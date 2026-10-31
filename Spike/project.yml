@@ -1,0 +1,67 @@
+# XcodeGen spec for the throwaway spike app. Generate the project with `make spike` (or `xcodegen generate`
+# in this folder), then open Spike.xcodeproj in Xcode 27. The .xcodeproj is git-ignored on purpose.
+#
+# Nothing in Spike/ is production code. The production app gets its own workspace after the go/no-go.
+
+name: Spike
+options:
+  bundleIdPrefix: com.ubiquitousbear.shutterbridge
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+packages:
+  PTPKit:
+    path: ../Packages/PTPKit
+
+targets:
+  Spike:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: PTPKit
+    entitlements:
+      path: Spike.entitlements
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: SB Spike
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+        # ImageCaptureCore on iOS reuses the camera privacy string for external cameras.
+        NSCameraUsageDescription: "Reads photos from a camera connected by USB-C, and scans the pairing code on the camera's screen."
+        NSPhotoLibraryAddUsageDescription: "Saves imported photos to your library."
+        NSLocalNetworkUsageDescription: "Finds your camera on the local network."
+        NSBonjourServices: [_ptp._tcp]
+        NSBluetoothAlwaysUsageDescription: "Notices when your camera is nearby so it can remind you about new photos."
+        UIBackgroundModes: [bluetooth-central]
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.ubiquitousbear.shutterbridge.spike.import
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ubiquitousbear.shutterbridge.spike
+        # Swift 5 language mode on the Swift 6 compiler: the spike talks to Objective-C delegate APIs all day
+        # and strict concurrency checking would be noise here. PTPKit, the code that survives the spike, is a
+        # swift-tools-version 6.0 package and is built in Swift 6 mode with full checking.
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        # Set your team once in Xcode (Signing & Capabilities); XcodeGen keeps it out of the repo.
+        DEVELOPMENT_TEAM: ""
+        ENABLE_USER_SCRIPT_SANDBOXING: true
+        SWIFT_EMIT_LOC_STRINGS: false
+
+schemes:
+  Spike:
+    build:
+      targets:
+        Spike: all
+    run:
+      config: Debug

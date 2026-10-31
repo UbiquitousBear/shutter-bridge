@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Joining the camera's own access point from the QR code (NEHotspotConfiguration). -->
+	<key>com.apple.developer.networking.HotspotConfiguration</key>
+	<true/>
+	<!--
+	  SSDP discovery needs the multicast entitlement, which Apple grants on request:
+	  https://developer.apple.com/contact/request/networking-multicast
+	  Add the key below ONLY after the request is approved and the capability is on the App ID,
+	  otherwise automatic signing fails on day 1. Until then the spike uses a typed IP (day 9).
+
+	  <key>com.apple.developer.networking.multicast</key>
+	  <true/>
+	-->
+</dict>
+</plist>
