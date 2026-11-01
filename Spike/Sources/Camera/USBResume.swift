@@ -30,6 +30,11 @@ struct USBResumeState: Codable, Equatable {
     /// The CameraSession that saved it. A cable pull always means a new CameraSession; Stop, a timeout or a PTP
     /// error do not, so a resume in the same one is not a link-drop resume. Optional so older saves still decode.
     var sessionID: UUID?
+    /// requestReadData reads: ImageCaptureCore reported the camera removed while this read was being saved (set by
+    /// didRemove), so its resume is a link-drop resume. Optional so older saves still decode.
+    var linkDropped: Bool?
+    /// requestReadData reads: the transport the read ran over ("ICTransportTypeUSB" in MTP, mass storage in MSC).
+    var transport: String?
 
     var percent: Double { identity.size == 0 ? 0 : Double(offset) / Double(identity.size) * 100 }
 

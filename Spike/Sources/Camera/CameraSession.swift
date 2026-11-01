@@ -142,7 +142,9 @@ final class CameraSession: NSObject {
 
     // MARK: - One operation at a time
 
-    private func perform(_ title: String, _ work: () async throws -> Void) async {
+    /// `transfer`: a download or resumable read, so locking the phone during it counts as locking during a transfer
+    /// even before its first file finishes (LifecycleMonitor).
+    private func perform(_ title: String, transfer: Bool = false, _ work: () async throws -> Void) async {
         if let activity {
             log.warn("\(title): busy with \(activity); wait for it or tap Stop")
             return
@@ -154,6 +156,7 @@ final class CameraSession: NSObject {
         activity = title
         stopRequested = false
         progressText = ""
+        if transfer { lifecycle.transferStarted(link: "usb") }
         let running = "\(title): running…"
         lastResult = running
         log.note("▶ \(title)")
@@ -170,6 +173,7 @@ final class CameraSession: NSObject {
         activity = nil
         progressText = ""
         stopRequested = false
+        if transfer { lifecycle.transferEnded() }
         lifecycle.operationEnded()
     }
 
@@ -408,7 +412,10 @@ final class CameraSession: NSObject {
         // On 1 Nov 23:47 a relaunched app with the camera still plugged in got a "complete" catalogue of 391 files
         // 0.09 s after the open: ImageCaptureCore had kept it from the earlier launch. A cold MTP catalogue takes
         // about 165 ms per object, so anything this fast for a card of any size was kept, not read.
-        let kept = !contended && seconds < 2 && (device.mediaFiles?.count ?? 0) > 20
+        // Cold MSC lists at about 18 ms per file at best (391 in 7.17 s), cold MTP at about 165 ms; the kept 23:47
+        // catalogue came at 0.23 ms per file. So: more than 20 files at under 2 ms per file, within 2 s.
+        let fileCount = device.mediaFiles?.count ?? 0
+        let kept = !contended && fileCount > 20 && seconds < 2 && seconds / Double(fileCount) < 0.002
         let name = contended ? "usb.catalog.complete.contended" : kept ? "usb.catalog.complete.kept" : "usb.catalog.complete"
         let detail = contended ? "; \(commands) PTP pass-through commands from the spike ran during it, not a cold figure"
             : kept ? "; ImageCaptureCore already had the catalogue (kept from an earlier session or app launch while the camera stayed plugged in), not a cold figure"
@@ -545,7 +552,7 @@ final class CameraSession: NSObject {
     // MARK: - Day 3 · downloads and throughput
 
     func downloadBatch(_ preset: USBDownloadPreset) async {
-        await perform(preset.label) {
+        await perform(preset.label, transfer: true) {
             try requireOpen()
             let selection = newest(preset.fileExtension, preset.count)
             guard !selection.isEmpty else { throw USBSpikeError.nothingToDo("no .\(preset.fileExtension) files on the card") }
@@ -1427,7 +1434,7 @@ final class CameraSession: NSObject {
     }
 
     func batteryPerGB(targetGB: Int) async {
-        await perform("Battery per GB") {
+        await perform("Battery per GB", transfer: true) {
             try requireOpen()
             let pool = files.filter { $0.fileSize > 0 }
             guard !pool.isEmpty else { throw USBSpikeError.nothingToDo("no files on the card") }
@@ -1475,7 +1482,7 @@ final class CameraSession: NSObject {
     // MARK: Day 4 · GetPartialObject vs requestReadData vs requestDownload
 
     func getPartialObjectTest() async {
-        await perform("GetPartialObject, newest ARW") {
+        await perform("GetPartialObject, newest ARW", transfer: true) {
             try requireOpen()
             guard let file = newest("ARW", 1).first else { throw USBSpikeError.nothingToDo("no ARW on the card") }
             let name = file.name ?? "?"
@@ -1829,7 +1836,7 @@ final class CameraSession: NSObject {
 
     /// Paced so there is time to pull the cable: 1 MiB chunks, 0.4 s apart (a 35 MB ARW takes about 15 s).
     func startResumableRead() async {
-        await perform("Start resumable read") {
+        await perform("Start resumable read", transfer: true) {
             try requireOpen()
             guard let file = newest("ARW", 1).first else { throw USBSpikeError.nothingToDo("no ARW on the card") }
             let info = try await deviceInfoOrFetch()
@@ -1897,7 +1904,7 @@ final class CameraSession: NSObject {
     }
 
     func resumeRead() async {
-        await perform("Resume read") {
+        await perform("Resume read", transfer: true) {
             try requireOpen()
             guard let saved = USBResumeStore.load() else {
                 throw USBSpikeError.nothingToDo("no saved read; tap Start resumable read first")
@@ -2025,7 +2032,7 @@ final class CameraSession: NSObject {
     /// PTP command: the identity is ImageCaptureCore's name, size and creation date, keyed by a tag of the device
     /// UUID (never a serial).
     func startReadDataResume() async {
-        await perform("Start resumable read (requestReadData)") {
+        await perform("Start resumable read (requestReadData)", transfer: true) {
             try requireOpen()
             guard let file = newest("ARW", 1).first else { throw USBSpikeError.nothingToDo("no ARW on the card") }
             let identity = readDataIdentity(file)
@@ -2041,7 +2048,7 @@ final class CameraSession: NSObject {
             }
             let writer = try PartFileWriter(url: USBResumePaths.url(relative: relative), startingAt: 0)
             var state = USBResumeState(identity: identity, offset: 0, partPath: relative, savedAt: Date(), reason: "started",
-                                       sessionID: sessionID)
+                                       sessionID: sessionID, transport: device.transportType)
             persistReadDataResume(state)
             let chunk: UInt64 = 1024 * 1024
             let pullAt = identity.size * 2 / 5
@@ -2066,6 +2073,8 @@ final class CameraSession: NSObject {
             state.savedAt = Date()
             if let error = result.error {
                 state.reason = "error: \(describe(error))"
+                // didRemove may already have marked the saved state; this save must not undo it.
+                if removed { state.linkDropped = true }
                 persistReadDataResume(state)
                 log.warn("Resumable requestReadData interrupted at offset \(writer.offset) of \(identity.size) (\(percent(writer.offset, identity.size)) %): \(describe(error)). Saved for resume. Plug the camera back in (same USB mode), Open session, then Resume read (requestReadData).")
                 lastResult = "Interrupted at \(percent(writer.offset, identity.size)) %; saved"
@@ -2079,7 +2088,7 @@ final class CameraSession: NSObject {
     }
 
     func resumeReadDataRead() async {
-        await perform("Resume read (requestReadData)") {
+        await perform("Resume read (requestReadData)", transfer: true) {
             try requireOpen()
             guard let saved = USBResumeStore.load(key: USBResumeStore.readDataKey) else {
                 throw USBSpikeError.nothingToDo("no saved requestReadData read; tap Start resumable read (requestReadData) first")
@@ -2097,9 +2106,20 @@ final class CameraSession: NSObject {
             let current = readDataIdentity(chosen)
             let partURL = USBResumePaths.url(relative: saved.partPath)
             let onDisk = PartFileWriter.sizeOnDisk(partURL) ?? 0
-            var offset = current == saved.identity ? saved.offset : 0
+            // The file decides the offset (name, size, creation date); the SHA-256 check catches a wrong file. The
+            // device key (a tag of the device UUID) is compared separately: whether it survives a re-plug in MSC is
+            // one of the things this test finds out.
+            let sameFile = current.filename == saved.identity.filename && current.size == saved.identity.size
+                && current.captureDateRaw == saved.identity.captureDateRaw
+            let sameDevice = current.cameraSerial == saved.identity.cameraSerial
+            log.note("  device key \(sameDevice ? "same as" : "DIFFERENT from") the saved read's; transport now \(device.transportType ?? "?"), saved read started over \(saved.transport ?? "?")")
+            var offset = sameFile ? saved.offset : 0
             if offset == 0 && saved.offset > 0 {
-                log.warn("Identity changed (\(current) vs \(saved.identity)): restarting from zero. A different USB mode can give a different device key.")
+                var changed: [String] = []
+                if current.filename != saved.identity.filename { changed.append("name") }
+                if current.size != saved.identity.size { changed.append("size") }
+                if current.captureDateRaw != saved.identity.captureDateRaw { changed.append("creation date '\(saved.identity.captureDateRaw)' → '\(current.captureDateRaw)'") }
+                log.warn("The file changed (\(changed.joined(separator: ", "))): restarting from zero, as the resume rule says.")
             }
             if offset > onDisk {
                 log.warn(".part holds \(onDisk) B on disk, fewer than the saved offset \(offset); continuing from \(onDisk)")
@@ -2108,7 +2128,7 @@ final class CameraSession: NSObject {
             log.note("Interrupted at offset \(saved.offset); .part on disk \(onDisk) B; resuming at offset \(offset) (\(percent(offset, current.size)) %) with requestReadData over \(device.transportType ?? "?")")
             let writer = try PartFileWriter(url: partURL, startingAt: offset)
             var state = USBResumeState(identity: current, offset: writer.offset, partPath: saved.partPath, savedAt: Date(), reason: "resumed",
-                                       sessionID: sessionID)
+                                       sessionID: sessionID, transport: device.transportType)
             persistReadDataResume(state)
             let result = await readDataLoop(chosen, size: current.size, from: writer.offset, chunk: UInt64(PTPPartialRead.defaultChunkSize),
                                             pause: nil, writer: writer, label: "resume (requestReadData)") { previous, now in
@@ -2125,6 +2145,7 @@ final class CameraSession: NSObject {
             state.savedAt = Date()
             if let error = result.error {
                 state.reason = "error: \(describe(error))"
+                if removed { state.linkDropped = true }
                 persistReadDataResume(state)
                 log.warn("Resume interrupted again at offset \(writer.offset): \(describe(error)). Reconnect and tap Resume read (requestReadData) again.")
                 lastResult = "Resume interrupted at \(percent(writer.offset, current.size)) %"
@@ -2146,11 +2167,11 @@ final class CameraSession: NSObject {
             let transport = device.transportType ?? "?"
             if offset == 0 {
                 log.warn("The read restarted from zero, so this was not a resume; usb.readData.resume.verified not recorded.")
-            } else if saved.sessionID == sessionID {
-                log.warn("The read was cut by \(saved.reason) in this same session (no cable pull, no re-plug), so this was not a link-drop resume; usb.readData.resume.verified not recorded. Start again and pull the cable at PULL NOW.")
+            } else if saved.sessionID == sessionID || saved.linkDropped != true {
+                log.warn("The read was cut by \(saved.reason) without ImageCaptureCore reporting the camera removed (no cable pull, or an app relaunch), so this was not a link-drop resume; usb.readData.resume.verified not recorded. Start again and pull the cable at PULL NOW.")
             } else {
                 log.flag("usb.readData.resume.verified", verified,
-                         context: "\(current.filename) over \(transport): interrupted at \(saved.offset) (\(saved.reason)), resumed at \(offset) with requestReadData after a re-plug, \(verified ? "SHA-256 match" : "SHA-256 MISMATCH") against requestDownload")
+                         context: "\(current.filename): started over \(saved.transport ?? "?"), interrupted at \(saved.offset) by a cable pull (\(saved.reason)), resumed over \(transport) at \(offset) with requestReadData, device key \(sameDevice ? "same" : "different") after the re-plug, \(verified ? "SHA-256 match" : "SHA-256 MISMATCH") against requestDownload")
             }
             if verified {
                 USBResumeStore.clear(key: USBResumeStore.readDataKey)
@@ -2277,7 +2298,7 @@ final class CameraSession: NSObject {
     // MARK: - Day 5 · lifecycle
 
     func longSerialDownload() async {
-        await perform("Long serial download") {
+        await perform("Long serial download", transfer: true) {
             try requireOpen()
             let selection = files.filter { Self.ext($0) == "ARW" }
             guard !selection.isEmpty else { throw USBSpikeError.nothingToDo("no ARW on the card") }
@@ -2299,7 +2320,7 @@ final class CameraSession: NSObject {
         continued.run(title: "Importing from camera (spike)", subtitle: "0 of \(selection.count)", totalUnits: selection.count) { [weak self] report, shouldStop in
             guard let self else { return false }
             var finished = false
-            await self.perform("Continued-task download") {
+            await self.perform("Continued-task download", transfer: true) {
                 finished = try await self.downloadSequence(selection, label: "continued task", report: report, shouldStop: shouldStop)
             }
             return finished
@@ -2452,6 +2473,13 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
         clearPTPCaches()
         log.warn("Camera removed (cable pulled?) [\(lifecycle.stateDescription)]. Re-plug, then Day 2 · Open session.")
         abortPending(.deviceRemoved)
+        // A requestReadData read this session saved (possibly a moment before this callback, from the read's own
+        // error) was cut by the link going away: only then does its resume count as a link-drop resume.
+        if var saved = USBResumeStore.load(key: USBResumeStore.readDataKey), saved.sessionID == sessionID,
+           saved.offset < saved.identity.size, saved.linkDropped != true {
+            saved.linkDropped = true
+            persistReadDataResume(saved)
+        }
     }
 
     func device(_ device: ICDevice, didEncounterError error: (any Error)?) {
