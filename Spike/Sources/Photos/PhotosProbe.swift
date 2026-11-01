@@ -113,7 +113,12 @@ final class PhotosProbe {
             guard let self else { return false }
             var waited = 0
             while UIApplication.shared.isProtectedDataAvailable {
-                if shouldStop() || waited >= 120 {
+                if shouldStop() {
+                    self.log?.warn("photos: locked save test ended: the task was stopped or expired while waiting for the lock")
+                    self.lastResult = "locked save test: stopped or expired"
+                    return false
+                }
+                if waited >= 120 {
                     self.log?.warn("photos: locked save test ended: the phone was not locked within 2 minutes")
                     self.lastResult = "locked save test: the phone was not locked"
                     return false
@@ -125,6 +130,11 @@ final class PhotosProbe {
             self.log?.note("photos: phone locked after \(waited) s; waiting 15 s more")
             for second in 1 ... 15 {
                 try? await Task.sleep(for: .seconds(1))
+                if shouldStop() {
+                    self.log?.warn("photos: locked save test ended: the task was stopped or expired \(second) s after the lock, before any save")
+                    self.lastResult = "locked save test: stopped or expired"
+                    return false
+                }
                 report(120 + second, second == 1 ? "Locked; saving in 15 s" : nil)
             }
             await self.lockedSave(fileA1, label: "A1 (complete until first unlock, no album)", album: nil, shouldStop: shouldStop)
@@ -137,9 +147,12 @@ final class PhotosProbe {
             report(137, "Saved A2")
             await self.lockedSave(fileB, label: "B (complete, no album)", album: nil, shouldStop: shouldStop)
             report(138, "Saved B")
-            let lockedBefore = !UIApplication.shared.isProtectedDataAvailable
+            let lookupLockedAtStart = !UIApplication.shared.isProtectedDataAvailable
+            let lookupStart = Date()
             let again = self.findAlbum()
-            self.log?.note("photos: album lookup while locked: \(again.detail) · locked \(lockedBefore ? "yes" : "NO (unlocked by now)")")
+            let lookupLockedAtEnd = !UIApplication.shared.isProtectedDataAvailable
+            let lookupSeconds = String(format: "%.1f", Date().timeIntervalSince(lookupStart))
+            self.log?.note("photos: album lookup while locked: \(again.detail) · \(lookupSeconds) s · locked at start \(lookupLockedAtStart ? "yes" : "NO"), at end \(lookupLockedAtEnd ? "yes" : "NO")")
             report(140, nil)
             self.lastResult = "locked save test finished; see the log"
             return true
@@ -166,8 +179,13 @@ final class PhotosProbe {
             if after != before { line += " → \(after)" }
             if failed || outcome.contains("FAILED") { self.log?.warn(line) } else { self.log?.note(line) }
             self.lastResult = "\(step): \(outcome)"
-            if await watcher.settle() {
+            switch await watcher.settle() {
+            case .stayedActive, .leftTheApp:
+                break
+            case .activeAgain:
                 self.log?.note("photos: active again after \"\(step)\"; access now \(self.access())")
+            case .stillInactive:
+                self.log?.warn("photos: still inactive 2 minutes after \"\(step)\"; access not read again")
             }
             watcher.stop()
             self.isBusy = false
@@ -178,8 +196,9 @@ final class PhotosProbe {
     /// starts, so a save that ran unlocked can't be logged as a locked result.
     private func lockedSave(_ url: URL, label: String, album: PHAssetCollection?, shouldStop: ContinuedTask.ShouldStop) async {
         let lockedAtStart = !UIApplication.shared.isProtectedDataAvailable
-        guard lockedAtStart, !shouldStop() else {
-            log?.warn("photos: locked save \(label) not run: \(lockedAtStart ? "the task was stopped or expired" : "the phone was unlocked") before it started")
+        let stopped = shouldStop()
+        guard lockedAtStart, !stopped else {
+            log?.warn("photos: locked save \(label) not run: before it started, phone unlocked \(lockedAtStart ? "no" : "YES"), task stopped or expired \(stopped ? "YES" : "no")")
             return
         }
         let start = Date()
@@ -193,7 +212,7 @@ final class PhotosProbe {
         let lockedAtEnd = !UIApplication.shared.isProtectedDataAvailable
         let seconds = String(format: "%.1f", Date().timeIntervalSince(start))
         let line = "photos: locked save \(label) \(outcome) · \(seconds) s · locked at start yes, at end \(lockedAtEnd ? "yes" : "NO") · task stopped or expired \(shouldStop() ? "YES" : "no")"
-        if outcome.hasPrefix("OK") && lockedAtEnd { log?.note(line) } else { log?.warn(line) }
+        if outcome.hasPrefix("OK") && lockedAtEnd && !outcome.contains("NOT added") { log?.note(line) } else { log?.warn(line) }
     }
 
     private func access() -> String {
@@ -305,24 +324,36 @@ final class PhotosProbe {
     }
 }
 
-/// Notices a system prompt (or anything else that takes the app out of the active state, such as Control Centre)
-/// while a Photos step runs or just after it: logs when the app goes inactive, and lets the step wait until the app is
-/// active again so the access can be logged after the prompt was answered.
+/// Notices a system prompt while a Photos step runs or in the 3 s after it: logs when the app goes inactive, and lets
+/// the step wait until the app is active again, so the access can be logged after the prompt was answered. A prompt
+/// keeps the app in the foreground; Home, Settings or swiping the app away move it to the background, which is logged
+/// as "not a prompt". Control Centre, Notification Centre and a glance at the app switcher look like a prompt here,
+/// so the runbook says to wait until the step's buttons are enabled again before leaving the app.
 @MainActor
 private final class PromptWatcher {
+    enum Outcome { case stayedActive, activeAgain, stillInactive, leftTheApp }
+
     private var tokens: [NSObjectProtocol] = []
     private var inactive = false
     private var wentInactive = false
+    private var leftTheApp = false
 
     init(step: String, start: Date, log: SpikeLog?) {
         let center = NotificationCenter.default
         tokens.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, !self.leftTheApp else { return }
                 self.inactive = true
                 self.wentInactive = true
-                let at = String(format: "%.1f", Date().timeIntervalSince(start))
-                log?.note("photos: app went inactive during \"\(step)\" at +\(at) s: a system prompt, or Control Centre")
+                log?.note("photos: app went inactive during \"\(step)\" at +\(String(format: "%.1f", Date().timeIntervalSince(start))) s: a system prompt, or Control Centre or the app switcher")
+            }
+        })
+        tokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.leftTheApp else { return }
+                self.leftTheApp = true
+                self.inactive = false
+                log?.note("photos: app left the foreground during or just after \"\(step)\" at +\(String(format: "%.1f", Date().timeIntervalSince(start))) s (Home, Settings or swiped away): not a prompt")
             }
         })
         tokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -331,17 +362,19 @@ private final class PromptWatcher {
     }
 
     /// Waits up to 3 s for a prompt that comes up after the step finished, then, if one came up, until the app is
-    /// active again (2 minutes at most). Returns whether the app went inactive at all.
-    func settle() async -> Bool {
-        for _ in 0 ..< 12 where !inactive {
+    /// active again (2 minutes at most).
+    func settle() async -> Outcome {
+        for _ in 0 ..< 12 where !inactive && !leftTheApp {
             try? await Task.sleep(for: .milliseconds(250))
         }
         var waited = 0
-        while inactive && waited < 480 {
+        while inactive && !leftTheApp && waited < 480 {
             try? await Task.sleep(for: .milliseconds(250))
             waited += 1
         }
-        return wentInactive
+        if leftTheApp { return .leftTheApp }
+        if inactive { return .stillInactive }
+        return wentInactive ? .activeAgain : .stayedActive
     }
 
     func stop() {
