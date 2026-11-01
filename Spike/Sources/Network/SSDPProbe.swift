@@ -322,6 +322,9 @@ struct SSDPDeviceDescription: Sendable {
     var modelName = ""
     var modelNumber = ""
     var serialNumber = ""
+    /// Every serialNumber element's value, any case, in document order (the summary uses only the first, above): for
+    /// FixtureStore's check that a zeroed description holds no serial.
+    var allSerialNumbers: [String] = []
     var udn = ""
     var serviceTypes: [String] = []
     /// Vendor elements (X_…), e.g. Sony's X_ScalarWebAPI_* entries, as "name=value".
@@ -361,10 +364,16 @@ private final class DeviceDescriptionParser: NSObject, XMLParserDelegate {
         text += string
     }
 
+    /// A value wrapped in <![CDATA[…]]> arrives here, not in foundCharacters.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        text += String(decoding: CDATABlock, as: UTF8.self)
+    }
+
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         text = ""
         let local = elementName.split(separator: ":").last.map(String.init) ?? elementName
+        if local.caseInsensitiveCompare("serialNumber") == .orderedSame { result.allSerialNumbers.append(value) }
         switch local {
         case "deviceType": if result.deviceType.isEmpty { result.deviceType = value }
         case "friendlyName": if result.friendlyName.isEmpty { result.friendlyName = value }

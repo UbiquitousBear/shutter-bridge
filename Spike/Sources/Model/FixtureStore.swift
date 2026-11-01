@@ -102,8 +102,9 @@ enum FixtureStore {
             log?.warn("fixture not saved: ptpip/\(name): could not zero the serialNumber in it")
             return nil
         }
+        // Every serialNumber element, CDATA included, not just the first one the summary shows.
         if let parsed = SSDPDeviceDescription.parse(zeroed.data),
-           parsed.serialNumber.contains(where: { $0 != "0" && !$0.isWhitespace }) {
+           parsed.allSerialNumbers.contains(where: { value in value.contains { $0 != "0" && !$0.isWhitespace } }) {
             log?.warn("fixture not saved: ptpip/\(name): after zeroing, the XML parser still reads a serialNumber that isn't all zeros (CDATA or an entity?)")
             return nil
         }
