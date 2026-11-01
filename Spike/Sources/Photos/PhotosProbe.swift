@@ -147,12 +147,17 @@ final class PhotosProbe {
             report(137, "Saved A2")
             await self.lockedSave(fileB, label: "B (complete, no album)", album: nil, shouldStop: shouldStop)
             report(138, "Saved B")
+            if shouldStop() {
+                self.log?.warn("photos: locked save test ended: the task was stopped or expired during the saves; album lookup not run")
+                self.lastResult = "locked save test: stopped or expired"
+                return false
+            }
             let lookupLockedAtStart = !UIApplication.shared.isProtectedDataAvailable
             let lookupStart = Date()
             let again = self.findAlbum()
             let lookupLockedAtEnd = !UIApplication.shared.isProtectedDataAvailable
             let lookupSeconds = String(format: "%.1f", Date().timeIntervalSince(lookupStart))
-            self.log?.note("photos: album lookup while locked: \(again.detail) · \(lookupSeconds) s · locked at start \(lookupLockedAtStart ? "yes" : "NO"), at end \(lookupLockedAtEnd ? "yes" : "NO")")
+            self.log?.note("photos: album lookup while locked: \(again.detail) · \(lookupSeconds) s · locked at start \(lookupLockedAtStart ? "yes" : "NO"), at end \(lookupLockedAtEnd ? "yes" : "NO") · task stopped or expired \(shouldStop() ? "YES" : "no")")
             report(140, nil)
             self.lastResult = "locked save test finished; see the log"
             return true
@@ -180,7 +185,7 @@ final class PhotosProbe {
             if failed || outcome.contains("FAILED") { self.log?.warn(line) } else { self.log?.note(line) }
             self.lastResult = "\(step): \(outcome)"
             switch await watcher.settle() {
-            case .stayedActive, .leftTheApp:
+            case .stayedActive, .leftTheApp, .leftWithPromptUp:
                 break
             case .activeAgain:
                 self.log?.note("photos: active again after \"\(step)\"; access now \(self.access())")
@@ -325,56 +330,65 @@ final class PhotosProbe {
 }
 
 /// Notices a system prompt while a Photos step runs or in the 3 s after it: logs when the app goes inactive, and lets
-/// the step wait until the app is active again, so the access can be logged after the prompt was answered. A prompt
-/// keeps the app in the foreground; Home, Settings or swiping the app away move it to the background, which is logged
-/// as "not a prompt". Control Centre, Notification Centre and a glance at the app switcher look like a prompt here,
-/// so the runbook says to wait until the step's buttons are enabled again before leaving the app.
+/// the step wait until the app is active again, so the access can be logged after the prompt was answered.
+/// - A prompt keeps the app in the foreground. Home, Settings, swiping the app away or locking the phone move it to the
+///   background within a moment of going inactive, which is logged as "not a prompt".
+/// - Going to the background long after going inactive means the phone locked (Auto-Lock) or the app was left while a
+///   prompt was up: the prompt, if any, is still unanswered, so the access isn't read again.
+/// - Control Centre, Notification Centre and a glance at the app switcher look like a prompt here, so the runbook says
+///   to wait until the step's buttons are enabled again before leaving the app.
+/// Once the app is active again after going inactive, or has gone to the background, the watcher stops listening.
 @MainActor
 private final class PromptWatcher {
-    enum Outcome { case stayedActive, activeAgain, stillInactive, leftTheApp }
+    enum Outcome { case stayedActive, activeAgain, stillInactive, leftTheApp, leftWithPromptUp }
 
     private var tokens: [NSObjectProtocol] = []
-    private var inactive = false
-    private var wentInactive = false
-    private var leftTheApp = false
+    private var inactiveSince: Date?
+    private var done: Outcome?
 
     init(step: String, start: Date, log: SpikeLog?) {
         let center = NotificationCenter.default
         tokens.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.leftTheApp else { return }
-                self.inactive = true
-                self.wentInactive = true
+                guard let self, self.done == nil else { return }
+                self.inactiveSince = Date()
                 log?.note("photos: app went inactive during \"\(step)\" at +\(String(format: "%.1f", Date().timeIntervalSince(start))) s: a system prompt, or Control Centre or the app switcher")
             }
         })
         tokens.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.leftTheApp else { return }
-                self.leftTheApp = true
-                self.inactive = false
-                log?.note("photos: app left the foreground during or just after \"\(step)\" at +\(String(format: "%.1f", Date().timeIntervalSince(start))) s (Home, Settings or swiped away): not a prompt")
+                guard let self, self.done == nil else { return }
+                let inactiveFor = self.inactiveSince.map { Date().timeIntervalSince($0) } ?? 0
+                if inactiveFor > 1.5 {
+                    self.done = .leftWithPromptUp
+                    log?.warn("photos: app went to the background \(String(format: "%.1f", inactiveFor)) s after going inactive during \"\(step)\" (the phone locked, or the app was left with a prompt up): any prompt is still unanswered, so the access was not read again")
+                } else {
+                    self.done = .leftTheApp
+                    log?.note("photos: app left the foreground during or just after \"\(step)\" (Home, Settings, swiped away or locked): not a prompt; the \"went inactive\" line just before is the same event")
+                }
             }
         })
         tokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.inactive = false }
+            MainActor.assumeIsolated {
+                guard let self, self.done == nil, self.inactiveSince != nil else { return }
+                self.done = .activeAgain
+            }
         })
     }
 
-    /// Waits up to 3 s for a prompt that comes up after the step finished, then, if one came up, until the app is
-    /// active again (2 minutes at most).
+    /// Waits up to 3 s for a prompt that comes up after the step finished, then, if one came up, until it is answered
+    /// or the app leaves the foreground (2 minutes at most).
     func settle() async -> Outcome {
-        for _ in 0 ..< 12 where !inactive && !leftTheApp {
+        for _ in 0 ..< 12 where inactiveSince == nil && done == nil {
             try? await Task.sleep(for: .milliseconds(250))
         }
         var waited = 0
-        while inactive && !leftTheApp && waited < 480 {
+        while inactiveSince != nil && done == nil && waited < 480 {
             try? await Task.sleep(for: .milliseconds(250))
             waited += 1
         }
-        if leftTheApp { return .leftTheApp }
-        if inactive { return .stillInactive }
-        return wentInactive ? .activeAgain : .stayedActive
+        if let done { return done }
+        return inactiveSince == nil ? .stayedActive : .stillInactive
     }
 
     func stop() {
