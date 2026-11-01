@@ -77,6 +77,25 @@ extension GuidedRunner {
         log.note("  guided: camera \(camera.name ?? "?") over \(camera.transportType ?? "?")")
     }
 
+    /// `camera` has gone: the browser no longer lists it, or its own session saw it removed.
+    func isUnplugged(_ camera: ICCameraDevice?) -> Bool {
+        guard let camera else { return true }
+        if !browser.cameras.contains(where: { $0 === camera }) { return true }
+        if let session = usb.session, session.device === camera, session.removed { return true }
+        return false
+    }
+
+    /// Starts a continued task with `submit` and waits for iOS to run it; stops the section if it was refused.
+    func startContinued(_ what: String, _ submit: () -> Void) async throws {
+        submit()
+        let started = try await waitUntil("Starting the continued task", "Waiting for iOS to start it.", timeout: 30) {
+            self.continued.state == "running" || !self.continued.isRunning
+        }
+        guard started, continued.isRunning, continued.state == "running" else {
+            throw GuidedStop("\(what) didn't start (continued task: \(continued.state); \(usb.session?.lastResult ?? wireless.activity))")
+        }
+    }
+
     /// Gets the camera attached in `mode`: keeps one that is already attached in that mode, otherwise asks for an
     /// unplug and a replug.
     func prepareMode(_ mode: String) async throws {
@@ -86,7 +105,7 @@ extension GuidedRunner {
                                      buttons: ["Yes, keep it", "No, replug it"])
             if keep.hasPrefix("Yes") { return }
             try await waitUntil("Unplug the camera", "Pull the cable out of the phone.", timeout: 300) {
-                !self.browser.cameras.contains { $0 === attached } || (self.usb.session?.removed ?? false)
+                self.isUnplugged(attached)
             }
             try await waitForCamera(mode: mode, excluding: attached)
         } else {
@@ -104,8 +123,8 @@ extension GuidedRunner {
                 done.value = true
             }
             try await waitUntil("Opening the session",
-                                wait ? "Waiting for ImageCaptureCore's catalogue: about 7 s in MSC, 65 s in MTP." : "Opening.",
-                                timeout: 240) { done.value }
+                                wait ? "Waiting for ImageCaptureCore's catalogue: about 7 s in MSC, 65 s in MTP (longer for a bigger card)." : "Opening.",
+                                timeout: wait ? 900 : 120) { done.value }
             if usb.isOpen { return }
             let retry = try await ask("The session didn't open", usb.session?.lastResult ?? "No session.",
                                       buttons: ["Try again", "Skip this section"])
@@ -150,6 +169,7 @@ extension GuidedRunner {
         try await ask(title, "Tap Start, then \(action) within 10 s and stay away about \(minutes) min. The run carries on when you come back.",
                       buttons: ["Start"])
         let returns = lifecycle.foregroundReturns
+        let entries = lifecycle.backgroundEntries
         let done = GuidedFlag()
         Task {
             await self.usb.run(work)
@@ -157,11 +177,11 @@ extension GuidedRunner {
         }
         do {
             try await waitUntil(title, "Now \(action). Come back after about \(minutes) min.", timeout: Double(minutes * 60 + 900)) {
-                self.lifecycle.foregroundReturns > returns || done.value
+                self.lifecycle.foregroundReturns > returns || (done.value && self.lifecycle.backgroundEntries == entries)
             }
-            if lifecycle.foregroundReturns == returns {
-                log.warn("  guided: \(title): the transfer ended before the app left the foreground")
-            } else {
+            if lifecycle.backgroundEntries == entries {
+                log.warn("  guided: \(title): \(done.value ? "the transfer ended before the app left the foreground" : "the app never left the foreground")")
+            } else if lifecycle.foregroundReturns > returns {
                 log.note(String(format: "  guided: %@: away %.0f s", title, lifecycle.lastAwaySeconds))
             }
             if !done.value {
@@ -204,17 +224,23 @@ extension GuidedRunner {
                 session.onPullNow = { @MainActor [weak self] in
                     self?.notice("Pull the cable now", "Pull the USB-C cable out of the phone now.")
                 }
+                defer { session.onPullNow = nil }
                 try await operation("Reading the newest ARW", "About 18 s. An alert will say when to pull the cable.", timeout: 180) {
                     await $0.startReadDataResume()
                 }
-                session.onPullNow = nil
-                pulled = try await waitUntil("Waiting for the cable pull", "Pull the USB-C cable out of the phone now.", timeout: 20) {
-                    session.removed
-                }
-                if !pulled {
+                let result = session.lastResult
+                if result.hasPrefix("Interrupted") {
+                    // The read's own error comes first; ImageCaptureCore reports the removal a moment later.
+                    pulled = try await waitUntil("Detecting the cable pull", "Waiting for the phone to notice the camera has gone.", timeout: 20) {
+                        session.removed
+                    }
+                    if !pulled { throw GuidedStop("the read stopped without a cable pull: \(result)") }
+                } else if result == "Finished without interruption" {
                     if attempt >= 2 { throw GuidedStop("the read finished before the cable was pulled, twice") }
                     try await ask("No cable pull", "The read finished before the cable came out. It starts again; pull when the alert appears.",
                                   buttons: ["Try again"])
+                } else {
+                    throw GuidedStop("the read didn't run: \(result)")
                 }
             }
             try await waitForCamera(mode: "Image Transfer (MSC)", excluding: usb.session?.device)
@@ -239,8 +265,7 @@ extension GuidedRunner {
             try await ask("Continued task", "Tap Start: 20 ARW download inside a continued task. Lock the phone as soon as its progress appears on the Lock Screen or in the Dynamic Island, and unlock after about 1 min.",
                           buttons: ["Start"])
             let returns = lifecycle.foregroundReturns
-            usb.session?.continuedDownload(using: continued)
-            try await waitUntil("Starting the continued task", "Waiting for iOS to start it.", timeout: 30) { self.continued.isRunning }
+            try await startContinued("The 20-ARW continued task") { usb.session?.continuedDownload(using: continued) }
             try await waitUntil("Lock the phone now", "Lock the phone. Unlock it after about 1 min.", timeout: 600) {
                 self.lifecycle.foregroundReturns > returns || !self.continued.isRunning
             }
@@ -256,8 +281,9 @@ extension GuidedRunner {
         try await section("PC Remote: DeviceInfo and ObjectAdded",
                           "Remote Shoot (PC Remote), about 5 minutes: the only USB mode with the shutter enabled. Does it send a new-photo event?") {
             try await prepareMode("Remote Shoot (PC Remote)")
-            try await openSession(wait: false)
-            try await operation("GetDeviceInfo", "Reading what the camera supports in PC Remote mode. Up to 65 s while ImageCaptureCore lists the card.", timeout: 150) {
+            // Pass-through waits for ImageCaptureCore's catalogue, and a command's own timeout is 60 s: open with the wait.
+            try await openSession(wait: true)
+            try await operation("GetDeviceInfo", "Reading what the camera supports in PC Remote mode.", timeout: 150) {
                 await $0.ptpGetDeviceInfo()
             }
             try await ask("Press the shutter", "Tap Start, then press the shutter 2 or 3 times in the next 60 s.", buttons: ["Start"])
@@ -302,11 +328,11 @@ extension GuidedRunner {
                           "Image Transfer (MSC), about 12 minutes, mostly unattended: a continued task over the whole card, repeated for 10 min, with the phone locked throughout.") {
             try await prepareMode("Image Transfer (MSC)")
             try await openSession(wait: true)
+            try await expectTransport(massStorage: true, mode: "Image Transfer (MSC)")
             try await ask("Ready to lock", "Tap Start, then lock the phone as soon as the import shows on the Lock Screen or in the Dynamic Island. Leave it locked for the 10 minutes, then unlock.",
                           buttons: ["Start"])
             let returns = lifecycle.foregroundReturns
-            usb.session?.continuedLongDownload(using: continued, minutes: 10)
-            try await waitUntil("Starting the continued task", "Waiting for iOS to start it.", timeout: 30) { self.continued.isRunning }
+            try await startContinued("The 10-minute continued task") { usb.session?.continuedLongDownload(using: continued, minutes: 10) }
             try await waitUntil("Lock the phone now", "Lock the phone and leave it for 10 minutes. Unlock afterwards.", timeout: 1500) {
                 self.lifecycle.foregroundReturns > returns || !self.continued.isRunning
             }
@@ -320,13 +346,16 @@ extension GuidedRunner {
             let old = usb.selectedCamera
             if old != nil {
                 try await waitUntil("Unplug the camera", "Pull the cable out of the phone, for a cold listing.", timeout: 300) {
-                    !self.browser.cameras.contains { $0 === old } || (self.usb.session?.removed ?? false)
+                    self.isUnplugged(old)
                 }
             }
             try await waitForCamera(mode: mode, excluding: old)
             let openedAt = Date()
             try await openSession(wait: true)
             try await expectTransport(massStorage: massStorage, mode: mode)
+            try await waitUntil("Listing the card", "ImageCaptureCore is still listing a big card.", timeout: 1800) {
+                self.usb.session?.catalogComplete ?? true
+            }
             if let m = log.measurements.last(where: { $0.at >= openedAt && $0.name.hasPrefix("usb.catalog.complete") }) {
                 let files = usb.session?.files.count ?? 0
                 if m.name == "usb.catalog.complete" {
@@ -357,11 +386,15 @@ extension GuidedRunner {
             for entry in plan {
                 step("Cold listing after the burst: \(entry.mode)")
                 let after = try await coldCatalogue(mode: entry.mode, massStorage: entry.massStorage)
-                guard let first = before[entry.key], after.files > first.files else {
-                    log.warn("  guided: \(entry.mode): the card didn't grow, so no scaling figure")
+                guard let first = before[entry.key], after.files - first.files >= 100 else {
+                    log.warn("  guided: \(entry.mode): the card grew by fewer than 100 files, too few for a scaling figure")
                     continue
                 }
                 let perFile = (after.seconds - first.seconds) / Double(after.files - first.files)
+                guard perFile > 0 else {
+                    log.warn("  guided: \(entry.mode): the bigger card listed no slower (\(fmt(first.seconds, 2)) s → \(fmt(after.seconds, 2)) s), so no projection")
+                    continue
+                }
                 let fixed = first.seconds - perFile * Double(first.files)
                 let context = "cold catalogue \(first.files) files \(fmt(first.seconds, 2)) s → \(after.files) files \(fmt(after.seconds, 2)) s; fixed part \(fmt(fixed, 2)) s"
                 log.measure("usb.\(entry.key).catalog.perFile", perFile * 1000, "ms", context: context)
@@ -418,23 +451,23 @@ extension GuidedRunner {
             if typed != "Done" { throw GuidedStop("no camera IP") }
             return
         }
-        let before = wireless.qrSummary
+        let scans = wireless.qrScans
         let scanned = try await waitInTabs("Scan the camera's QR code",
-                                           "Put the camera on its Wi-Fi screen. Open the Wi-Fi tab and tap Scan camera QR code (or type the SSID and password there). This step ends by itself once the code is read.",
+                                           "Put the camera on its Wi-Fi screen. Open the Wi-Fi tab and tap Scan camera QR code (or type the SSID and password there and tap Done here). This step ends by itself once a code is read.",
                                            timeout: 900) {
-            !self.wireless.joinSSID.isEmpty && self.wireless.qrSummary != before
+            self.wireless.qrScans > scans
         }
         if scanned == "Skip" { return }
         if wireless.joinSSID.isEmpty { throw GuidedStop("no SSID to join") }
         try await wifi("Join camera Wi-Fi", "Accept the system prompt to join the camera's network.", timeout: 90) { wireless.join() }
-        if let gateway = wireless.gatewayCandidate {
+        // Only this join's own gateway: a failed join leaves the home network's, which isn't the camera.
+        if let gateway = wireless.lastJoinGateway {
             UserDefaults.standard.set(gateway, forKey: "ptpip.host")
-            log.note("  guided: camera IP \(gateway) (the network's gateway)")
+            log.note("  guided: camera IP \(gateway) (the camera network's gateway)")
         } else {
-            let fixed = try await waitInTabs("Camera IP", "The join didn't give a gateway. In the Wi-Fi tab, check you're on the camera's network and set Camera IP, then tap Done here.",
-                                             timeout: 900) { self.wireless.gatewayCandidate != nil }
-            if fixed == "Skip" { throw GuidedStop("no camera IP") }
-            if let gateway = wireless.gatewayCandidate { UserDefaults.standard.set(gateway, forKey: "ptpip.host") }
+            let fixed = try await waitInTabs("Camera IP", "The join didn't report the camera's network. In Settings › Wi-Fi, join the camera's network; then in the Wi-Fi tab set Camera IP (usually 192.168.122.1) and tap Done here.",
+                                             timeout: 900) { false }
+            if fixed != "Done" { throw GuidedStop("not on the camera's network") }
         }
     }
 
@@ -442,7 +475,7 @@ extension GuidedRunner {
 
     func wifiModePass() async throws {
         let mode = try await ask("Camera mode", "Which Wi-Fi mode is the camera in? Set it on the camera now (Network menu).",
-                                 buttons: ["Smartphone Connect", "PC Remote (access point)", "Wi-Fi Direct"])
+                                 buttons: ["Smartphone Connect", "PC Remote (access point)", "PC Remote (Wi-Fi Direct)"])
         step("Wi-Fi mode: \(mode)")
         log.note("◆ Wi-Fi mode under test: \(mode)")
         try await section("Join and find the camera", "The network, then the camera's IP.") {
@@ -465,7 +498,7 @@ extension GuidedRunner {
             guard wireless.isConnected, wireless.connectionState.hasPrefix("connected") else {
                 throw GuidedStop("not connected: \(wireless.connectionState)")
             }
-            if mode.hasPrefix("PC Remote") {
+            if mode != "Smartphone Connect" {
                 try await wifi("Sony SDIO connect", "The Sony handshake that PC Remote modes may need before listing.", timeout: 60) { wireless.sonySDIO() }
             }
             try await wifi("List card", "GetObjectHandles, then GetObjectInfo for every object.", timeout: 900) { wireless.listCard() }
@@ -522,6 +555,9 @@ extension GuidedRunner {
             if wireless.objects.isEmpty {
                 try await wifi("List card", "The transfer needs the card listed.", timeout: 900) { wireless.listCard() }
             }
+            guard wireless.objects.contains(where: { $0.info.filename.uppercased().hasSuffix(".ARW") }) else {
+                throw GuidedStop("no ARW listed on the card")
+            }
             try await ask("Plain transfer, phone locked", "Tap Start, then lock the phone within 10 s and leave it locked about 2 minutes.", buttons: ["Start"])
             var returns = lifecycle.foregroundReturns
             step("GetObject 20 newest ARW, phone locked")
@@ -531,12 +567,19 @@ extension GuidedRunner {
             }
             try await waitUntil("Finishing the transfer", "Waiting for it to end or fail.", timeout: 1200) { !self.wireless.busy }
 
+            // Two minutes locked has likely ended the PTP/IP session: start the second half on a fresh one.
+            try await ask("Reconnect", "Make sure the phone is back on the camera's network (Settings › Wi-Fi), then tap OK to reconnect.", buttons: ["OK"])
+            try await wifi("Reconnect (same GUID)", "Reconnecting before the continued task.", timeout: 120) { wireless.reconnect(wifiTarget()) }
+            guard wireless.isConnected, wireless.connectionState.hasPrefix("connected") else {
+                throw GuidedStop("couldn't reconnect: \(wireless.connectionState)")
+            }
+            try await wifi("List card", "The continued task needs the card listed again.", timeout: 900) { wireless.listCard() }
+
             try await ask("Continued task, phone locked", "Tap Start, then lock the phone once the import shows on the Lock Screen or in the Dynamic Island; unlock after about 2 minutes.",
                           buttons: ["Start"])
             returns = lifecycle.foregroundReturns
             step("Continued task: 20 ARW over Wi-Fi, phone locked")
-            wireless.downloadARWContinued()
-            try await waitUntil("Starting the continued task", "Waiting for iOS to start it.", timeout: 30) { self.continued.isRunning }
+            try await startContinued("The Wi-Fi continued task") { wireless.downloadARWContinued() }
             try await waitUntil("Lock the phone now", "Lock the phone. Unlock after about 2 minutes.", timeout: 1200) {
                 self.lifecycle.foregroundReturns > returns || !self.continued.isRunning
             }
@@ -556,14 +599,20 @@ extension GuidedRunner {
                 throw GuidedStop("the app couldn't open a PTP/IP session while the camera was sending")
             }
             log.flag("\(t.prefix).sendToSmartphone.connects", true, context: "Send to Smartphone: a PTP/IP session opened")
+            let listStarted = Date()
             try await wifi("List card", "Listing what the camera offers.", timeout: 600) { wireless.listCard() }
-            let listed = wireless.objects.count
-            let expected = Int(chosen) ?? -1
-            log.flag("\(t.prefix).sendToSmartphone.listsSelection", expected > 0 ? listed == expected : listed > 0 && listed < 10,
-                     context: "listed \(listed) objects; \(chosen) chosen on the camera")
-            if listed > 0 {
+            guard log.measurements.contains(where: { $0.at >= listStarted && $0.name == "\(t.prefix).objects" }) else {
+                throw GuidedStop("the listing failed (see the log), so it says nothing about what Send to Smartphone offers")
+            }
+            let names = wireless.objects.map { $0.info.filename }
+            log.note("◆ Send to Smartphone: listed \(names.count) objects (\(chosen) chosen on the camera): \(names.prefix(10).joined(separator: ", "))")
+            if !names.isEmpty {
                 try await wifi("Thumbnails", "GetThumb for what was listed.", timeout: 300) { wireless.thumbnails() }
             }
+            let same = try await ask("The chosen photos?", "Listed \(names.count): \(names.prefix(8).joined(separator: ", "))\(names.count > 8 ? ", …" : ""). Are these the photos you chose on the camera (a RAW+JPEG pair counts as one)?",
+                                     buttons: ["Yes, just those", "More than those", "Not those"])
+            log.flag("\(t.prefix).sendToSmartphone.listsSelection", same == "Yes, just those",
+                     context: "listed \(names.count) objects with \(chosen) chosen on the camera; tester: \(same)")
             let camera = try await ask("On the camera", "What does the camera show now?", buttons: ["Sent / complete", "Still waiting", "An error"])
             log.note("◆ Send to Smartphone: camera shows \(camera)")
         }
@@ -571,10 +620,12 @@ extension GuidedRunner {
 
     // MARK: - Bluetooth sections
 
+    /// One 30 s scan and snapshot; returns the service UUIDs camera-like devices advertised in it.
+    @discardableResult
     private func scan(power: AdvertisementScanner.PowerState, pairing: AdvertisementScanner.PairingContext,
-                      instructions: String) async throws {
+                      instructions: String) async throws -> [String] {
         let go = try await ask("Camera \(power.rawValue), \(pairing.rawValue)", instructions, buttons: ["Ready", "Skip this state"])
-        guard go == "Ready" else { return }
+        guard go == "Ready" else { return [] }
         scanner.log = log
         scanner.start(sonyOnly: true)
         let started = try await waitUntil("Starting the scan", "Allow Bluetooth if iOS asks.", timeout: 30) { self.scanner.isScanning }
@@ -584,25 +635,30 @@ extension GuidedRunner {
             return Date().timeIntervalSince(since) >= 30
         }
         scanner.stop()
+        let candidates = scanner.candidateServiceUUIDs
         let uuid = UserDefaults.standard.string(forKey: ProximityWatcher.Keys.serviceUUID) ?? ""
         scanner.saveSnapshot(power: power, pairing: pairing, proximityUUID: uuid.isEmpty ? nil : uuid)
+        return candidates
     }
 
     func bleAdverts() async throws {
+        // The reminder has to work while Creators' App is quit, so that scan's UUIDs come first.
+        var seenWhileOn: [String] = []
+        var seenConnected: [String] = []
         try await section("Advertisements by power state",
                           "Creators' App paired but quit (the usual state for our users), then one run with it connected. 30 s scans, about 15 minutes.") {
-            try await scan(power: .on, pairing: .unlinked, instructions: "Quit Creators' App (swipe it away). Camera switched on.")
+            seenWhileOn = try await scan(power: .on, pairing: .unlinked, instructions: "Quit Creators' App (swipe it away). Camera switched on.")
             try await scan(power: .asleep, pairing: .unlinked, instructions: "Let the camera go to sleep (power save), Creators' App still quit.")
             try await scan(power: .off, pairing: .unlinked, instructions: "Switch the camera off, Creators' App still quit.")
-            try await scan(power: .on, pairing: .connected, instructions: "Switch the camera on and open Creators' App until it shows the camera connected.")
+            seenConnected = try await scan(power: .on, pairing: .connected, instructions: "Switch the camera on and open Creators' App until it shows the camera connected.")
             try await scan(power: .on, pairing: .unpaired, instructions: "Only if you're happy to pair again later: remove the camera in Creators' App and in the camera's Bluetooth settings. Otherwise skip.")
         }
         try await section("Proximity filter UUID", "Pick the service UUID the background watch filters on.") {
-            let candidates = scanner.candidateServiceUUIDs
+            let candidates = seenWhileOn + seenConnected.filter { !seenWhileOn.contains($0) }
             guard !candidates.isEmpty else {
                 throw GuidedStop("no service UUID advertised by a camera-like device; background scanning needs an advertised one")
             }
-            let choice = try await ask("Filter UUID", "Advertised by the camera: \(candidates.joined(separator: ", ")). Use which one?",
+            let choice = try await ask("Filter UUID", "Advertised by the camera with Creators' App quit: \(seenWhileOn.isEmpty ? "none" : seenWhileOn.joined(separator: ", ")); while connected: \(seenConnected.isEmpty ? "none" : seenConnected.joined(separator: ", ")). Use which one?",
                                        buttons: Array(candidates.prefix(3)) + ["None of them"])
             if candidates.contains(choice) {
                 UserDefaults.standard.set(choice, forKey: ProximityWatcher.Keys.serviceUUID)

@@ -74,6 +74,8 @@ final class GuidedRunner {
     @ObservationIgnored private var cancelled = false
     @ObservationIgnored private var startedAt = Date()
     @ObservationIgnored private var pendingAnswer: String?
+    /// When the last alert closed: the next one waits until 450 ms after it, so SwiftUI sees the old one go first.
+    @ObservationIgnored private var closedAt = Date.distantPast
 
     init(log: SpikeLog, browser: DeviceBrowser, usb: USBLab, wireless: WirelessLab, scanner: AdvertisementScanner,
          continued: ContinuedTask, lifecycle: LifecycleMonitor, proximity: ProximityWatcher) {
@@ -152,6 +154,8 @@ final class GuidedRunner {
     private func stopRunningWork() {
         if usb.isBusy { usb.session?.requestStop() }
         if continued.isRunning { continued.stop() }
+        if scanner.isScanning { scanner.stop() }
+        if wireless.busy { log.warn("◆ A Wi-Fi operation is still running; it ends on its own (the Wi-Fi tab has no Stop)") }
     }
 
     private func makeReport() -> String {
@@ -166,6 +170,7 @@ final class GuidedRunner {
     private func finishPrompt(with answer: String) {
         let waiting = continuation
         continuation = nil
+        if prompt != nil { closedAt = Date() }
         prompt = nil
         waiting?.resume(returning: answer)
     }
@@ -179,10 +184,12 @@ final class GuidedRunner {
         }
     }
 
+    /// Closes any alert on screen, then waits until 450 ms after the last one closed (however it closed), so SwiftUI
+    /// dismisses it before the next is set; replacing one alert with another in the same turn leaves the old one up.
     private func replaceAlert() async {
-        guard prompt != nil else { return }
-        finishPrompt(with: "")
-        try? await Task.sleep(for: .milliseconds(450))
+        if prompt != nil { finishPrompt(with: "") }
+        let wait = closedAt.addingTimeInterval(0.45).timeIntervalSinceNow
+        if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
     }
 
     private func checkCancelled() throws {
@@ -225,7 +232,10 @@ final class GuidedRunner {
             if Date() > deadline { break }
             try? await Task.sleep(for: .milliseconds(250))
         }
-        if prompt?.id == waiting.id { prompt = nil }
+        if prompt?.id == waiting.id {
+            prompt = nil
+            closedAt = Date()
+        }
         try checkCancelled()
         if !met { log.warn("  guided: \(title): not done after \(Int(timeout)) s") }
         return met
@@ -234,9 +244,17 @@ final class GuidedRunner {
     /// A notice that doesn't block the run (PULL NOW): it replaces the alert on screen, and the next alert replaces
     /// it in turn.
     func notice(_ title: String, _ message: String) {
+        guard runningTitle != nil, !cancelled else { return }
+        // Only a waiting alert (no continuation) may give way; an alert waiting for a button keeps the screen.
+        guard continuation == nil else { return }
         Task {
-            await replaceAlert()
-            if cancelled { return }
+            if prompt != nil && continuation == nil {
+                prompt = nil
+                closedAt = Date()
+            }
+            let wait = closedAt.addingTimeInterval(0.45).timeIntervalSinceNow
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            guard runningTitle != nil, !cancelled, prompt == nil, continuation == nil else { return }
             prompt = GuidedPrompt(title: title, message: message, buttons: ["OK"], allowsCancel: false)
         }
     }
