@@ -26,7 +26,7 @@ final class ProximityWatcher: NSObject {
     static let shared = ProximityWatcher()
 
     /// Must be identical on every launch: iOS hands the scan back to the central created with this identifier.
-    static let restoreIdentifier = "com.ubiquitousbear.shutterbridge.spike.proximity"
+    static let restoreIdentifier = "net.shamil.shutter-bridge.spike.proximity"
     static let categoryIdentifier = "spike.camera.nearby"
     static let importNowAction = "spike.camera.importNow"
     static let notNowAction = "spike.camera.notNow"

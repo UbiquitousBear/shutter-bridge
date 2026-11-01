@@ -9,7 +9,7 @@ import OSLog
 /// system can kill it while suspended, so every entry and measurement is also appended as one JSON line to
 /// Documents/spike-log.jsonl and reloaded at the next launch (the last `entryLimit` entries and
 /// `measurementLimit` measurements). The file is compacted when it carries too many dropped lines. Everything is
-/// still mirrored to OSLog (subsystem com.ubiquitousbear.shutterbridge.spike) for Console.app.
+/// still mirrored to OSLog (subsystem net.shamil.shutter-bridge.spike) for Console.app.
 @Observable
 @MainActor
 final class SpikeLog {
@@ -52,7 +52,7 @@ final class SpikeLog {
     private(set) var persistenceProblem: String?
 
     private let fileURL: URL?
-    private let os = Logger(subsystem: "com.ubiquitousbear.shutterbridge.spike", category: "spike")
+    private let os = Logger(subsystem: "net.shamil.shutter-bridge.spike", category: "spike")
     @ObservationIgnored private var handle: FileHandle?
     @ObservationIgnored private var linesInFile = 0
     /// True when the file existed but could not be read (device locked since boot): never compact then, or the

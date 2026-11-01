@@ -9,9 +9,15 @@ documentation on this date; the claims that rest only on forum reports are marke
 | --- | --- | --- | --- |
 | PTPKit tests on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/ptpkit.yml`) | PRs touching `Packages/PTPKit` | none |
 | Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`) | PRs touching `Spike/` or `Packages/PTPKit` | none |
-| Archive → TestFlight (internal testing) | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
+| Archive → TestFlight (internal testing), **now** | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`) | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
+| Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
 
-**Why Xcode Cloud for TestFlight.** It is the proposal's CI decision, it signs with Apple-managed certificates
+**Why GitHub for TestFlight first.** Shamil has no Mac until Thu 5 Nov, and Xcode Cloud's onboarding needs Xcode
+on a Mac, while the spike's wired days need the app on the iPhone from day 1. Everything the GitHub route needs
+can be set up from a phone's browser (below). Once Xcode Cloud is set up, revoke the API key and delete the
+`testflight` environment.
+
+**Why Xcode Cloud for TestFlight later.** It is the proposal's CI decision, it signs with Apple-managed certificates
 so no signing key or App Store Connect API key ever sits in this **public** repository, and the Apple Developer
 Program includes 25 compute hours a month (paid tiers from US$49.99 for 100 h). At an estimated 8–12 minutes per
 archive-only build (not yet measured), that is well over 100 builds a month.
@@ -40,18 +46,19 @@ The image is still marked *preview*: no SLA, occasional queueing, weekly changes
 - **Project generation in CI:** `Spike/ci_scripts/ci_post_clone.sh` installs XcodeGen and generates the git-ignored
   project. Xcode Cloud only runs scripts from a `ci_scripts` folder next to the project, hence `Spike/ci_scripts/`.
 
-## One-time setup (Shamil; about 30 minutes, needs the Mac)
+## Xcode Cloud: one-time setup (Shamil; about 30 minutes, needs the Mac)
 
-These steps live in Apple's and GitHub's consoles, not in git. An agent can't do them.
+These steps live in Apple's and GitHub's consoles, not in git. An agent can't do them. Steps 1–4 are the same as
+for the GitHub route below; skip the ones already done.
 
 1. **Agreements.** App Store Connect → Business: accept any pending agreements (Account Holder).
 2. **App ID with capabilities.** On the Mac: `make spike && make open`, set your team in Signing & Capabilities,
-   and run the app on the iPhone once. Automatic signing registers `com.ubiquitousbear.shutterbridge.spike` with
+   and run the app on the iPhone once. Automatic signing registers `net.shamil.shutter-bridge.spike` with
    Hotspot Configuration. Check in the developer portal (Certificates, IDs & Profiles → Identifiers) that the
    capability is ticked: cloud signing during export will not add capabilities to an App ID.
 3. **App record.** App Store Connect → Apps → + → New App: iOS, name e.g. "Shutter Bridge Spike" (don't spend the
    product name; no Sony marks), primary language English (UK), bundle ID
-   `com.ubiquitousbear.shutterbridge.spike`, SKU `shutterbridge-spike`. The bundle ID can't change after the
+   `net.shamil.shutter-bridge.spike`, SKU `shutterbridge-spike`. The bundle ID can't change after the
    first upload. Apple asks that apps be created on the website, not through the API.
 4. **Internal testers.** TestFlight → Internal Testing → + group "Spike", add yourself. Internal testing needs no
    Beta App Review; builds expire after 90 days.
@@ -107,24 +114,69 @@ It has `permissions: contents: read` and no secrets, so it is safe on PRs from f
 `Xcode_27.2.app` once the image carries the 27.2 release (it currently symlinks the release candidate there;
 App Store Connect accepts builds from both).
 
-## Not set up: TestFlight from GitHub Actions
+## TestFlight from GitHub Actions (no Mac needed)
 
-It is possible, but needs more trust than the spike warrants. For the record, if Xcode Cloud ever can't be used:
+`.github/workflows/testflight.yml` archives the spike on the `xcode-27` runner, signs it at export with
+Apple-managed certificates and uploads it to TestFlight for internal testing. It runs only when started by hand
+and approved, and only from `main`.
 
-- Archive ad-hoc signed so entitlements stay in the signature:
-  `CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<team>`
-  (`CODE_SIGNING_ALLOWED=NO` drops entitlements). Xcode Cloud's own archive command uses these flags; for GitHub
-  runners it rests on a developer-forum report, so verify the archive's entitlements.
-- Export and upload with `xcodebuild -exportArchive -allowProvisioningUpdates -authenticationKeyPath …
-  -authenticationKeyID … -authenticationKeyIssuerID …` and an ExportOptions.plist with `method`
-  `app-store-connect`, `destination` `upload`, `signingStyle` `automatic`, `teamID`,
-  `manageAppVersionAndBuildNumber` false, `testFlightInternalTestingOnly` true (key names from Xcode 27.0's
-  `xcodebuild -help`; re-check on the Mac).
-- Cloud-managed distribution certificates need a **Team API key with the Admin role**: that key could sign and
-  upload as you, so it must live in a GitHub Environment (`testflight`) with you as required reviewer, the
-  workflow must be `workflow_dispatch` only (never `pull_request`/`pull_request_target`), and the `.p8` must be
-  written to `$RUNNER_TEMP` with `umask 077` and deleted on exit.
-- Build numbers from `CURRENT_PROJECT_VERSION=${{ github.run_number }}`.
+### One-time setup from a phone or any browser (about 45 minutes)
+
+Use Safari's "Request Desktop Website" for the Apple pages.
+
+1. **Agreements.** App Store Connect → Business: accept any pending agreements (Account Holder).
+2. **App ID.** developer.apple.com → Account → Certificates, IDs & Profiles → Identifiers → + → App IDs → App:
+   description "Shutter Bridge Spike", Bundle ID **Explicit** `net.shamil.shutter-bridge.spike`, and under
+   Capabilities tick **Hotspot Configuration**. (Apple-managed signing at export creates the profile but will not
+   register an App ID or change its capabilities, so this step is manual.) Later, once Apple grants it, add
+   Multicast Networking here too; optionally Access Wi-Fi Information (see the runbook).
+3. **App record.** App Store Connect → Apps → + → New App: iOS, name e.g. "Shutter Bridge Spike" (don't spend the
+   product name; no Sony marks), primary language English (UK), bundle ID `net.shamil.shutter-bridge.spike`, SKU
+   `shutterbridge-spike`, Full Access. The bundle ID can't change after the first upload.
+4. **Internal testers.** The app → TestFlight → Internal Testing → + group "Spike", add yourself, and turn on
+   automatic distribution so each new build reaches the group.
+5. **Team API key.** App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys
+   (if it shows Request Access, the Account Holder accepts that once) → Generate API Key → name
+   "GitHub TestFlight (spike)", Access **Admin** (Apple-managed signing needs Admin) → Generate. Note the
+   **Issuer ID** (top of the page) and the key's **Key ID**, then Download API Key: the `.p8` downloads once only.
+   On an iPhone, rename it to `.txt` in Files so it opens as text to copy.
+6. **GitHub environment.** Repository → Settings → Environments → New environment `testflight`:
+   - Required reviewers: Shamil. Leave "Prevent self-reviews" off, or you can't approve your own runs.
+   - Deployment branches and tags: Selected branches and tags → `main`.
+   - Environment secrets: `ASC_KEY_ID` (Key ID), `ASC_ISSUER_ID` (Issuer ID), `ASC_PRIVATE_KEY` (the whole `.p8`
+     text, BEGIN and END lines included).
+   - Environment variable: `APPLE_TEAM_ID` (the 10-character Team ID: developer.apple.com → Account →
+     Membership details).
+7. **Merge PR #1.** A manually started workflow only shows under Actions once it is on the default branch.
+
+### Running it
+
+Actions → **Spike to TestFlight** → Run workflow (branch `main`, Xcode 27.1) → approve the `testflight`
+deployment when GitHub asks. The job checks the environment is complete, generates the project, archives with
+an ad-hoc signature, fails if the archive lost the Hotspot Configuration entitlement, then exports and uploads.
+Build numbers are the workflow's run number. After a few minutes of processing on Apple's side the build appears
+in the TestFlight app.
+
+If you later use Xcode Cloud for the same app, set its next build number above the last GitHub run number (App
+Store Connect → the app → Xcode Cloud → Settings → Build Number), since Xcode Cloud counts from 1.
+
+### If the first run fails
+
+- **Archive fails with a signing or provisioning error:** the ad-hoc archive flags
+  (`CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES CODE_SIGN_STYLE=Automatic`) are what Xcode Cloud's own
+  archive uses, but on GitHub runners they rest on a developer-forum report. Paste the log here; the fallback is
+  manual signing with a distribution certificate and profile, which needs a little more setup.
+- **Export fails with a permission or "cloud signing" error:** the key must be a Team key with the Admin role.
+- **Export fails over a capability or profile:** check step 2 (Hotspot Configuration ticked on the App ID).
+- **Upload rejected as a duplicate:** a build with that number already exists; run the workflow again.
+
+### Security
+
+The key can sign and upload apps and manage the account, so: it lives only in the `testflight` environment
+(limited to `main`, approval per run); the workflow never runs on pushes or pull requests, so a fork's code never
+sees it; the `.p8` is written with owner-only permissions to the runner's temp folder and deleted when the step
+ends; nothing prints it. Revoke it in App Store Connect when Xcode Cloud takes over, or at once if it might have
+leaked.
 
 ## Sources
 

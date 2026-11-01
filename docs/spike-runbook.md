@@ -24,7 +24,7 @@ The spike app compiles with Xcode 27 for iPhone (the unsigned build in `.github/
 | [ ] | ATS exception for the SSDP description | Already in `Spike/project.yml` (`NSAppTransportSecurity` › `NSAllowsLocalNetworking: true`): the day-6 SSDP probe fetches the camera's UPnP description over plain HTTP from an IP address, which iOS blocks otherwise. If that fetch fails with error -1022, check the generated Info.plist. |
 | [ ] | Optional: Access Wi-Fi Information | With `com.apple.developer.networking.wifi-info` in `Spike.entitlements` (and the capability on the App ID), the day-9 join can confirm the SSID and BSSID it joined. Without it the join still works and is timed; the log says the SSID was not confirmed. |
 | [ ] | Developer Mode | iPhone: Settings › Privacy & Security › Developer Mode, then restart. |
-| [ ] | Install route | Run from Xcode (needs the team set), or install a TestFlight build from Xcode Cloud once it is set up ([ci.md](ci.md)). |
+| [ ] | Install route | Without a Mac: the **Spike to TestFlight** GitHub workflow, then the TestFlight app ([ci.md](ci.md), "TestFlight from GitHub Actions"). With the Mac: run from Xcode (needs the team set), or Xcode Cloud once it is set up. The bundle ID is `net.shamil.shutter-bridge.spike`. |
 | [ ] | Xcode over the network | Pair the phone with Xcode over the cable once, so Xcode can reach it over the network: from day 1 the phone's only USB-C port is taken by the camera. |
 | [ ] | Phone state | At least 20 GB free (the download tests check free space before they start and stop if there isn't enough). Low Power Mode off: it stops background Bluetooth scanning and may end continued tasks early (the launch line in the log records it). Bluetooth on. |
 | [ ] | Files sharing | Already on in `project.yml` (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`). The app's Documents folder shows in the Files app under On My iPhone › SB Spike, and in Finder on the Mac (select the iPhone, then Files › SB Spike). Fixtures are in `fixtures/a7c2/`, the log in `spike-log.jsonl`. |
@@ -42,6 +42,18 @@ Permission prompts to expect, the first time each feature is used:
 | Join network (system sheet) | Wi-Fi › *Join camera Wi-Fi* | Shown on every `NEHotspotConfiguration` join; not a privacy setting. |
 
 The spike never writes to Photos, so there is no Photos prompt.
+
+## Week 1 without the Mac (until Thu 5 Nov)
+
+The app comes from TestFlight (above), so only the Mac-side probes wait for the Mac:
+
+| When | What |
+| --- | --- |
+| First days, phone and camera only | Day 1's camera and iPhone steps (each USB mode → Photos → Import, menu wording, the app's Wired tab), the multicast entitlement request, then days 2–5 in the app. Fixtures stay on the phone (Log › Fixtures). Day 6's BLE capture (nRF Connect or LightBlue, and the Bluetooth tab) needs no Mac either and can come forward. |
+| Thu 5 Nov, with the Mac | Day 1's Mac steps (Image Capture, `gphoto2 --auto-detect` and `--summary`); copy the fixtures off the phone into `Fixtures/a7c2/`, then `make fixtures && make test`; optionally set up Xcode Cloud. |
+| From Fri 6 Nov | Week 2 as planned, with day 6's Mac probes. |
+
+Without Xcode attached, the app's own log (Log tab, persisted across launches) and TestFlight's crash reports are the record; export the log at the end of each day.
 
 ## Day 1: baseline with zero code
 

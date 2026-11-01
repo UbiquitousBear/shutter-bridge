@@ -9,7 +9,7 @@ import BackgroundTasks
 @Observable
 @MainActor
 final class ContinuedTask {
-    static let identifier = "com.ubiquitousbear.shutterbridge.spike.import"
+    static let identifier = "net.shamil.shutter-bridge.spike.import"
 
     private(set) var state = "idle"
     private(set) var completed = 0

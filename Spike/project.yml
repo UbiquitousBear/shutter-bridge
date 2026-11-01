@@ -8,7 +8,7 @@ options:
   # Floor, not a pin: XcodeGen refuses to generate with anything older than 2.46.0 (the Homebrew version when this
   # was written). CI and local setups install the latest Homebrew release, so a newer XcodeGen can still change the output.
   minimumXcodeGenVersion: "2.46.0"
-  bundleIdPrefix: com.ubiquitousbear.shutterbridge
+  bundleIdPrefix: net.shamil.shutter-bridge
   deploymentTarget:
     iOS: "27.0"
   createIntermediateGroups: true
@@ -57,10 +57,10 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         BGTaskSchedulerPermittedIdentifiers:
-          - com.ubiquitousbear.shutterbridge.spike.import
+          - net.shamil.shutter-bridge.spike.import
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ubiquitousbear.shutterbridge.spike
+        PRODUCT_BUNDLE_IDENTIFIER: net.shamil.shutter-bridge.spike
         CODE_SIGN_ENTITLEMENTS: Spike.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "0.1"
