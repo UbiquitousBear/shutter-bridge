@@ -509,7 +509,7 @@ final class WirelessLab {
             let (info, raw) = try await c.getDeviceInfo()
             deviceInfo = info
             logDeviceInfo(info, raw: raw)
-            FixtureStore.save(raw, link: .ptpip, name: "deviceinfo.bin", log: log)
+            FixtureStore.saveDeviceInfo(raw, link: .ptpip, log: log)
             FixtureStore.recordFirmware(model: info.model, version: info.deviceVersion, link: .ptpip, log: log)
             connectionState = "connected · \(info.model) \(info.deviceVersion) · \(t.netLabel)"
             return (c, info)
@@ -523,7 +523,7 @@ final class WirelessLab {
     private func logDeviceInfo(_ di: PTPDeviceInfo, raw: Data) {
         func yn(_ b: Bool) -> String { b ? "yes" : "no" }
         let vendor = di.vendorExtension.map { "\($0)" } ?? String(format: "0x%08X", di.vendorExtensionID)
-        log.note("DeviceInfo (\(raw.count) bytes): \(di.manufacturer) \(di.model), firmware \(di.deviceVersion), serial \(di.serialNumber); PTP \(di.standardVersion), vendor extension \(vendor) v\(di.vendorExtensionVersion) \"\(di.vendorExtensionDescription)\", functional mode \(di.functionalMode)")
+        log.note("DeviceInfo (\(raw.count) bytes): \(di.manufacturer) \(di.model), firmware \(di.deviceVersion), \(di.serialNumber.isEmpty ? "serial (empty)" : "serial present (\(di.serialNumber.count) characters, redacted)"); PTP \(di.standardVersion), vendor extension \(vendor) v\(di.vendorExtensionVersion) \"\(di.vendorExtensionDescription)\", functional mode \(di.functionalMode)")
         let ops = di.operationsSupported.map { code -> String in
             String(format: "0x%04X ", code) + PTPOperationCode(rawValue: code).description
         }

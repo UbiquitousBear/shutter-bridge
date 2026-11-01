@@ -632,12 +632,12 @@ final class CameraSession: NSObject {
     private func loadDeviceInfo() async throws -> PTPDeviceInfo {
         let reply = try await send(PTPCommand.getDeviceInfo(tx: tx.take()))
         try check(reply, "GetDeviceInfo")
-        FixtureStore.save(reply.data, link: .usb, name: "deviceinfo.bin", log: log)
+        FixtureStore.saveDeviceInfo(reply.data, link: .usb, log: log)
         let info = try PTPDeviceInfo.decode(reply.data)
         deviceInfo = info
         FixtureStore.recordFirmware(model: info.model, version: info.deviceVersion, link: .usb, log: log)
         let vendor = info.vendorExtension.map { "\($0)" } ?? "unknown"
-        log.note("DeviceInfo: \(info.manufacturer) \(info.model), firmware \(info.deviceVersion), serial \(info.serialNumber.isEmpty ? "(empty)" : info.serialNumber)")
+        log.note("DeviceInfo: \(info.manufacturer) \(info.model), firmware \(info.deviceVersion), \(redactedSerial(info.serialNumber))")
         log.note("  PTP \(info.standardVersion), vendor extension \(hex32(info.vendorExtensionID)) (\(vendor)) v\(info.vendorExtensionVersion) '\(info.vendorExtensionDescription)', functional mode \(info.functionalMode)")
         log.note("  operations (\(info.operationsSupported.count)): " + info.operationsSupported.map { named($0, PTPOperationCode(rawValue: $0).description) }.joined(separator: ", "))
         log.note("  events (\(info.eventsSupported.count)): " + info.eventsSupported.map { named($0, PTPEventCode(rawValue: $0).description) }.joined(separator: ", "))
@@ -1925,6 +1925,10 @@ private func named(_ code: UInt16, _ name: String) -> String {
 private func hex16(_ value: UInt16) -> String { String(format: "0x%04X", value) }
 private func hex32(_ value: UInt32) -> String { String(format: "0x%08X", value) }
 private func yesNo(_ value: Bool) -> String { value ? "yes" : "no" }
+/// The camera serial must never reach the public repo, and the log is exported: only whether there is one.
+private func redactedSerial(_ serial: String) -> String {
+    serial.isEmpty ? "serial (empty)" : "serial present (\(serial.count) characters, redacted)"
+}
 private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
 private func mb<T: BinaryInteger>(_ bytes: T) -> String { fmt(Double(bytes) / 1_000_000) + " MB" }
 private func gb(_ bytes: UInt64) -> String { fmt(Double(bytes) / 1_000_000_000, 2) + " GB" }

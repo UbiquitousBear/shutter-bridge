@@ -70,4 +70,6 @@ and `.pcap` files stay here as the record.
 - Never edit a fixture by hand. If a test fails on one, the codec is wrong.
 - Nothing in here may contain the camera's Wi-Fi password or a QR payload. The spike app never writes either;
   scrub any pcap of the QR or join step.
-- `deviceinfo.bin` and `ssdp-description.xml` may contain the camera's serial number.
+- The camera's serial number must never reach this repo. The spike app writes `deviceinfo.bin` with every
+  character of the SerialNumber replaced by "0" (same length; log line `fixture saved: … (serial zeroed)`), and
+  doesn't log the serial. `ssdp-description.xml` may still contain it: check before committing one.
