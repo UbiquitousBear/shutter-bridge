@@ -65,6 +65,15 @@ struct PTPContainerTests {
         #expect(PTPObjectFormat.sonyHEIF.description == "Sony HEIF")
     }
 
+    @Test("GetDevicePropValue(BatteryLevel) carries the property code as its only parameter")
+    func devicePropValue() {
+        let c = PTPCommand.getDevicePropValue(.batteryLevel, tx: 4)
+        #expect(c.operationCode == .getDevicePropValue)
+        #expect(c.parameters == [0x5001])
+        #expect(PTPDevicePropCode.batteryLevel.description == "BatteryLevel")
+        #expect(PTPDevicePropCode(rawValue: 0xD20F).description == "Prop(0xD20F)")
+    }
+
     @Test("Both the standard and Sony ObjectAdded signal a new object")
     func newObjectEvents() {
         #expect(PTPEventCode.objectAdded.signalsNewObject)

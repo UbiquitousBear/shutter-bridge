@@ -113,7 +113,6 @@ public struct PTPResponseCode: RawRepresentable, Hashable, Sendable, CustomStrin
         case .accessDenied: "AccessDenied"
         case .noThumbnailPresent: "NoThumbnailPresent"
         case .storeNotAvailable: "StoreNotAvailable"
-        case .invalidStorageID: "InvalidStorageID"
         case .devicePropNotSupported: "DevicePropNotSupported"
         case .invalidObjectFormatCode: "InvalidObjectFormatCode"
         case .storeFull: "StoreFull"
@@ -229,6 +228,29 @@ public enum PTPVendorExtension: UInt32, Sendable {
     case microsoftMTP = 0x0006
     case sony = 0x0011
     case fujifilm = 0x0012
+}
+
+/// Device property codes (ISO 15740 §13) the spike reads.
+public struct PTPDevicePropCode: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: UInt16
+    public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+    /// UINT8, percent of a full battery.
+    public static let batteryLevel = PTPDevicePropCode(rawValue: 0x5001)
+    public static let functionalMode = PTPDevicePropCode(rawValue: 0x5002)
+    public static let imageSize = PTPDevicePropCode(rawValue: 0x5003)
+    /// String, "YYYYMMDDThhmmss".
+    public static let dateTime = PTPDevicePropCode(rawValue: 0x5011)
+
+    public var description: String {
+        switch self {
+        case .batteryLevel: "BatteryLevel"
+        case .functionalMode: "FunctionalMode"
+        case .imageSize: "ImageSize"
+        case .dateTime: "DateTime"
+        default: String(format: "Prop(0x%04X)", rawValue)
+        }
+    }
 }
 
 public struct PTPStorageID: RawRepresentable, Hashable, Sendable {

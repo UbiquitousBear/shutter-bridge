@@ -194,10 +194,18 @@ public struct PTPObjectInfo: Equatable, Sendable {
         }
     }
 
+    /// True when the 32-bit size field cannot hold the object's size: ISO 15740 has the responder report
+    /// 0xFFFFFFFF for objects of 4 GiB or more (long video clips), and the real size must come from elsewhere
+    /// (ImageCaptureCore's file size, or MTP's ObjectSize property).
+    public var sizeExceeds32Bits: Bool { objectCompressedSize == UInt32.max }
+
     /// Identity of this object for diffing and resume: handles are not stable across sessions, and filenames
     /// alone collide after the camera's counter wraps (proposal § Import engine design, stage 3).
-    public func identity(cameraSerial: String) -> PTPObjectIdentity {
-        PTPObjectIdentity(cameraSerial: cameraSerial, filename: filename, captureDateRaw: captureDateRaw, size: UInt64(objectCompressedSize))
+    /// Pass `size` when the true size is known from elsewhere; it is required when `sizeExceeds32Bits`, since
+    /// 0xFFFFFFFF would make every large clip look the same size.
+    public func identity(cameraSerial: String, size: UInt64? = nil) -> PTPObjectIdentity {
+        PTPObjectIdentity(cameraSerial: cameraSerial, filename: filename, captureDateRaw: captureDateRaw,
+                          size: size ?? UInt64(objectCompressedSize))
     }
 
     public static func decode(_ data: Data) throws -> PTPObjectInfo {

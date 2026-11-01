@@ -62,6 +62,13 @@ struct PTPDatasetTests {
         #expect(decoded.captureDate != nil)
         #expect(decoded.mediaKind == .raw)
         #expect(decoded.identity(cameraSerial: "S1") == PTPObjectIdentity(cameraSerial: "S1", filename: "DSC04512.ARW", captureDateRaw: "20261031T211412", size: 36_412_928))
+        #expect(!decoded.sizeExceeds32Bits)
+
+        var clip = decoded
+        clip.filename = "C0042.MP4"
+        clip.objectCompressedSize = .max   // ≥ 4 GiB: the 32-bit field saturates
+        #expect(clip.sizeExceeds32Bits)
+        #expect(clip.identity(cameraSerial: "S1", size: 6_442_450_944).size == 6_442_450_944)
     }
 
     @Test("Media kind: extension first, vendor format code as fallback", arguments: [

@@ -130,6 +130,14 @@ public enum PTPCommand {
         PTPContainer(type: .command, code: PTPOperationCode.getThumb.rawValue, transactionID: tx, parameters: [handle.rawValue])
     }
 
+    public static func getDevicePropValue(_ prop: PTPDevicePropCode, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.getDevicePropValue.rawValue, transactionID: tx, parameters: [UInt32(prop.rawValue)])
+    }
+
+    public static func getDevicePropDesc(_ prop: PTPDevicePropCode, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.getDevicePropDesc.rawValue, transactionID: tx, parameters: [UInt32(prop.rawValue)])
+    }
+
     /// ISO 15740 GetPartialObject: 32-bit offset and length. `length == 0xFFFFFFFF` means "to the end".
     public static func getPartialObject(_ handle: PTPObjectHandle, offset: UInt32, length: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.getPartialObject.rawValue, transactionID: tx,
