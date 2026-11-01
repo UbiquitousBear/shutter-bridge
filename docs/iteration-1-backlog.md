@@ -100,10 +100,14 @@ Acceptance criteria:
 - Creates assets with `PHAssetCreationRequest` from file URLs, never from data in memory.
 - An `.ARW` and a `.JPG` or `.HIF` with the same pair stem become one asset: the JPEG or HEIF as `.photo`, the ARW as `.alternatePhoto`. A lone ARW, JPEG or HEIF becomes its own asset.
 - The camera's capture date (and GPS from EXIF, if present) is set on the asset.
-- Asks for `.addOnly` access only.
+- Asks for `.readWrite` access once, at the first import, and works with `.limited`. The prompt's text says that *Limit Access* with no photos selected is enough. The spike showed that add-only access can't create an album without bringing up the read/write prompt anyway (spike-findings.md, "Photos albums").
+- Puts each import in an album: creates it the first time, stores its `localIdentifier`, finds it by that identifier (the title can match more than one album), and checks `canPerform(.addContent)` before adding.
+- Stages downloads as complete-until-first-unlock (the default), never `complete`: a locked import inside a continued task then saves as it goes. A `complete` file fails while locked (`PHPhotosErrorDomain` 3302).
 - Returns the `localIdentifier`, which the catalogue stores.
 - Tested against a protocol, with a fake library in unit tests and the real one in the hardware plan.
-- Open point: check whether `.addOnly` access allows creating the per-camera album and adding assets to it; if it does not, the album needs read-write access or waits.
+- Decided by the spike: `.addOnly` can't create the album, so albums use read/write access (limited is enough).
+- Open point: which albums. One per camera, one per import (dated), or both. The proposal has both, with the per-import album optional; Shamil asked for imports to go into a new album.
+- Open point: iOS 27's `PHAssetCreationRequest.originalResourceChoice` picks whether the RAW or the JPEG is a pair's original. Decide which.
 
 Could change with: the filenames and pair stems in the captured ObjectInfo fixtures; whether the card holds HEIF pairs; whether Apple's RAW decoder handles the α7C II's ARW (thumbnails fall back to the embedded JPEG either way).
 
