@@ -56,6 +56,8 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var thumbnailRuns = 0
     @ObservationIgnored private var successfulOpens = 0
     @ObservationIgnored private var openIsReopen = false
+    /// Stamped into USBResumeState: a resume counts as a link-drop resume only in a different CameraSession.
+    private let sessionID = UUID()
 
     private struct RecentEvent {
         let data: Data
@@ -291,6 +293,7 @@ final class CameraSession: NSObject {
             var failures: [String] = []
             for (index, file) in sample.enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
                 let name = file.name ?? "?"
                 let start = clock.now
                 do {
@@ -343,6 +346,10 @@ final class CameraSession: NSObject {
                 await self.runBatch(selection, parallel: preset.parallel, dir: dir, title: preset.label)
             }
             if removed { throw USBSpikeError.deviceRemoved }
+            if !isOpen {
+                log.warn("The camera closed the session after \(result.ok) of \(selection.count) files; \(preset.measurement) not recorded (the per-file figures above stand).")
+                throw USBSpikeError.sessionClosed
+            }
             if result.stopped {
                 log.warn("Batch stopped after \(result.ok) of \(selection.count) files; \(preset.measurement) not recorded (the per-file figures above stand).")
                 throw USBSpikeError.stopped
@@ -398,7 +405,7 @@ final class CameraSession: NSObject {
                     lifecycle.noteProgress("downloaded \(outcome.name) (\(finished)/\(selection.count))", link: "usb")
                 }
                 progressText = "\(finished)/\(selection.count)"
-                if stopRequested || removed {
+                if stopRequested || removed || !isOpen {
                     result.stopped = true
                 } else if next < selection.count {
                     let file = selection[next]
@@ -713,6 +720,7 @@ final class CameraSession: NSObject {
             var count = 0
             while bytes < target {
                 if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
                 let file = pool[count % pool.count]
                 let downloaded = try await downloadFile(file, to: dir)
                 try? FileManager.default.removeItem(at: downloaded.url)
@@ -785,9 +793,23 @@ final class CameraSession: NSObject {
             } else {
                 log.error("GetPartialObject stopped at \(gpo.offset) of \(size) bytes: \(gpo.error.map { describe($0) } ?? "short read")")
             }
-            log.flag("usb.getPartialObject.supported", complete,
-                     context: complete ? "\(name) fully reassembled with \(variant.rawValue)"
-                                       : "\(variant.rawValue) failed at \(gpo.offset)/\(size): \(gpo.error.map { describe($0) } ?? "short read")")
+            // "No" only when the camera itself answered the first chunk with a non-OK response, or OK with no bytes
+            // (same rule as the Wi-Fi path). Timeouts, pass-through decode failures, local write errors and failures
+            // after good chunks are not an answer about the camera.
+            var cameraRefused = false
+            if gpo.offset == 0, let e = gpo.error as? USBSpikeError {
+                switch e {
+                case .ptp, .noData: cameraRefused = true
+                default: break
+                }
+            }
+            if complete || cameraRefused {
+                log.flag("usb.getPartialObject.supported", complete,
+                         context: complete ? "\(name) fully reassembled with \(variant.rawValue)"
+                                           : "\(variant.rawValue) refused on the first chunk: \(gpo.error.map { describe($0) } ?? "short read")")
+            } else {
+                log.warn("usb.getPartialObject.supported not recorded: \(variant.rawValue) failed at \(gpo.offset)/\(size) with \(gpo.error.map { describe($0) } ?? "short read"), which is not the camera refusing the operation. Re-run, or try Start resumable read (1 MiB chunks).")
+            }
             if removed { throw USBSpikeError.deviceRemoved }
 
             // 2. requestReadData, same chunk size.
@@ -823,7 +845,7 @@ final class CameraSession: NSObject {
 
             guard let gpoSHA else {
                 log.warn("usb.getPartialObject.sha256Match not recorded: there is no complete GetPartialObject reassembly to compare.")
-                lastResult = "GetPartialObject: not supported here"
+                lastResult = cameraRefused ? "GetPartialObject: not supported here" : "GetPartialObject: incomplete"
                 return
             }
             var references: [(String, String)] = []
@@ -895,6 +917,9 @@ final class CameraSession: NSObject {
             if removed {
                 return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.deviceRemoved)
             }
+            if !isOpen {
+                return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.sessionClosed)
+            }
             let chunkStart = clock.now
             do {
                 let command = try PTPPartialRead.command(handle, chunk: chunk, variant: variant, tx: tx.take())
@@ -939,6 +964,7 @@ final class CameraSession: NSObject {
         let clock = ContinuousClock()
         while offset < size {
             if stopRequested { throw USBSpikeError.stopped }
+            if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
             let length = min(chunk, size - offset)
             let readOffset = off_t(offset)
             let readLength = off_t(length)
@@ -994,8 +1020,10 @@ final class CameraSession: NSObject {
             if let at = newObjectEventAt {
                 log.note("New-object event \(fmt(at.timeIntervalSince(started))) s after the watch started. \(iccNote). Events this session by source: \(sources).")
                 lastResult = "ObjectAdded received"
-            } else if objectAddedFlagged {
-                log.note("No new-object event in this window (one was recorded earlier this session). \(iccNote). Events by source: \(sources).")
+            } else if objectAddedFlagged || log.measurements.contains(where: { $0.name == "usb.event.objectAdded" && $0.value == 1 }) {
+                // ObjectAdded is a property of the camera mode, not of one session: a timeout after an earlier yes
+                // (this session, an earlier session or an earlier launch) must not overwrite it with no.
+                log.note("No new-object event in this window (one was recorded earlier). \(iccNote). Events by source: \(sources).")
                 lastResult = "No ObjectAdded this time"
             } else {
                 log.flag("usb.event.objectAdded", false,
@@ -1057,7 +1085,18 @@ final class CameraSession: NSObject {
             let variant = chooseVariant(size: identity.size, info: info)
             let relative = USBResumePaths.relativePartPath(serial: serial, filename: objectInfo.filename)
             let writer = try PartFileWriter(url: USBResumePaths.url(relative: relative), startingAt: 0)
-            var state = USBResumeState(identity: identity, offset: 0, partPath: relative, savedAt: Date(), reason: "started")
+            // Only one saved read is kept: say so if an unfinished one is replaced, and don't orphan another file's .part.
+            if let previous = USBResumeStore.load() {
+                if previous.offset < previous.identity.size {
+                    log.warn("Replacing the saved read of \(previous.identity.filename) at \(fmt(previous.percent, 0)) % (\(previous.reason)); its resume is discarded")
+                }
+                if previous.partPath != relative {
+                    try? FileManager.default.removeItem(at: USBResumePaths.url(relative: previous.partPath))
+                    log.note("Discarded the earlier .part Caches/\(previous.partPath)")
+                }
+            }
+            var state = USBResumeState(identity: identity, offset: 0, partPath: relative, savedAt: Date(), reason: "started",
+                                       sessionID: sessionID)
             persistResume(state)
 
             let chunkSize: UInt32 = 1024 * 1024
@@ -1151,7 +1190,8 @@ final class CameraSession: NSObject {
 
             let variant = chooseVariant(size: currentIdentity.size, info: info)
             let writer = try PartFileWriter(url: partURL, startingAt: offset)
-            var state = USBResumeState(identity: currentIdentity, offset: writer.offset, partPath: saved.partPath, savedAt: Date(), reason: "resumed")
+            var state = USBResumeState(identity: currentIdentity, offset: writer.offset, partPath: saved.partPath, savedAt: Date(), reason: "resumed",
+                                       sessionID: sessionID)
             persistResume(state)
             let result = await partialReadLoop(handle: PTPObjectHandle(rawValue: chosen.ptpObjectHandle), name: currentIdentity.filename,
                                                size: currentIdentity.size, from: writer.offset, variant: variant,
@@ -1185,6 +1225,8 @@ final class CameraSession: NSObject {
             log.note("  reference SHA-256 \(reference.sha) (\(reference.bytes) B): \(verified ? "MATCH" : "MISMATCH")")
             if offset == 0 {
                 log.warn("The read restarted from zero, so this was not a resume; usb.resume.verified not recorded.")
+            } else if saved.sessionID == sessionID {
+                log.warn("The read was cut by \(saved.reason) in this same session (no cable pull, no re-plug), so this was not a link-drop resume; usb.resume.verified not recorded. Start again and pull the cable at PULL NOW.")
             } else {
                 log.flag("usb.resume.verified", verified,
                          context: "\(currentIdentity.filename): interrupted at \(saved.offset) (\(saved.reason)), resumed at \(offset) in a new request sequence, \(verified ? "SHA-256 match" : "SHA-256 MISMATCH")")
@@ -1277,6 +1319,11 @@ final class CameraSession: NSObject {
             if stopRequested || (shouldStop?() ?? false) {
                 log.warn("\(label): stopping cleanly after \(done) of \(selection.count) files [\(lifecycle.stateDescription)]")
                 lastResult = "\(label): stopped after \(done)/\(selection.count)"
+                return false
+            }
+            if !isOpen {
+                log.warn("\(label): \(removed ? "camera disconnected" : "the camera closed the session") after \(done) of \(selection.count) files; stopping [\(lifecycle.stateDescription)]")
+                lastResult = "\(label): session closed after \(done)/\(selection.count)"
                 return false
             }
             let name = file.name ?? "?"

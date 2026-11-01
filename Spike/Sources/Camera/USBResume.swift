@@ -27,6 +27,9 @@ struct USBResumeState: Codable, Equatable {
     var savedAt: Date
     /// Why it was saved: "started", "checkpoint", "error: …", "complete".
     var reason: String
+    /// The CameraSession that saved it. A cable pull always means a new CameraSession; Stop, a timeout or a PTP
+    /// error do not, so a resume in the same one is not a link-drop resume. Optional so older saves still decode.
+    var sessionID: UUID?
 
     var percent: Double { identity.size == 0 ? 0 : Double(offset) / Double(identity.size) * 100 }
 

@@ -111,7 +111,7 @@ struct WiredView: View {
                         .disabled(!canRun)
                     Button("Forget saved read", role: .destructive) { session?.forgetSavedRead() }
                         .disabled(session == nil || isBusy)
-                    Text("Start, pull the cable when the log says PULL NOW, plug back in, Open session, then Resume read.")
+                    Text("Start, pull the cable when the log says PULL NOW, plug back in, Open session, then Resume read. Start resumable read replaces any saved read.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
