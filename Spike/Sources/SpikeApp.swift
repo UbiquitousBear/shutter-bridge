@@ -8,16 +8,39 @@ struct SpikeApp: App {
     @UIApplicationDelegateAdaptor(SpikeAppDelegate.self) private var appDelegate
     // The log and the proximity watcher are shared instances: the app delegate uses them on a Bluetooth
     // relaunch, when no scene (and so no SwiftUI view) exists.
-    @State private var log = SpikeLog.shared
-    @State private var browser = DeviceBrowser()
-    @State private var continued = ContinuedTask()
-    @State private var lifecycle = LifecycleMonitor()
+    @State private var log: SpikeLog
+    @State private var browser: DeviceBrowser
+    @State private var continued: ContinuedTask
+    @State private var lifecycle: LifecycleMonitor
     @State private var proximity = ProximityWatcher.shared
     @State private var photos = PhotosProbe()
+    /// The Wired and Wi-Fi tabs' state, shared with the Guided tab's runner.
+    @State private var usb: USBLab
+    @State private var wireless: WirelessLab
+    @State private var guided: GuidedRunner
+    @State private var scanner: AdvertisementScanner
 
     init() {
         // Must be registered before the app finishes launching (day 5 test).
         ContinuedTask.registerLaunchHandler()
+        let log = SpikeLog.shared
+        let browser = DeviceBrowser()
+        let continued = ContinuedTask()
+        let lifecycle = LifecycleMonitor()
+        let usb = USBLab(browser: browser, log: log, lifecycle: lifecycle)
+        let wireless = WirelessLab(log: log, continued: continued, lifecycle: lifecycle)
+        let scanner = AdvertisementScanner()
+        scanner.log = log
+        _scanner = State(initialValue: scanner)
+        _log = State(initialValue: log)
+        _browser = State(initialValue: browser)
+        _continued = State(initialValue: continued)
+        _lifecycle = State(initialValue: lifecycle)
+        _usb = State(initialValue: usb)
+        _wireless = State(initialValue: wireless)
+        _guided = State(initialValue: GuidedRunner(log: log, browser: browser, usb: usb, wireless: wireless,
+                                                   scanner: scanner, continued: continued, lifecycle: lifecycle,
+                                                   proximity: ProximityWatcher.shared))
     }
 
     var body: some Scene {
@@ -29,6 +52,10 @@ struct SpikeApp: App {
                 .environment(lifecycle)
                 .environment(proximity)
                 .environment(photos)
+                .environment(usb)
+                .environment(wireless)
+                .environment(guided)
+                .environment(scanner)
                 .task {
                     browser.log = log
                     continued.log = log

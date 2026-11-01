@@ -26,6 +26,11 @@ final class LifecycleMonitor {
     /// before its first file finishes has reported no progress yet but is still running.
     private var runningTransfers = 0
     private var runningLink = "usb"
+    /// Times the app has come back to the foreground, and how long it was away the last time: the guided runner
+    /// waits on these for "lock the phone" and "switch apps" steps.
+    private(set) var foregroundReturns = 0
+    private(set) var lastAwaySeconds: Double = 0
+    private(set) var backgroundEntries = 0
     /// Progress this recent when the app is backgrounded means a transfer was running.
     private static let activeWindow: TimeInterval = 60
 
@@ -79,6 +84,7 @@ final class LifecycleMonitor {
     private func enteredBackground() {
         let now = Date()
         backgroundedAt = now
+        backgroundEntries += 1
         // A transfer counts as running if it reported progress in the last minute (Wi-Fi reports once per file) and
         // no operation has ended since: only then does "no progress while away" mean the session died, rather than
         // that nothing was running.
@@ -104,6 +110,8 @@ final class LifecycleMonitor {
         guard let since = backgroundedAt else { return }
         let away = Date().timeIntervalSince(since)
         log?.note(String(format: "app returning to foreground after %.1f s", away))
+        lastAwaySeconds = away
+        foregroundReturns += 1
         if let last = lastProgressAt, last > since {
             log?.measure("\(lastProgressLink).lifecycle.progressAfterBackground", last.timeIntervalSince(since), "s",
                          context: String(format: "away %.0f s; last: %@", away, lastProgressNote))

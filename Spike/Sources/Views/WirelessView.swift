@@ -5,24 +5,13 @@ import PTPKit
 /// measurements the Log tab exports into the spike plan's table (names "ptpip.<net>.…", net = ap or lan from the
 /// Network picker).
 struct WirelessView: View {
-    @Environment(SpikeLog.self) private var log
-    @Environment(ContinuedTask.self) private var continued
-    @Environment(LifecycleMonitor.self) private var lifecycle
-    @State private var lab: WirelessLab?
+    /// Created by the app and shared with the Guided tab's runner.
+    @Environment(WirelessLab.self) private var lab
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let lab {
-                    WirelessPanel(lab: lab)
-                } else {
-                    ProgressView()
-                }
-            }
-            .navigationTitle("Wi-Fi")
-        }
-        .task {
-            if lab == nil { lab = WirelessLab(log: log, continued: continued, lifecycle: lifecycle) }
+            WirelessPanel(lab: lab)
+                .navigationTitle("Wi-Fi")
         }
     }
 }

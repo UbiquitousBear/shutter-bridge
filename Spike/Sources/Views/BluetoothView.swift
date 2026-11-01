@@ -6,7 +6,8 @@ import SwiftUI
 struct BluetoothView: View {
     @Environment(SpikeLog.self) private var log
     @Environment(ProximityWatcher.self) private var watcher
-    @State private var scanner = AdvertisementScanner()
+    /// Created by the app and shared with the Guided tab's runner.
+    @Environment(AdvertisementScanner.self) private var scanner
     @AppStorage(ProximityWatcher.Keys.serviceUUID) private var serviceUUID = ""
     @AppStorage("ble.snapshot.power") private var powerRaw = AdvertisementScanner.PowerState.on.rawValue
     @AppStorage("ble.snapshot.pairing") private var pairingRaw = AdvertisementScanner.PairingContext.connected.rawValue

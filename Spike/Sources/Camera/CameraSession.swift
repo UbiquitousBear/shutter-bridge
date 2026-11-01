@@ -30,6 +30,8 @@ final class CameraSession: NSObject {
     private(set) var progressText = ""
     private(set) var lastResult = ""
     private(set) var resumeSummary: String = USBResumeStore.load()?.summary ?? "none saved"
+    /// Called when a resumable read reaches its PULL NOW offset, so the Guided tab can say so in an alert.
+    @ObservationIgnored var onPullNow: (@MainActor () -> Void)?
     private(set) var readDataResumeSummary: String = USBResumeStore.load(key: USBResumeStore.readDataKey)?.summary ?? "none saved"
     private(set) var stopRequested = false
     /// ImageCaptureCore's contentCatalogPercentCompleted as last polled while waiting for the catalogue.
@@ -1877,6 +1879,7 @@ final class CameraSession: NSObject {
                                                pause: .milliseconds(400), writer: writer, label: "resumable read") { previous, current in
                 if previous < pullAt && current >= pullAt {
                     self.log.warn("PULL NOW: pull the USB-C cable out (offset \(current) of \(identity.size))")
+                    self.onPullNow?()
                 }
                 if PTPPartialRead.crossesCheckpoint(from: previous, to: current) {
                     try? writer.flush()
@@ -2059,6 +2062,7 @@ final class CameraSession: NSObject {
                                             writer: writer, label: "resumable requestReadData") { previous, current in
                 if previous < pullAt && current >= pullAt {
                     self.log.warn("PULL NOW: pull the USB-C cable out (offset \(current) of \(identity.size))")
+                    self.onPullNow?()
                 }
                 if PTPPartialRead.crossesCheckpoint(from: previous, to: current) {
                     try? writer.flush()

@@ -12,6 +12,24 @@ How to read the tables:
 
 The spike app compiles with Xcode 27 for iPhone (the unsigned build in `.github/workflows/spike-build.yml`), but it has not yet run on a phone. Behaviour that only a device can confirm is commented `verify on day 1` in the sources.
 
+## Guided runs (build 8)
+
+The *Guided* tab runs the sessions in [spike-remaining.md](spike-remaining.md) as sequences of the same buttons, with alerts for the physical steps: change the camera's USB mode, pull the cable, lock the phone, press the shutter, switch the camera off. Where the app can see a step happen (the cable pulled, the camera back, the phone unlocked), the alert closes by itself; steps done in another tab (scanning the camera's QR code, typing an IP) wait on the Guided tab with *Done* and *Skip*. Every alert has *Cancel run*, which also stops the running transfer. Each run logs `◆` lines, and at the end its log and the measurements table are on the clipboard to paste into the chat (*Copy report again* and *Share report* on the Guided tab).
+
+| Run | Covers | Time |
+| --- | --- | --- |
+| USB evening: checks, MSC, PC Remote, MTP | the five USB runs below, in order; each can be skipped | about 35 min |
+| Camera and Photos checks | whether the USB mode can be fixed (`usb.mode.fixable`); whether Photos › Import shows JPGs (`usb.photosImport.jpgShown`) | 3 min |
+| MSC: resume after a cable pull | *Start resumable read (requestReadData)* with a "pull the cable now" alert at PULL NOW, the replug, *Open session*, *Resume read (requestReadData)* | 3 min |
+| MSC: app switch, continued task, lock | *Long serial download* while you switch apps; the 20-ARW continued task while the phone is locked; *Long serial download* while it is locked | 12 min |
+| PC Remote: DeviceInfo and ObjectAdded | *Open session* (no wait), *GetDeviceInfo*, *Watch for ObjectAdded (60 s)* while you press the shutter, whether it fired (`usb.pcRemote.shutterEnabled`) | 5 min |
+| MTP: RAW+JPEG pair | *GetObjectInfo: newest ARW + pair* after you shoot RAW+JPEG and RAW+HEIF frames | 3 min |
+| Wi-Fi: one camera mode | the network, the QR code and join (or the LAN IP), the four day-6 probes, *Connect + OpenSession + GetDeviceInfo* (and *Sony SDIO connect* in PC Remote), *List card*, *Thumbnails for 50 newest*, *GetObject 20 newest ARW*, *Shutter test*; run once per camera Wi-Fi mode | 15 min |
+| Wi-Fi: GUID after a power cycle | *Reconnect (same GUID)* after a camera restart, then a new GUID and *Connect*, with your answer on whether the camera asked | 5 min |
+| Wi-Fi: resume after Wi-Fi off | *Reference hash*, *Start resumable read* paused at 50 %, Wi-Fi off and on, *Resume read* | 5 min |
+| Bluetooth: what the camera advertises | 30 s scans and snapshots with the camera on, asleep and off (Creators' App quit), connected, and optionally not paired; then the filter UUID from those advertised | 15 min |
+| Bluetooth: proximity reminder | *Watch in background*, then the camera switched on with the phone locked, same room and next room (`ble.proximity.reminder.sameRoom`, `.nextRoom`) | 15 min |
+
 ## Before day 1
 
 | Done | Item | How |

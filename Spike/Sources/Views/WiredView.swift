@@ -10,14 +10,13 @@ struct WiredView: View {
     @Environment(SpikeLog.self) private var log
     @Environment(LifecycleMonitor.self) private var lifecycle
     @Environment(ContinuedTask.self) private var continued
-    @State private var session: CameraSession?
-    @State private var selectedCameraID: ObjectIdentifier?
+    /// The session, the selected camera and the catalogue toggle live in USBLab, shared with the Guided tab.
+    @Environment(USBLab.self) private var usb
     @State private var batteryGB = 1
-    /// Off: Open session returns when the session is open and the catalogue is logged in the background.
-    @State private var waitForCatalogue = true
 
     var body: some View {
         @Bindable var bindableBrowser = browser
+        @Bindable var usb = usb
         NavigationStack {
             List {
                 Section("Session") {
@@ -60,7 +59,7 @@ struct WiredView: View {
                 }
 
                 Section("Day 2 · Catalogue") {
-                    Toggle("Wait for ImageCaptureCore's catalogue", isOn: $waitForCatalogue)
+                    Toggle("Wait for ImageCaptureCore's catalogue", isOn: $usb.waitForCatalogue)
                         .disabled(isBusy)
                     Button("Open session") { openSession() }
                         .disabled(selectedCamera == nil || isBusy || (isOpen && !isStalled))
@@ -175,7 +174,7 @@ struct WiredView: View {
 
     private func cameraRow(_ camera: ICCameraDevice) -> some View {
         Button {
-            selectedCameraID = ObjectIdentifier(camera)
+            usb.selectedCameraID = ObjectIdentifier(camera)
         } label: {
             HStack {
                 VStack(alignment: .leading) {
@@ -195,63 +194,19 @@ struct WiredView: View {
         .disabled(isBusy)
     }
 
-    private var selectedCamera: ICCameraDevice? {
-        if let id = selectedCameraID, let camera = browser.cameras.first(where: { ObjectIdentifier($0) == id }) {
-            return camera
-        }
-        // The selected camera has gone (cable pulled): the most recently added one is likely the replugged camera.
-        return browser.cameras.last
-    }
-
-    private var isBusy: Bool { session?.isBusy ?? false }
-    private var isOpen: Bool { session?.isOpen ?? false }
+    private var session: CameraSession? { usb.session }
+    private var selectedCamera: ICCameraDevice? { usb.selectedCamera }
+    private var isBusy: Bool { usb.isBusy }
+    private var isOpen: Bool { usb.isOpen }
     /// The camera stopped answering on this session's connection: only Open session (a new session) is offered.
-    private var isStalled: Bool { session?.linkStalled ?? false }
-    private var canRun: Bool { isOpen && !isBusy && !isStalled }
+    private var isStalled: Bool { usb.isStalled }
+    private var canRun: Bool { usb.canRun }
 
-    /// Reuses the session if it belongs to the selected camera, the camera is still attached and its connection hasn't
-    /// stalled; otherwise starts a new one (after a cable pull the re-plugged camera is a new ICCameraDevice).
     private func openSession() {
-        guard let selected = selectedCamera else {
-            log.warn("No camera: start browsing and plug the camera in (Day 1)")
-            return
-        }
-        let wait = waitForCatalogue
-        if let session, session.device === selected, !session.removed, !session.linkStalled {
-            Task { await session.openSession(waitForCatalogue: wait) }
-            return
-        }
-        // After a cable pull, if the browser still lists the dead device, prefer the camera added since (the
-        // replugged camera is a new ICCameraDevice, added at the end). A stalled but still attached camera stays
-        // selected, so it can be retried and the warning below shows.
-        var camera = selected
-        if let session, session.device === selected, session.removed,
-           let other = browser.cameras.last(where: { $0 !== session.device }) {
-            log.note("Open session: switching to the most recently added camera (\(other.name ?? "?")); the selected one was disconnected")
-            selectedCameraID = ObjectIdentifier(other)
-            camera = other
-        }
-        if let session {
-            // Which case this was is the first thing to know when a replug doesn't recover the camera.
-            let why = session.removed ? "the camera was disconnected"
-                : session.device !== camera ? "a different camera (or the replugged one) is selected"
-                : "the connection stalled and ImageCaptureCore hasn't reported a disconnect, so this is the same connection"
-            log.note("Open session: starting a new session (\(why))")
-            if session.linkStalled && session.device === camera && !session.removed {
-                log.warn("The camera hasn't been unplugged since it stopped answering. If this open gets no answer, unplug it and plug it back in; if that doesn't help, turn the camera off and on.")
-            }
-        }
-        session?.detach()
-        let fresh = CameraSession(device: camera, log: log, lifecycle: lifecycle)
-        session = fresh
-        Task { await fresh.openSession(waitForCatalogue: wait) }
+        Task { await usb.openSession() }
     }
 
     private func run(_ work: @escaping @MainActor (CameraSession) async -> Void) {
-        guard let session else {
-            log.warn("Open a session first (Day 2)")
-            return
-        }
-        Task { await work(session) }
+        Task { await usb.run(work) }
     }
 }
