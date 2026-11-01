@@ -97,10 +97,11 @@ The plan's paths use the α7 IV-generation names. Record what the α7C II actual
 | --- | --- | --- |
 | `Setup → Setup Option → Version` | Firmware check |  |
 | `Setup → USB → USB Connection Mode` | Choosing the USB mode |  |
-| … *Select on Connect* | USB mode candidate |  |
-| … *Still Img Transfer (MTP)* (older naming *MTP*) | USB mode candidate |  |
-| … *Remote Shoot (PC Remote)* | USB mode candidate |  |
-| … *Webcam* | USB mode candidate |  |
+| … *Select on Connect* | USB mode candidate | On plugging in, the camera shows **Select USB Connect Mode** with four choices (1 Nov), so a select-on-connect setting is in use. Its name in the menu is not yet recorded. |
+| … *Still Img Transfer (MTP)* (older naming *MTP*) | USB mode candidate | **Image Transfer (MTP)** |
+| … *Remote Shoot (PC Remote)* | USB mode candidate | **Remote Shoot (PC Remote)** |
+| (not in the plan) | USB mode | **Image Transfer (MSC)**: mass storage |
+| … *Webcam* | USB mode candidate | **Live Stream (USB Streaming)** |
 | `Setup → USB → USB LUN Setting` | USB |  |
 | `Setup → USB → USB Power Supply` | Battery test (set to Off) |  |
 | `Network → Wi-Fi → Wi-Fi Connect` | Joining a network |  |
@@ -192,9 +193,9 @@ Proximity test:
 
 | Question | Finding | Evidence |
 | --- | --- | --- |
-| USB connection mode(s) that enumerate in `ICDeviceBrowser`, and the ones Photos imports from |  |  |
-| Device type mask that finds the camera (*Cameras, local*, *Cameras* or *System default*) |  |  |
-| Contents and control authorisation on iOS 27: prompt shown, and the status returned |  |  |
+| USB connection mode(s) that enumerate in `ICDeviceBrowser`, and the ones Photos imports from | **Three of the four enumerate.** *Image Transfer (MTP)* and *Remote Shoot (PC Remote)*: `ILCE-7CM2`, `ICTransportTypeUSB`, 1 capability. *Image Transfer (MSC)*: `Untitled` (the card's volume), `ICTransportTypeMassStorage`, 2 capabilities. *Live Stream (USB Streaming)*: not seen. **Photos:** Import appears but lists nothing with a RAW-only card; the cause is not yet known (Photos hiding ARW, or no files presented). | Wired tab screenshots, 1 Nov 18:55–18:59 |
+| Device type mask that finds the camera (*Cameras, local*, *Cameras* or *System default*) | *Cameras, local* (mask in use 0x101) finds it in MTP, PC Remote and MSC. | Wired tab, 1 Nov |
+| Contents and control authorisation on iOS 27: prompt shown, and the status returned | Status `contents=authorized control=authorized` on iOS 27.2. Whether a prompt was shown is still to note. | Wired tab, 1 Nov |
 | Pass-through reply layout (`PTPPassThrough.Layout`) and whether transaction IDs are renumbered |  |  |
 | `GetObjectHandles` allowed through `requestSendPTPCommand` |  |  |
 | `GetPartialObject` variant that works (0x101B, 0x95C1 or neither) |  |  |

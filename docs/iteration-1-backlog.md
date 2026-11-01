@@ -106,8 +106,8 @@ Acceptance criteria:
 - Returns the `localIdentifier`, which the catalogue stores.
 - Tested against a protocol, with a fake library in unit tests and the real one in the hardware plan.
 - Decided by the spike: `.addOnly` can't create the album, so albums use read/write access (limited is enough).
-- Open point: which albums. One per camera, one per import (dated), or both. The proposal has both, with the per-import album optional; Shamil asked for imports to go into a new album.
-- Open point: iOS 27's `PHAssetCreationRequest.originalResourceChoice` picks whether the RAW or the JPEG is a pair's original. Decide which.
+- Albums are the user's choice, defaulting to one per camera (Shamil, 1 Nov). The options are one per camera, one per import (dated), or both.
+- For a RAW+JPEG pair, the original is the user's choice, defaulting to RAW (Shamil, 1 Nov). Set it with iOS 27's `PHAssetCreationRequest.originalResourceChoice`, which only applies to RAW+JPEG assets. This replaces the fixed JPEG-as-`.photo` pairing in the criterion above; check how the choice maps onto the `.photo` and `.alternatePhoto` resources.
 
 Could change with: the filenames and pair stems in the captured ObjectInfo fixtures; whether the card holds HEIF pairs; whether Apple's RAW decoder handles the α7C II's ARW (thumbnails fall back to the embedded JPEG either way).
 
