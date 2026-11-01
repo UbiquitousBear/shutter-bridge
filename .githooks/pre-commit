@@ -17,8 +17,9 @@ done
 
 # Packet captures never enter the repo: a tcpdump of the PTP/IP handshake holds GetDeviceInfo with the camera's
 # serial, and Init packets and SSDP/mDNS traffic name the Mac. .gitignore drops them under Fixtures/, but
-# `git add -f` gets past that, so refuse any staged one, anywhere.
-pcaps="$(git diff --cached --name-only --diff-filter=ACMR -- '*.pcap' '*.pcapng' '*.PCAP' '*.PCAPNG')"
+# `git add -f` gets past that, so refuse any staged one, anywhere. Pathspecs ignore core.ignorecase, hence :(icase).
+pcaps="$(git diff --cached --name-only --diff-filter=ACMR -- \
+    ':(icase)*.pcap' ':(icase)*.pcapng' ':(icase)*.pcap.gz' ':(icase)*.pcapng.gz' ':(icase)*.cap')"
 if [ -n "$pcaps" ]; then
     echo "pre-commit: refusing to commit packet captures; they carry the camera's serial and the Mac's name:" >&2
     printf '%s\n' "$pcaps" | sed 's/^/  /' >&2
