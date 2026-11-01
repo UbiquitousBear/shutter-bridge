@@ -14,4 +14,27 @@ for role in AUTHOR COMMITTER; do
         exit 1
     fi
 done
+
+# The camera's serial number never reaches this public repository (owner's decision, 1 Nov 2026): refuse a staged
+# deviceinfo.bin or ssdp-description.xml that still contains one. scripts/redact-fixtures.py zeroes it.
+staged="$(git diff --cached --name-only --diff-filter=ACMR -- '*deviceinfo.bin' '*ssdp-description.xml')"
+if [ -n "$staged" ]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "pre-commit: python3 is needed to check fixtures for the camera's serial number." >&2
+        exit 1
+    fi
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    script="$(git rev-parse --show-toplevel)/scripts/redact-fixtures.py"
+    printf '%s\n' "$staged" | while IFS= read -r f; do
+        mkdir -p "$tmp/$(dirname "$f")"
+        if ! git show ":$f" > "$tmp/$f" || ! python3 "$script" --check "$tmp/$f"; then
+            : > "$tmp/.failed"
+        fi
+    done
+    if [ -e "$tmp/.failed" ]; then
+        echo "pre-commit: refusing to commit a fixture with the camera's serial number (see above)." >&2
+        exit 1
+    fi
+fi
 exit 0

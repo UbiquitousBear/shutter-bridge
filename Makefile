@@ -18,6 +18,7 @@ test-docker:
 # Copy captured camera bytes into the PTPKit test bundle under the names its fixture tests look for:
 # Fixtures/a7c2/<link>/<name>.bin -> $(FIXTURE_TESTS)/a7c2-<link>-<name>.bin
 fixtures:
+	@python3 scripts/redact-fixtures.py
 	@n=0; for f in Fixtures/a7c2/*/*.bin; do \
 		[ -f "$$f" ] || continue; \
 		link=$$(basename "$$(dirname "$$f")"); name=$$(basename "$$f"); \
