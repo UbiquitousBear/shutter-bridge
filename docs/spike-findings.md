@@ -126,7 +126,7 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 | Thumbnail fetch, average per item |  |  |  |
 | ARW throughput, single file |  |  |  |
 | ARW throughput, two in flight |  |  |  |
-| MP4 throughput (1 GB clip) |  |  |  |
+| MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
 | `GetPartialObject` supported |  |  |  |
 | Resume after link drop verified |  |  |  |
 | `ObjectAdded` event received |  |  |  |
