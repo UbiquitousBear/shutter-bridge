@@ -154,6 +154,11 @@ public struct PTPIPTransaction: Sendable {
         return (expected, receivedDataLength)
     }
 
+    /// Set when Cmd_Response arrived while the data phase was still open (Start_Data seen, End_Data not). With an
+    /// unknown total length this is the only sign of a truncated transfer. Not thrown, so the spike can log it;
+    /// the engine should treat it as a failed transfer.
+    public var dataPhaseUnterminated: Bool { isComplete && dataStarted && !endDataSeen }
+
     public mutating func consume(_ event: PTPIPStreamDecoder.Event) throws -> [Output] {
         switch event {
         case .packet(let p):

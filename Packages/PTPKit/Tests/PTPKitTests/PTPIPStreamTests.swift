@@ -62,6 +62,7 @@ struct PTPIPStreamTests {
         #expect(r.transaction.isComplete)
         #expect(r.transaction.receivedDataLength == 200_000)
         #expect(r.transaction.dataLengthMismatch == nil)
+        #expect(!r.transaction.dataPhaseUnterminated)
         #expect(r.others.first == .dataStarted(totalLength: 200_000))
         #expect(r.others.contains(.pingReceived))
         #expect(r.others.contains(.event(PTPIP.Event(code: .objectAdded, transactionID: 0, parameters: [0x55]))))
@@ -134,6 +135,22 @@ struct PTPIPStreamTests {
         let stream = packets.reduce(into: Data()) { $0.append($1.encode()) }
         let r = try Self.run(stream, tx: 2, pieces: [stream.count])
         #expect(r.others.first == .dataStarted(totalLength: nil))
+        #expect(r.transaction.dataLengthMismatch == nil)
+        #expect(!r.transaction.dataPhaseUnterminated)
+    }
+
+    @Test("Cmd_Response before End_Data is reported, not thrown, even with an unknown length")
+    func responseBeforeEndData() throws {
+        let packets = [
+            PTPIP.startData(transactionID: 2, totalLength: .max),
+            PTPIP.data(transactionID: 2, bytes: Self.payload(10)),
+            PTPIP.cmdResponse(.ok, transactionID: 2),
+        ]
+        let stream = packets.reduce(into: Data()) { $0.append($1.encode()) }
+        let r = try Self.run(stream, tx: 2, pieces: [stream.count])
+        #expect(r.transaction.isComplete)
+        #expect(r.transaction.receivedDataLength == 10)
+        #expect(r.transaction.dataPhaseUnterminated)
         #expect(r.transaction.dataLengthMismatch == nil)
     }
 

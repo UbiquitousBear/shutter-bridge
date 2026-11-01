@@ -15,8 +15,10 @@ public enum PTPPassThrough {
         case dataThenResponse
         /// (response container, data-phase payload).
         case responseThenData
-        /// One of the values held a whole data container (header included) that we stripped.
+        /// (data container with header that we stripped, response container).
         case dataContainerThenResponse
+        /// (response container, data container with header that we stripped).
+        case responseThenDataContainer
         /// Both values concatenated hold a sequence of containers (data and response).
         case concatenatedContainers
     }
@@ -46,7 +48,7 @@ public enum PTPPassThrough {
         }
         if let response = responseContainer(first) {
             let (payload, stripped) = strippingDataHeader(second, for: command, responseTX: response.transactionID)
-            return Reply(response: response, data: payload, layout: stripped ? .dataContainerThenResponse : .responseThenData)
+            return Reply(response: response, data: payload, layout: stripped ? .responseThenDataContainer : .responseThenData)
         }
         if let all = try? PTPContainer.decodeAll(first + second),
            let response = all.last(where: { $0.type == .response }) {

@@ -36,6 +36,25 @@ struct PTPDatasetTests {
         #expect(decoded.model == "ILCE-7CM2")
     }
 
+    @Test("Vendor extension IDs match libgphoto2; Sony over PTP/IP or MTP (0xFFFFFFFF) still counts as Sony")
+    func vendorExtension() throws {
+        #expect(PTPVendorExtension(rawValue: 0x0E) == .fujifilm)
+        #expect(PTPVendorExtension(rawValue: 0x12) == nil)
+        var info = Self.syntheticSonyDeviceInfo
+        #expect(info.isSony)
+        info.vendorExtensionID = 0xFFFF_FFFF
+        let decoded = try PTPDeviceInfo.decode(info.encode())
+        #expect(decoded.vendorExtension == .mtp)
+        #expect(decoded.isSony)
+        info.vendorExtensionID = PTPVendorExtension.microsoftMTP.rawValue
+        #expect(info.isSony)
+        info.manufacturer = "Acme"
+        #expect(!info.isSony)
+        info.vendorExtensionID = PTPVendorExtension.canon.rawValue
+        info.manufacturer = "Sony Corporation"
+        #expect(!info.isSony)
+    }
+
     @Test("ObjectInfo round trip and derived fields")
     func objectInfoRoundTrip() throws {
         let info = PTPObjectInfo(

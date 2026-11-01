@@ -14,7 +14,7 @@ one exists, and then checks all of them:
 
 | Kind (files) | Test | Checks |
 | --- | --- | --- |
-| `deviceinfo` (`a7c2-usb-deviceinfo.bin`, `a7c2-ptpip-deviceinfo.bin`) | `deviceInfo()`, "DeviceInfo from the camera parses and is Sony's" | decodes; the manufacturer contains "Sony", the vendor extension is Sony's and the model contains "ILCE"; the operations list is not empty; re-encoding reproduces the camera's bytes (trailing vendor data is not modelled) |
+| `deviceinfo` (`a7c2-usb-deviceinfo.bin`, `a7c2-ptpip-deviceinfo.bin`) | `deviceInfo()`, "DeviceInfo from the camera parses and is Sony's" | decodes; the manufacturer contains "Sony", the device counts as Sony (`isSony`: vendor extension 0x11, or the MTP ID 0xFFFFFFFF or 0x6 from a Sony manufacturer, as libgphoto2 treats it) and the model contains "ILCE"; the operations list is not empty; re-encoding reproduces the camera's bytes (trailing vendor data is not modelled) |
 | `objectinfo` (`a7c2-<link>-objectinfo-arw.bin`, `-jpg`, `-hif`, `-mp4`) | `objectInfo()`, "ObjectInfo from the camera parses with a filename, size, date and the right media kind" | decodes with a filename, a size above zero and a capture date that parses; the media kind matches the name (`arw` raw, `jpg` JPEG, `hif` HEIF, `mp4` video); re-encoding reproduces the bytes |
 | `storageinfo` (`a7c2-<link>-storageinfo.bin`) | `storageInfo()`, "StorageInfo from the camera parses" | decodes; capacity above zero and free space no larger than capacity |
 | `storageids`, `objecthandles` (`a7c2-<link>-storageids.bin`, `a7c2-<link>-objecthandles.bin`) | `arrays()`, "Storage IDs and object handles arrays parse" | each decodes to a non-empty array |

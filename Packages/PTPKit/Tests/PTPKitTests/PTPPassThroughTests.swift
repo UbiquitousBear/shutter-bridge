@@ -32,6 +32,14 @@ struct PTPPassThroughTests {
         #expect(reply.data == Self.payload)
     }
 
+    @Test("(response, data container): the header is stripped and the layout keeps the order")
+    func responseThenDataContainer() throws {
+        let reply = try PTPPassThrough.decodeReply(Self.ok.encode(), Self.dataContainer.encode(), for: Self.command)
+        #expect(reply.layout == .responseThenDataContainer)
+        #expect(reply.data == Self.payload)
+        #expect(reply.responseCode.isOK)
+    }
+
     @Test("A data header renumbered by ImageCaptureCore is still stripped when it matches the response")
     func renumberedTransaction() throws {
         let data = PTPContainer(type: .data, code: PTPOperationCode.getDeviceInfo.rawValue, transactionID: 99, payload: Self.payload)

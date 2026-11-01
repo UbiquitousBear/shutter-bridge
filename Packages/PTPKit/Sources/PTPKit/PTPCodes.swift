@@ -2,7 +2,9 @@
 // Pure Swift, no I/O. Sony vendor values come from libgphoto2's camlibs/ptp2/ptp.h (the best public record of
 // Sony's PTP extension); they are `unverified` on the α7C II until the camera's own GetDeviceInfo and
 // GetObjectInfo, captured into Fixtures/a7c2/ during the spike, confirm them. Vendor codes in the 0x9000,
-// 0xB000 and 0xC000 ranges only mean what they say here when DeviceInfo.vendorExtensionID is Sony (0x11).
+// 0xB000 and 0xC000 ranges only mean what they say here when the device is Sony (`PTPDeviceInfo.isSony`):
+// vendorExtensionID 0x11, or an MTP ID (0xFFFFFFFF, or 0x6) with a Sony manufacturer. libgphoto2 treats
+// 0xFFFFFFFF from "Sony Corporation" as Sony ("Mostly for PTP/IP mode"), so Sony bodies do send it.
 
 public enum PTPContainerType: UInt16, Sendable {
     case command = 1
@@ -222,15 +224,18 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
     }
 }
 
-/// PTP vendor extension IDs (DeviceInfo.vendorExtensionID). Sony is 0x11, as libgphoto2 also records.
+/// PTP vendor extension IDs (DeviceInfo.vendorExtensionID), as in libgphoto2's ptp.h. Sony is 0x11, but Sony
+/// bodies in PTP/IP and MTP modes report `mtp` (0xFFFFFFFF) instead; see `PTPDeviceInfo.isSony`.
 public enum PTPVendorExtension: UInt32, Sendable {
     case none = 0x0000
     case kodak = 0x0001
     case canon = 0x000B
     case nikon = 0x000A
     case microsoftMTP = 0x0006
+    case fujifilm = 0x000E
     case sony = 0x0011
-    case fujifilm = 0x0012
+    /// PTP_VENDOR_MTP: what Sony (and some other MTP devices) report instead of their own ID.
+    case mtp = 0xFFFF_FFFF
 }
 
 /// Device property codes (ISO 15740 §13) the spike reads.

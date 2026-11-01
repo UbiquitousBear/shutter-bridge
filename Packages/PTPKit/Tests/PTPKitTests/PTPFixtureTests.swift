@@ -33,7 +33,8 @@ struct PTPFixtureTests {
             let data = try Data(contentsOf: f.url)
             let info = try PTPDeviceInfo.decode(data)
             #expect(info.manufacturer.lowercased().contains("sony"), "\(f.url.lastPathComponent)")
-            #expect(info.vendorExtension == .sony, "\(f.url.lastPathComponent)")
+            // Sony bodies report 0x11, or the MTP ID 0xFFFFFFFF over PTP/IP and in MTP mode (libgphoto2 maps it).
+            #expect(info.isSony, "\(f.url.lastPathComponent): vendor extension 0x\(String(info.vendorExtensionID, radix: 16))")
             #expect(info.model.uppercased().contains("ILCE"), "\(f.url.lastPathComponent)")
             #expect(!info.operationsSupported.isEmpty)
             // Re-encoding reproduces the camera's bytes (trailing vendor data, if any, is not modelled).
