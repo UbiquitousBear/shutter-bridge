@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CoreGraphics   // CGImage in cameraDevice(_:didReceiveThumbnail:for:error:); don't rely on a re-export
 import ImageCaptureCore
 import CryptoKit
 import PTPKit
@@ -52,6 +53,9 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var lastSerialARWThroughput: Double?
     @ObservationIgnored private var closingSession = false
     @ObservationIgnored private var loggedDownloadName = false
+    @ObservationIgnored private var thumbnailRuns = 0
+    @ObservationIgnored private var successfulOpens = 0
+    @ObservationIgnored private var openIsReopen = false
 
     private struct RecentEvent {
         let data: Data
@@ -67,7 +71,9 @@ final class CameraSession: NSObject {
         device.delegate = self
         // Day 4: raw PTP event containers. Apple: when this handler is set it is called *instead of*
         // cameraDevice(_:didReceivePTPEvent:); both paths feed `receiveEvent`, which de-duplicates.
-        device.ptpEventHandler = { [weak self] data in
+        // @Sendable: the handler runs on an ImageCaptureCore queue, so it must not inherit this init's main-actor
+        // isolation (Swift 6 mode or DynamicActorIsolation would trap on the executor check).
+        device.ptpEventHandler = { @Sendable [weak self] data in
             Task { @MainActor in self?.receiveEvent(data, source: "ptpEventHandler") }
         }
     }
@@ -163,19 +169,28 @@ final class CameraSession: NSObject {
             let clock = ContinuousClock()
             let start = clock.now
             openRequestedAt = start
+            // A reopen on the same ICCameraDevice may find the catalogue ImageCaptureCore kept from the last session.
+            openIsReopen = successfulOpens > 0
+            // Only this open may stamp usb.catalog.complete: a ready callback after it (a reopen by ImageCaptureCore,
+            // a failed or stopped open) must not be timed from this request.
+            defer { openRequestedAt = nil }
             let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
                 self.device.requestOpenSession(options: nil) { error in
                     if let error { done(.failure(error)) } else { done(.success(())) }
                 }
             }
             isOpen = true
+            successfulOpens += 1
             log.measure("usb.openSession", (clock.now - start).inSeconds, "s", context: device.name ?? "camera")
             logCapabilities("after open")
+            let percentAtOpen = device.contentCatalogPercentCompleted
 
             // usb.catalog.complete is recorded by deviceDidBecomeReady(withCompleteContentCatalog:) itself, from
             // `openRequestedAt`; this loop only waits for it.
             // If the callback never comes (possible when a session is reopened on the same device), the first
-            // moment contentCatalogPercentCompleted reads 100 is used instead, 10 s later, and labelled as such.
+            // moment contentCatalogPercentCompleted reads 100 is used instead, 10 s later, and labelled as such. If
+            // it already read 100 when the open completed, ImageCaptureCore kept the catalogue from an earlier
+            // session: that is not a listing of the card, so nothing is recorded.
             var lastNote = clock.now
             var fullAt: ContinuousClock.Instant?
             while !catalogComplete {
@@ -186,9 +201,13 @@ final class CameraSession: NSObject {
                 progressText = "cataloguing \(percentDone)%"
                 if percentDone >= 100, fullAt == nil { fullAt = clock.now }
                 if let fullAt, clock.now - fullAt > .seconds(10) {
-                    log.warn("deviceDidBecomeReady(withCompleteContentCatalog:) did not arrive within 10 s of the catalogue reading 100 %; using that moment instead")
-                    log.measure("usb.catalog.complete", (fullAt - start).inSeconds, "s",
-                                context: "open request → contentCatalogPercentCompleted = 100 (no ready callback), \(device.mediaFiles?.count ?? 0) files")
+                    if openIsReopen && percentAtOpen >= 100 {
+                        log.warn("Reopen: the catalogue already read 100 % when the session opened (kept from the earlier session) and no ready callback came, so this was not a listing of the card: usb.catalog.complete not recorded. Unplug and re-plug the camera for a cold listing.")
+                    } else {
+                        log.warn("deviceDidBecomeReady(withCompleteContentCatalog:) did not arrive within 10 s of the catalogue reading 100 %; using that moment instead")
+                        log.measure("usb.catalog.complete", (fullAt - start).inSeconds, "s",
+                                    context: "open request → contentCatalogPercentCompleted = 100 (no ready callback), \(device.mediaFiles?.count ?? 0) files")
+                    }
                     catalogComplete = true
                     break
                 }
@@ -259,6 +278,11 @@ final class CameraSession: NSObject {
     func timeThumbnails(count: Int = 50) async {
         await perform("Thumbnails, \(count) newest") {
             try requireOpen()
+            thumbnailRuns += 1
+            let run = thumbnailRuns
+            if run > 1 {
+                log.warn("Thumbnail run \(run) in this session: ImageCaptureCore may serve these from its cache. For the cold figure use the first run after Open session.")
+            }
             let sample = Array(files.prefix(count))
             guard !sample.isEmpty else { throw USBSpikeError.nothingToDo("no files on the card") }
             let clock = ContinuousClock()
@@ -293,7 +317,7 @@ final class CameraSession: NSObject {
             let minMs = times.min() ?? 0
             let maxMs = times.max() ?? 0
             log.measure("usb.thumb.avg", avg, "ms",
-                        context: "\(times.count) of \(sample.count) newest ok, min \(fmt(minMs)) max \(fmt(maxMs)) ms, avg \(bytes / max(times.count, 1) / 1000) KB [\(lifecycle.stateDescription)]")
+                        context: "\(times.count) of \(sample.count) newest ok, min \(fmt(minMs)) max \(fmt(maxMs)) ms, avg \(bytes / max(times.count, 1) / 1000) KB, run \(run) this session [\(lifecycle.stateDescription)]")
             for failure in failures.prefix(5) { log.warn("  thumbnail failed: \(failure)") }
             lastResult = "Thumbnails: \(fmt(avg)) ms average"
         }
@@ -408,7 +432,8 @@ final class CameraSession: NSObject {
         let start = clock.now
         // No timeout: a long clip can take minutes, and a cable pull ends the wait through didRemove.
         let saved: String = try await callback("requestDownload \(name)", timeout: nil) { done in
-            _ = file.requestDownload(options: options) { filename, error in
+            // The completion is not declared @Sendable but runs "on any available queue" (Apple): keep it nonisolated.
+            _ = file.requestDownload(options: options) { @Sendable filename, error in
                 if let error { done(.failure(error)) } else { done(.success(filename ?? name)) }
             }
         }
@@ -552,6 +577,9 @@ final class CameraSession: NSObject {
             let reply: PTPPassThrough.Reply
             do {
                 reply = try await send(PTPCommand.getObjectHandles(storage: .all, tx: tx.take()), timeout: 120)
+            } catch let interruption as USBSpikeError where interruption.isInterruption {
+                // A cable pull, a session closed under us or Stop says nothing about what ImageCaptureCore allows.
+                throw interruption
             } catch {
                 log.warn("GetObjectHandles through pass-through: no reply (\(describe(error))). ImageCaptureCore allows it: no.")
                 lastResult = "GetObjectHandles: not allowed"
@@ -641,9 +669,7 @@ final class CameraSession: NSObject {
 
     /// GetDevicePropValue(BatteryLevel 0x5001); ISO 15740 types it UINT8 (0–100).
     private func readBattery() async throws -> Int {
-        let command = PTPContainer(type: .command, code: PTPOperationCode.getDevicePropValue.rawValue,
-                                   transactionID: tx.take(), parameters: [UInt32(batteryLevelProperty)])
-        let reply = try await send(command)
+        let reply = try await send(PTPCommand.getDevicePropValue(.batteryLevel, tx: tx.take()))
         try check(reply, "GetDevicePropValue(BatteryLevel 0x5001)")
         var reader = PTPReader(reply.data)
         let value = try reader.u8()
@@ -723,6 +749,8 @@ final class CameraSession: NSObject {
             guard size > 0 else { throw USBSpikeError.nothingToDo("\(name) reports size 0") }
             let info = try await deviceInfoOrFetch()
             let variant = chooseVariant(size: size, info: info)
+            // The reassembly is kept and the requestDownload reference lands beside it.
+            try ensureFreeSpace(for: Int64(size) * 2)
             let dir = try freshDirectory("GetPartialObject")
             let partURL = dir.appendingPathComponent(USBResumePaths.sanitised(name))
 
@@ -737,6 +765,11 @@ final class CameraSession: NSObject {
                 switch interruption {
                 case .stopped, .deviceRemoved, .sessionClosed, .sessionReplaced:
                     log.warn("GetPartialObject interrupted at \(gpo.offset) of \(size) bytes (\(interruption.description)); usb.getPartialObject.supported not recorded")
+                    throw interruption
+                case .ptp(_, let code) where code == .invalidTransactionID:
+                    // Our transaction numbering versus ImageCaptureCore's, not the camera refusing the operation:
+                    // recording "unsupported" here would put a harness problem into the go/no-go table.
+                    log.warn("GetPartialObject got InvalidTransactionID at \(gpo.offset) of \(size) bytes; usb.getPartialObject.supported not recorded (a transaction-ID problem in the pass-through, not an answer about the camera)")
                     throw interruption
                 default:
                     break
@@ -762,8 +795,9 @@ final class CameraSession: NSObject {
             var readSHA: String?
             do {
                 readSHA = try await readDataSHA(file, measure: true).sha
-            } catch USBSpikeError.stopped {
-                throw USBSpikeError.stopped
+            } catch let interruption as USBSpikeError where interruption.isInterruption {
+                // Stop or a cable pull: don't go on to write a .sha256 fixture whose references say "failed".
+                throw interruption
             } catch {
                 log.error("requestReadData failed: \(describe(error))")
             }
@@ -781,6 +815,8 @@ final class CameraSession: NSObject {
                 if downloaded.seconds > 0 { downloadMBps = Double(downloaded.bytes) / downloaded.seconds / 1_000_000 }
                 downloadSHA = try sha256(of: downloaded.url)
                 try? FileManager.default.removeItem(at: referenceDir)
+            } catch let interruption as USBSpikeError where interruption.isInterruption {
+                throw interruption
             } catch {
                 log.error("requestDownload failed: \(describe(error))")
             }
@@ -1076,11 +1112,12 @@ final class CameraSession: NSObject {
                 log.warn("Camera serial \(serial) is not the saved \(saved.identity.cameraSerial): the identity check will restart from zero.")
             }
 
-            // Handles are not stable across sessions: find candidates by name and size, then confirm the capture
-            // date with GetObjectInfo.
-            let candidates = files.filter { ($0.name ?? "") == saved.identity.filename && UInt64(max(0, $0.fileSize)) == saved.identity.size }
+            // Handles are not stable across sessions: find candidates by name, then confirm the identity (capture date
+            // and size, both from GetObjectInfo like the saved one) per candidate. Matching on ICCameraFile.fileSize
+            // here would compare ImageCaptureCore's size with ObjectInfo's and could miss the object.
+            let candidates = files.filter { ($0.name ?? "") == saved.identity.filename }
             guard !candidates.isEmpty else {
-                throw USBSpikeError.nothingToDo("\(saved.identity.filename) of \(saved.identity.size) B is not on the card any more; Forget saved read")
+                throw USBSpikeError.nothingToDo("\(saved.identity.filename) is not on the card any more; Forget saved read")
             }
             var chosen = candidates[0]
             var current: PTPObjectIdentity?
@@ -1372,8 +1409,10 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
     func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         let now = ContinuousClock.now
         if !catalogComplete, let start = openRequestedAt {
+            openRequestedAt = nil
             log.measure("usb.catalog.complete", (now - start).inSeconds, "s",
-                        context: "open request → complete catalogue, \(device.mediaFiles?.count ?? 0) files")
+                        context: "open request → complete catalogue, \(device.mediaFiles?.count ?? 0) files"
+                            + (openIsReopen ? "; REOPEN on the same device, the catalogue may be cached (re-plug for a cold figure)" : ""))
         } else {
             log.note("deviceDidBecomeReady(withCompleteContentCatalog:) again")
         }
@@ -1469,6 +1508,14 @@ enum USBSpikeError: Error, CustomStringConvertible {
     case passThrough(String, String)
     case diskSpace(needed: Int64, available: Int64)
 
+    /// The link or the operation went away (cable pull, session closed or replaced, Stop): no answer about the camera.
+    var isInterruption: Bool {
+        switch self {
+        case .stopped, .deviceRemoved, .sessionClosed, .sessionReplaced: return true
+        default: return false
+        }
+    }
+
     var description: String {
         switch self {
         case .sessionNotOpen: return "no open session (Day 2 · Open session first)"
@@ -1507,7 +1554,7 @@ private final class PendingRequest<T>: @unchecked Sendable {
 
 // MARK: - Formatting and names
 
-private let batteryLevelProperty: UInt16 = 0x5001
+private let batteryLevelProperty: UInt16 = PTPDevicePropCode.batteryLevel.rawValue
 
 /// ISO 15740 §13 and MTP device property names, for logging DeviceInfo. Sony's 0xD2xx properties stay hex.
 private let devicePropertyNames: [UInt16: String] = [

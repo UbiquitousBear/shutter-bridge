@@ -28,10 +28,14 @@ final class DeviceBrowser: NSObject {
     var maskChoice: MaskChoice = .cameraLocal
     var log: SpikeLog?
     @ObservationIgnored private var loggedSerialNote = false
+    /// The mask a fresh browser has, read before anything sets it: what "System default" restores. Without it a
+    /// later "System default" would silently keep whatever an earlier choice set on this (one, long-lived) browser.
+    @ObservationIgnored private var systemDefaultMask: ICDeviceTypeMask?
 
     override init() {
         super.init()
         browser.delegate = self
+        systemDefaultMask = browser.browsedDeviceTypeMask
     }
 
     func start() async {
@@ -78,7 +82,7 @@ final class DeviceBrowser: NSObject {
         case .camera:
             browser.browsedDeviceTypeMask = .camera
         case .systemDefault:
-            break
+            if let systemDefaultMask { browser.browsedDeviceTypeMask = systemDefaultMask }
         }
         let after = browser.browsedDeviceTypeMask.rawValue
         maskDescription = "0x" + String(after, radix: 16)
