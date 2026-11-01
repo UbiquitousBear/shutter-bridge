@@ -14,8 +14,10 @@ import UIKit
 /// - Saving while locked: documented only for Lock Screen camera extensions (WWDC24). A staged file stays readable
 ///   while locked only with a protection class weaker than "complete", so the locked test saves one file of each.
 ///
-/// Each step logs both access levels before it runs and again after it if they changed. A step that shows a prompt
-/// also takes as long as the prompt stays up, so the duration gives it away.
+/// Each step logs both access levels before it runs, and again after it if they changed. PhotoKit shows its prompts
+/// asynchronously (a fetch returns at once and the prompt comes up afterwards), so a step's line can be written
+/// before its prompt appears. PromptWatcher therefore logs when the app goes inactive during or just after a step,
+/// and the access once it is active again.
 @Observable
 @MainActor
 final class PhotosProbe {
@@ -72,37 +74,42 @@ final class PhotosProbe {
             guard let album = found.collection else { return "album not found (\(found.detail)); nothing saved" }
             let url = try Self.stageJPEG(label: "existing album", protection: .completeFileProtectionUntilFirstUserAuthentication)
             defer { try? FileManager.default.removeItem(at: url) }
-            let created = try await Self.save(url, newAlbumTitle: nil, into: album)
-            return "album found (\(found.detail)); saved \(created.asset ?? "?") into it"
+            // Keep the lookup result even when the save fails: "found but couldn't add" is its own answer.
+            do {
+                let created = try await Self.save(url, newAlbumTitle: nil, into: album)
+                return "album found (\(found.detail)); saved \(created.asset ?? "?")\(created.albumNote)"
+            } catch {
+                return "album found (\(found.detail)); save into it FAILED: \(Self.describe(error))"
+            }
         }
     }
 
     /// Starts a continued task and waits for the phone to lock, then 15 s more (the keys for "complete" files are
-    /// discarded about 10 s after the lock). Then it saves photo A, staged complete-until-first-unlock and added to
-    /// the test album found before the lock, and photo B, staged complete. Finally it looks the album up again
-    /// while the phone is still locked.
+    /// discarded about 10 s after the lock). Then three saves, each changing one thing:
+    /// A1: complete-until-first-unlock file, no album; A2: the same class, added to the test album found before the
+    /// lock; B: complete file, no album (expected to fail while locked). Then it looks the album up again. Each save
+    /// logs whether the phone was locked when it started and when it finished, and whether the task had been stopped
+    /// or expired; only a save locked at both ends counts as a locked result.
     func startLockedSave(using task: ContinuedTask) {
         guard !isBusy, !task.isRunning else { log?.warn("photos: locked save test not started: another test is running"); return }
         let before = access()
         let found = findAlbum()
-        let fileA: URL, fileB: URL
+        let fileA1: URL, fileA2: URL, fileB: URL
         do {
-            fileA = try Self.stageJPEG(label: "locked, A: complete until first unlock",
-                                       protection: .completeFileProtectionUntilFirstUserAuthentication)
-            fileB = try Self.stageJPEG(label: "locked, B: complete", protection: .completeFileProtection)
+            let untilUnlock = Data.WritingOptions.completeFileProtectionUntilFirstUserAuthentication
+            fileA1 = try Self.stageJPEG(label: "locked, A1: complete until first unlock, no album", protection: untilUnlock)
+            fileA2 = try Self.stageJPEG(label: "locked, A2: complete until first unlock, album", protection: untilUnlock)
+            fileB = try Self.stageJPEG(label: "locked, B: complete, no album", protection: .completeFileProtection)
         } catch {
             log?.error("photos: locked save test could not stage its files: \(Self.describe(error))")
             return
         }
-        log?.note("photos: locked save test ready; album before the lock: \(found.detail); \(before). Lock the phone now and leave it locked for a minute.")
+        log?.note("photos: locked save test ready; album before the lock: \(found.detail); access \(before). Lock the phone now and leave it locked for a minute.")
         lastResult = "locked save test: waiting for the lock"
-        // Progress units: up to 120 one-second waits for the lock, 15 for the key to go, then 5 for the saves. The
-        // count moves every second so the system sees progress.
+        // Progress units: up to 120 one-second waits for the lock, 15 for the keys to go, then 5 for the saves and
+        // the lookup. The count moves every second so the system sees progress.
         task.run(title: "Saving to Photos (spike)", subtitle: "Lock the phone now", totalUnits: 140) { [weak self] report, shouldStop in
-            defer {
-                try? FileManager.default.removeItem(at: fileA)
-                try? FileManager.default.removeItem(at: fileB)
-            }
+            defer { for file in [fileA1, fileA2, fileB] { try? FileManager.default.removeItem(at: file) } }
             guard let self else { return false }
             var waited = 0
             while UIApplication.shared.isProtectedDataAvailable {
@@ -120,16 +127,19 @@ final class PhotosProbe {
                 try? await Task.sleep(for: .seconds(1))
                 report(120 + second, second == 1 ? "Locked; saving in 15 s" : nil)
             }
-            let state = UIApplication.shared.isProtectedDataAvailable
-                ? "protected data AVAILABLE: the phone was unlocked again, so this run proves nothing"
-                : "protected data unavailable"
-            await self.lockedSave(fileA, label: "A (complete until first unlock)", album: found.collection, state: state)
-            report(137, "Saved A")
-            await self.lockedSave(fileB, label: "B (complete)", album: nil, state: state)
-            report(139, "Saved B")
+            await self.lockedSave(fileA1, label: "A1 (complete until first unlock, no album)", album: nil, shouldStop: shouldStop)
+            report(136, "Saved A1")
+            if let album = found.collection {
+                await self.lockedSave(fileA2, label: "A2 (complete until first unlock, into the album)", album: album, shouldStop: shouldStop)
+            } else {
+                self.log?.note("photos: locked save A2 skipped: no test album was found before the lock (\(found.detail))")
+            }
+            report(137, "Saved A2")
+            await self.lockedSave(fileB, label: "B (complete, no album)", album: nil, shouldStop: shouldStop)
+            report(138, "Saved B")
+            let lockedBefore = !UIApplication.shared.isProtectedDataAvailable
             let again = self.findAlbum()
-            let lockedNow = UIApplication.shared.isProtectedDataAvailable ? "unlocked by now" : "still locked"
-            self.log?.note("photos: album lookup while locked: \(again.detail) (\(lockedNow))")
+            self.log?.note("photos: album lookup while locked: \(again.detail) · locked \(lockedBefore ? "yes" : "NO (unlocked by now)")")
             report(140, nil)
             self.lastResult = "locked save test finished; see the log"
             return true
@@ -138,13 +148,15 @@ final class PhotosProbe {
 
     // MARK: - Helpers
 
-    /// Runs one step at a time, logging access before (and after, if it changed), the outcome and the duration.
+    /// Runs one step at a time, logging access before (and after, if it changed), the outcome and the duration, then
+    /// waits for any prompt the step brought up to be answered before the next step can start.
     private func run(_ step: String, _ body: @escaping @MainActor () async throws -> String) {
         guard !isBusy else { return }
         isBusy = true
         Task { @MainActor in
-            let before = self.access()
             let start = Date()
+            let watcher = PromptWatcher(step: step, start: start, log: self.log)
+            let before = self.access()
             let outcome: String
             var failed = false
             do { outcome = try await body() } catch { outcome = "FAILED: \(Self.describe(error))"; failed = true }
@@ -152,23 +164,36 @@ final class PhotosProbe {
             let after = self.access()
             var line = "photos: \(step) → \(outcome) · \(seconds) s · access \(before)"
             if after != before { line += " → \(after)" }
-            if failed { self.log?.warn(line) } else { self.log?.note(line) }
+            if failed || outcome.contains("FAILED") { self.log?.warn(line) } else { self.log?.note(line) }
             self.lastResult = "\(step): \(outcome)"
+            if await watcher.settle() {
+                self.log?.note("photos: active again after \"\(step)\"; access now \(self.access())")
+            }
+            watcher.stop()
             self.isBusy = false
         }
     }
 
-    private func lockedSave(_ url: URL, label: String, album: PHAssetCollection?, state: String) async {
+    /// One locked save. It is skipped if the phone is no longer locked or the task was stopped or expired before it
+    /// starts, so a save that ran unlocked can't be logged as a locked result.
+    private func lockedSave(_ url: URL, label: String, album: PHAssetCollection?, shouldStop: ContinuedTask.ShouldStop) async {
+        let lockedAtStart = !UIApplication.shared.isProtectedDataAvailable
+        guard lockedAtStart, !shouldStop() else {
+            log?.warn("photos: locked save \(label) not run: \(lockedAtStart ? "the task was stopped or expired" : "the phone was unlocked") before it started")
+            return
+        }
         let start = Date()
+        var outcome: String
         do {
             let created = try await Self.save(url, newAlbumTitle: nil, into: album)
-            let seconds = String(format: "%.1f", Date().timeIntervalSince(start))
-            let into = album == nil ? "" : ", added to the test album"
-            log?.note("photos: locked save \(label) OK\(into) → \(created.asset ?? "?") · \(seconds) s · \(state)")
+            outcome = "OK → \(created.asset ?? "?")\(created.albumNote)"
         } catch {
-            let seconds = String(format: "%.1f", Date().timeIntervalSince(start))
-            log?.warn("photos: locked save \(label) FAILED: \(Self.describe(error)) · \(seconds) s · \(state)")
+            outcome = "FAILED: \(Self.describe(error))"
         }
+        let lockedAtEnd = !UIApplication.shared.isProtectedDataAvailable
+        let seconds = String(format: "%.1f", Date().timeIntervalSince(start))
+        let line = "photos: locked save \(label) \(outcome) · \(seconds) s · locked at start yes, at end \(lockedAtEnd ? "yes" : "NO") · task stopped or expired \(shouldStop() ? "YES" : "no")"
+        if outcome.hasPrefix("OK") && lockedAtEnd { log?.note(line) } else { log?.warn(line) }
     }
 
     private func access() -> String {
@@ -181,7 +206,9 @@ final class PhotosProbe {
         UserDefaults.standard.set(id, forKey: Self.albumIDKey)
     }
 
-    /// Looks the test album up both ways the product could: by the stored local identifier, then by title.
+    /// Looks the test album up both ways the product could: by the stored local identifier, then by title. Also
+    /// reports whether the album accepts new photos (canPerform(.addContent)); adding to one that doesn't raises an
+    /// exception, so save() checks it first.
     private func findAlbum() -> (collection: PHAssetCollection?, detail: String) {
         var parts: [String] = []
         var collection: PHAssetCollection?
@@ -197,18 +224,24 @@ final class PhotosProbe {
         let byTitle = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: options)
         parts.append("by title \(byTitle.count)")
         if collection == nil { collection = byTitle.firstObject }
+        if let collection {
+            parts.append(collection.canPerform(.addContent) ? "accepts new photos" : "does NOT accept new photos")
+        }
         return (collection, parts.joined(separator: ", "))
     }
 
     private final class Created: @unchecked Sendable {
         var asset: String?
         var album: String?
+        /// For a save into an existing album: whether the photo was added, or why not.
+        var albumNote = ""
     }
 
     /// One change block, saving from a file URL as the product will: the asset, and either a new album holding it or
-    /// the asset added to an existing album.
+    /// the asset added to an existing album (only if the album accepts new photos).
     private static func save(_ url: URL, newAlbumTitle: String?, into album: PHAssetCollection?) async throws -> Created {
         let created = Created()
+        let accepts = album?.canPerform(.addContent) ?? false
         try await PHPhotoLibrary.shared().performChanges {
             let request = PHAssetCreationRequest.forAsset()
             request.addResource(with: .photo, fileURL: url, options: nil)
@@ -220,7 +253,14 @@ final class PhotosProbe {
                 created.album = albumRequest.placeholderForCreatedAssetCollection.localIdentifier
             }
             if let album, let placeholder {
-                PHAssetCollectionChangeRequest(for: album)?.addAssets([placeholder] as NSArray)
+                if !accepts {
+                    created.albumNote = "; NOT added: the album does not accept new photos"
+                } else if let change = PHAssetCollectionChangeRequest(for: album) {
+                    change.addAssets([placeholder] as NSArray)
+                    created.albumNote = ", added to the test album"
+                } else {
+                    created.albumNote = "; NOT added: no change request for the album"
+                }
             }
         }
         return created
@@ -235,7 +275,7 @@ final class PhotosProbe {
             context.fill(CGRect(origin: .zero, size: size))
             let text = "Shutter Bridge spike test\n\(label)\n\(stamp)" as NSString
             text.draw(in: CGRect(x: 60, y: 60, width: size.width - 120, height: size.height - 120),
-                      withAttributes: [.font: UIFont.boldSystemFont(ofSize: 64), .foregroundColor: UIColor.white])
+                      withAttributes: [.font: UIFont.boldSystemFont(ofSize: 56), .foregroundColor: UIColor.white])
         }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("photos-test", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -262,5 +302,50 @@ final class PhotosProbe {
     static func describe(_ error: Error) -> String {
         let ns = error as NSError
         return "\(ns.domain) \(ns.code): \(ns.localizedDescription)"
+    }
+}
+
+/// Notices a system prompt (or anything else that takes the app out of the active state, such as Control Centre)
+/// while a Photos step runs or just after it: logs when the app goes inactive, and lets the step wait until the app is
+/// active again so the access can be logged after the prompt was answered.
+@MainActor
+private final class PromptWatcher {
+    private var tokens: [NSObjectProtocol] = []
+    private var inactive = false
+    private var wentInactive = false
+
+    init(step: String, start: Date, log: SpikeLog?) {
+        let center = NotificationCenter.default
+        tokens.append(center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.inactive = true
+                self.wentInactive = true
+                let at = String(format: "%.1f", Date().timeIntervalSince(start))
+                log?.note("photos: app went inactive during \"\(step)\" at +\(at) s: a system prompt, or Control Centre")
+            }
+        })
+        tokens.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.inactive = false }
+        })
+    }
+
+    /// Waits up to 3 s for a prompt that comes up after the step finished, then, if one came up, until the app is
+    /// active again (2 minutes at most). Returns whether the app went inactive at all.
+    func settle() async -> Bool {
+        for _ in 0 ..< 12 where !inactive {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        var waited = 0
+        while inactive && waited < 480 {
+            try? await Task.sleep(for: .milliseconds(250))
+            waited += 1
+        }
+        return wentInactive
+    }
+
+    func stop() {
+        tokens.forEach { NotificationCenter.default.removeObserver($0) }
+        tokens = []
     }
 }
