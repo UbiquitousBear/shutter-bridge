@@ -180,9 +180,15 @@ final class CameraSession: NSObject {
     /// Counts a request that got no answer; from two in a row the link is marked stalled (see `linkStalled`).
     private func noteNoAnswer(_ what: String) {
         consecutiveNoAnswers += 1
-        guard consecutiveNoAnswers >= 2, !linkStalled else { return }
+        guard consecutiveNoAnswers >= 2 else { return }
+        markLinkStalled("\(consecutiveNoAnswers) requests in a row got no answer (the last was \(what))")
+    }
+
+    /// From here every action refuses with `.linkStalled` until the camera is replugged (a new CameraSession).
+    private func markLinkStalled(_ why: String) {
+        guard !linkStalled else { return }
         linkStalled = true
-        log.warn("The camera has stopped answering: \(consecutiveNoAnswers) requests in a row got no answer (the last was \(what)). Unplug it, plug it back in, choose MTP, then Open session. The spike sends nothing more on this connection.")
+        log.warn("The camera has stopped answering: \(why). Unplug it, plug it back in, choose MTP, then Open session. The spike sends nothing more on this connection.")
     }
 
     // MARK: - Completion-handler plumbing
@@ -249,6 +255,7 @@ final class CameraSession: NSObject {
             }
             isOpen = true
             successfulOpens += 1
+            consecutiveNoAnswers = 0
             log.measure("usb.openSession", (clock.now - start).inSeconds, "s", context: device.name ?? "camera")
             logCapabilities("after open")
             let percentAtOpen = device.contentCatalogPercentCompleted
@@ -584,6 +591,8 @@ final class CameraSession: NSObject {
 
     /// One requestDownload. Bytes are the size of the file on disk afterwards; seconds are request → completion.
     private func downloadFile(_ file: ICCameraFile, to dir: URL) async throws -> (url: URL, bytes: Int64, seconds: Double) {
+        // requestDownload has no timeout and Stop doesn't end it: on a stalled link only a cable pull would.
+        if linkStalled { throw USBSpikeError.linkStalled }
         let name = file.name ?? "?"
         let options: [ICDownloadOption: Any] = [
             .downloadsDirectoryURL: dir,
@@ -1040,8 +1049,8 @@ final class CameraSession: NSObject {
             }
             let attempts: [(label: String, probe: Bool, timeout: Double)] = [
                 ("all properties of the newest object (\(newest)), depth 0", true, 20),
-                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", false, 60),
-                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", false, 60),
+                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", false, 90),
+                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", false, 90),
             ]
             let clock = ContinuousClock()
             for (index, attempt) in attempts.enumerated() {
@@ -1061,7 +1070,10 @@ final class CameraSession: NSObject {
                     throw interruption
                 } catch {
                     let seconds = (clock.now - start).inSeconds
-                    log.warn("GetObjectPropList (\(label)) got no answer after \(fmt(seconds, 1)) s: \(describe(error)). Not trying the larger forms\(linkStalled ? "; replug the camera before anything else" : "").")
+                    log.warn("GetObjectPropList (\(label)) got no answer after \(fmt(seconds, 1)) s: \(describe(error)). Not trying the larger forms.")
+                    // send counted it if there was no response at all (timeout or two empty values). On 1 Nov one
+                    // unanswered GetObjectPropList left the camera answering nothing until it was replugged.
+                    if consecutiveNoAnswers > 0 { markLinkStalled("GetObjectPropList (\(label)) got no answer, and on 1 Nov one unanswered GetObjectPropList left the camera silent until it was replugged") }
                     log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); no answer")
                     lastResult = "MTP listing: no answer to \(label)"
                     return
@@ -1192,17 +1204,18 @@ final class CameraSession: NSObject {
                 if linkStalled { throw USBSpikeError.linkStalled }
                 if failuresInARow >= 3 {
                     for failure in failures.prefix(5) { log.warn("  GetThumb failed: \(failure)") }
-                    throw USBSpikeError.nothingToDo("3 GetThumb requests in a row failed, so the run stopped: \(failures.suffix(3).joined(separator: "; "))")
+                    throw USBSpikeError.nothingToDo("3 GetThumb requests in a row got no answer, so the run stopped: \(failures.suffix(3).joined(separator: "; "))")
                 }
                 let start = clock.now
                 do {
                     let reply = try await send(PTPCommand.getThumb(handle, tx: tx.take()), timeout: 10)
+                    // Any response, OK or not, shows the camera is answering: a folder among the highest handles
+                    // answers NoThumbnailPresent in milliseconds and must not end the run.
+                    failuresInARow = 0
                     guard reply.responseCode.isOK else {
                         failures.append("\(handle): \(reply.responseCode)")
-                        failuresInARow += 1
                         continue
                     }
-                    failuresInARow = 0
                     let ms = (clock.now - start).inSeconds * 1000
                     times.append(ms)
                     bytes += reply.data.count
@@ -1364,6 +1377,7 @@ final class CameraSession: NSObject {
                 log.warn("usb.getPartialObject.supported not recorded: \(variant.rawValue) failed at \(gpo.offset)/\(size) with \(gpo.error.map { describe($0) } ?? "short read"), which is not the camera refusing the operation. Re-run, or try Start resumable read (1 MiB chunks).")
             }
             if removed { throw USBSpikeError.deviceRemoved }
+            if linkStalled { throw USBSpikeError.linkStalled }
 
             // 2. requestReadData, same chunk size.
             log.note("2/3 requestReadData (4 MiB chunks) of \(name)…")
@@ -1378,6 +1392,7 @@ final class CameraSession: NSObject {
             }
 
             // 3. requestDownload of the same file: the throughput reference and a second SHA.
+            if linkStalled { throw USBSpikeError.linkStalled }
             log.note("3/3 requestDownload of \(name)…")
             var downloadSHA: String?
             var downloadMBps: Double?
@@ -1473,6 +1488,9 @@ final class CameraSession: NSObject {
             if !isOpen {
                 return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.sessionClosed)
             }
+            if linkStalled {
+                return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.linkStalled)
+            }
             let chunkStart = clock.now
             do {
                 let command = try PTPPartialRead.command(handle, chunk: chunk, variant: variant, tx: tx.take())
@@ -1518,17 +1536,25 @@ final class CameraSession: NSObject {
         while offset < size {
             if stopRequested { throw USBSpikeError.stopped }
             if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+            if linkStalled { throw USBSpikeError.linkStalled }
             let length = min(chunk, size - offset)
             let readOffset = off_t(offset)
             let readLength = off_t(length)
             let start = clock.now
-            var data: Data = try await callback("requestReadData", timeout: 60) { done in
-                file.requestReadData(atOffset: readOffset, length: readLength) { data, error in
-                    if let error { done(.failure(error)) }
-                    else if let data, !data.isEmpty { done(.success(data)) }
-                    else { done(.failure(USBSpikeError.noData("requestReadData"))) }
+            var data: Data
+            do {
+                data = try await callback("requestReadData", timeout: 60) { done in
+                    file.requestReadData(atOffset: readOffset, length: readLength) { bytes, error in
+                        if let error { done(.failure(error)) }
+                        else if let bytes, !bytes.isEmpty { done(.success(bytes)) }
+                        else { done(.failure(USBSpikeError.noData("requestReadData"))) }
+                    }
                 }
+            } catch let error as USBSpikeError {
+                if case .timedOut = error { noteNoAnswer("requestReadData") }
+                throw error
             }
+            consecutiveNoAnswers = 0
             seconds += (clock.now - start).inSeconds
             if UInt64(data.count) > length {
                 log.warn("requestReadData returned \(data.count) B for \(length) B at \(offset); keeping \(length)")
