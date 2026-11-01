@@ -1038,9 +1038,12 @@ final class CameraSession: NSObject {
                     resolvedHandles[FileKey(name: name.lowercased(), size: Int64(clamping: size))] = handle
                     keyed += 1
                 }
+                // Without ObjectSize every size is nil: a byte total would read 0 B.
+                let sizesKnown = properties.contains(.objectSize)
                 let totalBytes = summaries.values.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
                 let split = formatKnown ? "\(files.count) files, \(folders) folders"
-                                        : "file/folder split unknown (ObjectFormat not sent), \(totalBytes) B"
+                                        : "file/folder split unknown (ObjectFormat not sent), "
+                                          + (sizesKnown ? "\(totalBytes) B" : "sizes not sent")
                 log.note("MTP listing (\(label)): \(summaries.count) objects (\(split)), \(list.elements.count) properties, \(reply.data.count) B in \(fmt(seconds, 2)) s")
                 log.note("  properties sent: " + properties.map { "\($0)" }.sorted().joined(separator: ", "))
                 if !formatKnown {
@@ -1049,7 +1052,7 @@ final class CameraSession: NSObject {
                 let byExtension = Dictionary(grouping: files.values) { ($0.filename.flatMap { $0.split(separator: ".").last.map(String.init) } ?? "?").uppercased() }
                 for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
                     let bytes = group.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
-                    log.note("  .\(ext): \(group.count) \(unit), \(mb(bytes))")
+                    log.note("  .\(ext): \(group.count) \(unit), \(sizesKnown ? mb(bytes) : "sizes not sent")")
                 }
                 let newestFirst = files.sorted { a, b in
                     let da = a.value.dateCreated ?? .distantPast
