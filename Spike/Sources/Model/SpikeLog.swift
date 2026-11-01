@@ -37,13 +37,17 @@ final class SpikeLog {
         note(String(format: "%@ = %.2f %@ %@", name, value, unit, context))
     }
 
+    /// Records a yes/no result (value 1 or 0, unit "bool"), e.g. `usb.getPartialObject.supported`.
+    func flag(_ name: String, _ value: Bool, context: String = "") {
+        measure(name, value ? 1 : 0, "bool", context: context)
+    }
+
     /// Times a block and records it as a measurement. Returns the block's result.
     func timed<T>(_ name: String, context: String = "", _ body: () async throws -> T) async rethrows -> T {
         let clock = ContinuousClock()
         let start = clock.now
         let result = try await body()
-        let seconds = Double((clock.now - start).components.seconds) + Double((clock.now - start).components.attoseconds) / 1e18
-        measure(name, seconds, "s", context: context)
+        measure(name, (clock.now - start).inSeconds, "s", context: context)
         return result
     }
 
@@ -70,6 +74,11 @@ final class SpikeLog {
         entries.append(Entry(id: UUID(), at: Date(), level: level, text: text))
         if entries.count > 2000 { entries.removeFirst(entries.count - 2000) }
     }
+}
+
+extension Duration {
+    /// Seconds as a Double, for MB/s and ms arithmetic.
+    var inSeconds: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }
 
 extension Data {

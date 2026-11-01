@@ -41,6 +41,9 @@ targets:
         NSBonjourServices: [_ptp._tcp]
         NSBluetoothAlwaysUsageDescription: "Notices when your camera is nearby so it can remind you about new photos."
         UIBackgroundModes: [bluetooth-central]
+        # Captured fixtures live in Documents/fixtures and are visible in the Files app and Finder.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         BGTaskSchedulerPermittedIdentifiers:
           - com.ubiquitousbear.shutterbridge.spike.import
     settings:
