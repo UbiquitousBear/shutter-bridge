@@ -392,22 +392,32 @@ enum LogScrubber {
         (#"camera serial is .*?, the saved read is from \S+"#, "the camera's serial differs from the saved read's"),
         // Object identities: "<size>B @<serial>" (build 4: "@camera-key(N chars)"; build 4 prerelease "@serial(N chars)").
         (#"(\d)B @(?!serial\(|camera-key\()[A-Za-z0-9._-]+"#, "$1B @camera-key(redacted)"),
-        // Resume paths: "Imports/<serial>/" (build 4: "Imports/sn-…/", "Imports/uuid-sn-…/").
-        (#"Imports/(?!sn-|uuid-sn-|…/)[^/\s]+/"#, "Imports/…/"),
+        // Resume paths: "Imports/<serial>/". Build 4 writes "Imports/sn-…/", "Imports/uuid-sn-…/", and the serial-free
+        // fallbacks "Imports/uuid-unknown/" (USB) and "Imports/unknown-serial/" (Wi-Fi).
+        (#"Imports/(?!sn-|uuid-sn-|uuid-unknown/|unknown-serial/|…/)[^/\s]+/"#, "Imports/…/"),
         // The empty-serial fallback "uuid-<raw device UUID>" anywhere else, such as its warning (after the two rules
         // above, which replace it whole). Build 4 writes "uuid-sn-…" or "uuid-unknown".
         (#"\buuid-(?!sn-|unknown\b|\(redacted\))[0-9A-Za-z-]+"#, "uuid-(redacted)"),
         // DeviceBrowser's didAdd/didRemove, "uuid=<raw>" (build 4 writes "uuid=sn-…" or "uuid=-").
         (#"\buuid=(?!sn-|-(?:\s|$)|\(redacted\))\S+"#, "uuid=(redacted)"),
-        // SSDP description summary: "serialNumber <value> · UDN …".
-        (#"\bserialNumber (?!present \(|absent\b|\(redacted\))[^·\n]*?(?= · |\n|$)"#, "serialNumber (redacted)"),
+        // SSDP description summary, builds 1–3: `… · serialNumber <value> · UDN …`, with "-" for no serial. Only that
+        // shape: build 4's own lines that mention serialNumber ("no serialNumber in it", "could not zero the
+        // serialNumber", "serialNumber present (…)" / "absent") must pass through.
+        (#"(?<= · )serialNumber -(?= · UDN )"#, "serialNumber absent"),
+        (#"(?<= · )serialNumber (?!present \(|absent(?= · )|\(redacted\)(?= · )|-(?= · ))[^\n]*?(?= · UDN )"#,
+         "serialNumber (redacted)"),
     ].map { pattern, template in
         // The patterns are constants: a bad one is a programming error caught the first time the app runs.
         (try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]), template)
     }
 
+    /// Every rule's match contains one of these: a record without any is left alone without running the regexes,
+    /// which keeps the scrub cheap on every launch (up to 2,000 entries and 10,000 measurement contexts).
+    private static let triggers = ["serial", "uuid", "B @", "Imports/"]
+
     /// `text` with every serial or device UUID of the old formats replaced.
     static func scrub(_ text: String) -> String {
+        guard triggers.contains(where: { text.contains($0) }) else { return text }
         var out = text
         for (regex, template) in rules {
             let range = NSRange(out.startIndex..., in: out)
