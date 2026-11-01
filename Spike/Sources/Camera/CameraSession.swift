@@ -38,6 +38,7 @@ final class CameraSession: NSObject {
 
     var stateDescription: String {
         if removed { return "camera disconnected" }
+        if linkStalled { return "stalled: unplug, replug, choose MTP, then Open session" }
         if !isOpen { return "closed" }
         return catalogComplete ? "open" : "open, cataloguing \(cataloguePercent) %"
     }
@@ -57,10 +58,19 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var loggedDownloadName = false
     @ObservationIgnored private var thumbnailRuns = 0
     @ObservationIgnored private var successfulOpens = 0
+    /// Devices any CameraSession has opened in this process: a new session on one of them (after a stall) is still a
+    /// reopen, and ImageCaptureCore may keep its catalogue. A replugged camera is a new ICCameraDevice.
+    private static let openedDevices = NSHashTable<ICCameraDevice>.weakObjects()
     @ObservationIgnored private var openIsReopen = false
     /// PTP pass-through commands sent between this open's request and ImageCaptureCore's complete catalogue: they
     /// share the link with the catalogue, so a catalogue time with any of them is not a cold figure.
     @ObservationIgnored private var ptpCommandsDuringCatalogue = 0
+    /// Pass-through commands logged with their timing while ImageCaptureCore's catalogue ran (the first few per open,
+    /// and any that waited more than 2 s): does pass-through wait for the catalogue?
+    @ObservationIgnored private var catalogueTimingNotes = 0
+    /// Objects the spike has sent a per-object command for in this session (GetObjectInfo, GetThumb,
+    /// GetPartialObject, GetObjectPropList): the camera may answer those from a cache, so listings time them apart.
+    @ObservationIgnored private var touchedHandles: Set<PTPObjectHandle> = []
     /// This session's catalogue figure (measurement name, seconds, a note such as REOPEN), for the listing contexts.
     /// SpikeLog.measurements is restored across launches, so the last logged value may be another session's.
     @ObservationIgnored private var sessionCatalogue: (seconds: Double, name: String, note: String)?
@@ -231,6 +241,34 @@ final class CameraSession: NSObject {
     func openSession(waitForCatalogue: Bool = true) async {
         await perform("Open session") {
             if isOpen { log.note("Session already open"); return }
+            var staleCloseUnconfirmed = false
+            if device.hasOpenSession {
+                // A new CameraSession on a device ImageCaptureCore still has open (the previous one stalled and the
+                // camera was not unplugged): close it first so the open below starts clean. No answer is expected
+                // on a stalled connection, so this waits 10 s at most.
+                log.warn("ImageCaptureCore still has a session open on this camera (no cable pull since the last one); closing it first")
+                // As in closeSession: this close's own didCloseSession must not abort it.
+                closingSession = true
+                defer { closingSession = false }
+                do {
+                    let _: Void = try await callback("requestCloseSession (stale)", timeout: 10) { done in
+                        self.device.requestCloseSession(options: nil) { error in
+                            if let error { done(.failure(error)) } else { done(.success(())) }
+                        }
+                    }
+                    log.note("  stale session closed")
+                } catch USBSpikeError.sessionClosed {
+                    log.note("  stale session closed (didCloseSession)")
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    staleCloseUnconfirmed = true
+                    log.warn("  closing the stale session failed: \(describe(error))")
+                }
+            }
+            if staleCloseUnconfirmed {
+                throw USBSpikeError.nothingToDo("ImageCaptureCore didn't confirm closing the stalled session within 10 s, so the camera is still not answering. Unplug it and plug it back in (if the camera is then listed twice, tap the lower row), or turn the camera off and on, then Open session.")
+            }
             stopCatalogueMonitor()
             clearPTPCaches()
             catalogComplete = false
@@ -241,8 +279,10 @@ final class CameraSession: NSObject {
             let start = clock.now
             openRequestedAt = start
             ptpCommandsDuringCatalogue = 0
+            catalogueTimingNotes = 0
+            touchedHandles.removeAll()
             // A reopen on the same ICCameraDevice may find the catalogue ImageCaptureCore kept from the last session.
-            openIsReopen = successfulOpens > 0
+            openIsReopen = successfulOpens > 0 || Self.openedDevices.contains(device)
             // Only this open may stamp usb.catalog.complete: a ready callback after it (a reopen by ImageCaptureCore,
             // a failed or stopped open) must not be timed from this request. When not waiting, the monitor owns
             // `openRequestedAt` from here and clears it when it ends.
@@ -255,6 +295,7 @@ final class CameraSession: NSObject {
             }
             isOpen = true
             successfulOpens += 1
+            Self.openedDevices.add(device)
             consecutiveNoAnswers = 0
             log.measure("usb.openSession", (clock.now - start).inSeconds, "s", context: device.name ?? "camera")
             logCapabilities("after open")
@@ -373,10 +414,16 @@ final class CameraSession: NSObject {
             guard isOpen else { log.note("Session is not open"); return }
             closingSession = true
             defer { closingSession = false }
-            let _: Void = try await callback("requestCloseSession", timeout: 30) { done in
-                self.device.requestCloseSession(options: nil) { error in
-                    if let error { done(.failure(error)) } else { done(.success(())) }
+            do {
+                let _: Void = try await callback("requestCloseSession", timeout: linkStalled ? 10 : 30) { done in
+                    self.device.requestCloseSession(options: nil) { error in
+                        if let error { done(.failure(error)) } else { done(.success(())) }
+                    }
                 }
+            } catch let closeError where linkStalled {
+                // The camera stopped answering, so CloseSession can't be answered either. Treat the session as closed
+                // here, or Open session would stay disabled with every other button refusing.
+                log.warn("requestCloseSession on the stalled connection: \(describe(closeError)). Treated as closed; unplug and replug the camera (or turn it off and on) before Open session.")
             }
             isOpen = false
             catalogComplete = false
@@ -645,7 +692,11 @@ final class CameraSession: NSObject {
         let name = command.operationCode.description
         let encoded = command.encode()
         // Shares the link with ImageCaptureCore's catalogue if that is still running for this open.
-        if openRequestedAt != nil && !catalogComplete { ptpCommandsDuringCatalogue += 1 }
+        let catalogueOpenedAt: ContinuousClock.Instant? = catalogComplete ? nil : openRequestedAt
+        if catalogueOpenedAt != nil { ptpCommandsDuringCatalogue += 1 }
+        let sentAt = ContinuousClock().now
+        var outcome = "got no answer"
+        defer { if let catalogueOpenedAt { noteDuringCatalogue(name, outcome, openedAt: catalogueOpenedAt, sentAt: sentAt) } }
         let raw: RawPTPReply
         do {
             raw = try await callback(name, timeout: timeout) { done in
@@ -654,7 +705,12 @@ final class CameraSession: NSObject {
                 }
             }
         } catch let error as USBSpikeError {
-            if case .timedOut = error { noteNoAnswer(name) }
+            if case .timedOut = error {
+                noteNoAnswer(name)
+                outcome = "got no answer (timed out)"
+            } else {
+                outcome = "ended (\(describe(error)))"
+            }
             throw error
         }
         if raw.first.isEmpty && raw.second.isEmpty {
@@ -666,6 +722,8 @@ final class CameraSession: NSObject {
         do {
             reply = try PTPPassThrough.decodeReply(raw.first, raw.second, for: command)
         } catch {
+            outcome = raw.first.isEmpty && raw.second.isEmpty ? "got no answer (two empty values)"
+                : "sent no response container (\(raw.first.count) + \(raw.second.count) B)"
             let bytes = "first \(raw.first.count) B [\(raw.first.hexDump(limit: 24))], second \(raw.second.count) B [\(raw.second.hexDump(limit: 24))]"
             if let iccError = raw.error {
                 throw USBSpikeError.passThrough(name, "\(describe(iccError)); \(bytes)")
@@ -676,7 +734,19 @@ final class CameraSession: NSObject {
             log.warn("\(name): ImageCaptureCore reported \(describe(iccError)) alongside response \(reply.responseCode)")
         }
         noteLayout(reply, op: name, command: command, raw: raw)
+        outcome = "answered \(reply.responseCode)"
         return reply
+    }
+
+    /// Whether a pass-through command waits for ImageCaptureCore's catalogue, which decides if the app can show the
+    /// newest shots before a 65 s MTP catalogue ends. Logs the first 5 commands of each open that started during the
+    /// catalogue, and any that took more than 2 s.
+    private func noteDuringCatalogue(_ name: String, _ outcome: String, openedAt: ContinuousClock.Instant, sentAt: ContinuousClock.Instant) {
+        let took = (ContinuousClock().now - sentAt).inSeconds
+        guard catalogueTimingNotes < 5 || took > 2 else { return }
+        catalogueTimingNotes += 1
+        let state = catalogComplete ? "the catalogue had completed by then" : "catalogue still at \(device.contentCatalogPercentCompleted) %"
+        log.note("  during ImageCaptureCore's catalogue: \(name) sent \(fmt((sentAt - openedAt).inSeconds, 1)) s after Open session, \(outcome) \(fmt(took * 1000, 0)) ms later; \(state). Findings-page fact: does pass-through wait for the catalogue?")
     }
 
     /// The (data, response) order and header handling of requestSendPTPCommand is a findings-page fact: logged once
@@ -942,6 +1012,7 @@ final class CameraSession: NSObject {
 
     /// GetObjectInfo for one handle, decoded and cached by handle.
     private func readObjectInfo(_ handle: PTPObjectHandle) async throws -> PTPObjectInfo {
+        touchedHandles.insert(handle)
         let reply = try await send(PTPCommand.getObjectInfo(handle, tx: tx.take()))
         try check(reply, "GetObjectInfo \(handle)")
         let info = try PTPObjectInfo.decode(reply.data)
@@ -1038,135 +1109,207 @@ final class CameraSession: NSObject {
         }
     }
 
-    // MARK: Day 2 · MTP listing (one call)
+    // MARK: Day 2 · MTP listing (one object at a time)
 
-    /// MTP GetObjectPropList (0x9805), which the α7C II advertises in MTP mode: one request that may return every
-    /// object's name, size, format, parent and dates. Tries libmtp's "every property of every object" first, then two
-    /// narrower forms if the camera refuses it, and stops at the first that answers OK. The raw reply is saved as a
-    /// fixture whether or not it decodes. A decoded listing fills resolveHandle's (name, size) cache.
+    /// MTP GetObjectPropList (0x9805) for one object at a time (depth 0, every property), newest handle first, timed
+    /// per object, to compare with GetObjectInfo (about 165 ms per object on 1 Nov). On 1 Nov one object answered in
+    /// 0.01 s. A single request for the whole card is never sent: ImageCaptureCore ends a pass-through request after
+    /// about 60 s, both whole-card forms got no answer, and after one of them the camera answered nothing until it was
+    /// replugged. Fills resolveHandle's (name, size) cache and GetThumb's newest-first picks.
     func mtpListing() async {
-        await perform("MTP listing (GetObjectPropList)") {
+        await perform("MTP listing (GetObjectPropList per object)") {
             try requireSession()
-            let iccPercentAtStart: Int? = catalogComplete ? nil : device.contentCatalogPercentCompleted
-            // Narrowest first, stopping at the first request that gets no answer: on 1 Nov the libmtp whole-card form
-            // got no reply, and the camera then answered nothing until it was replugged.
-            let handles = try await objectHandles()
-            guard let newest = handles.max(by: { $0.rawValue < $1.rawValue }) else {
-                throw USBSpikeError.nothingToDo("GetObjectHandles returned no objects")
-            }
-            let attempts: [(label: String, probe: Bool, timeout: Double)] = [
-                ("all properties of the newest object (\(newest)), depth 0", true, 20),
-                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", false, 90),
-                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", false, 90),
-            ]
+            let iccAtStart = catalogComplete ? "ImageCaptureCore catalogue complete"
+                                             : "ImageCaptureCore catalogue running (\(device.contentCatalogPercentCompleted) % at the start)"
+            let touchedBefore = touchedHandles
             let clock = ContinuousClock()
-            for (index, attempt) in attempts.enumerated() {
+            let start = clock.now
+            let handles = try await objectHandles()
+            let handlesSeconds = (clock.now - start).inSeconds
+            log.note("  GetObjectHandles: \(handles.count) handles in \(fmt(handlesSeconds, 2)) s; \(iccAtStart)")
+            var elements: [MTPObjectPropElement] = []
+            var summaries: [PTPObjectHandle: MTPObjectSummary] = [:]
+            // Untouched by the spike and sent after ImageCaptureCore's catalogue completed; sent while it ran; touched.
+            var coldMs: [Double] = []
+            var duringCatalogueMs: [Double] = []
+            var warmMs: [Double] = []
+            var lastHandle: PTPObjectHandle?
+            var failures: [String] = []
+            var failuresInARow = 0
+            var newest50Seconds: Double?
+            var newest50Catalogue = ""
+            var savedFixture = false
+            for (index, handle) in handles.sorted(by: { $0.rawValue > $1.rawValue }).enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
-                let label = attempt.label
-                let command: PTPContainer
-                switch index {
-                case 0: command = PTPCommand.getObjectPropList(handle: newest, depth: 0, tx: tx.take())
-                case 1: command = PTPCommand.getObjectPropList(property: .objectFileName, tx: tx.take())
-                default: command = PTPCommand.getAllObjectProps(tx: tx.take())
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                if linkStalled {
+                    // How far the listing got, before the stall ends it.
+                    for failure in failures.suffix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
+                    log.warn("  MTP listing stopped by the stall after \(summaries.count) of \(handles.count) objects; the last handle tried was \(lastHandle.map { "\($0)" } ?? "none")")
+                    throw USBSpikeError.linkStalled
                 }
-                let start = clock.now
-                let reply: PTPPassThrough.Reply
+                if failuresInARow >= 3 {
+                    for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
+                    throw USBSpikeError.nothingToDo("3 GetObjectPropList requests in a row failed without a response after \(summaries.count) objects: \(failures.suffix(3).joined(separator: "; "))")
+                }
+                lastHandle = handle
+                let catalogueRunning = !catalogComplete
+                let requestStart = clock.now
                 do {
-                    reply = try await send(command, timeout: attempt.timeout)
+                    touchedHandles.insert(handle)
+                    let reply = try await send(PTPCommand.getObjectPropList(handle: handle, depth: 0, tx: tx.take()), timeout: 10)
+                    // Any response shows the camera is answering; only requests with none count toward the stop.
+                    failuresInARow = 0
+                    let ms = (clock.now - requestStart).inSeconds * 1000
+                    if !reply.responseCode.isOK {
+                        failures.append("\(handle): \(reply.responseCode)")
+                    } else {
+                        if touchedBefore.contains(handle) { warmMs.append(ms) }
+                        else if catalogueRunning { duringCatalogueMs.append(ms) }
+                        else { coldMs.append(ms) }
+                        if !savedFixture {
+                            savedFixture = true
+                            FixtureStore.save(reply.data, link: .usb, name: "objectproplist-one.bin", log: log,
+                                              detail: "all properties of the newest object (\(handle)), depth 0")
+                        }
+                        do {
+                            let list = try MTPObjectPropList.decode(reply.data)
+                            elements.append(contentsOf: list.elements)
+                            if let objectSummary = list.summaries()[handle] { summaries[handle] = objectSummary }
+                            if index < 3 { log.note("  \(handle): \(propSummary(list, handle)) in \(fmt(ms)) ms") }
+                        } catch {
+                            failures.append("\(handle): answered OK with \(reply.data.count) B but didn't decode: \(describe(error)); starts \(reply.data.hexDump(limit: 16))")
+                        }
+                    }
                 } catch let interruption as USBSpikeError where interruption.isInterruption {
                     throw interruption
                 } catch {
-                    let seconds = (clock.now - start).inSeconds
-                    log.warn("GetObjectPropList (\(label)) got no answer after \(fmt(seconds, 1)) s: \(describe(error)). Not trying the larger forms.")
-                    // Any error other than an interruption means no response container came back: a timeout, two
-                    // empty values, or part of a data phase cut off. On 1 Nov one unanswered GetObjectPropList left
-                    // the camera answering nothing until it was replugged.
-                    markLinkStalled("GetObjectPropList (\(label)) got no answer, and on 1 Nov one unanswered GetObjectPropList left the camera silent until it was replugged")
-                    log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); no answer")
-                    lastResult = "MTP listing: no answer to \(label)"
-                    return
+                    failures.append("\(handle): \(describe(error))")
+                    failuresInARow += 1
                 }
-                let seconds = (clock.now - start).inSeconds
-                guard reply.responseCode.isOK else {
-                    log.warn("  GetObjectPropList (\(label)): \(reply.responseCode) after \(fmt(seconds, 2)) s, \(reply.data.count) B")
-                    continue
+                if index + 1 == 50 {
+                    newest50Seconds = (clock.now - start).inSeconds
+                    newest50Catalogue = catalogComplete ? "catalogue complete by the 50th" : "catalogue still running at the 50th"
                 }
-                if attempt.probe {
-                    FixtureStore.save(reply.data, link: .usb, name: "objectproplist-one.bin", log: log, detail: label)
-                    if let one = try? MTPObjectPropList.decode(reply.data) {
-                        let names = Set(one.elements.map { $0.property }).map { "\($0)" }.sorted().joined(separator: ", ")
-                        let summary = one.summaries()[newest]
-                        log.note("  GetObjectPropList (\(label)) answered in \(fmt(seconds, 2)) s: \(one.elements.count) properties for \(summary?.filename ?? "?"): \(names)")
-                    } else {
-                        log.warn("  GetObjectPropList (\(label)) answered OK with \(reply.data.count) B in \(fmt(seconds, 2)) s but didn't decode; the fixture has the bytes")
-                    }
-                    log.measure("usb.mtp.proplist.one", seconds, "s", context: label)
-                    continue
-                }
-                FixtureStore.save(reply.data, link: .usb, name: "objectproplist.bin", log: log, detail: label)
-                let list: MTPObjectPropList
-                do {
-                    list = try MTPObjectPropList.decode(reply.data)
-                } catch {
-                    log.warn("GetObjectPropList (\(label)) answered OK with \(reply.data.count) B in \(fmt(seconds, 2)) s but didn't decode: \(describe(error)); starts \(reply.data.hexDump(limit: 24)). The fixture has the bytes.")
-                    log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); \(reply.data.count) B; did not decode")
-                    lastResult = "MTP listing: answered, didn't decode"
-                    return
-                }
-                let summaries = list.summaries()
-                let properties = Set(list.elements.map { $0.property })
-                // Without ObjectFormat every summary's isFolder is false: folders would be counted as files.
-                let formatKnown = properties.contains(.objectFormat)
-                let unit = formatKnown ? "files" : "objects"
-                // GetThumb picks newest files from this; without the format it falls back to the highest handles.
-                mtpSummaries = formatKnown ? summaries : [:]
-                let folders = summaries.values.filter { $0.isFolder }.count
-                let files = summaries.filter { !$0.value.isFolder }
-                var keyed = 0
-                for (handle, summary) in files {
-                    guard let name = summary.filename, let size = summary.size else { continue }
-                    resolvedHandles[FileKey(name: name.lowercased(), size: Int64(clamping: size))] = handle
-                    keyed += 1
-                }
-                // Without ObjectSize every size is nil: a byte total would read 0 B.
-                let sizesKnown = properties.contains(.objectSize)
-                let totalBytes = summaries.values.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
-                let split = formatKnown ? "\(files.count) files, \(folders) folders"
-                                        : "file/folder split unknown (ObjectFormat not sent), "
-                                          + (sizesKnown ? "\(totalBytes) B" : "sizes not sent")
-                log.note("MTP listing (\(label)): \(summaries.count) objects (\(split)), \(list.elements.count) properties, \(reply.data.count) B in \(fmt(seconds, 2)) s")
-                log.note("  properties sent: " + properties.map { "\($0)" }.sorted().joined(separator: ", "))
-                if !formatKnown {
-                    log.warn("  ObjectFormat not sent: folders can't be told from files, so the counts below are objects and GetThumb will use the highest handles")
-                }
-                let byExtension = Dictionary(grouping: files.values) { ($0.filename.flatMap { $0.split(separator: ".").last.map(String.init) } ?? "?").uppercased() }
-                for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
-                    let bytes = group.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
-                    log.note("  .\(ext): \(group.count) \(unit), \(sizesKnown ? mb(bytes) : "sizes not sent")")
-                }
-                let newestFirst = files.sorted { a, b in
-                    let da = a.value.dateCreated ?? .distantPast
-                    let db = b.value.dateCreated ?? .distantPast
-                    if da != db { return da > db }
-                    return a.key.rawValue > b.key.rawValue
-                }
-                for entry in newestFirst.prefix(5) {
-                    let v = entry.value
-                    log.note("  \(v.filename ?? "?") \(entry.key), \(v.size.map { "\($0) B" } ?? "no size"), created '\(v.dateCreatedRaw ?? "")', format \(v.format.map { "\($0)" } ?? "?"), parent \(v.parent.map { "\($0)" } ?? "?")")
-                }
-                if keyed < files.count { log.warn("  \(files.count - keyed) \(unit) have no name or size, so they can't be matched to ImageCaptureCore's files") }
-                // This session's figures only: SpikeLog.measurements also holds other sessions' and launches'.
-                let ptp = sessionPTPListingSeconds.map { "PTP listing \(fmt($0, 2)) s" } ?? "no PTP listing this session"
-                let icc = iccPercentAtStart.map { "ImageCaptureCore catalogue \($0)% at the start" }
-                    ?? sessionCatalogue.map { "ImageCaptureCore \($0.name) \(fmt($0.seconds, 1)) s" + ($0.note.isEmpty ? "" : " (\($0.note))") }
-                    ?? "ImageCaptureCore catalogue complete, not timed this session"
-                log.measure("usb.mtp.proplist", seconds, "s",
-                            context: "\(label); \(summaries.count) objects, \(split), \(reply.data.count) B; \(ptp); \(icc)")
-                lastResult = "MTP listing: \(summaries.count) objects in \(fmt(seconds, 2)) s"
-                return
+                progressText = "GetObjectPropList \(index + 1)/\(handles.count)"
+                if (index + 1) % 50 == 0 { lifecycle.noteProgress("MTP listing \(index + 1)/\(handles.count)", link: "usb") }
             }
-            throw USBSpikeError.nothingToDo("GetObjectPropList: the camera refused all \(attempts.count) forms (see the warnings above)")
+            let seconds = (clock.now - start).inSeconds
+            let iccAtEnd = catalogComplete ? "complete at the end" : "still running at the end"
+            for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
+            guard !summaries.isEmpty else {
+                throw USBSpikeError.nothingToDo("no object's properties decoded: \(failures.prefix(3).joined(separator: "; "))")
+            }
+
+            let properties = Set(elements.map { $0.property })
+            // Without ObjectFormat every summary's isFolder is false: folders would be counted as files.
+            let formatKnown = properties.contains(.objectFormat)
+            mtpSummaries = formatKnown ? summaries : [:]
+            let files = summaries.filter { !$0.value.isFolder }
+            let folders = summaries.count - files.count
+            var keyed = 0
+            for (handle, summary) in files {
+                guard let name = summary.filename, let size = summary.size else { continue }
+                resolvedHandles[FileKey(name: name.lowercased(), size: Int64(clamping: size))] = handle
+                keyed += 1
+            }
+            let split = formatKnown ? "\(files.count) files, \(folders) folders" : "\(summaries.count) objects (ObjectFormat not sent)"
+            log.note("MTP listing: \(split) from \(handles.count) handles in \(fmt(seconds, 2)) s; \(failures.count) failed")
+            log.note("  properties sent: " + properties.map { "\($0)" }.sorted().joined(separator: ", "))
+            let byExtension = Dictionary(grouping: files.values) { ($0.filename.flatMap { $0.split(separator: ".").last.map(String.init) } ?? "?").uppercased() }
+            for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
+                log.note("  .\(ext): \(group.count), \(mb(group.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }))")
+            }
+            if keyed < files.count { log.warn("  \(files.count - keyed) files have no name or size, so they can't be matched to ImageCaptureCore's files") }
+            // DeviceInfo for the serial check, after the clock so it can't hold up the listing.
+            if deviceInfo == nil {
+                do {
+                    _ = try await deviceInfoOrFetch()
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    log.warn("  GetDeviceInfo for the serial check failed: \(describe(error))")
+                }
+            }
+            notePersistentIDs(elements, summaries: summaries)
+
+            func stats(_ values: [Double]) -> String {
+                guard !values.isEmpty else { return "none" }
+                return "\(values.count) at \(fmt(values.reduce(0, +) / Double(values.count))) ms average (min \(fmt(values.min() ?? 0)), max \(fmt(values.max() ?? 0)))"
+            }
+            let all = coldMs + duringCatalogueMs + warmMs
+            let ptp = sessionPTPListingSeconds.map { "PTP listing \(fmt($0, 2)) s this session" } ?? "no PTP listing this session"
+            log.measure("usb.mtp.listing", seconds, "s",
+                        context: "\(split), one GetObjectPropList per object, newest first; GetObjectHandles \(fmt(handlesSeconds, 2)) s; \(ptp); \(iccAtStart), \(iccAtEnd)")
+            if !all.isEmpty {
+                log.measure("usb.mtp.proplist.perObject", all.reduce(0, +) / Double(all.count), "ms",
+                            context: "untouched, after ImageCaptureCore's catalogue: \(stats(coldMs)); untouched, while it ran: \(stats(duringCatalogueMs)); touched earlier this session (GetObjectInfo, GetThumb, GetPartialObject, a listing): \(stats(warmMs))")
+            }
+            if let newest50Seconds {
+                log.measure("usb.mtp.listing.newest50", newest50Seconds, "s", context: "GetObjectHandles plus the 50 highest handles; \(iccAtStart), \(newest50Catalogue)")
+            }
+            lastResult = "MTP listing: \(summaries.count) objects in \(fmt(seconds, 2)) s"
         }
+    }
+
+    /// One line for an object's decoded properties: name, size, date, format.
+    private func propSummary(_ list: MTPObjectPropList, _ handle: PTPObjectHandle) -> String {
+        guard let s = list.summaries()[handle] else { return "\(list.elements.count) properties, no summary" }
+        return "\(s.filename ?? "?"), \(s.size.map { "\($0) B" } ?? "no size"), created '\(s.dateCreatedRaw ?? "")', format \(s.format.map { "\($0)" } ?? "?"), \(list.elements.count) properties"
+    }
+
+    /// PersistentUniqueObjectIdentifier (0xDC41): whether every file has one, whether they are unique, whether any
+    /// contains the camera's serial number (then objectproplist fixtures must not be committed as they are), and
+    /// whether each file keeps its ID across sessions. The IDs never reach the log: only a keyed tag of each is kept
+    /// (CameraSerialTag's per-install key), by file name and size, in UserDefaults.
+    private func notePersistentIDs(_ elements: [MTPObjectPropElement], summaries: [PTPObjectHandle: MTPObjectSummary]) {
+        var ids: [PTPObjectHandle: Data] = [:]
+        for element in elements where element.property == .persistentUniqueObjectIdentifier {
+            switch element.value {
+            case .uint128(let bytes), .int128(let bytes): ids[element.handle] = bytes
+            case .uint(let v): ids[element.handle] = withUnsafeBytes(of: v.littleEndian) { Data($0) }
+            default: break
+            }
+        }
+        guard !ids.isEmpty else {
+            log.note("  PersistentUniqueObjectIdentifier: not sent")
+            return
+        }
+        let unique = Set(ids.values).count
+        var serialFound = "not checked (no DeviceInfo this session)"
+        if let serial = deviceInfo?.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines), !serial.isEmpty {
+            // The serial as sent and without leading zeros (at least 6 characters, so a short tail can't match by
+            // chance), each as ASCII, as UTF-16LE, and as text inside the ID's hex in either byte order.
+            let significant = String(serial.drop { $0 == "0" })
+            let forms = Set([serial, significant].filter { $0.count >= 6 }.map { $0.lowercased() })
+            let hit = ids.values.contains { id in
+                let hex = id.map { String(format: "%02x", $0) }.joined()
+                let reversedHex = Data(id.reversed()).map { String(format: "%02x", $0) }.joined()
+                return forms.contains { form in
+                    id.range(of: Data(form.utf8)) != nil || id.range(of: Data(form.uppercased().utf8)) != nil
+                        || id.range(of: Data(form.uppercased().utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] })) != nil
+                        || hex.contains(form) || reversedHex.contains(form)
+                }
+            }
+            serialFound = hit ? "YES" : forms.isEmpty ? "not checked (serial shorter than 6 characters)" : "not found as text or hex (it could still be encoded some other way)"
+        }
+        let key = "spike.mtp.persistentIDTags"
+        let stored = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+        var updated = stored
+        var same = 0, changed = 0, unseen = 0
+        for (handle, id) in ids {
+            guard let s = summaries[handle], let name = s.filename, let size = s.size else { continue }
+            let fileKey = "\(name.lowercased())|\(size)"
+            let tag = CameraSerialTag.tag(bytes: id)
+            if let previous = stored[fileKey] {
+                if previous == tag { same += 1 } else { changed += 1 }
+            } else {
+                unseen += 1
+            }
+            updated[fileKey] = tag
+        }
+        if updated.count <= 5_000 { UserDefaults.standard.set(updated, forKey: key) }
+        log.note("  PersistentUniqueObjectIdentifier: \(ids.count) of \(summaries.count) objects, \(unique) distinct, \(ids.values.first.map { "\($0.count) B" } ?? "?") each; contains the camera's serial: \(serialFound); against earlier listings on this phone: \(same) same, \(changed) changed, \(unseen) not seen before. Findings-page fact (identity across sessions).")
     }
 
     // MARK: Day 2 · thumbnails over PTP
@@ -1177,6 +1320,7 @@ final class CameraSession: NSObject {
     func ptpThumbnails(count: Int = 50) async {
         await perform("GetThumb, \(count) newest (PTP)") {
             try requireSession()
+            let iccAtStart = catalogComplete ? "ImageCaptureCore catalogue complete" : "ImageCaptureCore catalogue running (\(device.contentCatalogPercentCompleted) % at the start)"
             let highestHandles = "the highest handles (no finished listing with object formats this session, so folders may be among them)"
             let picks: [PTPObjectHandle]
             let source: String
@@ -1216,6 +1360,7 @@ final class CameraSession: NSObject {
                 }
                 let start = clock.now
                 do {
+                    touchedHandles.insert(handle)
                     let reply = try await send(PTPCommand.getThumb(handle, tx: tx.take()), timeout: 10)
                     // Any response, OK or not, shows the camera is answering: a folder among the highest handles
                     // answers NoThumbnailPresent in milliseconds and must not end the run.
@@ -1240,7 +1385,7 @@ final class CameraSession: NSObject {
             guard !times.isEmpty else { throw USBSpikeError.nothingToDo("every GetThumb failed: \(failures.prefix(3).joined(separator: "; "))") }
             let avg = times.reduce(0, +) / Double(times.count)
             log.measure("usb.ptp.thumb.avg", avg, "ms",
-                        context: "\(times.count) of \(picks.count) from \(source) ok, min \(fmt(times.min() ?? 0)) max \(fmt(times.max() ?? 0)) ms, avg \(bytes / max(times.count, 1) / 1000) KB [\(lifecycle.stateDescription)]")
+                        context: "\(times.count) of \(picks.count) from \(source) ok, min \(fmt(times.min() ?? 0)) max \(fmt(times.max() ?? 0)) ms, avg \(bytes / max(times.count, 1) / 1000) KB; \(iccAtStart) [\(lifecycle.stateDescription)]")
             lastResult = "GetThumb: \(fmt(avg)) ms average"
         }
     }
@@ -1510,6 +1655,7 @@ final class CameraSession: NSObject {
             }
             let chunkStart = clock.now
             do {
+                touchedHandles.insert(handle)
                 let command = try PTPPartialRead.command(handle, chunk: chunk, variant: variant, tx: tx.take())
                 let reply = try await send(command, timeout: 60)
                 try check(reply, "\(label) at \(chunk.offset)")

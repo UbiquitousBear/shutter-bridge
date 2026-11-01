@@ -217,6 +217,13 @@ enum CameraSerialTag {
         return "sn-" + code.prefix(6).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// The same keyed tag for another identifier that must not reach the log as it is (an MTP
+    /// PersistentUniqueObjectIdentifier may embed the serial): "id-" and 12 hex digits.
+    static func tag(bytes: Data) -> String {
+        let code = HMAC<SHA256>.authenticationCode(for: bytes, using: key)
+        return "id-" + code.prefix(6).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static var key: SymmetricKey {
         let defaults = UserDefaults.standard
         if let stored = defaults.data(forKey: keyDefaultsKey), stored.count == 32 {

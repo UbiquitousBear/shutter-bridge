@@ -9,6 +9,7 @@ struct LogView: View {
     @AppStorage(ProximityWatcher.Keys.serviceUUID) private var serviceUUID = ""
     @State private var exportURL: URL?
     @State private var tableMarkdown: String?
+    @State private var logText: String?
     @State private var fixtures: [String] = []
     @State private var zipURL: URL?
     @State private var device = DeviceContext.current()
@@ -42,6 +43,17 @@ struct LogView: View {
                             Text(e.text)
                                 .font(.caption.monospaced())
                                 .foregroundStyle(color(for: e.level))
+                                .textSelection(.enabled)
+                        }
+                        .contextMenu {
+                            Button("Copy this entry") {
+                                UIPasteboard.general.string = log.plainText([e], device: device)
+                            }
+                            Button("Copy from here to the latest") {
+                                if let i = log.entries.firstIndex(where: { $0.id == e.id }) {
+                                    copyLog(log.entries[i...], what: "from \(Self.timeFormatter.string(from: e.at))")
+                                }
+                            }
                         }
                     }
                 }
@@ -98,6 +110,13 @@ struct LogView: View {
 
     private var exportSection: some View {
         Section("Day 10 · Export") {
+            Button("Copy log since the last Open session (\(log.entriesSinceLastOpen.count) entries)") {
+                copyLog(log.entriesSinceLastOpen, what: "since the last Open session")
+            }
+            Button("Copy whole log (\(log.entries.count) entries)") { copyLog(log.entries[...], what: "whole log") }
+            if let logText {
+                ShareLink("Share copied log as text", item: logText)
+            }
             Button("Copy measurements table") { copyTable() }
             if let tableMarkdown {
                 ShareLink("Share measurements table", item: tableMarkdown)
@@ -108,7 +127,7 @@ struct LogView: View {
                     Label("Share \(exportURL.lastPathComponent)", systemImage: "square.and.arrow.up")
                 }
             }
-            Text("The table is docs/spike-plan.md's measurements table filled from the latest value of each measurement (— where nothing was recorded), then every measurement and the device. Paste it into the findings page.")
+            Text("Copy log puts the entries on the clipboard as text, oldest first, to paste into the chat; touch and hold an entry to copy just that one, or from it to the latest. The table is docs/spike-plan.md's measurements table filled from the latest value of each measurement (— where nothing was recorded), then every measurement and the device. Paste it into the findings page.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -164,6 +183,14 @@ struct LogView: View {
     private func refresh() {
         fixtures = FixtureStore.inventory()
         device = DeviceContext.current()
+    }
+
+    private func copyLog(_ entries: ArraySlice<SpikeLog.Entry>, what: String) {
+        device = DeviceContext.current()
+        let text = log.plainText(entries, device: device)
+        UIPasteboard.general.string = text
+        logText = text
+        log.note("log copied to the clipboard (\(what): \(entries.count) entries, \(text.utf8.count / 1000) KB)")
     }
 
     private func copyTable() {

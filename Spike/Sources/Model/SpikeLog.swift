@@ -128,6 +128,31 @@ final class SpikeLog {
         note(line)
     }
 
+    /// Entries as plain text to paste into a chat or the findings page, oldest first, one per line:
+    /// "23:01:15.820 WARN text". The device line comes first. Texts go through LogScrubber again in case an
+    /// older entry slipped past it.
+    func plainText(_ entries: some Collection<Entry>, device: DeviceContext) -> String {
+        var lines = ["Spike log, \(entries.count) entries · \(device.summary)"]
+        for e in entries {
+            let level = e.level == "info" ? "" : " " + e.level.uppercased()
+            lines.append("\(Self.lineTimeFormatter.string(from: e.at))\(level) \(LogScrubber.scrub(e.text))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The entries from the latest "▶ Open session" on (a test run), or every entry if there is none.
+    var entriesSinceLastOpen: ArraySlice<Entry> {
+        guard let start = entries.lastIndex(where: { $0.text == "▶ Open session" }) else { return entries[...] }
+        return entries[start...]
+    }
+
+    private static let lineTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "dd MMM HH:mm:ss.SSS"
+        return f
+    }()
+
     /// JSON with the device context first (keys are sorted: device, entries, exportedAt, measurements).
     func export() throws -> URL {
         struct Export: Codable {
