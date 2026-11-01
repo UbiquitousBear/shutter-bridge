@@ -391,6 +391,7 @@ final class WirelessLab {
             self.busy = false
             self.activity = ""
             self.progress = nil
+            self.lifecycle.operationEnded()
         }
     }
 
@@ -768,6 +769,7 @@ final class WirelessLab {
             busy = false
             activity = ""
             progress = nil
+            lifecycle.operationEnded()
         }
         var done = 0
         var bytes: UInt64 = 0

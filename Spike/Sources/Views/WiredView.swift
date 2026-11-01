@@ -124,7 +124,14 @@ struct WiredView: View {
                         .disabled(!canRun)
                     Button("Forget saved read", role: .destructive) { session?.forgetSavedRead() }
                         .disabled(session == nil || isBusy)
-                    Text("Start, pull the cable when the log says PULL NOW, plug back in, Open session, then Resume read. Start resumable read replaces any saved read.")
+                    LabeledContent("Saved requestReadData read", value: session?.readDataResumeSummary ?? "open a session to see it")
+                    Button("Start resumable read (requestReadData, MTP or MSC)") { run { await $0.startReadDataResume() } }
+                        .disabled(!canRun)
+                    Button("Resume read (requestReadData)") { run { await $0.resumeReadDataRead() } }
+                        .disabled(!canRun)
+                    Button("Forget saved requestReadData read", role: .destructive) { session?.forgetReadDataResume() }
+                        .disabled(session == nil || isBusy)
+                    Text("Start, pull the cable when the log says PULL NOW, plug back in, Open session, then Resume read. Start resumable read replaces any saved read. The requestReadData pair sends no PTP command, so it also works in Image Transfer (MSC) mode; plug back in to the same mode.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

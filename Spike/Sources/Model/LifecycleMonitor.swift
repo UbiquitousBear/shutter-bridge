@@ -20,6 +20,8 @@ final class LifecycleMonitor {
     private var observers: [NSObjectProtocol] = []
     /// Whether a transfer was making progress when the app left the foreground (see `activeWindow`).
     private var transferWasActive = false
+    /// When the last operation (a button's run) ended: progress from before then is a finished operation's.
+    private var lastOperationEndAt: Date?
     /// Progress this recent when the app is backgrounded means a transfer was running.
     private static let activeWindow: TimeInterval = 60
 
@@ -54,12 +56,21 @@ final class LifecycleMonitor {
         if !isInForeground { log?.note("progress while \(stateDescription): \(what)") }
     }
 
+    /// An operation finished (or failed or stopped). Without this, a listing that ended seconds before the phone
+    /// was locked counted as a transfer that made no progress while away (1 Nov 23:39, a false 0.00 s).
+    func operationEnded() {
+        lastOperationEndAt = Date()
+    }
+
     private func enteredBackground() {
         let now = Date()
         backgroundedAt = now
-        // A transfer counts as running if it reported progress in the last minute (Wi-Fi reports once per file):
-        // only then does "no progress while away" mean the session died, rather than that nothing was running.
-        transferWasActive = lastProgressAt.map { now.timeIntervalSince($0) < Self.activeWindow } ?? false
+        // A transfer counts as running if it reported progress in the last minute (Wi-Fi reports once per file) and
+        // no operation has ended since: only then does "no progress while away" mean the session died, rather than
+        // that nothing was running.
+        let recent = lastProgressAt.map { now.timeIntervalSince($0) < Self.activeWindow } ?? false
+        let endedSince = lastProgressAt.map { progress in lastOperationEndAt.map { $0 >= progress } ?? false } ?? false
+        transferWasActive = recent && !endedSince
         log?.note("app entered background" + (transferWasActive ? " during a transfer" : ""))
     }
 

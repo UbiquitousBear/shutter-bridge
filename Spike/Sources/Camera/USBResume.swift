@@ -43,22 +43,25 @@ struct USBResumeState: Codable, Equatable {
 enum USBResumeStore {
     static let defaultsKey = "usb.resume.state"
 
-    static func load(_ defaults: UserDefaults = .standard) -> USBResumeState? {
-        guard let data = defaults.data(forKey: defaultsKey) else { return nil }
+    /// The requestReadData read (works in MSC mode too), kept apart from the GetPartialObject one.
+    static let readDataKey = "usb.readData.resume.state"
+
+    static func load(key: String = defaultsKey, _ defaults: UserDefaults = .standard) -> USBResumeState? {
+        guard let data = defaults.data(forKey: key) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(USBResumeState.self, from: data)
     }
 
-    static func save(_ state: USBResumeState, _ defaults: UserDefaults = .standard) throws {
+    static func save(_ state: USBResumeState, key: String = defaultsKey, _ defaults: UserDefaults = .standard) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        defaults.set(try encoder.encode(state), forKey: defaultsKey)
+        defaults.set(try encoder.encode(state), forKey: key)
     }
 
-    static func clear(_ defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: defaultsKey)
+    static func clear(key: String = defaultsKey, _ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: key)
     }
 }
 
