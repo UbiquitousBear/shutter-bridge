@@ -590,8 +590,9 @@ final class CameraSession: NSObject {
     }
 
     /// One requestDownload. Bytes are the size of the file on disk afterwards; seconds are request → completion.
-    private func downloadFile(_ file: ICCameraFile, to dir: URL) async throws -> (url: URL, bytes: Int64, seconds: Double) {
-        // requestDownload has no timeout and Stop doesn't end it: on a stalled link only a cable pull would.
+    /// `timeout` nil (day 3, day 5): no bound, since a long clip can take minutes. Stop doesn't end the wait; a cable
+    /// pull does.
+    private func downloadFile(_ file: ICCameraFile, to dir: URL, timeout: Double? = nil) async throws -> (url: URL, bytes: Int64, seconds: Double) {
         if linkStalled { throw USBSpikeError.linkStalled }
         let name = file.name ?? "?"
         let options: [ICDownloadOption: Any] = [
@@ -600,13 +601,19 @@ final class CameraSession: NSObject {
         ]
         let clock = ContinuousClock()
         let start = clock.now
-        // No timeout: a long clip can take minutes, and a cable pull ends the wait through didRemove.
-        let saved: String = try await callback("requestDownload \(name)", timeout: nil) { done in
-            // The completion is not declared @Sendable but runs "on any available queue" (Apple): keep it nonisolated.
-            _ = file.requestDownload(options: options) { @Sendable filename, error in
-                if let error { done(.failure(error)) } else { done(.success(filename ?? name)) }
+        let saved: String
+        do {
+            saved = try await callback("requestDownload \(name)", timeout: timeout) { done in
+                // The completion is not declared @Sendable but runs "on any available queue" (Apple): keep it nonisolated.
+                _ = file.requestDownload(options: options) { @Sendable filename, error in
+                    if let error { done(.failure(error)) } else { done(.success(filename ?? name)) }
+                }
             }
+        } catch let error as USBSpikeError {
+            if case .timedOut = error { noteNoAnswer("requestDownload \(name)") }
+            throw error
         }
+        consecutiveNoAnswers = 0
         let seconds = (clock.now - start).inSeconds
         // verify on day 1: the completion's String is documented only as "String?"; treated as a file name inside
         // `dir`, or as a path if it is absolute. The log line below shows which.
@@ -1071,9 +1078,10 @@ final class CameraSession: NSObject {
                 } catch {
                     let seconds = (clock.now - start).inSeconds
                     log.warn("GetObjectPropList (\(label)) got no answer after \(fmt(seconds, 1)) s: \(describe(error)). Not trying the larger forms.")
-                    // send counted it if there was no response at all (timeout or two empty values). On 1 Nov one
-                    // unanswered GetObjectPropList left the camera answering nothing until it was replugged.
-                    if consecutiveNoAnswers > 0 { markLinkStalled("GetObjectPropList (\(label)) got no answer, and on 1 Nov one unanswered GetObjectPropList left the camera silent until it was replugged") }
+                    // Any error other than an interruption means no response container came back: a timeout, two
+                    // empty values, or part of a data phase cut off. On 1 Nov one unanswered GetObjectPropList left
+                    // the camera answering nothing until it was replugged.
+                    markLinkStalled("GetObjectPropList (\(label)) got no answer, and on 1 Nov one unanswered GetObjectPropList left the camera silent until it was replugged")
                     log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); no answer")
                     lastResult = "MTP listing: no answer to \(label)"
                     return
@@ -1391,24 +1399,33 @@ final class CameraSession: NSObject {
                 log.error("requestReadData failed: \(describe(error))")
             }
 
-            // 3. requestDownload of the same file: the throughput reference and a second SHA.
+            // 3. requestDownload of the same file: the throughput reference and a second SHA. Skipped straight after
+            // a request that got no answer, and bounded (about 1 s for an ARW at 1 Nov's 38 MB/s), because Stop
+            // can't end a requestDownload.
             if linkStalled { throw USBSpikeError.linkStalled }
-            log.note("3/3 requestDownload of \(name)…")
+            let skipReference = consecutiveNoAnswers > 0
+            if skipReference {
+                log.warn("3/3 requestDownload of \(name) skipped: the last request got no answer")
+            } else {
+                log.note("3/3 requestDownload of \(name)…")
+            }
             var downloadSHA: String?
             var downloadMBps: Double?
-            do {
-                let referenceDir = dir.appendingPathComponent("reference", isDirectory: true)
-                try FileManager.default.createDirectory(at: referenceDir, withIntermediateDirectories: true)
-                let downloaded = try await downloadFile(file, to: referenceDir)
-                log.throughput("usb.download.file", bytes: Int(downloaded.bytes), seconds: downloaded.seconds,
-                               context: "\(name), reference copy for the GetPartialObject comparison [\(lifecycle.stateDescription)]")
-                if downloaded.seconds > 0 { downloadMBps = Double(downloaded.bytes) / downloaded.seconds / 1_000_000 }
-                downloadSHA = try sha256(of: downloaded.url)
-                try? FileManager.default.removeItem(at: referenceDir)
-            } catch let interruption as USBSpikeError where interruption.isInterruption {
-                throw interruption
-            } catch {
-                log.error("requestDownload failed: \(describe(error))")
+            if !skipReference {
+                do {
+                    let referenceDir = dir.appendingPathComponent("reference", isDirectory: true)
+                    try FileManager.default.createDirectory(at: referenceDir, withIntermediateDirectories: true)
+                    let downloaded = try await downloadFile(file, to: referenceDir, timeout: max(60, Double(size) / 5_000_000))
+                    log.throughput("usb.download.file", bytes: Int(downloaded.bytes), seconds: downloaded.seconds,
+                                   context: "\(name), reference copy for the GetPartialObject comparison [\(lifecycle.stateDescription)]")
+                    if downloaded.seconds > 0 { downloadMBps = Double(downloaded.bytes) / downloaded.seconds / 1_000_000 }
+                    downloadSHA = try sha256(of: downloaded.url)
+                    try? FileManager.default.removeItem(at: referenceDir)
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    log.error("requestDownload failed: \(describe(error))")
+                }
             }
 
             guard let gpoSHA else {
@@ -1543,7 +1560,9 @@ final class CameraSession: NSObject {
             let start = clock.now
             var data: Data
             do {
-                data = try await callback("requestReadData", timeout: 60) { done in
+                // Well under ImageCaptureCore's own limit (about 60 s on 1 Nov), so this counted timeout fires
+                // first; a healthy 4 MiB chunk takes a fraction of a second.
+                data = try await callback("requestReadData", timeout: 30) { done in
                     file.requestReadData(atOffset: readOffset, length: readLength) { bytes, error in
                         if let error { done(.failure(error)) }
                         else if let bytes, !bytes.isEmpty { done(.success(bytes)) }
