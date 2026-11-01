@@ -9,6 +9,8 @@ public enum PTPDecodingError: Error, Equatable, Sendable {
     case badString
     case badDateTime(String)
     case badPacketType(UInt32)
+    /// A property value in an MTP dataset carries a datatype code this decoder doesn't know.
+    case unknownDataType(UInt16)
 }
 
 public struct PTPReader: Sendable {

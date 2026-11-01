@@ -150,6 +150,44 @@ public enum PTPCommand {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOGetExtDeviceInfo.rawValue, transactionID: tx, parameters: [version, 1])
     }
 
+    /// MTP GetObjectPropList (0x9805): five parameters in MTP's order, ObjectHandle, ObjectFormatCode,
+    /// ObjectPropCode, ObjectPropGroupCode, Depth. The data phase is an `MTPObjectPropList`.
+    ///
+    /// Defaults follow what libmtp sends for "every object, every property": `get_all_metadata_fast` in
+    /// libmtp.c calls `ptp_mtp_getobjectproplist(params, 0xffffffff, …)`, which in ptp.c expands to
+    /// `ptp_mtp_getobjectproplist_generic(handle, 0x00000000 /* all formats */, 0xFFFFFFFF /* all properties */,
+    /// 0 /* property group */, level)` with `level = 0xFFFFFFFF`. libgphoto2's ptp.c has identical wrappers but
+    /// uses them with `level = 0` for one object at a time (`ptp_mtp_getobjectproplist_single`).
+    /// - `handle`: `.allObjects` (0xFFFFFFFF); a real handle asks for that object (and children, per `depth`).
+    /// - `format`: `nil` sends 0, "all formats".
+    /// - `property`: `nil` sends 0xFFFFFFFF, "all properties" (a `UInt32` on the wire although property codes are
+    ///   16-bit); a code asks for just that property, which should shrink the reply.
+    /// - `group`: 0, none (only meaningful when `property` is 0; devices answer
+    ///   Specification_By_Group_Unsupported otherwise).
+    /// - `depth`: 0xFFFFFFFF as libmtp sends for the whole device; with the all-objects handle it should be
+    ///   moot. For a real handle, 0 is "this object only" and 1 "its children too".
+    ///
+    /// `unverified` on the α7C II: its DeviceInfo advertises 0x9805, but no capture yet proves it answers this
+    /// parameter combination, or answers it quickly.
+    public static func getObjectPropList(
+        handle: PTPObjectHandle = .allObjects,
+        format: PTPObjectFormat? = nil,
+        property: MTPObjectPropertyCode? = nil,
+        group: UInt32 = 0,
+        depth: UInt32 = MTPObjectPropList.allDepths,
+        tx: UInt32
+    ) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.getObjectPropList.rawValue, transactionID: tx,
+                     parameters: [handle.rawValue, UInt32(format?.rawValue ?? 0),
+                                  property.map { UInt32($0.rawValue) } ?? 0xFFFF_FFFF, group, depth])
+    }
+
+    /// "Every property of every object": `getObjectPropList` with all defaults, the libmtp
+    /// `get_all_metadata_fast` request. `unverified` on the α7C II.
+    public static func getAllObjectProps(tx: UInt32) -> PTPContainer {
+        getObjectPropList(tx: tx)
+    }
+
     /// ISO 15740 GetPartialObject: 32-bit offset and length. `length == 0xFFFFFFFF` means "to the end".
     public static func getPartialObject(_ handle: PTPObjectHandle, offset: UInt32, length: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.getPartialObject.rawValue, transactionID: tx,
