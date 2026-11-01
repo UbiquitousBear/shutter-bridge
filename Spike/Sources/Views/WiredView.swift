@@ -1,78 +1,213 @@
 import SwiftUI
 import ImageCaptureCore
+import PTPKit
 
+/// Week 1 over USB-C. One section per spike day; each button is one step of docs/spike-plan.md and logs what it
+/// measured to the Log tab. Only one operation runs at a time: buttons are disabled while it runs, and the overlay
+/// shows it with a Stop button.
 struct WiredView: View {
     @Environment(DeviceBrowser.self) private var browser
     @Environment(SpikeLog.self) private var log
+    @Environment(LifecycleMonitor.self) private var lifecycle
+    @Environment(ContinuedTask.self) private var continued
     @State private var session: CameraSession?
-    @State private var busy = false
+    @State private var selectedCameraID: ObjectIdentifier?
+    @State private var batteryGB = 1
 
     var body: some View {
+        @Bindable var bindableBrowser = browser
         NavigationStack {
             List {
-                Section("Browser") {
-                    LabeledContent("Authorization", value: browser.authorization)
+                Section("Session") {
+                    LabeledContent("Camera", value: selectedCamera?.name ?? "none")
+                    LabeledContent("State", value: session?.stateDescription ?? "no session")
+                    LabeledContent("Files", value: session.map { "\($0.files.count)" } ?? "–")
+                    if let info = session?.deviceInfo {
+                        LabeledContent("DeviceInfo", value: "\(info.model) \(info.deviceVersion)")
+                    }
+                    if let result = session?.lastResult, !result.isEmpty {
+                        Text(result).font(.footnote)
+                    }
+                }
+
+                Section("Day 1 · Browser") {
+                    LabeledContent("Authorisation", value: browser.authorization)
+                    Picker("Device mask", selection: $bindableBrowser.maskChoice) {
+                        ForEach(DeviceBrowser.MaskChoice.allCases) { choice in
+                            Text(choice.rawValue).tag(choice)
+                        }
+                    }
+                    .disabled(browser.isBrowsing)
+                    LabeledContent("Mask in use", value: browser.maskDescription)
                     Button(browser.isBrowsing ? "Stop browsing" : "Start browsing") {
-                        if browser.isBrowsing { browser.stop() } else { Task { await browser.start() } }
+                        if browser.isBrowsing {
+                            browser.stop()
+                        } else {
+                            Task { await browser.start() }
+                        }
                     }
-                }
-                Section("Cameras") {
+                    .disabled(isBusy)
                     if browser.cameras.isEmpty {
-                        Text("None yet. Camera USB mode → Still Img Transfer (MTP), then plug in.").foregroundStyle(.secondary)
+                        Text("No camera yet. On the camera: Setup → USB → USB Connection Mode; try each mode, then plug in.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    ForEach(browser.cameras, id: \.uuidString) { camera in
-                        Button {
-                            session = CameraSession(device: camera, log: log)
-                            run { await session?.open() }
-                        } label: {
-                            VStack(alignment: .leading) {
-                                Text(camera.name ?? "Camera").font(.headline)
-                                Text("\(camera.transportType ?? "?") · \(camera.capabilities.count) capabilities").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
+                    ForEach(browser.cameras, id: \.self) { camera in
+                        cameraRow(camera)
                     }
                 }
-                if let session {
-                    Section("Session · \(session.isOpen ? "open" : "closed") · \(session.files.count) files") {
-                        Button("Refresh catalogue") { session.refreshFiles() }
-                        Button("Time 50 thumbnails") { run { await session.timeThumbnails() } }
-                        Button("Download 20 newest, serial") { run { await session.download(newest(session, 20), parallel: 1) } }
-                        Button("Download 20 newest, 2 in flight") { run { await session.download(newest(session, 20), parallel: 2) } }
-                        Button("Download newest MP4 (if any)") {
-                            if let mp4 = session.files.first(where: { ($0.name ?? "").uppercased().hasSuffix(".MP4") }) {
-                                run { await session.download([mp4]) }
-                            } else { log.warn("no MP4 on card") }
-                        }
+
+                Section("Day 2 · Catalogue") {
+                    Button("Open session") { openSession() }
+                        .disabled(selectedCamera == nil || isBusy || isOpen)
+                    Button("Refresh catalogue") { session?.refreshCatalogue(record: true) }
+                        .disabled(!canRun)
+                    Button("Thumbnails, 50 newest") { run { await $0.timeThumbnails(count: 50) } }
+                        .disabled(!canRun)
+                    Button("Close session", role: .destructive) { run { await $0.closeSession() } }
+                        .disabled(!canRun)
+                }
+
+                Section("Day 3 · Throughput") {
+                    ForEach(USBDownloadPreset.allCases) { preset in
+                        Button(preset.label) { run { await $0.downloadBatch(preset) } }
+                            .disabled(!canRun)
                     }
-                    Section("Day 4 · PTP pass-through") {
-                        Button("GetDeviceInfo") { run { await session.fetchDeviceInfo() } }
-                        Button("GetObjectInfo (newest ARW)") { if let f = newestARW(session) { run { await session.fetchObjectInfo(f) } } }
-                        Button("Read newest ARW via requestReadData (4 MiB chunks)") { if let f = newestARW(session) { run { await session.readPartialViaICC(f) } } }
-                        Button("Read newest ARW via GetPartialObject (4 MiB chunks)") { if let f = newestARW(session) { run { await session.readPartialViaPTP(f) } } }
-                        Text("Then press the shutter and watch the log for ObjectAdded.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Records MB/s per file and per batch, and the memory high-water mark. Copies are deleted afterwards.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Day 4 · PTP pass-through") {
+                    Button("GetDeviceInfo") { run { await $0.ptpGetDeviceInfo() } }
+                        .disabled(!canRun)
+                    Button("GetStorageIDs + GetStorageInfo") { run { await $0.ptpStorage() } }
+                        .disabled(!canRun)
+                    Button("GetObjectHandles") { run { await $0.ptpObjectHandles() } }
+                        .disabled(!canRun)
+                    Button("GetObjectInfo: newest ARW + pair") { run { await $0.ptpObjectInfo() } }
+                        .disabled(!canRun)
+                    Button("GetPartialObject: newest ARW") { run { await $0.getPartialObjectTest() } }
+                        .disabled(!canRun)
+                    Button("Watch for ObjectAdded (60 s)") { run { await $0.watchForObjectAdded(seconds: 60) } }
+                        .disabled(!canRun)
+                    Stepper("Battery test size: \(batteryGB) GB", value: $batteryGB, in: 1 ... 10)
+                        .disabled(isBusy)
+                    Button("Battery per GB") {
+                        let size = batteryGB
+                        run { await $0.batteryPerGB(targetGB: size) }
                     }
-                    Section {
-                        Button("Close session", role: .destructive) { run { await session.close() } }
-                    }
+                    .disabled(!canRun)
+                    Text("Battery: set Setup → USB → USB Power Supply to Off first, or the camera charges from the phone. ObjectAdded: tap Watch, then press the shutter.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Day 4 · Resume over USB") {
+                    LabeledContent("Saved read", value: session?.resumeSummary ?? "open a session to see it")
+                    Button("Start resumable read") { run { await $0.startResumableRead() } }
+                        .disabled(!canRun)
+                    Button("Resume read") { run { await $0.resumeRead() } }
+                        .disabled(!canRun)
+                    Button("Forget saved read", role: .destructive) { session?.forgetSavedRead() }
+                        .disabled(session == nil || isBusy)
+                    Text("Start, pull the cable when the log says PULL NOW, plug back in, Open session, then Resume read.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Day 5 · Lifecycle") {
+                    LabeledContent("App", value: lifecycle.stateDescription)
+                    Button("Long serial download (lock the phone now)") { run { await $0.longSerialDownload() } }
+                        .disabled(!canRun)
+                    Button("Download 20 newest ARW inside a continued task") { session?.continuedDownload(using: continued) }
+                        .disabled(!canRun || continued.isRunning)
+                    LabeledContent("Continued task", value: "\(continued.state) · \(continued.completed)/\(continued.total)")
+                    Button("Stop continued task") { continued.stop() }
+                        .disabled(!continued.isRunning)
                 }
             }
             .navigationTitle("Wired")
-            .overlay { if busy { ProgressView().controlSize(.large) } }
+            .overlay(alignment: .bottom) {
+                if let session, let activity = session.activity {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                        Text(activity)
+                            .font(.headline)
+                            .multilineTextAlignment(.center)
+                        if !session.progressText.isEmpty {
+                            Text(session.progressText)
+                                .font(.caption)
+                                .monospacedDigit()
+                        }
+                        Button("Stop") { session.requestStop() }
+                            .buttonStyle(.bordered)
+                            .disabled(session.stopRequested)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding()
+                }
+            }
         }
     }
 
-    private func run(_ work: @escaping () async -> Void) {
-        busy = true
-        Task { await work(); busy = false }
+    private func cameraRow(_ camera: ICCameraDevice) -> some View {
+        Button {
+            selectedCameraID = ObjectIdentifier(camera)
+        } label: {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(camera.name ?? "Camera")
+                        .font(.headline)
+                    Text("\(camera.transportType ?? "?") · \(camera.capabilities.count) capabilities")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if camera === selectedCamera {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                }
+            }
+        }
+        .disabled(isBusy)
     }
 
-    private func newest(_ s: CameraSession, _ n: Int) -> [ICCameraFile] {
-        Array(s.files.sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }.prefix(n))
+    private var selectedCamera: ICCameraDevice? {
+        if let id = selectedCameraID, let camera = browser.cameras.first(where: { ObjectIdentifier($0) == id }) {
+            return camera
+        }
+        return browser.cameras.first
     }
 
-    private func newestARW(_ s: CameraSession) -> ICCameraFile? {
-        let arw = newest(s, 400).first { ($0.name ?? "").uppercased().hasSuffix(".ARW") }
-        if arw == nil { log.warn("no ARW on card") }
-        return arw
+    private var isBusy: Bool { session?.isBusy ?? false }
+    private var isOpen: Bool { session?.isOpen ?? false }
+    private var canRun: Bool { isOpen && !isBusy }
+
+    /// Reuses the session if it belongs to the selected camera and the camera is still attached; otherwise starts a
+    /// new one (after a cable pull the re-plugged camera is a new ICCameraDevice).
+    private func openSession() {
+        guard let camera = selectedCamera else {
+            log.warn("No camera: start browsing and plug the camera in (Day 1)")
+            return
+        }
+        if let session, session.device === camera, !session.removed {
+            Task { await session.openSession() }
+            return
+        }
+        session?.detach()
+        let fresh = CameraSession(device: camera, log: log, lifecycle: lifecycle)
+        session = fresh
+        Task { await fresh.openSession() }
+    }
+
+    private func run(_ work: @escaping @MainActor (CameraSession) async -> Void) {
+        guard let session else {
+            log.warn("Open a session first (Day 2)")
+            return
+        }
+        Task { await work(session) }
     }
 }
