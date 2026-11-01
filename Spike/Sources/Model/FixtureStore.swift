@@ -12,7 +12,9 @@ import Foundation
 /// Naming (keep in step with Fixtures/README.md and PTPKit's fixture tests): `deviceinfo.bin`,
 /// `storageinfo.bin`, `storageids.bin`, `objecthandles.bin`, `objectinfo-<ext>.bin` (arw, jpg, hif, mp4),
 /// `event-<name>.bin` (USB: one PTP event container; PTP/IP: one whole Event packet), `<what>.sha256` text,
-/// `advert-<on|asleep|off>.json` for BLE.
+/// and for BLE `advert-<on|asleep|off>.json` (latest snapshot per power state) plus
+/// `advert-<on|asleep|off>-<connected|unlinked|unpaired>.json` (the same snapshot per Creators' App pairing
+/// context; the owner's camera is normally paired with Creators' App).
 ///
 /// Never write a Wi-Fi password, SSID passphrase or QR payload here.
 @MainActor
