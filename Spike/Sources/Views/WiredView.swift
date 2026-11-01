@@ -13,6 +13,8 @@ struct WiredView: View {
     @State private var session: CameraSession?
     @State private var selectedCameraID: ObjectIdentifier?
     @State private var batteryGB = 1
+    /// Off: Open session returns when the session is open and the catalogue is logged in the background.
+    @State private var waitForCatalogue = true
 
     var body: some View {
         @Bindable var bindableBrowser = browser
@@ -58,14 +60,25 @@ struct WiredView: View {
                 }
 
                 Section("Day 2 · Catalogue") {
+                    Toggle("Wait for ImageCaptureCore's catalogue", isOn: $waitForCatalogue)
+                        .disabled(isBusy)
                     Button("Open session") { openSession() }
                         .disabled(selectedCamera == nil || isBusy || isOpen)
+                    Button("PTP listing (GetObjectHandles + GetObjectInfo for every object)") { run { await $0.ptpListing() } }
+                        .disabled(!canRun)
+                    Button("MTP listing (GetObjectPropList, one request)") { run { await $0.mtpListing() } }
+                        .disabled(!canRun)
+                    Button("GetThumb, 50 newest (PTP)") { run { await $0.ptpThumbnails(count: 50) } }
+                        .disabled(!canRun)
                     Button("Refresh catalogue") { session?.refreshCatalogue(record: true) }
                         .disabled(!canRun)
                     Button("Thumbnails, 50 newest") { run { await $0.timeThumbnails(count: 50) } }
                         .disabled(!canRun)
                     Button("Close session", role: .destructive) { run { await $0.closeSession() } }
                         .disabled(!canRun)
+                    Text("Wait off: Open session returns at once and the catalogue is logged every 2 s until usb.catalog.complete; the PTP and MTP buttons work meanwhile, ImageCaptureCore's thumbnails and downloads wait for it. MTP mode only: the camera answers no PTP commands in MSC mode.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Day 3 · Throughput") {
@@ -193,14 +206,15 @@ struct WiredView: View {
             log.warn("No camera: start browsing and plug the camera in (Day 1)")
             return
         }
+        let wait = waitForCatalogue
         if let session, session.device === camera, !session.removed {
-            Task { await session.openSession() }
+            Task { await session.openSession(waitForCatalogue: wait) }
             return
         }
         session?.detach()
         let fresh = CameraSession(device: camera, log: log, lifecycle: lifecycle)
         session = fresh
-        Task { await fresh.openSession() }
+        Task { await fresh.openSession(waitForCatalogue: wait) }
     }
 
     private func run(_ work: @escaping @MainActor (CameraSession) async -> Void) {

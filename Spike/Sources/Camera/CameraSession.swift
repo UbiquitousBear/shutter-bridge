@@ -31,13 +31,15 @@ final class CameraSession: NSObject {
     private(set) var lastResult = ""
     private(set) var resumeSummary: String = USBResumeStore.load()?.summary ?? "none saved"
     private(set) var stopRequested = false
+    /// ImageCaptureCore's contentCatalogPercentCompleted as last polled while waiting for the catalogue.
+    private(set) var cataloguePercent = 0
 
     var isBusy: Bool { activity != nil }
 
     var stateDescription: String {
         if removed { return "camera disconnected" }
         if !isOpen { return "closed" }
-        return catalogComplete ? "open" : "open, cataloguing"
+        return catalogComplete ? "open" : "open, cataloguing \(cataloguePercent) %"
     }
 
     @ObservationIgnored private var tx = PTPTransactionCounter()
@@ -56,6 +58,17 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var thumbnailRuns = 0
     @ObservationIgnored private var successfulOpens = 0
     @ObservationIgnored private var openIsReopen = false
+    /// Open session with the wait turned off: polls the catalogue outside `perform` until it completes.
+    @ObservationIgnored private var catalogueMonitor: Task<Void, Never>?
+    /// The running monitor's token; a cancelled monitor that wakes later must not touch a newer open's state.
+    @ObservationIgnored private var catalogueMonitorID: UUID?
+    // PTP handle lookup (resolveHandle). ImageCaptureCore's ptpObjectHandle is 0 for every file in the camera's
+    // MTP mode (iOS 27.2), so handles are found over PTP. All three are per session: cleared on open, close and
+    // removal, because handles are not stable across sessions.
+    @ObservationIgnored private var ptpHandles: [PTPObjectHandle]?
+    @ObservationIgnored private var ptpObjectInfos: [PTPObjectHandle: PTPObjectInfo] = [:]
+    @ObservationIgnored private var resolvedHandles: [FileKey: PTPObjectHandle] = [:]
+    @ObservationIgnored private var mtpSummaries: [PTPObjectHandle: MTPObjectSummary] = [:]
     /// Stamped into USBResumeState: a resume counts as a link-drop resume only in a different CameraSession.
     private let sessionID = UUID()
 
@@ -63,6 +76,12 @@ final class CameraSession: NSObject {
         let data: Data
         let at: Date
         let source: String
+    }
+
+    /// (name, size) of an ICCameraFile, the key a resolved PTP handle is cached under. Name lower-cased.
+    private struct FileKey: Hashable {
+        let name: String
+        let size: Int64
     }
 
     init(device: ICCameraDevice, log: SpikeLog, lifecycle: LifecycleMonitor) {
@@ -84,6 +103,7 @@ final class CameraSession: NSObject {
     func detach() {
         device.delegate = nil
         device.ptpEventHandler = { _ in }
+        stopCatalogueMonitor()
         abortPending(.sessionReplaced)
     }
 
@@ -125,10 +145,19 @@ final class CameraSession: NSObject {
         stopRequested = false
     }
 
+    /// An open session with ImageCaptureCore's catalogue complete: for everything that picks files from `files`
+    /// (thumbnails, downloads, the newest ARW). `files` stays empty until the catalogue completes.
     private func requireOpen() throws {
+        try requireSession()
+        guard catalogComplete else {
+            throw USBSpikeError.catalogueIncomplete(device.contentCatalogPercentCompleted, device.mediaFiles?.count ?? 0)
+        }
+    }
+
+    /// An open session, catalogue complete or not: for PTP commands that don't need ImageCaptureCore's file list.
+    private func requireSession() throws {
         if removed { throw USBSpikeError.deviceRemoved }
         guard isOpen else { throw USBSpikeError.sessionNotOpen }
-        if !catalogComplete { log.warn("The catalogue is not complete yet; results may be partial.") }
     }
 
     // MARK: - Completion-handler plumbing
@@ -164,18 +193,27 @@ final class CameraSession: NSObject {
 
     // MARK: - Day 2 · session and catalogue
 
-    func openSession() async {
+    /// `waitForCatalogue` off (Wired tab toggle): returns as soon as requestOpenSession completes, and a monitor task
+    /// outside `perform` (so other buttons stay usable) logs the catalogue until it completes. Buttons that need
+    /// ImageCaptureCore's file list refuse until then (`requireOpen`). usb.catalog.complete is stamped by
+    /// deviceDidBecomeReady(withCompleteContentCatalog:) either way.
+    func openSession(waitForCatalogue: Bool = true) async {
         await perform("Open session") {
             if isOpen { log.note("Session already open"); return }
+            stopCatalogueMonitor()
+            clearPTPCaches()
             catalogComplete = false
+            cataloguePercent = 0
             let clock = ContinuousClock()
             let start = clock.now
             openRequestedAt = start
             // A reopen on the same ICCameraDevice may find the catalogue ImageCaptureCore kept from the last session.
             openIsReopen = successfulOpens > 0
             // Only this open may stamp usb.catalog.complete: a ready callback after it (a reopen by ImageCaptureCore,
-            // a failed or stopped open) must not be timed from this request.
-            defer { openRequestedAt = nil }
+            // a failed or stopped open) must not be timed from this request. When not waiting, the monitor owns
+            // `openRequestedAt` from here and clears it when it ends.
+            var monitorOwnsStamp = false
+            defer { if !monitorOwnsStamp { openRequestedAt = nil } }
             let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
                 self.device.requestOpenSession(options: nil) { error in
                     if let error { done(.failure(error)) } else { done(.success(())) }
@@ -187,41 +225,95 @@ final class CameraSession: NSObject {
             logCapabilities("after open")
             let percentAtOpen = device.contentCatalogPercentCompleted
 
-            // usb.catalog.complete is recorded by deviceDidBecomeReady(withCompleteContentCatalog:) itself, from
-            // `openRequestedAt`; this loop only waits for it.
-            // If the callback never comes (possible when a session is reopened on the same device), the first
-            // moment contentCatalogPercentCompleted reads 100 is used instead, 10 s later, and labelled as such. If
-            // it already read 100 when the open completed, ImageCaptureCore kept the catalogue from an earlier
-            // session: that is not a listing of the card, so nothing is recorded.
-            var lastNote = clock.now
-            var fullAt: ContinuousClock.Instant?
-            while !catalogComplete {
-                if removed { throw USBSpikeError.deviceRemoved }
-                if stopRequested { throw USBSpikeError.stopped }
-                if clock.now - start > .seconds(300) { throw USBSpikeError.timedOut("the complete content catalogue", 300) }
-                let percentDone = device.contentCatalogPercentCompleted
-                progressText = "cataloguing \(percentDone)%"
-                if percentDone >= 100, fullAt == nil { fullAt = clock.now }
-                if let fullAt, clock.now - fullAt > .seconds(10) {
-                    if openIsReopen && percentAtOpen >= 100 {
-                        log.warn("Reopen: the catalogue already read 100 % when the session opened (kept from the earlier session) and no ready callback came, so this was not a listing of the card: usb.catalog.complete not recorded. Unplug and re-plug the camera for a cold listing.")
-                    } else {
-                        log.warn("deviceDidBecomeReady(withCompleteContentCatalog:) did not arrive within 10 s of the catalogue reading 100 %; using that moment instead")
-                        log.measure("usb.catalog.complete", (fullAt - start).inSeconds, "s",
-                                    context: "open request → contentCatalogPercentCompleted = 100 (no ready callback), \(device.mediaFiles?.count ?? 0) files")
-                    }
-                    catalogComplete = true
-                    break
-                }
-                if clock.now - lastNote > .seconds(2) {
-                    lastNote = clock.now
-                    log.note("  catalogue \(percentDone)%, \(device.mediaFiles?.count ?? 0) files so far")
-                }
-                try? await Task.sleep(for: .milliseconds(50))
+            if !waitForCatalogue && !catalogComplete {
+                monitorOwnsStamp = true
+                cataloguePercent = percentAtOpen
+                startCatalogueMonitor(start: start, percentAtOpen: percentAtOpen)
+                log.note("Not waiting for ImageCaptureCore's catalogue (\(percentAtOpen)% at open). PTP buttons work now; thumbnails, downloads and the newest-file tests wait for usb.catalog.complete.")
+                lastResult = "Open session: catalogue \(percentAtOpen)%, not waiting"
+                return
             }
+            try await awaitCatalogue(start: start, percentAtOpen: percentAtOpen, inOperation: true)
             refreshCatalogue(record: true)
             lastResult = "Open session: \(files.count) files"
         }
+    }
+
+    /// Polls until ImageCaptureCore's catalogue is complete, logging `catalogue n%, m files so far` every 2 s.
+    /// `inOperation`: inside `perform` (Stop ends it, the overlay shows the percentage); otherwise the monitor,
+    /// which ends when its task is cancelled. Either way it ends on removal, session close or after 300 s.
+    private func awaitCatalogue(start: ContinuousClock.Instant, percentAtOpen: Int, inOperation: Bool) async throws {
+        // usb.catalog.complete is recorded by deviceDidBecomeReady(withCompleteContentCatalog:) itself, from
+        // `openRequestedAt`; this loop only waits for it.
+        // If the callback never comes (possible when a session is reopened on the same device), the first
+        // moment contentCatalogPercentCompleted reads 100 is used instead, 10 s later, and labelled as such. If
+        // it already read 100 when the open completed, ImageCaptureCore kept the catalogue from an earlier
+        // session: that is not a listing of the card, so nothing is recorded.
+        let clock = ContinuousClock()
+        var lastNote = clock.now
+        var fullAt: ContinuousClock.Instant?
+        while !catalogComplete {
+            if removed { throw USBSpikeError.deviceRemoved }
+            if !isOpen { throw USBSpikeError.sessionClosed }
+            if inOperation && stopRequested { throw USBSpikeError.stopped }
+            try Task.checkCancellation()
+            if clock.now - start > .seconds(300) { throw USBSpikeError.timedOut("the complete content catalogue", 300) }
+            let percentDone = device.contentCatalogPercentCompleted
+            if cataloguePercent != percentDone { cataloguePercent = percentDone }
+            if inOperation { progressText = "cataloguing \(percentDone)%" }
+            if percentDone >= 100, fullAt == nil { fullAt = clock.now }
+            if let fullAt, clock.now - fullAt > .seconds(10) {
+                if openIsReopen && percentAtOpen >= 100 {
+                    log.warn("Reopen: the catalogue already read 100 % when the session opened (kept from the earlier session) and no ready callback came, so this was not a listing of the card: usb.catalog.complete not recorded. Unplug and re-plug the camera for a cold listing.")
+                } else {
+                    log.warn("deviceDidBecomeReady(withCompleteContentCatalog:) did not arrive within 10 s of the catalogue reading 100 %; using that moment instead")
+                    log.measure("usb.catalog.complete", (fullAt - start).inSeconds, "s",
+                                context: "open request → contentCatalogPercentCompleted = 100 (no ready callback), \(device.mediaFiles?.count ?? 0) files")
+                }
+                catalogComplete = true
+                break
+            }
+            if clock.now - lastNote > .seconds(2) {
+                lastNote = clock.now
+                log.note("  catalogue \(percentDone)%, \(device.mediaFiles?.count ?? 0) files so far")
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    private func startCatalogueMonitor(start: ContinuousClock.Instant, percentAtOpen: Int) {
+        catalogueMonitor?.cancel()   // openSession already stopped any earlier one; this is belt and braces
+        let id = UUID()
+        catalogueMonitorID = id
+        catalogueMonitor = Task { [weak self] in
+            guard let self else { return }
+            await self.monitorCatalogue(id: id, start: start, percentAtOpen: percentAtOpen)
+        }
+    }
+
+    private func monitorCatalogue(id: UUID, start: ContinuousClock.Instant, percentAtOpen: Int) async {
+        do {
+            try await awaitCatalogue(start: start, percentAtOpen: percentAtOpen, inOperation: false)
+            guard catalogueMonitorID == id else { return }
+            refreshCatalogue(record: true)
+            log.note("Catalogue monitor: ImageCaptureCore's catalogue is complete, \(files.count) files; file-list buttons work now")
+        } catch {
+            // Cancelled by close, removal, a new open or detach: whoever cancelled it says why.
+            guard catalogueMonitorID == id else { return }
+            log.warn("Catalogue monitor ended: \(describe(error)) [\(lifecycle.stateDescription)]")
+        }
+        catalogueMonitorID = nil
+        catalogueMonitor = nil
+        openRequestedAt = nil
+    }
+
+    /// Ends the catalogue monitor quietly; the caller logs why. No effect when none is running.
+    private func stopCatalogueMonitor() {
+        guard let monitor = catalogueMonitor else { return }
+        monitor.cancel()
+        catalogueMonitor = nil
+        catalogueMonitorID = nil
+        openRequestedAt = nil
     }
 
     func closeSession() async {
@@ -236,6 +328,8 @@ final class CameraSession: NSObject {
             }
             isOpen = false
             catalogComplete = false
+            stopCatalogueMonitor()
+            clearPTPCaches()
             log.note("Session closed")
         }
     }
@@ -243,6 +337,11 @@ final class CameraSession: NSObject {
     /// Walks `mediaFiles` (and the `contents` tree, to compare) and logs what the findings page needs to check
     /// "metadata matches the card". `record` adds usb.catalog.count.
     func refreshCatalogue(record: Bool) {
+        if !catalogComplete {
+            // `files` stays empty until the catalogue completes, so file-list buttons can't act on a partial list.
+            log.warn("ImageCaptureCore's catalogue is not complete yet (\(device.contentCatalogPercentCompleted)%, \(device.mediaFiles?.count ?? 0) files so far); not refreshed, usb.catalog.count not recorded")
+            return
+        }
         let clock = ContinuousClock()
         let start = clock.now
         let flat = (device.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
@@ -518,7 +617,7 @@ final class CameraSession: NSObject {
 
     func ptpGetDeviceInfo() async {
         await perform("GetDeviceInfo") {
-            try requireOpen()
+            try requireSession()
             let info = try await loadDeviceInfo()
             lastResult = "DeviceInfo: \(info.model) \(info.deviceVersion), \(info.operationsSupported.count) operations"
         }
@@ -534,12 +633,12 @@ final class CameraSession: NSObject {
     private func loadDeviceInfo() async throws -> PTPDeviceInfo {
         let reply = try await send(PTPCommand.getDeviceInfo(tx: tx.take()))
         try check(reply, "GetDeviceInfo")
-        FixtureStore.save(reply.data, link: .usb, name: "deviceinfo.bin", log: log)
+        FixtureStore.saveDeviceInfo(reply.data, link: .usb, log: log)
         let info = try PTPDeviceInfo.decode(reply.data)
         deviceInfo = info
         FixtureStore.recordFirmware(model: info.model, version: info.deviceVersion, link: .usb, log: log)
         let vendor = info.vendorExtension.map { "\($0)" } ?? "unknown"
-        log.note("DeviceInfo: \(info.manufacturer) \(info.model), firmware \(info.deviceVersion), serial \(info.serialNumber.isEmpty ? "(empty)" : info.serialNumber)")
+        log.note("DeviceInfo: \(info.manufacturer) \(info.model), firmware \(info.deviceVersion), \(redactedSerial(info.serialNumber))")
         log.note("  PTP \(info.standardVersion), vendor extension \(hex32(info.vendorExtensionID)) (\(vendor)) v\(info.vendorExtensionVersion) '\(info.vendorExtensionDescription)', functional mode \(info.functionalMode)")
         log.note("  operations (\(info.operationsSupported.count)): " + info.operationsSupported.map { named($0, PTPOperationCode(rawValue: $0).description) }.joined(separator: ", "))
         log.note("  events (\(info.eventsSupported.count)): " + info.eventsSupported.map { named($0, PTPEventCode(rawValue: $0).description) }.joined(separator: ", "))
@@ -552,7 +651,7 @@ final class CameraSession: NSObject {
 
     func ptpStorage() async {
         await perform("GetStorageIDs + GetStorageInfo") {
-            try requireOpen()
+            try requireSession()
             let reply = try await send(PTPCommand.getStorageIDs(tx: tx.take()))
             try check(reply, "GetStorageIDs")
             FixtureStore.save(reply.data, link: .usb, name: "storageids.bin", log: log)
@@ -578,7 +677,7 @@ final class CameraSession: NSObject {
 
     func ptpObjectHandles() async {
         await perform("GetObjectHandles") {
-            try requireOpen()
+            try requireSession()
             let clock = ContinuousClock()
             let start = clock.now
             let reply: PTPPassThrough.Reply
@@ -600,9 +699,12 @@ final class CameraSession: NSObject {
             }
             FixtureStore.save(reply.data, link: .usb, name: "objecthandles.bin", log: log)
             let handles = try PTPObjectHandle.decodeArray(reply.data)
+            ptpHandles = handles
             let iccHandles = Set(files.map { $0.ptpObjectHandle })
             let known = handles.filter { iccHandles.contains($0.rawValue) }.count
-            log.note("GetObjectHandles through pass-through: allowed. \(handles.count) handles in \(fmt(seconds, 2)) s; \(known) match an ICCameraFile.ptpObjectHandle, ImageCaptureCore lists \(files.count) files (the difference is folders and objects it hides).")
+            let iccFiles = catalogComplete ? "ImageCaptureCore lists \(files.count) files (the difference is folders and objects it hides)"
+                                           : "ImageCaptureCore's catalogue is not complete (\(device.contentCatalogPercentCompleted)%)"
+            log.note("GetObjectHandles through pass-through: allowed. \(handles.count) handles in \(fmt(seconds, 2)) s; \(known) match an ICCameraFile.ptpObjectHandle; \(iccFiles).")
             lastResult = "GetObjectHandles: \(handles.count) handles"
         }
     }
@@ -631,11 +733,11 @@ final class CameraSession: NSObject {
     @discardableResult
     private func objectInfo(for file: ICCameraFile, saveFixture: Bool, compare: Bool) async throws -> PTPObjectInfo {
         let name = file.name ?? "?"
-        guard file.ptpObjectHandle != 0 else { throw USBSpikeError.nothingToDo("\(name) has no PTP object handle") }
-        let handle = PTPObjectHandle(rawValue: file.ptpObjectHandle)
+        let handle = try await resolveHandle(for: file)
         let reply = try await send(PTPCommand.getObjectInfo(handle, tx: tx.take()))
         try check(reply, "GetObjectInfo \(name)")
         let info = try PTPObjectInfo.decode(reply.data)
+        ptpObjectInfos[handle] = info
         if saveFixture {
             let ext = (info.fileExtension.isEmpty ? Self.ext(file) : info.fileExtension).lowercased()
             FixtureStore.save(reply.data, link: .usb, name: "objectinfo-\(ext.isEmpty ? "unknown" : ext).bin", log: log)
@@ -669,6 +771,318 @@ final class CameraSession: NSObject {
             log.note("  matches ICCameraFile (name, size, date)")
         } else {
             log.warn("  ObjectInfo vs ICCameraFile mismatch: " + mismatches.joined(separator: "; "))
+        }
+    }
+
+    // MARK: Day 4 · PTP object handles
+
+    /// The PTP handle of an ImageCaptureCore file. ImageCaptureCore's own if it has one; in the camera's MTP mode
+    /// it gives 0 for every file (iOS 27.2), so the handle is then found over PTP: GetObjectHandles (cached for the
+    /// session), then GetObjectInfo per handle, highest first (newest objects usually have the highest handles),
+    /// until one has the file's name (ignoring case) and size. Folders are skipped. Each ObjectInfo read is cached by
+    /// handle and the match by (name, size), so later lookups cost nothing.
+    private func resolveHandle(for file: ICCameraFile) async throws -> PTPObjectHandle {
+        if file.ptpObjectHandle != 0 { return PTPObjectHandle(rawValue: file.ptpObjectHandle) }
+        let name = file.name ?? ""
+        guard !name.isEmpty else { throw USBSpikeError.noHandle("a file without a name", "nothing to match on") }
+        let size = Int64(file.fileSize)
+        let key = FileKey(name: name.lowercased(), size: size)
+        if let handle = resolvedHandles[key] { return handle }
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        var calls = 0
+        var failures: [String] = []
+        func found(_ handle: PTPObjectHandle) -> PTPObjectHandle {
+            resolvedHandles[key] = handle
+            log.note("handle for \(name): \(handle) after \(calls) GetObjectInfo call(s) in \(fmt((clock.now - start).inSeconds, 2)) s (ImageCaptureCore gave 0)")
+            return handle
+        }
+
+        // Objects already read this session (PTP listing, earlier lookups) need no call.
+        let known = ptpObjectInfos.filter { Self.matches($0.value, name: name, size: size) }
+        if let handle = known.keys.max(by: { $0.rawValue < $1.rawValue }) { return found(handle) }
+
+        // A cached handle list may predate objects shot since: if nothing in it matches, it is read once more.
+        let listWasCached = ptpHandles != nil
+        for pass in 0 ..< 2 {
+            if pass == 1 {
+                guard listWasCached else { break }
+                ptpHandles = nil
+            }
+            let handles = try await objectHandles()
+            for handle in handles.sorted(by: { $0.rawValue > $1.rawValue }) where ptpObjectInfos[handle] == nil {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                calls += 1
+                progressText = "finding \(name): \(calls) GetObjectInfo"
+                do {
+                    let info = try await readObjectInfo(handle)
+                    if Self.matches(info, name: name, size: size) { return found(handle) }
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    failures.append("\(handle): \(describe(error))")
+                    if failures.count >= 5 {
+                        throw USBSpikeError.noHandle(name, "GetObjectInfo failed \(failures.count) times: \(failures.prefix(3).joined(separator: "; "))")
+                    }
+                }
+            }
+        }
+
+        let sameName = ptpObjectInfos.filter { !$0.value.isFolder && $0.value.filename.caseInsensitiveCompare(name) == .orderedSame }
+        let otherSizes = sameName.map { "\($0.key) \($0.value.sizeExceeds32Bits ? "≥ 4 GiB" : "\($0.value.objectCompressedSize) B")" }.sorted()
+        var detail = "none of \(ptpHandles?.count ?? 0) PTP objects is \(name) at \(size) B (\(calls) GetObjectInfo call(s) in \(fmt((clock.now - start).inSeconds, 2)) s)"
+        if !otherSizes.isEmpty { detail += "; same name, other size: \(otherSizes.joined(separator: ", "))" }
+        if !failures.isEmpty { detail += "; \(failures.count) GetObjectInfo failure(s): \(failures.joined(separator: "; "))" }
+        throw USBSpikeError.noHandle(name, detail)
+    }
+
+    /// Same object: name equal ignoring case, and size equal (ObjectCompressedSize, or its 0xFFFFFFFF sentinel for
+    /// a file of 4 GiB or more). Folders (associations) never match.
+    nonisolated private static func matches(_ info: PTPObjectInfo, name: String, size: Int64) -> Bool {
+        guard !info.isFolder, info.filename.caseInsensitiveCompare(name) == .orderedSame else { return false }
+        if info.sizeExceeds32Bits { return size >= Int64(UInt32.max) }
+        return Int64(info.objectCompressedSize) == size
+    }
+
+    /// GetObjectHandles for every store, once per session (`ptpHandles`).
+    private func objectHandles() async throws -> [PTPObjectHandle] {
+        if let ptpHandles { return ptpHandles }
+        let reply = try await send(PTPCommand.getObjectHandles(storage: .all, tx: tx.take()), timeout: 120)
+        try check(reply, "GetObjectHandles")
+        let handles = try PTPObjectHandle.decodeArray(reply.data)
+        ptpHandles = handles
+        return handles
+    }
+
+    /// GetObjectInfo for one handle, decoded and cached by handle.
+    private func readObjectInfo(_ handle: PTPObjectHandle) async throws -> PTPObjectInfo {
+        let reply = try await send(PTPCommand.getObjectInfo(handle, tx: tx.take()))
+        try check(reply, "GetObjectInfo \(handle)")
+        let info = try PTPObjectInfo.decode(reply.data)
+        ptpObjectInfos[handle] = info
+        return info
+    }
+
+    private func clearPTPCaches() {
+        ptpHandles = nil
+        ptpObjectInfos.removeAll()
+        resolvedHandles.removeAll()
+        mtpSummaries.removeAll()
+    }
+
+    // MARK: Day 2 · PTP listing
+
+    /// Lists the card ourselves: GetObjectHandles, then GetObjectInfo for every object, timed together, to compare
+    /// with ImageCaptureCore's catalogue. Works whether that catalogue is complete or not; fills resolveHandle's caches.
+    func ptpListing() async {
+        await perform("PTP listing") {
+            try requireSession()
+            let iccPercentAtStart: Int? = catalogComplete ? nil : device.contentCatalogPercentCompleted
+            clearPTPCaches()
+            let clock = ContinuousClock()
+            let start = clock.now
+            let handles = try await objectHandles()
+            let handlesSeconds = (clock.now - start).inSeconds
+            log.note("  GetObjectHandles: \(handles.count) handles in \(fmt(handlesSeconds, 2)) s; ImageCaptureCore catalogue \(iccPercentAtStart.map { "\($0)%" } ?? "complete")")
+            var infos: [PTPObjectHandle: PTPObjectInfo] = [:]
+            var failures: [String] = []
+            var failuresInARow = 0
+            for (index, handle) in handles.enumerated() {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                do {
+                    infos[handle] = try await readObjectInfo(handle)
+                    failuresInARow = 0
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    failures.append("\(handle): \(describe(error))")
+                    failuresInARow += 1
+                    if failuresInARow >= 5 {
+                        throw USBSpikeError.nothingToDo("GetObjectInfo failed 5 times in a row after \(infos.count) objects: \(failures.suffix(3).joined(separator: "; "))")
+                    }
+                }
+                progressText = "GetObjectInfo \(index + 1)/\(handles.count)"
+                if (index + 1) % 50 == 0 { lifecycle.noteProgress("PTP listing \(index + 1)/\(handles.count)", link: "usb") }
+            }
+            let seconds = (clock.now - start).inSeconds
+
+            let folderCount = infos.values.filter { $0.isFolder }.count
+            let fileInfos = infos.filter { !$0.value.isFolder }
+            let unreadable = failures.isEmpty ? "" : ", \(failures.count) unreadable"
+            log.note("PTP listing: \(handles.count) objects (\(fileInfos.count) files, \(folderCount) folders\(unreadable)) in \(fmt(seconds, 2)) s: GetObjectHandles \(fmt(handlesSeconds, 2)) s + \(handles.count) GetObjectInfo")
+            let byExtension = Dictionary(grouping: fileInfos.values) { $0.fileExtension }
+            for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
+                let bytes = group.reduce(UInt64(0)) { $0 + UInt64($1.objectCompressedSize) }
+                let large = group.filter { $0.sizeExceeds32Bits }.count
+                log.note("  .\(ext.isEmpty ? "?" : ext): \(group.count) files, \(mb(bytes))\(large > 0 ? " (\(large) of 4 GiB or more, counted as 0xFFFFFFFF B)" : "")")
+            }
+            let newestFirst = fileInfos.sorted { a, b in
+                let da = a.value.captureDate ?? .distantPast
+                let db = b.value.captureDate ?? .distantPast
+                if da != db { return da > db }
+                return a.key.rawValue > b.key.rawValue
+            }
+            for entry in newestFirst.prefix(5) {
+                let info = entry.value
+                log.note("  \(info.filename) \(entry.key), \(info.sizeExceeds32Bits ? "≥ 4 GiB" : "\(info.objectCompressedSize) B"), captured '\(info.captureDateRaw)', format \(info.objectFormat), parent \(info.parentObject)")
+            }
+            for failure in failures.prefix(5) { log.warn("  GetObjectInfo failed: \(failure)") }
+
+            let icc: String
+            if catalogComplete, let last = log.measurements.last(where: { $0.name == "usb.catalog.complete" }) {
+                icc = "ImageCaptureCore usb.catalog.complete \(fmt(last.value, 1)) s"
+                    + (iccPercentAtStart.map { ", completed during this listing (\($0)% at its start)" } ?? "")
+            } else if catalogComplete {
+                icc = "ImageCaptureCore catalogue complete but not timed"
+            } else {
+                icc = "ImageCaptureCore catalogue not complete (\(device.contentCatalogPercentCompleted)%)"
+            }
+            log.measure("usb.ptp.catalog", seconds, "s",
+                        context: "\(handles.count) objects, \(fileInfos.count) files, \(folderCount) folders\(unreadable); GetObjectHandles \(fmt(handlesSeconds, 2)) s; \(icc)")
+            log.measure("usb.ptp.catalog.count", Double(handles.count), "objects",
+                        context: "\(fileInfos.count) files, \(folderCount) folders\(unreadable)")
+            lastResult = "PTP listing: \(handles.count) objects in \(fmt(seconds, 2)) s"
+        }
+    }
+
+    // MARK: Day 2 · MTP listing (one call)
+
+    /// MTP GetObjectPropList (0x9805), which the α7C II advertises in MTP mode: one request that may return every
+    /// object's name, size, format, parent and dates. Tries libmtp's "every property of every object" first, then two
+    /// narrower forms if the camera refuses it, and stops at the first that answers OK. The raw reply is saved as a
+    /// fixture whether or not it decodes. A decoded listing fills resolveHandle's (name, size) cache.
+    func mtpListing() async {
+        await perform("MTP listing (GetObjectPropList)") {
+            try requireSession()
+            let iccPercentAtStart: Int? = catalogComplete ? nil : device.contentCatalogPercentCompleted
+            let attempts: [(String, PTPContainer)] = [
+                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", PTPCommand.getAllObjectProps(tx: tx.take())),
+                ("all properties, all objects, depth 0", PTPCommand.getObjectPropList(depth: 0, tx: tx.take())),
+                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", PTPCommand.getObjectPropList(property: .objectFileName, tx: tx.take())),
+            ]
+            let clock = ContinuousClock()
+            for (label, command) in attempts {
+                if stopRequested { throw USBSpikeError.stopped }
+                let start = clock.now
+                let reply = try await send(command, timeout: 120)
+                let seconds = (clock.now - start).inSeconds
+                guard reply.responseCode.isOK else {
+                    log.warn("  GetObjectPropList (\(label)): \(reply.responseCode) after \(fmt(seconds, 2)) s, \(reply.data.count) B")
+                    continue
+                }
+                FixtureStore.save(reply.data, link: .usb, name: "objectproplist.bin", log: log, detail: label)
+                let list: MTPObjectPropList
+                do {
+                    list = try MTPObjectPropList.decode(reply.data)
+                } catch {
+                    log.warn("GetObjectPropList (\(label)) answered OK with \(reply.data.count) B in \(fmt(seconds, 2)) s but didn't decode: \(describe(error)); starts \(reply.data.hexDump(limit: 24)). The fixture has the bytes.")
+                    log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); \(reply.data.count) B; did not decode")
+                    lastResult = "MTP listing: answered, didn't decode"
+                    return
+                }
+                let summaries = list.summaries()
+                mtpSummaries = summaries
+                let folders = summaries.values.filter { $0.isFolder }.count
+                let files = summaries.filter { !$0.value.isFolder }
+                var keyed = 0
+                for (handle, summary) in files {
+                    guard let name = summary.filename, let size = summary.size else { continue }
+                    resolvedHandles[FileKey(name: name.lowercased(), size: Int64(clamping: size))] = handle
+                    keyed += 1
+                }
+                let properties = Set(list.elements.map { $0.property })
+                log.note("MTP listing (\(label)): \(summaries.count) objects (\(files.count) files, \(folders) folders), \(list.elements.count) properties, \(reply.data.count) B in \(fmt(seconds, 2)) s")
+                log.note("  properties sent: " + properties.map { "\($0)" }.sorted().joined(separator: ", "))
+                let byExtension = Dictionary(grouping: files.values) { ($0.filename.flatMap { $0.split(separator: ".").last.map(String.init) } ?? "?").uppercased() }
+                for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
+                    let bytes = group.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
+                    log.note("  .\(ext): \(group.count) files, \(mb(bytes))")
+                }
+                let newestFirst = files.sorted { a, b in
+                    let da = a.value.dateCreated ?? .distantPast
+                    let db = b.value.dateCreated ?? .distantPast
+                    if da != db { return da > db }
+                    return a.key.rawValue > b.key.rawValue
+                }
+                for entry in newestFirst.prefix(5) {
+                    let v = entry.value
+                    log.note("  \(v.filename ?? "?") \(entry.key), \(v.size.map { "\($0) B" } ?? "no size"), created '\(v.dateCreatedRaw ?? "")', format \(v.format.map { "\($0)" } ?? "?"), parent \(v.parent.map { "\($0)" } ?? "?")")
+                }
+                if keyed < files.count { log.warn("  \(files.count - keyed) files have no name or size, so they can't be matched to ImageCaptureCore's files") }
+                let ptp = log.measurements.last(where: { $0.name == "usb.ptp.catalog" }).map { "PTP listing \(fmt($0.value, 2)) s" } ?? "no PTP listing yet"
+                let icc = iccPercentAtStart.map { "ImageCaptureCore catalogue \($0)% at the start" }
+                    ?? log.measurements.last(where: { $0.name == "usb.catalog.complete" }).map { "ImageCaptureCore usb.catalog.complete \(fmt($0.value, 1)) s" }
+                    ?? "ImageCaptureCore catalogue complete"
+                log.measure("usb.mtp.proplist", seconds, "s",
+                            context: "\(label); \(summaries.count) objects, \(files.count) files, \(folders) folders, \(reply.data.count) B; \(ptp); \(icc)")
+                lastResult = "MTP listing: \(summaries.count) objects in \(fmt(seconds, 2)) s"
+                return
+            }
+            throw USBSpikeError.nothingToDo("GetObjectPropList: the camera refused all \(attempts.count) forms (see the warnings above)")
+        }
+    }
+
+    // MARK: Day 2 · thumbnails over PTP
+
+    /// GetThumb (0x100A) for the newest files, timed, to compare with ImageCaptureCore's requestThumbnailData
+    /// (usb.thumb.avg). Picks the newest files from a PTP or MTP listing if one ran this session, otherwise the
+    /// highest handles; doesn't need ImageCaptureCore's catalogue.
+    func ptpThumbnails(count: Int = 50) async {
+        await perform("GetThumb, \(count) newest (PTP)") {
+            try requireSession()
+            let picks: [PTPObjectHandle]
+            let source: String
+            if !ptpObjectInfos.isEmpty {
+                picks = ptpObjectInfos.filter { !$0.value.isFolder }
+                    .sorted { ($0.value.captureDate ?? .distantPast, $0.key.rawValue) > ($1.value.captureDate ?? .distantPast, $1.key.rawValue) }
+                    .prefix(count).map { $0.key }
+                source = "the PTP listing"
+            } else if !mtpSummaries.isEmpty {
+                picks = mtpSummaries.filter { !$0.value.isFolder }
+                    .sorted { ($0.value.dateCreated ?? .distantPast, $0.key.rawValue) > ($1.value.dateCreated ?? .distantPast, $1.key.rawValue) }
+                    .prefix(count).map { $0.key }
+                source = "the MTP listing"
+            } else {
+                let handles = try await objectHandles()
+                picks = Array(handles.sorted { $0.rawValue > $1.rawValue }.prefix(count))
+                source = "the highest handles (no listing yet, so folders may be among them)"
+            }
+            guard !picks.isEmpty else { throw USBSpikeError.nothingToDo("no objects to fetch thumbnails for") }
+            log.note("  GetThumb for \(picks.count) objects from \(source)")
+            let clock = ContinuousClock()
+            var times: [Double] = []
+            var bytes = 0
+            var failures: [String] = []
+            for (index, handle) in picks.enumerated() {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                let start = clock.now
+                do {
+                    let reply = try await send(PTPCommand.getThumb(handle, tx: tx.take()), timeout: 30)
+                    guard reply.responseCode.isOK else {
+                        failures.append("\(handle): \(reply.responseCode)")
+                        continue
+                    }
+                    let ms = (clock.now - start).inSeconds * 1000
+                    times.append(ms)
+                    bytes += reply.data.count
+                    if index < 3 { log.note("  GetThumb \(handle): \(reply.data.count) B in \(fmt(ms)) ms, starts \(reply.data.hexDump(limit: 4))") }
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    failures.append("\(handle): \(describe(error))")
+                }
+                progressText = "\(index + 1)/\(picks.count)"
+            }
+            for failure in failures.prefix(5) { log.warn("  GetThumb failed: \(failure)") }
+            guard !times.isEmpty else { throw USBSpikeError.nothingToDo("every GetThumb failed: \(failures.prefix(3).joined(separator: "; "))") }
+            let avg = times.reduce(0, +) / Double(times.count)
+            log.measure("usb.ptp.thumb.avg", avg, "ms",
+                        context: "\(times.count) of \(picks.count) from \(source) ok, min \(fmt(times.min() ?? 0)) max \(fmt(times.max() ?? 0)) ms, avg \(bytes / max(times.count, 1) / 1000) KB [\(lifecycle.stateDescription)]")
+            lastResult = "GetThumb: \(fmt(avg)) ms average"
         }
     }
 
@@ -757,6 +1171,7 @@ final class CameraSession: NSObject {
             guard size > 0 else { throw USBSpikeError.nothingToDo("\(name) reports size 0") }
             let info = try await deviceInfoOrFetch()
             let variant = chooseVariant(size: size, info: info)
+            let handle = try await resolveHandle(for: file)
             // The reassembly is kept and the requestDownload reference lands beside it.
             try ensureFreeSpace(for: Int64(size) * 2)
             let dir = try freshDirectory("GetPartialObject")
@@ -765,7 +1180,7 @@ final class CameraSession: NSObject {
             // 1. GetPartialObject, 4 MiB chunks, streamed to disk.
             log.note("1/3 GetPartialObject (\(variant.rawValue), 4 MiB chunks) of \(name), \(mb(size))…")
             let writer = try PartFileWriter(url: partURL, startingAt: 0)
-            let gpo = await partialReadLoop(handle: PTPObjectHandle(rawValue: file.ptpObjectHandle), name: name, size: size,
+            let gpo = await partialReadLoop(handle: handle, name: name, size: size,
                                             from: 0, variant: variant, chunkSize: PTPPartialRead.defaultChunkSize,
                                             pause: nil, writer: writer, label: "GetPartialObject") { _, _ in }
             writer.close()
@@ -1000,7 +1415,7 @@ final class CameraSession: NSObject {
     /// Day 4 shutter test: watch for a new-object event for `seconds`, then record usb.event.objectAdded either way.
     func watchForObjectAdded(seconds: Int = 60) async {
         await perform("Watch for ObjectAdded") {
-            try requireOpen()
+            try requireSession()
             let started = Date()
             newObjectEventAt = nil
             iccAddedAfterCatalogue = []
@@ -1075,6 +1490,7 @@ final class CameraSession: NSObject {
             let info = try await deviceInfoOrFetch()
             let serial = cameraSerial(info)
             let objectInfo = try await objectInfo(for: file, saveFixture: false, compare: false)
+            let handle = try await resolveHandle(for: file)   // cached by objectInfo(for:)
             let identity = objectInfo.identity(cameraSerial: serial)
             guard identity.size > 0, objectInfo.objectCompressedSize != UInt32.max else {
                 throw USBSpikeError.nothingToDo("ObjectInfo size \(objectInfo.objectCompressedSize) is not usable for this test")
@@ -1103,7 +1519,7 @@ final class CameraSession: NSObject {
             let pullAt = identity.size * 2 / 5
             let estimate = Double(identity.size) / Double(chunkSize) * 0.45
             log.note("Resumable read of \(identity) into Caches/\(relative), \(variant.rawValue), 1 MiB chunks 0.4 s apart (about \(Int(estimate)) s). Pull the USB-C cable when the log says PULL NOW.")
-            let result = await partialReadLoop(handle: PTPObjectHandle(rawValue: file.ptpObjectHandle), name: identity.filename,
+            let result = await partialReadLoop(handle: handle, name: identity.filename,
                                                size: identity.size, from: 0, variant: variant, chunkSize: chunkSize,
                                                pause: .milliseconds(400), writer: writer, label: "resumable read") { previous, current in
                 if previous < pullAt && current >= pullAt {
@@ -1154,27 +1570,40 @@ final class CameraSession: NSObject {
             // Handles are not stable across sessions: find candidates by name, then confirm the identity (capture date
             // and size, both from GetObjectInfo like the saved one) per candidate. Matching on ICCameraFile.fileSize
             // here would compare ImageCaptureCore's size with ObjectInfo's and could miss the object.
+            // When ImageCaptureCore gives handle 0 (MTP mode), each candidate's handle comes from resolveHandle, which
+            // does match on name and ImageCaptureCore's size; a candidate it can't place is skipped with a warning
+            // (the error names any same-name object of another size), and the identity check below still decides.
             let candidates = files.filter { ($0.name ?? "") == saved.identity.filename }
             guard !candidates.isEmpty else {
                 throw USBSpikeError.nothingToDo("\(saved.identity.filename) is not on the card any more; Forget saved read")
             }
-            var chosen = candidates[0]
-            var current: PTPObjectIdentity?
-            var firstSeen: PTPObjectIdentity?
+            var match: (file: ICCameraFile, handle: PTPObjectHandle, identity: PTPObjectIdentity)?
+            var firstSeen: (file: ICCameraFile, handle: PTPObjectHandle, identity: PTPObjectIdentity)?
             for candidate in candidates {
+                let handle: PTPObjectHandle
+                do {
+                    handle = try await resolveHandle(for: candidate)
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    log.warn("  candidate \(candidate.name ?? "?") (\(candidate.fileSize) B): \(describe(error))")
+                    continue
+                }
                 let candidateInfo = try await objectInfo(for: candidate, saveFixture: false, compare: false)
                 let identity = candidateInfo.identity(cameraSerial: serial)
-                if firstSeen == nil { firstSeen = identity }
+                if firstSeen == nil { firstSeen = (candidate, handle, identity) }
                 if identity == saved.identity {
-                    chosen = candidate
-                    current = identity
+                    match = (candidate, handle, identity)
                     break
                 }
-                log.warn("  handle \(hex32(candidate.ptpObjectHandle)) is \(identity), not the saved object")
+                log.warn("  handle \(handle) is \(identity), not the saved object")
             }
-            guard let currentIdentity = current ?? firstSeen else {
+            guard let target = match ?? firstSeen else {
                 throw USBSpikeError.nothingToDo("could not read ObjectInfo for any candidate")
             }
+            let chosen = target.file
+            let chosenHandle = target.handle
+            let currentIdentity = target.identity
 
             let partURL = USBResumePaths.url(relative: saved.partPath)
             let onDisk = PartFileWriter.sizeOnDisk(partURL) ?? 0
@@ -1186,14 +1615,14 @@ final class CameraSession: NSObject {
                 log.warn(".part holds \(onDisk) B on disk, fewer than the saved offset \(offset); continuing from \(onDisk)")
                 offset = onDisk
             }
-            log.note("Interrupted at offset \(saved.offset); .part on disk \(onDisk) B; resuming at offset \(offset) (\(percent(offset, currentIdentity.size)) %) with this session's handle \(hex32(chosen.ptpObjectHandle))")
+            log.note("Interrupted at offset \(saved.offset); .part on disk \(onDisk) B; resuming at offset \(offset) (\(percent(offset, currentIdentity.size)) %) with this session's handle \(chosenHandle)")
 
             let variant = chooseVariant(size: currentIdentity.size, info: info)
             let writer = try PartFileWriter(url: partURL, startingAt: offset)
             var state = USBResumeState(identity: currentIdentity, offset: writer.offset, partPath: saved.partPath, savedAt: Date(), reason: "resumed",
                                        sessionID: sessionID)
             persistResume(state)
-            let result = await partialReadLoop(handle: PTPObjectHandle(rawValue: chosen.ptpObjectHandle), name: currentIdentity.filename,
+            let result = await partialReadLoop(handle: chosenHandle, name: currentIdentity.filename,
                                                size: currentIdentity.size, from: writer.offset, variant: variant,
                                                chunkSize: PTPPartialRead.defaultChunkSize, pause: nil, writer: writer,
                                                label: "resume") { previous, now in
@@ -1290,6 +1719,7 @@ final class CameraSession: NSObject {
     func continuedDownload(using continued: ContinuedTask) {
         guard activity == nil else { log.warn("Busy with \(activity ?? ""); wait for it or tap Stop"); return }
         guard isOpen, !removed else { log.error("Open a session first (Day 2 · Open session)"); return }
+        guard catalogComplete else { log.error("Continued-task download: \(USBSpikeError.catalogueIncomplete(device.contentCatalogPercentCompleted, device.mediaFiles?.count ?? 0))"); return }
         let selection = newest("ARW", 20)
         guard !selection.isEmpty else { log.warn("No ARW on the card"); return }
         log.note("Submitting a continued task for \(selection.count) ARW; lock the phone once the log says it started.")
@@ -1435,12 +1865,16 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
         log.note("didCloseSession error=\(error.map { describe($0) } ?? "nil") [\(lifecycle.stateDescription)]")
         isOpen = false
         catalogComplete = false
+        stopCatalogueMonitor()
+        clearPTPCaches()
         if !closingSession { abortPending(.sessionClosed) }
     }
 
     func didRemove(_ device: ICDevice) {
         removed = true
         isOpen = false
+        stopCatalogueMonitor()
+        clearPTPCaches()
         log.warn("Camera removed (cable pulled?) [\(lifecycle.stateDescription)]. Re-plug, then Day 2 · Open session.")
         abortPending(.deviceRemoved)
     }
@@ -1554,6 +1988,10 @@ enum USBSpikeError: Error, CustomStringConvertible {
     case ptp(String, PTPResponseCode)
     case passThrough(String, String)
     case diskSpace(needed: Int64, available: Int64)
+    /// ImageCaptureCore's catalogue is still running (percent, files so far): `files` is not filled yet.
+    case catalogueIncomplete(Int, Int)
+    /// ImageCaptureCore gave ptpObjectHandle 0 and no PTP object matched (file name, why).
+    case noHandle(String, String)
 
     /// The link or the operation went away (cable pull, session closed or replaced, Stop): no answer about the camera.
     var isInterruption: Bool {
@@ -1576,6 +2014,8 @@ enum USBSpikeError: Error, CustomStringConvertible {
         case .ptp(let what, let code): return "\(what): \(code) (\(hex16(code.rawValue)))"
         case .passThrough(let what, let detail): return "\(what) pass-through failed: \(detail)"
         case .diskSpace(let needed, let available): return "not enough free space on the phone: need \(needed / 1_000_000) MB, \(available / 1_000_000) MB free"
+        case .catalogueIncomplete(let percent, let count): return "ImageCaptureCore's catalogue is not complete yet (\(percent)%, \(count) files so far); wait for usb.catalog.complete in the log"
+        case .noHandle(let name, let detail): return "no PTP handle for \(name) (ImageCaptureCore gave 0): \(detail)"
         }
     }
 }
@@ -1625,6 +2065,10 @@ private func named(_ code: UInt16, _ name: String) -> String {
 private func hex16(_ value: UInt16) -> String { String(format: "0x%04X", value) }
 private func hex32(_ value: UInt32) -> String { String(format: "0x%08X", value) }
 private func yesNo(_ value: Bool) -> String { value ? "yes" : "no" }
+/// The camera serial must never reach the public repo, and the log is exported: only whether there is one.
+private func redactedSerial(_ serial: String) -> String {
+    serial.isEmpty ? "serial (empty)" : "serial present (\(serial.count) characters, redacted)"
+}
 private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
 private func mb<T: BinaryInteger>(_ bytes: T) -> String { fmt(Double(bytes) / 1_000_000) + " MB" }
 private func gb(_ bytes: UInt64) -> String { fmt(Double(bytes) / 1_000_000_000, 2) + " GB" }

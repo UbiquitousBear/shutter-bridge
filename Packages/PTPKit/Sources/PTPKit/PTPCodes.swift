@@ -34,6 +34,14 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     /// Android's MTP extension (libgphoto2 `PTP_OC_ANDROID_GetPartialObject64`): 64-bit offset variant.
     public static let getPartialObject64 = PTPOperationCode(rawValue: 0x95C1)
 
+    // MTP object-property operations (libmtp/libgphoto2 `PTP_OC_MTP_*`). A Sony body in MTP mode lists all four
+    // in its DeviceInfo, but their behaviour is `unverified` on the α7C II until a fixture proves it.
+    public static let getObjectPropsSupported = PTPOperationCode(rawValue: 0x9801)
+    public static let getObjectPropDesc       = PTPOperationCode(rawValue: 0x9802)
+    public static let getObjectPropValue      = PTPOperationCode(rawValue: 0x9803)
+    /// Properties of many objects in one data phase (see `MTPObjectPropList`).
+    public static let getObjectPropList       = PTPOperationCode(rawValue: 0x9805)
+
     // Sony SDIO extension (libgphoto2 names). `unverified` on the α7C II.
     /// Three-phase handshake (param 1 = phase 1, 2, 3) that PC Remote mode needs before vendor ops work.
     public static let sonySDIOConnect = PTPOperationCode(rawValue: 0x9201)
@@ -61,6 +69,10 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
         case .getDevicePropValue: "GetDevicePropValue"
         case .getPartialObject: "GetPartialObject"
         case .getPartialObject64: "GetPartialObject64 (Android/MTP)"
+        case .getObjectPropsSupported: "GetObjectPropsSupported (MTP)"
+        case .getObjectPropDesc: "GetObjectPropDesc (MTP)"
+        case .getObjectPropValue: "GetObjectPropValue (MTP)"
+        case .getObjectPropList: "GetObjectPropList (MTP)"
         case .sonySDIOConnect: "Sony SDIO_Connect"
         case .sonySDIOGetExtDeviceInfo: "Sony SDIO_GetExtDeviceInfo"
         case .sonySDIOGetPartialLargeObject: "Sony SDIO_GetPartialLargeObject"
@@ -261,6 +273,50 @@ public struct PTPDevicePropCode: RawRepresentable, Hashable, Sendable, CustomStr
     }
 }
 
+/// MTP object property codes (MTP 1.1 Appendix B), as carried in an ObjectPropList. Names and values match
+/// libmtp's `LIBMTP_PROPERTY_*` table. Which of them a Sony body actually reports is `unverified` on the α7C II.
+public struct MTPObjectPropertyCode: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: UInt16
+    public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+    /// UINT32.
+    public static let storageID         = MTPObjectPropertyCode(rawValue: 0xDC01)
+    /// UINT16, a `PTPObjectFormat` code.
+    public static let objectFormat      = MTPObjectPropertyCode(rawValue: 0xDC02)
+    /// UINT16.
+    public static let protectionStatus  = MTPObjectPropertyCode(rawValue: 0xDC03)
+    /// UINT64 (MTP widens PTP's 32-bit size, so files over 4 GiB are exact here).
+    public static let objectSize        = MTPObjectPropertyCode(rawValue: 0xDC04)
+    /// STR.
+    public static let objectFileName    = MTPObjectPropertyCode(rawValue: 0xDC07)
+    /// STR, a PTP DateTime ("YYYYMMDDThhmmss", optional fraction and zone).
+    public static let dateCreated       = MTPObjectPropertyCode(rawValue: 0xDC08)
+    /// STR, a PTP DateTime.
+    public static let dateModified      = MTPObjectPropertyCode(rawValue: 0xDC09)
+    /// UINT32 handle; 0 means the storage root (unlike ObjectInfo's 0xFFFFFFFF wildcard).
+    public static let parentObject      = MTPObjectPropertyCode(rawValue: 0xDC0B)
+    /// UINT128.
+    public static let persistentUniqueObjectIdentifier = MTPObjectPropertyCode(rawValue: 0xDC41)
+    /// STR.
+    public static let name              = MTPObjectPropertyCode(rawValue: 0xDC44)
+
+    public var description: String {
+        switch self {
+        case .storageID: "StorageID"
+        case .objectFormat: "ObjectFormat"
+        case .protectionStatus: "ProtectionStatus"
+        case .objectSize: "ObjectSize"
+        case .objectFileName: "ObjectFileName"
+        case .dateCreated: "DateCreated"
+        case .dateModified: "DateModified"
+        case .parentObject: "ParentObject"
+        case .persistentUniqueObjectIdentifier: "PersistentUniqueObjectIdentifier"
+        case .name: "Name"
+        default: String(format: "ObjectProp(0x%04X)", rawValue)
+        }
+    }
+}
+
 public struct PTPStorageID: RawRepresentable, Hashable, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
@@ -273,5 +329,7 @@ public struct PTPObjectHandle: RawRepresentable, Hashable, Sendable, CustomStrin
     public init(rawValue: UInt32) { self.rawValue = rawValue }
     /// Wildcard parent handle meaning "root".
     public static let root = PTPObjectHandle(rawValue: 0xFFFF_FFFF)
+    /// MTP GetObjectPropList wildcard handle meaning "every object" (libmtp passes 0xffffffff for it).
+    public static let allObjects = PTPObjectHandle(rawValue: 0xFFFF_FFFF)
     public var description: String { String(format: "0x%08X", rawValue) }
 }

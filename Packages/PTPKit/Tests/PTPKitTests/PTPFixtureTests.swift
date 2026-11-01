@@ -126,6 +126,7 @@ struct PTPRobustnessTests {
             _ = try? PTPStorageID.decodeArray(bytes)
             _ = try? PTPObjectHandle.decodeArray(bytes)
             _ = try? PTPContainer.decodeAll(bytes)
+            _ = try? MTPObjectPropList.decode(bytes).summaries()
             _ = try? PTPPassThrough.decodeReply(bytes, Data(bytes.reversed()), for: PTPCommand.getDeviceInfo(tx: 1))
             if let packet = (try? PTPIP.Packet.decode(bytes))??.packet {
                 _ = try? PTPIP.decodeInitCommandAck(packet)

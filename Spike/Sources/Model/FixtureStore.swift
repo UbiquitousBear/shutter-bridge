@@ -1,4 +1,5 @@
 import Foundation
+import PTPKit
 
 /// Where captured camera bytes go on the phone, laid out exactly like the repo's `Fixtures/a7c2/` folder:
 ///
@@ -16,7 +17,8 @@ import Foundation
 /// `advert-<on|asleep|off>-<connected|unlinked|unpaired>.json` (the same snapshot per Creators' App pairing
 /// context; the owner's camera is normally paired with Creators' App).
 ///
-/// Never write a Wi-Fi password, SSID passphrase or QR payload here.
+/// Never write a Wi-Fi password, SSID passphrase or QR payload here. DeviceInfo goes through `saveDeviceInfo`,
+/// which zeroes the camera's serial number: it must never reach the public repo.
 @MainActor
 enum FixtureStore {
     enum Link: String, CaseIterable, Sendable {
@@ -31,20 +33,62 @@ enum FixtureStore {
         root.appending(path: link.rawValue, directoryHint: .isDirectory)
     }
 
-    /// Saves `data` as `<link>/<name>`, replacing an earlier capture of the same name, and logs it.
+    /// Saves `data` as `<link>/<name>`, replacing an earlier capture of the same name, and logs it. `detail` is
+    /// added to the log line.
     @discardableResult
-    static func save(_ data: Data, link: Link, name: String, log: SpikeLog?) -> URL? {
+    static func save(_ data: Data, link: Link, name: String, log: SpikeLog?, detail: String? = nil) -> URL? {
         let dir = folder(link)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let url = dir.appending(path: name)
             try data.write(to: url, options: .atomic)
-            log?.note("fixture saved: \(link.rawValue)/\(name) (\(data.count) bytes)")
+            log?.note("fixture saved: \(link.rawValue)/\(name) (\(data.count) bytes\(detail.map { ", \($0)" } ?? ""))")
             return url
         } catch {
             log?.warn("could not save fixture \(link.rawValue)/\(name): \(error)")
             return nil
         }
+    }
+
+    /// Saves a GetDeviceInfo dataset as `<link>/deviceinfo.bin` with its SerialNumber zeroed. If the dataset can't
+    /// be walked to that field, nothing is saved and the log says why.
+    @discardableResult
+    static func saveDeviceInfo(_ data: Data, link: Link, log: SpikeLog?) -> URL? {
+        let name = "deviceinfo.bin"
+        do {
+            return save(try zeroingSerialNumber(in: data), link: link, name: name, log: log, detail: "serial zeroed")
+        } catch {
+            log?.warn("fixture not saved: \(link.rawValue)/\(name): could not walk DeviceInfo to the SerialNumber to zero it (\(error))")
+            return nil
+        }
+    }
+
+    /// `data` with every character of DeviceInfo's SerialNumber replaced by "0": same length, every other byte
+    /// unchanged. Walks ISO 15740 §5.1.1 up to the field: StandardVersion u16, VendorExtensionID u32,
+    /// VendorExtensionVersion u16, VendorExtensionDesc string, FunctionalMode u16, five u16 arrays (operations,
+    /// events, device properties, capture formats, image formats), Manufacturer, Model, DeviceVersion strings,
+    /// then SerialNumber. A PTP string is a u8 count of UTF-16LE code units including the NUL, then the units;
+    /// each non-NUL unit becomes 0x30 0x00. Throws if the dataset ends before the SerialNumber does.
+    nonisolated static func zeroingSerialNumber(in data: Data) throws -> Data {
+        var reader = PTPReader(data)
+        _ = try reader.u16()
+        _ = try reader.u32()
+        _ = try reader.u16()
+        _ = try reader.string()
+        _ = try reader.u16()
+        for _ in 0 ..< 5 { _ = try reader.u16Array() }
+        for _ in 0 ..< 3 { _ = try reader.string() }
+        let countAt = reader.offset
+        _ = try reader.string()   // throws if the serial's code units run past the end
+        var bytes = [UInt8](data)   // zero-based, whatever `data`'s startIndex
+        let units = Int(bytes[countAt])
+        for unit in 0 ..< units {
+            let at = countAt + 1 + unit * 2
+            if bytes[at] == 0 && bytes[at + 1] == 0 { continue }
+            bytes[at] = 0x30
+            bytes[at + 1] = 0x00
+        }
+        return Data(bytes)
     }
 
     @discardableResult
