@@ -732,7 +732,14 @@ final class WirelessLab {
             guard !items.isEmpty else { throw WiFiLabError.message("no MP4 listed; tap List card first") }
             await self.batteryBeforeDownload(c, prefix: prefix)
             let result = try await self.log.withMemoryPeak("\(prefix).download", context: "\(items.count) MP4 via GetObject") {
-                try await self.downloadBatch(items, client: c, prefix: prefix, perFile: "\(prefix).getObject.mp4", label: "MP4")
+                try await self.downloadBatch(items, client: c, prefix: prefix, perFile: "\(prefix).getObject.file", label: "MP4")
+            }
+            // One batch figure, like usb.download.mp4, so the table's MP4 row compares like with like.
+            if result.files > 0 {
+                self.log.throughput("\(prefix).getObject.mp4", bytes: Int(result.bytes), seconds: result.seconds,
+                                    context: String(format: "%ld MP4, %.1f MB, batch wall time %.1f s (first Cmd_Request to last response)%@",
+                                                    result.files, Double(result.bytes) / 1e6, result.seconds,
+                                                    result.failures > 0 ? ", \(result.failures) failed" : ""))
             }
             await self.batteryAfterDownload(c, bytes: result.bytes, prefix: prefix)
         }
@@ -931,7 +938,10 @@ final class WirelessLab {
             self.log.note("Reference hash: GetObject \(o.info.filename) (\(o.info.objectCompressedSize) bytes)…")
             let r = try await c.getObject(o.handle, to: url)
             let expected = UInt64(o.info.objectCompressedSize)
-            if r.bytes != expected { self.log.warn("GetObject returned \(r.bytes) bytes; ObjectInfo says \(expected)") }
+            // A truncated or padded reference would later make resume.verified a false "no".
+            guard r.bytes == expected, r.announcedLength.map({ $0 == r.bytes }) ?? true else {
+                throw WiFiLabError.message("GetObject returned \(r.bytes) bytes (Start_Data announced \(r.announcedLength.map { String($0) } ?? "unknown"), ObjectInfo says \(expected)); reference not saved, tap Reference hash again")
+            }
             let identity = o.info.identity(cameraSerial: self.cameraSerial)
             if !WiFiResumeStore.saveReference(WiFiReferenceHash(identity: identity, sha256: r.sha256, bytes: r.bytes, savedAt: Date())) {
                 self.log.error("could not save the reference hash")
@@ -952,7 +962,7 @@ final class WirelessLab {
             guard identity.size > 0, o.info.objectCompressedSize != UInt32.max else {
                 throw WiFiLabError.message("\(o.info.filename): size unknown in ObjectInfo")
             }
-            let reference = WiFiResumeStore.loadReference().flatMap { $0.identity == identity ? $0.sha256 : nil }
+            let reference = WiFiResumeStore.loadReference().flatMap { $0.identity == identity && $0.bytes == identity.size ? $0.sha256 : nil }
             if reference == nil {
                 self.log.warn("no reference hash for \(identity.filename): tap Reference hash first, or the resumed file can't be verified")
             }
@@ -1010,7 +1020,13 @@ final class WirelessLab {
                                  Double(offset) / Double(max(current.size, 1)) * 100, onDisk > offset ? onDisk - offset : 0))
             var record = saved
             record.offset = offset
-            record.resumes += 1
+            if offset > 0 {
+                record.resumes += 1
+            } else {
+                // A read from 0 is a full re-read, not a resume; an earlier resume must not count for it either.
+                record.resumes = 0
+                self.log.warn("Resume read: restarting from 0 (saved offset \(saved.offset), part file \(onDisk) bytes); this run does not exercise resume")
+            }
             record.savedAt = Date()
             WiFiResumeStore.save(record)
             try await self.runPartialRead(c, handle: found.handle, record: record, isResume: true, pauseAtHalf: false)
@@ -1162,11 +1178,13 @@ final class WirelessLab {
                               link: .ptpip, name: "getpartialobject.sha256", log: log)
         if let reference = record.referenceSHA256 {
             let same = sha == reference
-            if record.resumes > 0 {
+            if isResume, startOffset > 0, record.resumes > 0 {
                 log.flag("\(prefix).resume.verified", same,
                          context: "\(name) after \(record.resumes) resume(s): SHA-256 \(same ? "matches" : "DIFFERS from") the GetObject reference (\(String(sha.prefix(16)))… vs \(String(reference.prefix(16)))…)")
             } else {
-                log.note("\(name): uninterrupted reassembly \(same ? "matches" : "DIFFERS from") the GetObject reference. No resume happened, so resume.verified isn't recorded; turn Wi-Fi off mid-read next time.")
+                log.note(isResume
+                    ? "\(name): the resumed read restarted from 0 (nothing usable was saved), so it \(same ? "matches" : "DIFFERS from") the GetObject reference but resume.verified isn't recorded; turn Wi-Fi off mid-read next time."
+                    : "\(name): uninterrupted reassembly \(same ? "matches" : "DIFFERS from") the GetObject reference. No resume happened, so resume.verified isn't recorded; turn Wi-Fi off mid-read next time.")
             }
         } else {
             log.warn("\(name): SHA-256 \(sha), but no reference hash to compare with; tap Reference hash and run the test again")

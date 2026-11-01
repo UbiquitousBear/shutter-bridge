@@ -83,7 +83,7 @@ struct CameraQRCode: Equatable, Sendable, CustomStringConvertible {
     }
 
     private static func parseSony(_ fields: [Field]) throws -> CameraQRCode {
-        let keys = fields.map(\.key)
+        let keys = fields.map { safeKey($0.key) }
         let s = value("S", in: fields)
         let model = value("C", in: fields)
         let mac = value("M", in: fields)
@@ -117,7 +117,7 @@ struct CameraQRCode: Equatable, Sendable, CustomStringConvertible {
     }
 
     private static func parseWiFi(_ fields: [Field]) throws -> CameraQRCode {
-        let keys = fields.map(\.key)
+        let keys = fields.map { safeKey($0.key) }
         guard let ssid = value("S", in: fields), !ssid.isEmpty else { throw ParseError.missingSSID(format: .wifi, keys: keys) }
         let security = value("T", in: fields)
         var passphrase = value("P", in: fields)
@@ -142,7 +142,8 @@ struct CameraQRCode: Equatable, Sendable, CustomStringConvertible {
     }
 
     /// Splits `K:V;K:V;…` honouring backslash escapes. A `:` or `;` preceded by `\` is literal. Values wrapped in
-    /// double quotes lose the quotes. Keys are upper-cased; empty fields (the trailing `;;`) are dropped.
+    /// double quotes lose the quotes. Keys are upper-cased; empty fields (the trailing `;;`) are dropped;
+    /// a fragment with no colon is an unescaped `;` and stays in the previous value.
     static func fields(_ body: Substring) -> [Field] {
         var out: [Field] = []
         var key = ""
@@ -151,9 +152,15 @@ struct CameraQRCode: Equatable, Sendable, CustomStringConvertible {
         var escaping = false
 
         func flush() {
-            let k = key.trimmingCharacters(in: .whitespaces).uppercased()
-            if !k.isEmpty || !value.isEmpty {
-                out.append(Field(key: k, value: unquote(value)))
+            if !inValue, !key.isEmpty, let last = out.popLast() {
+                // No colon: an unescaped ';' inside the previous value (often a passphrase). Keep it in that value;
+                // never turn the fragment into a key, because keys are logged.
+                out.append(Field(key: last.key, value: unquote(last.value + ";" + key)))
+            } else {
+                let k = key.trimmingCharacters(in: .whitespaces).uppercased()
+                if !k.isEmpty || !value.isEmpty {
+                    out.append(Field(key: k, value: unquote(value)))
+                }
             }
             key = ""
             value = ""
@@ -193,6 +200,15 @@ struct CameraQRCode: Equatable, Sendable, CustomStringConvertible {
 
     private static func value(_ key: String, in fields: [Field]) -> String? {
         fields.first { $0.key == key }?.value
+    }
+
+    /// A key name fit for the log: 1–3 ASCII letters or digits. Anything else may be a fragment of a secret value
+    /// (an unescaped `;` or `:` in a passphrase), so only its length is shown.
+    private static func safeKey(_ k: String) -> String {
+        guard (1...3).contains(k.count), k.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else {
+            return "?(\(k.count) chars)"
+        }
+        return k
     }
 
     /// Up to the first colon of an unrecognised payload, if that looks like a format tag ("W02:", "MECARD:").
