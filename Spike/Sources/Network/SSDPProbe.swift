@@ -12,7 +12,8 @@ import Observation
 ///   result to record.
 ///
 /// Every reply is logged (status line, ST, USN, SERVER, LOCATION) and the LOCATION description XML is fetched
-/// once and summarised (friendlyName, modelName, serialNumber, UDN, service types).
+/// once and summarised (friendlyName, modelName, whether there is a serialNumber but never its value, UDN, service
+/// types). The description is saved as a fixture with the serial zeroed.
 @Observable
 @MainActor
 final class SSDPProbe {
@@ -229,9 +230,16 @@ final class SSDPProbe {
                 log.warn("SSDP description \(location): HTTP \(status), \(data.count) bytes")
                 return
             }
-            FixtureStore.save(data, link: .ptpip, name: "ssdp-description.xml", log: log)
+            // The description carries the camera's serial: the fixture and the log only ever see it zeroed.
+            FixtureStore.saveSSDPDescription(data, log: log)
             guard let d = SSDPDeviceDescription.parse(data) else {
-                log.warn("SSDP description \(location) did not parse as XML (\(data.count) bytes): \(String(decoding: data.prefix(160), as: UTF8.self))")
+                let zeroed = FixtureStore.zeroingSSDPSerial(in: data)?.data ?? Data()
+                var shown = String(decoding: zeroed.prefix(160), as: UTF8.self)
+                // An unclosed <serialNumber> in malformed XML is not zeroed: show nothing from the tag on.
+                if let tag = shown.range(of: "<serialNumber", options: .caseInsensitive) {
+                    shown = String(shown[..<tag.lowerBound]) + "…"
+                }
+                log.warn("SSDP description \(location) did not parse as XML (\(data.count) bytes): \(shown)")
                 return
             }
             descriptions[location] = d.shortSummary
@@ -323,7 +331,7 @@ struct SSDPDeviceDescription: Sendable {
 
     var summary: String {
         var parts = ["friendlyName \"\(friendlyName)\"", "manufacturer \"\(manufacturer)\"",
-                     "modelName \"\(modelName)\" \(modelNumber)", "serialNumber \(serialNumber.isEmpty ? "-" : serialNumber)",
+                     "modelName \"\(modelName)\" \(modelNumber)", "serialNumber \(serialNumber.isEmpty ? "absent" : "present (\(serialNumber.count) chars, redacted)")",
                      "UDN \(udn.isEmpty ? "-" : udn)", "deviceType \(deviceType)",
                      "services [\(serviceTypes.joined(separator: ", "))]"]
         if !vendorFields.isEmpty { parts.append("vendor [\(vendorFields.joined(separator: "; "))]") }

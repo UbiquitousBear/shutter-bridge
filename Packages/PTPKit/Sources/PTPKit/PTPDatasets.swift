@@ -384,7 +384,8 @@ public struct PTPObjectIdentity: Hashable, Sendable, Codable, CustomStringConver
         self.size = size
     }
 
-    public var description: String { "\(filename) \(captureDateRaw) \(size)B @\(cameraSerial)" }
+    /// For logs, which may be published: the camera serial is shown only by its length, never its value.
+    public var description: String { "\(filename) \(captureDateRaw) \(size)B @serial(\(cameraSerial.count) chars)" }
 }
 
 /// PTP DateTime strings: "YYYYMMDDThhmmss", optionally ".s" tenths, optionally "Z" or "±hhmm".

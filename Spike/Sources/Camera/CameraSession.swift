@@ -1572,7 +1572,7 @@ final class CameraSession: NSObject {
                 }
                 if previous.partPath != relative {
                     try? FileManager.default.removeItem(at: USBResumePaths.url(relative: previous.partPath))
-                    log.note("Discarded the earlier .part Caches/\(previous.partPath)")
+                    log.note("Discarded the earlier .part \((previous.partPath as NSString).lastPathComponent)")   // a build-3 path holds the raw serial
                 }
             }
             var state = USBResumeState(identity: identity, offset: 0, partPath: relative, savedAt: Date(), reason: "started",
@@ -1628,7 +1628,7 @@ final class CameraSession: NSObject {
             let info = try await deviceInfoOrFetch()
             let serial = cameraSerial(info)
             if serial != saved.identity.cameraSerial {
-                log.warn("Camera serial \(serial) is not the saved \(saved.identity.cameraSerial): the identity check will restart from zero.")
+                log.warn("The camera's serial differs from the saved read's: the identity check will restart from zero.")
             }
 
             // Handles are not stable across sessions: find candidates by name, then confirm the identity (capture date
@@ -1731,7 +1731,7 @@ final class CameraSession: NSObject {
             } else {
                 state.reason = "verify failed"
                 persistResume(state)
-                log.warn("  .part kept at Caches/\(saved.partPath) for inspection")
+                log.warn("  .part kept in Caches/Imports for inspection: \((saved.partPath as NSString).lastPathComponent)")   // a build-3 path holds the raw serial
             }
             lastResult = "Resume \(verified ? "verified" : "MISMATCH")"
         }
@@ -1756,10 +1756,12 @@ final class CameraSession: NSObject {
         }
     }
 
-    /// GetDeviceInfo's serial (ICDevice.serialNumberString is macOS-only); the device UUID if the camera sends none.
+    /// The resume identity's camera key: a one-way tag of GetDeviceInfo's serial (CameraSerialTag; the serial itself
+    /// must not reach identities and `.part` paths, which are logged), or the device UUID if the camera sends none.
+    /// ICDevice.serialNumberString is macOS-only.
     private func cameraSerial(_ info: PTPDeviceInfo) -> String {
         let serial = info.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !serial.isEmpty { return serial }
+        if !serial.isEmpty { return CameraSerialTag.tag(serial) }
         let fallback = "uuid-" + (device.uuidString ?? "unknown")
         log.warn("DeviceInfo has an empty serial number; using \(fallback) for the resume identity")
         return fallback

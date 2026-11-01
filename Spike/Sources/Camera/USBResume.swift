@@ -9,8 +9,8 @@ import PTPKit
 // typechecked on Linux.
 //
 // Flow on the bench:
-//   1. "Start resumable read": newest ARW → Caches/Imports/<camera serial>/<filename>.part, paced so there is
-//      time to pull the cable. State is saved at every 16 MiB checkpoint and on every error.
+//   1. "Start resumable read": newest ARW → Caches/Imports/<serial tag>/<filename>.part (CameraSerialTag), paced
+//      so there is time to pull the cable. State is saved at every 16 MiB checkpoint and on every error.
 //   2. Pull the cable mid-read. The loop stops on the error / didRemove and saves the offset it reached.
 //   3. Re-plug, open a new session, "Resume read": the object is found again by identity (handles are not stable
 //      across sessions), PTPPartialRead.resumeOffset decides where to continue, and the finished `.part` is
@@ -18,7 +18,7 @@ import PTPKit
 
 /// What "Resume read" needs after a cable pull. Persisted as JSON in UserDefaults.
 struct USBResumeState: Codable, Equatable {
-    /// (camera serial, filename, capture date, size): the key the object is found by after a re-plug.
+    /// (camera serial tag, filename, capture date, size): the key the object is found by after a re-plug.
     var identity: PTPObjectIdentity
     /// Bytes known to be on disk in the `.part` file when this was saved.
     var offset: UInt64
@@ -68,7 +68,7 @@ enum USBResumePaths {
             ?? FileManager.default.temporaryDirectory
     }
 
-    /// "Imports/<serial>/<filename>.part", relative to Caches.
+    /// "Imports/<serial tag>/<filename>.part", relative to Caches. `serial` is CameraSerialTag's tag, never the serial.
     static func relativePartPath(serial: String, filename: String) -> String {
         "Imports/\(sanitised(serial))/\(sanitised(filename)).part"
     }
