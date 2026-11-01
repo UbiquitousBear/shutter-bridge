@@ -26,9 +26,9 @@ Go if `ImageCaptureCore` enumerates the card in some USB mode and sustains ≥ 2
 
 Measurements: `usb.catalog.complete`, `usb.catalog.count`, `usb.download.throughput.serial`, `usb.download.memory.peak`.
 
-**Finding:** _to fill_
+**Finding:** **Go.** In *Image Transfer (MTP)* mode, ImageCaptureCore lists the card and downloads 20 ARW (839 MB) at **38.19 MB/s** one at a time and **39.05 MB/s** two at a time, on a USB 2 iPhone. That is about 80 % of USB 2's 480 Mb/s, so the cable is the limit and a second download in flight gains nothing. 20 JPG (440 MB) come at **25.61 MB/s**: smaller files pay a fixed cost per file. Memory peaks at 70 MB, 3 MB over the 67 MB baseline, so downloads stream to disk. The weak point is listing: ImageCaptureCore takes **65 s** for 391 files in MTP mode (12 s in MSC). Build 3 times listing the card over PTP and in one MTP request instead.
 
-**Evidence:** _to fill_
+**Evidence:** Log, 1 Nov 2026 19:43, build 0.1 (2.1), MTP: `usb.download.throughput.serial` 38.19 MB/s (20 of 20, 839.0 MB in 21.97 s); `usb.download.throughput.parallel2` 39.05 MB/s (839.0 MB in 21.49 s); `usb.download.jpg.throughput` 25.61 MB/s (439.5 MB in 17.16 s); `usb.download.memory.peak` 70.04 MB; `usb.catalog.complete` 64.96 s, 391 files. Full measurements under "Measurements".
 
 ### Byte-range resume on USB
 
@@ -122,17 +122,32 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 
 | Measurement | USB-C (USB 2 iPhone) | Wi-Fi, camera AP | Wi-Fi, UniFi LAN |
 | --- | --- | --- | --- |
-| Time to enumerate 200 files |  |  |  |
-| Thumbnail fetch, average per item |  |  |  |
-| ARW throughput, single file |  |  |  |
-| ARW throughput, two in flight |  |  |  |
+| Time to enumerate 200 files | 64.96 s for 391 files (MTP, ImageCaptureCore); 12.23 s in MSC |  |  |
+| Thumbnail fetch, average per item | 144.8 ms (MTP); 187.6 ms (MSC) |  |  |
+| ARW throughput, single file | 38.19 MB/s |  |  |
+| ARW throughput, two in flight | 39.05 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
-| `GetPartialObject` supported |  |  |  |
+| `GetPartialObject` supported | advertised (0x101B, 32-bit); not yet exercised |  |  |
 | Resume after link drop verified |  |  |  |
 | `ObjectAdded` event received |  |  |  |
 | Session survives phone lock (seconds) |  |  |  |
 | Camera battery used per 1 GB |  |  |  |
 | BLE: advertises when on / asleep / off; service UUID |  |  |  |
+
+All measurements, MTP, from *Copy measurements table* (1 Nov 2026 19:43; the log had been cleared after the thumbnail runs, whose figures are in the table above):
+
+| Name | Latest value | Unit | Count | Latest context |
+| --- | --- | --- | --- | --- |
+| `usb.catalog.complete` | 64.96 | s | 1 | open request → complete catalogue, 391 files |
+| `usb.catalog.count` | 391.00 | files | 1 | mediaFiles; contents tree has 0 files; walk 0.6 ms |
+| `usb.download.file` | 26.65 | MB/s | 60 | DSC01925.JPG 24.8 MB in 0.93 s, 20 newest JPG, serial [foreground] |
+| `usb.download.jpg.throughput` | 25.61 | MB/s | 1 | 20 of 20 files, 439.5 MB on disk in 17.16 s, 1 in flight |
+| `usb.download.memory.peak` | 70.04 | MB | 3 | baseline 67 MB, 20 newest JPG, serial |
+| `usb.download.throughput.parallel2` | 39.05 | MB/s | 1 | 20 of 20 files, 839.0 MB on disk in 21.49 s, 2 in flight |
+| `usb.download.throughput.serial` | 38.19 | MB/s | 1 | 20 of 20 files, 839.0 MB on disk in 21.97 s, 1 in flight |
+| `usb.openSession` | 0.03 | s | 1 | ILCE-7CM2 |
+
+Device: iPhone18,4; iOS 27.2 (24B119); spike 0.1 (2.1); Low Power Mode off; thermal nominal.
 
 ## Day-6 mode matrix
 
