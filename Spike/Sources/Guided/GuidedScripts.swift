@@ -92,7 +92,7 @@ extension GuidedRunner {
             self.continued.state == "running" || !self.continued.isRunning
         }
         guard started, continued.isRunning, continued.state == "running" else {
-            throw GuidedStop("\(what) didn't start (continued task: \(continued.state); \(usb.session?.lastResult ?? wireless.activity))")
+            throw GuidedStop("\(what) didn't start (continued task: \(continued.state); the log says why)")
         }
     }
 
@@ -220,7 +220,10 @@ extension GuidedRunner {
             var pulled = false
             while !pulled {
                 attempt += 1
-                guard let session = usb.session else { throw GuidedStop("no session") }
+                guard let session = usb.session, session.isOpen, !session.removed else {
+                    throw GuidedStop("no open session (the camera may have been unplugged)")
+                }
+                let resultBefore = session.lastResult
                 session.onPullNow = { @MainActor [weak self] in
                     self?.notice("Pull the cable now", "Pull the USB-C cable out of the phone now.")
                 }
@@ -229,6 +232,9 @@ extension GuidedRunner {
                     await $0.startReadDataResume()
                 }
                 let result = session.lastResult
+                if result == resultBefore {
+                    throw GuidedStop("the read didn't start (\(session.removed ? "the camera was unplugged" : "the session was busy or closed"))")
+                }
                 if result.hasPrefix("Interrupted") {
                     // The read's own error comes first; ImageCaptureCore reports the removal a moment later.
                     pulled = try await waitUntil("Detecting the cable pull", "Waiting for the phone to notice the camera has gone.", timeout: 20) {

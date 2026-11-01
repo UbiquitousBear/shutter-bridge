@@ -187,9 +187,13 @@ final class GuidedRunner {
     /// Closes any alert on screen, then waits until 450 ms after the last one closed (however it closed), so SwiftUI
     /// dismisses it before the next is set; replacing one alert with another in the same turn leaves the old one up.
     private func replaceAlert() async {
-        if prompt != nil { finishPrompt(with: "") }
-        let wait = closedAt.addingTimeInterval(0.45).timeIntervalSinceNow
-        if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+        // Loops because a notice can take the screen while this one sleeps; it is closed and waited out in turn.
+        while true {
+            if prompt != nil { finishPrompt(with: "") }
+            let wait = closedAt.addingTimeInterval(0.45).timeIntervalSinceNow
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            if prompt == nil { return }
+        }
     }
 
     private func checkCancelled() throws {

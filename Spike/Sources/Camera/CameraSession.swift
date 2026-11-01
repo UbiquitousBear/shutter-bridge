@@ -2549,6 +2549,7 @@ final class CameraSession: NSObject {
         guard activity == nil else { log.warn("Busy with \(activity ?? ""); wait for it or tap Stop"); return }
         guard isOpen, !removed else { log.error("Open a session first (Day 2 · Open session)"); return }
         guard catalogComplete else { log.error("Continued-task download: \(USBSpikeError.catalogueIncomplete(device.contentCatalogPercentCompleted, device.mediaFiles?.count ?? 0))"); return }
+        guard !linkStalled else { log.error("Continued-task download: \(USBSpikeError.linkStalled)"); return }
         let selection = files.filter { ["ARW", "JPG", "HIF"].contains(Self.ext($0)) }
         guard !selection.isEmpty else { log.warn("No ARW, JPG or HEIF on the card"); return }
         let totalSeconds = minutes * 60
@@ -2563,14 +2564,21 @@ final class CameraSession: NSObject {
             var finished = false
             await self.perform("Continued-task download, \(minutes) min", transfer: true) {
                 var pass = 0
-                while Date() < deadline && !shouldStop() && self.isOpen && !self.stopRequested {
+                var failed = false
+                while Date() < deadline && !shouldStop() && self.isOpen && !self.stopRequested && !self.linkStalled {
                     pass += 1
-                    _ = try await self.downloadSequence(selection, label: "continued \(minutes) min, pass \(pass)", report: byTime,
-                                                        shouldStop: { shouldStop() || Date() >= deadline })
+                    let complete = try await self.downloadSequence(selection, label: "continued \(minutes) min, pass \(pass)", report: byTime,
+                                                                   shouldStop: { shouldStop() || Date() >= deadline })
+                    // A pass cut short by anything but the time limit (failures, a lost session) ends the run.
+                    if !complete && Date() < deadline && !shouldStop() {
+                        failed = true
+                        break
+                    }
                 }
-                // Only the time limit counts as finishing: not the system expiring the task, Stop, or a lost session.
-                finished = Date() >= deadline && !shouldStop() && self.isOpen && !self.stopRequested
+                // Only the time limit counts as finishing: not failures, the system expiring the task, Stop, or a lost session.
+                finished = !failed && Date() >= deadline && !shouldStop() && self.isOpen && !self.stopRequested
                 let why = finished ? "ran to the time limit"
+                    : failed ? "a pass failed (see the errors above)"
                     : shouldStop() ? "the system or Stop ended the task"
                     : !self.isOpen ? "the session closed (\(self.removed ? "camera disconnected" : "closed"))"
                     : "stopped"
