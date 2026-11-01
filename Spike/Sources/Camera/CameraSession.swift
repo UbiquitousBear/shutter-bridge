@@ -1969,6 +1969,11 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
                                     context: "open request → complete catalogue, \(device.mediaFiles?.count ?? 0) files"
                                         + (openIsReopen ? "; REOPEN on the same device, the catalogue may be cached (re-plug for a cold figure)" : ""),
                                     note: openIsReopen ? "REOPEN, may be cached" : "")
+        } else if !wasComplete && !isOpen {
+            // The open failed or timed out, or the session was closed: no session to mark complete. A later open
+            // resets the state and waits for its own callback.
+            log.note("deviceDidBecomeReady(withCompleteContentCatalog:) with no session open (the open failed or was closed); ignored")
+            return
         } else if !wasComplete {
             // The open stopped waiting (Stop during the catalogue with the wait on): no request to time it from.
             log.note("deviceDidBecomeReady(withCompleteContentCatalog:) after the open stopped waiting; not timed. File list loaded; tap Refresh catalogue to record usb.catalog.count")
