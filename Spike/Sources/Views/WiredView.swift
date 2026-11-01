@@ -66,13 +66,17 @@ struct WiredView: View {
                         .disabled(selectedCamera == nil || isBusy || isOpen)
                     Button("PTP listing (GetObjectHandles + GetObjectInfo for every object)") { run { await $0.ptpListing() } }
                         .disabled(!canRun)
+                    Button("MTP listing (GetObjectPropList, one request)") { run { await $0.mtpListing() } }
+                        .disabled(!canRun)
+                    Button("GetThumb, 50 newest (PTP)") { run { await $0.ptpThumbnails(count: 50) } }
+                        .disabled(!canRun)
                     Button("Refresh catalogue") { session?.refreshCatalogue(record: true) }
                         .disabled(!canRun)
                     Button("Thumbnails, 50 newest") { run { await $0.timeThumbnails(count: 50) } }
                         .disabled(!canRun)
                     Button("Close session", role: .destructive) { run { await $0.closeSession() } }
                         .disabled(!canRun)
-                    Text("Wait off: Open session returns at once and the catalogue is logged every 2 s until usb.catalog.complete; PTP buttons work meanwhile, thumbnails and downloads wait for it.")
+                    Text("Wait off: Open session returns at once and the catalogue is logged every 2 s until usb.catalog.complete; the PTP and MTP buttons work meanwhile, ImageCaptureCore's thumbnails and downloads wait for it. MTP mode only: the camera answers no PTP commands in MSC mode.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

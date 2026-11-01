@@ -68,6 +68,7 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var ptpHandles: [PTPObjectHandle]?
     @ObservationIgnored private var ptpObjectInfos: [PTPObjectHandle: PTPObjectInfo] = [:]
     @ObservationIgnored private var resolvedHandles: [FileKey: PTPObjectHandle] = [:]
+    @ObservationIgnored private var mtpSummaries: [PTPObjectHandle: MTPObjectSummary] = [:]
     /// Stamped into USBResumeState: a resume counts as a link-drop resume only in a different CameraSession.
     private let sessionID = UUID()
 
@@ -868,6 +869,7 @@ final class CameraSession: NSObject {
         ptpHandles = nil
         ptpObjectInfos.removeAll()
         resolvedHandles.removeAll()
+        mtpSummaries.removeAll()
     }
 
     // MARK: Day 2 · PTP listing
@@ -943,6 +945,144 @@ final class CameraSession: NSObject {
             log.measure("usb.ptp.catalog.count", Double(handles.count), "objects",
                         context: "\(fileInfos.count) files, \(folderCount) folders\(unreadable)")
             lastResult = "PTP listing: \(handles.count) objects in \(fmt(seconds, 2)) s"
+        }
+    }
+
+    // MARK: Day 2 · MTP listing (one call)
+
+    /// MTP GetObjectPropList (0x9805), which the α7C II advertises in MTP mode: one request that may return every
+    /// object's name, size, format, parent and dates. Tries libmtp's "every property of every object" first, then two
+    /// narrower forms if the camera refuses it, and stops at the first that answers OK. The raw reply is saved as a
+    /// fixture whether or not it decodes. A decoded listing fills resolveHandle's (name, size) cache.
+    func mtpListing() async {
+        await perform("MTP listing (GetObjectPropList)") {
+            try requireSession()
+            let iccPercentAtStart: Int? = catalogComplete ? nil : device.contentCatalogPercentCompleted
+            let attempts: [(String, PTPContainer)] = [
+                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", PTPCommand.getAllObjectProps(tx: tx.take())),
+                ("all properties, all objects, depth 0", PTPCommand.getObjectPropList(depth: 0, tx: tx.take())),
+                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", PTPCommand.getObjectPropList(property: .objectFileName, tx: tx.take())),
+            ]
+            let clock = ContinuousClock()
+            for (label, command) in attempts {
+                if stopRequested { throw USBSpikeError.stopped }
+                let start = clock.now
+                let reply = try await send(command, timeout: 120)
+                let seconds = (clock.now - start).inSeconds
+                guard reply.responseCode.isOK else {
+                    log.warn("  GetObjectPropList (\(label)): \(reply.responseCode) after \(fmt(seconds, 2)) s, \(reply.data.count) B")
+                    continue
+                }
+                FixtureStore.save(reply.data, link: .usb, name: "objectproplist.bin", log: log, detail: label)
+                let list: MTPObjectPropList
+                do {
+                    list = try MTPObjectPropList.decode(reply.data)
+                } catch {
+                    log.warn("GetObjectPropList (\(label)) answered OK with \(reply.data.count) B in \(fmt(seconds, 2)) s but didn't decode: \(describe(error)); starts \(reply.data.hexDump(limit: 24)). The fixture has the bytes.")
+                    log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); \(reply.data.count) B; did not decode")
+                    lastResult = "MTP listing: answered, didn't decode"
+                    return
+                }
+                let summaries = list.summaries()
+                mtpSummaries = summaries
+                let folders = summaries.values.filter { $0.isFolder }.count
+                let files = summaries.filter { !$0.value.isFolder }
+                var keyed = 0
+                for (handle, summary) in files {
+                    guard let name = summary.filename, let size = summary.size else { continue }
+                    resolvedHandles[FileKey(name: name.lowercased(), size: Int64(clamping: size))] = handle
+                    keyed += 1
+                }
+                let properties = Set(list.elements.map { $0.property })
+                log.note("MTP listing (\(label)): \(summaries.count) objects (\(files.count) files, \(folders) folders), \(list.elements.count) properties, \(reply.data.count) B in \(fmt(seconds, 2)) s")
+                log.note("  properties sent: " + properties.map { "\($0)" }.sorted().joined(separator: ", "))
+                let byExtension = Dictionary(grouping: files.values) { ($0.filename.flatMap { $0.split(separator: ".").last.map(String.init) } ?? "?").uppercased() }
+                for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
+                    let bytes = group.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
+                    log.note("  .\(ext): \(group.count) files, \(mb(bytes))")
+                }
+                let newestFirst = files.sorted { a, b in
+                    let da = a.value.dateCreated ?? .distantPast
+                    let db = b.value.dateCreated ?? .distantPast
+                    if da != db { return da > db }
+                    return a.key.rawValue > b.key.rawValue
+                }
+                for entry in newestFirst.prefix(5) {
+                    let v = entry.value
+                    log.note("  \(v.filename ?? "?") \(entry.key), \(v.size.map { "\($0) B" } ?? "no size"), created '\(v.dateCreatedRaw ?? "")', format \(v.format.map { "\($0)" } ?? "?"), parent \(v.parent.map { "\($0)" } ?? "?")")
+                }
+                if keyed < files.count { log.warn("  \(files.count - keyed) files have no name or size, so they can't be matched to ImageCaptureCore's files") }
+                let ptp = log.measurements.last(where: { $0.name == "usb.ptp.catalog" }).map { "PTP listing \(fmt($0.value, 2)) s" } ?? "no PTP listing yet"
+                let icc = iccPercentAtStart.map { "ImageCaptureCore catalogue \($0)% at the start" }
+                    ?? log.measurements.last(where: { $0.name == "usb.catalog.complete" }).map { "ImageCaptureCore usb.catalog.complete \(fmt($0.value, 1)) s" }
+                    ?? "ImageCaptureCore catalogue complete"
+                log.measure("usb.mtp.proplist", seconds, "s",
+                            context: "\(label); \(summaries.count) objects, \(files.count) files, \(folders) folders, \(reply.data.count) B; \(ptp); \(icc)")
+                lastResult = "MTP listing: \(summaries.count) objects in \(fmt(seconds, 2)) s"
+                return
+            }
+            throw USBSpikeError.nothingToDo("GetObjectPropList: the camera refused all \(attempts.count) forms (see the warnings above)")
+        }
+    }
+
+    // MARK: Day 2 · thumbnails over PTP
+
+    /// GetThumb (0x100A) for the newest files, timed, to compare with ImageCaptureCore's requestThumbnailData
+    /// (usb.thumb.avg). Picks the newest files from a PTP or MTP listing if one ran this session, otherwise the
+    /// highest handles; doesn't need ImageCaptureCore's catalogue.
+    func ptpThumbnails(count: Int = 50) async {
+        await perform("GetThumb, \(count) newest (PTP)") {
+            try requireSession()
+            let picks: [PTPObjectHandle]
+            let source: String
+            if !ptpObjectInfos.isEmpty {
+                picks = ptpObjectInfos.filter { !$0.value.isFolder }
+                    .sorted { ($0.value.captureDate ?? .distantPast, $0.key.rawValue) > ($1.value.captureDate ?? .distantPast, $1.key.rawValue) }
+                    .prefix(count).map { $0.key }
+                source = "the PTP listing"
+            } else if !mtpSummaries.isEmpty {
+                picks = mtpSummaries.filter { !$0.value.isFolder }
+                    .sorted { ($0.value.dateCreated ?? .distantPast, $0.key.rawValue) > ($1.value.dateCreated ?? .distantPast, $1.key.rawValue) }
+                    .prefix(count).map { $0.key }
+                source = "the MTP listing"
+            } else {
+                let handles = try await objectHandles()
+                picks = Array(handles.sorted { $0.rawValue > $1.rawValue }.prefix(count))
+                source = "the highest handles (no listing yet, so folders may be among them)"
+            }
+            guard !picks.isEmpty else { throw USBSpikeError.nothingToDo("no objects to fetch thumbnails for") }
+            log.note("  GetThumb for \(picks.count) objects from \(source)")
+            let clock = ContinuousClock()
+            var times: [Double] = []
+            var bytes = 0
+            var failures: [String] = []
+            for (index, handle) in picks.enumerated() {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                let start = clock.now
+                do {
+                    let reply = try await send(PTPCommand.getThumb(handle, tx: tx.take()), timeout: 30)
+                    guard reply.responseCode.isOK else {
+                        failures.append("\(handle): \(reply.responseCode)")
+                        continue
+                    }
+                    let ms = (clock.now - start).inSeconds * 1000
+                    times.append(ms)
+                    bytes += reply.data.count
+                    if index < 3 { log.note("  GetThumb \(handle): \(reply.data.count) B in \(fmt(ms)) ms, starts \(reply.data.hexDump(limit: 4))") }
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    failures.append("\(handle): \(describe(error))")
+                }
+                progressText = "\(index + 1)/\(picks.count)"
+            }
+            for failure in failures.prefix(5) { log.warn("  GetThumb failed: \(failure)") }
+            guard !times.isEmpty else { throw USBSpikeError.nothingToDo("every GetThumb failed: \(failures.prefix(3).joined(separator: "; "))") }
+            let avg = times.reduce(0, +) / Double(times.count)
+            log.measure("usb.ptp.thumb.avg", avg, "ms",
+                        context: "\(times.count) of \(picks.count) from \(source) ok, min \(fmt(times.min() ?? 0)) max \(fmt(times.max() ?? 0)) ms, avg \(bytes / max(times.count, 1) / 1000) KB [\(lifecycle.stateDescription)]")
+            lastResult = "GetThumb: \(fmt(avg)) ms average"
         }
     }
 
