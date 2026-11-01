@@ -76,7 +76,7 @@ struct WiredView: View {
                         .disabled(!canRun)
                     Button("Close session", role: .destructive) { run { await $0.closeSession() } }
                         .disabled(!canRun)
-                    Text("Wait off: Open session returns at once and the catalogue is logged every 2 s until usb.catalog.complete; the PTP and MTP buttons work meanwhile, ImageCaptureCore's thumbnails and downloads wait for it. MTP mode only: the camera answers no PTP commands in MSC mode.")
+                    Text("Wait off: Open session returns at once and the catalogue is logged every 2 s until usb.catalog.complete; the PTP and MTP buttons work meanwhile (a catalogue they overlap is recorded as usb.catalog.complete.contended), ImageCaptureCore's thumbnails and downloads wait for it. MTP mode only: the camera answers no PTP commands in MSC mode.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

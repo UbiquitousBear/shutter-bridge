@@ -367,9 +367,11 @@ final class WirelessLab {
 
     var gatewayCandidate: String? { joinedGateway ?? path.current?.firstIPv4Gateway }
 
+    /// The resume identity's camera key: a one-way tag of the serial (CameraSerialTag), never the serial itself,
+    /// because identities and `.part` paths are logged and the log is exported.
     private var cameraSerial: String {
         let serial = deviceInfo?.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return serial.isEmpty ? "unknown-serial" : serial
+        return serial.isEmpty ? "unknown-serial" : CameraSerialTag.tag(serial)
     }
 
     // MARK: Running actions
@@ -1001,7 +1003,7 @@ final class WirelessLab {
             let (c, _) = try await self.open(target, closingPrevious: false)
             let serial = self.cameraSerial
             if serial != saved.identity.cameraSerial {
-                self.log.warn("camera serial is \(serial), the saved read is from \(saved.identity.cameraSerial)")
+                self.log.warn("the camera's serial differs from the saved read's")
             }
             guard let found = try await self.findObject(c, identity: saved.identity, serial: serial) else {
                 self.log.error("Resume read: \(saved.identity) not found on the card; the engine would restart that file from zero. The partial file is kept; Forget partial read discards it.")

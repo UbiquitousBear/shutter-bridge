@@ -21,7 +21,7 @@ one exists, and then checks all of them:
 | `event` (`a7c2-<link>-event-objectadded.bin`, `a7c2-<link>-event-<xxxx>.bin`) | `events()`, "Events: USB containers and PTP/IP packets decode; ObjectAdded fixtures signal a new object" | over USB, one container of type event; over PTP/IP, one whole packet that decodes as an Event; an `event-objectadded` file must carry 0x4002 or Sony's 0xC201 |
 | `sdio-extdeviceinfo` (`a7c2-ptpip-sdio-extdeviceinfo.bin`) | none yet | copied by `make fixtures`, but PTPKit has no parser for Sony's ExtDeviceInfo |
 
-Only `.bin` files are copied. The `FIRMWARE`, `.sha256`, `.json`, `.xml` and `.pcap` files stay in
-`/Fixtures/a7c2/`.
+Only `.bin` files are copied. The `FIRMWARE`, `.sha256`, `.json` and `.xml` files stay in
+`/Fixtures/a7c2/`; the Mac's `.pcap` captures never enter the repo.
 
 If a test fails on a fixture, the codec disagrees with the camera: fix the codec, not the fixture.

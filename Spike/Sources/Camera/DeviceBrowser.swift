@@ -99,13 +99,20 @@ final class DeviceBrowser: NSObject {
     }
 
     private func hex4(_ v: Int32) -> String { String(format: "%04X", v) }
+
+    /// ImageCaptureCore's device UUID appears to embed the camera's USB serial, and the log is exported: only a
+    /// one-way tag of it (CameraSerialTag), stable for the install, so didAdd and didRemove lines still pair up.
+    private func uuidTag(_ device: ICDevice) -> String {
+        guard let uuid = device.uuidString, !uuid.isEmpty else { return "-" }
+        return CameraSerialTag.tag(uuid)
+    }
 }
 
 extension DeviceBrowser: @preconcurrency ICDeviceBrowserDelegate {
     func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
         let caps = device.capabilities
         let acceptsPTP = caps.contains(ICDeviceCapability.cameraDeviceCanAcceptPTPCommands.rawValue)
-        log?.note("didAdd: \(device.name ?? "?") kind=\(device.productKind ?? "?") transport=\(device.transportType ?? "?") type=0x\(String(device.type.rawValue, radix: 16)) usb=\(hex4(device.usbVendorID)):\(hex4(device.usbProductID)) uuid=\(device.uuidString ?? "-") moreComing=\(moreComing)")
+        log?.note("didAdd: \(device.name ?? "?") kind=\(device.productKind ?? "?") transport=\(device.transportType ?? "?") type=0x\(String(device.type.rawValue, radix: 16)) usb=\(hex4(device.usbVendorID)):\(hex4(device.usbProductID)) uuid=\(uuidTag(device)) moreComing=\(moreComing)")
         log?.note("  capabilities (\(caps.count)): \(caps.isEmpty ? "none reported yet" : caps.joined(separator: ", "))")
         log?.note("  acceptsPTPCommands=\(acceptsPTP ? "yes" : "no") (cameraDeviceCanAcceptPTPCommands; day 4 needs yes)")
         if !loggedSerialNote {
@@ -120,7 +127,7 @@ extension DeviceBrowser: @preconcurrency ICDeviceBrowserDelegate {
     }
 
     func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
-        log?.note("browser didRemove: \(device.name ?? "?") uuid=\(device.uuidString ?? "-")")
+        log?.note("browser didRemove: \(device.name ?? "?") uuid=\(uuidTag(device))")
         cameras.removeAll { $0 === device }
     }
 

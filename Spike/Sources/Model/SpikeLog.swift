@@ -63,6 +63,10 @@ final class SpikeLog {
     /// The file ended mid-line (the app was killed during a write): start the next append on a fresh line.
     @ObservationIgnored private var fileEndsMidLine = false
     @ObservationIgnored private let encoder = JSONEncoder()
+    /// Restored records LogScrubber changed, to report in one log line with the next append.
+    @ObservationIgnored private var scrubNotePending = 0
+    /// Rewrite the file after the next successful write (restored records were scrubbed after a late read).
+    @ObservationIgnored private var compactAfterWrite = false
 
     /// One JSON line in the file: exactly one of `e` / `m` is set.
     private struct Record: Codable {
@@ -162,6 +166,11 @@ final class SpikeLog {
         entries.append(e)
         if entries.count > Self.entryLimit { entries.removeFirst(entries.count - Self.entryLimit) }
         persist(Record(e: e, m: nil))
+        if scrubNotePending > 0 {
+            let count = scrubNotePending
+            scrubNotePending = 0
+            note("spike log: removed the camera serial or device UUID from \(count) restored entries and measurement contexts written by an earlier build; \(fileURL?.lastPathComponent ?? "the log file") rewritten")
+        }
     }
 
     // MARK: - Persistence (append-only JSON Lines)
@@ -193,6 +202,7 @@ final class SpikeLog {
             if let e = record.e { loadedEntries.append(e) }
             if let m = record.m { loadedMeasurements.append(m) }
         }
+        let scrubbedCount = Self.scrub(&loadedEntries, &loadedMeasurements)
         entries = Array(loadedEntries.suffix(Self.entryLimit))
         measurements = Array(loadedMeasurements.suffix(Self.measurementLimit))
         restoredEntryCount = entries.count
@@ -201,7 +211,36 @@ final class SpikeLog {
         if unreadableLines > 0 {
             os.warning("spike log: skipped \(unreadableLines) unreadable lines (a write cut short by a kill?)")
         }
-        if linesInFile > entries.count + measurements.count + Self.compactionSlack { compact() }
+        if scrubbedCount > 0 {
+            // Rewrite the file too (it is in Documents, visible in the Files app, and survives app updates): with the
+            // first write of this launch, which also logs the count.
+            compactAfterWrite = true
+            scrubNotePending = scrubbedCount
+        } else if linesInFile > entries.count + measurements.count + Self.compactionSlack {
+            compact()
+        }
+    }
+
+    /// Runs LogScrubber over restored entry texts and measurement contexts; returns how many records changed.
+    private static func scrub(_ entries: inout [Entry], _ measurements: inout [Measurement]) -> Int {
+        var changed = 0
+        for i in entries.indices {
+            let e = entries[i]
+            let text = LogScrubber.scrub(e.text)
+            if text != e.text {
+                entries[i] = Entry(id: e.id, at: e.at, level: e.level, text: text)
+                changed += 1
+            }
+        }
+        for i in measurements.indices {
+            let m = measurements[i]
+            let context = LogScrubber.scrub(m.context)
+            if context != m.context {
+                measurements[i] = Measurement(id: m.id, at: m.at, name: m.name, value: m.value, unit: m.unit, context: context)
+                changed += 1
+            }
+        }
+        return changed
     }
 
     private func persist(_ record: Record) {
@@ -230,7 +269,10 @@ final class SpikeLog {
             unwritten.append(line)
             return
         }
-        if !fileUnreadable, linesInFile > entries.count + measurements.count + Self.compactionSlack { compact() }
+        if compactAfterWrite || (!fileUnreadable && linesInFile > entries.count + measurements.count + Self.compactionSlack) {
+            compactAfterWrite = false
+            compact()
+        }
     }
 
     private func openHandle() {
@@ -280,6 +322,7 @@ final class SpikeLog {
             if let e = record.e { oldEntries.append(e) }
             if let m = record.m { oldMeasurements.append(m) }
         }
+        let scrubbedCount = Self.scrub(&oldEntries, &oldMeasurements)
         // Anything already written by this process is in memory too: keep the in-memory copy.
         let entryIDs = Set(entries.map(\.id)), measurementIDs = Set(measurements.map(\.id))
         oldEntries.removeAll { entryIDs.contains($0.id) }
@@ -291,6 +334,12 @@ final class SpikeLog {
         restoredMeasurementCount = max(0, measurements.count - newMeasurementCount)
         linesInFile = lines
         os.info("spike log: read \(lines) lines from the file once it became readable; restored \(self.restoredEntryCount) entries and \(self.restoredMeasurementCount) measurements")
+        if scrubbedCount > 0 {
+            // The file still has the unscrubbed lines. persist (which called openHandle, which called this) rewrites
+            // it from memory once its pending lines are written; compacting here would write those lines twice.
+            compactAfterWrite = true
+            scrubNotePending = scrubbedCount
+        }
     }
 
     /// Rewrites the file from memory, dropping lines that fell off the in-memory limits.
@@ -322,6 +371,60 @@ final class SpikeLog {
     private func reportPersistence(_ problem: String) {
         if persistenceProblem != problem { os.error("spike log persistence: \(problem, privacy: .public)") }
         persistenceProblem = problem
+    }
+}
+
+/// Removes the camera serial (and ImageCaptureCore's device UUID, which appears to embed the USB serial) from log
+/// text written by builds 1–3, which printed them in DeviceInfo lines, object identities (`… B @<serial>`), resume
+/// paths (`Imports/<serial>/`), serial-mismatch warnings, the SSDP description summary and didAdd/didRemove lines.
+/// SpikeLog runs it over every restored entry and measurement context at launch. What build 4 writes passes
+/// through unchanged (`serial present …`, `@camera-key(…)`, `Imports/sn-…/`, `uuid=sn-…`), so it is idempotent.
+/// Foundation only.
+enum LogScrubber {
+    private static let rules: [(NSRegularExpression, String)] = [
+        // DeviceInfo, builds 1–3: "firmware 2.00, serial 4012345" (USB) and "…, serial 4012345; PTP 1.00…" (Wi-Fi).
+        (#"(firmware [^,;]*, serial )(?!present \(|\(empty\)|\(redacted\))[^;\n]+"#, "$1(redacted)"),
+        // The first USB build: "fw=2.00 serial=4012345 vendorExt=…".
+        (#"\bserial=(?!\(redacted\))\S+"#, "serial=(redacted)"),
+        // Old resume mismatch warnings, USB and Wi-Fi.
+        (#"Camera serial .*? is not the saved .*?: the identity check"#,
+         "The camera's serial differs from the saved read's: the identity check"),
+        (#"camera serial is .*?, the saved read is from \S+"#, "the camera's serial differs from the saved read's"),
+        // Object identities: "<size>B @<serial>" (build 4: "@camera-key(N chars)"; build 4 prerelease "@serial(N chars)").
+        (#"(\d)B @(?!serial\(|camera-key\()[A-Za-z0-9._-]+"#, "$1B @camera-key(redacted)"),
+        // Resume paths: "Imports/<serial>/". Build 4 writes "Imports/sn-…/", "Imports/uuid-sn-…/", and the serial-free
+        // fallbacks "Imports/uuid-unknown/" (USB) and "Imports/unknown-serial/" (Wi-Fi).
+        (#"Imports/(?!sn-|uuid-sn-|uuid-unknown/|unknown-serial/|…/)[^/\s]+/"#, "Imports/…/"),
+        // The empty-serial fallback "uuid-<raw device UUID>" anywhere else, such as its warning (after the two rules
+        // above, which replace it whole). Build 4 writes "uuid-sn-…" or "uuid-unknown".
+        (#"\buuid-(?!sn-|unknown\b|\(redacted\))[0-9A-Za-z-]+"#, "uuid-(redacted)"),
+        // DeviceBrowser's didAdd/didRemove, "uuid=<raw>" (build 4 writes "uuid=sn-…" or "uuid=-").
+        (#"\buuid=(?!sn-|-(?:\s|$)|\(redacted\))\S+"#, "uuid=(redacted)"),
+        // SSDP description summary, builds 1–3: `… · serialNumber <value> · UDN …`, with "-" for no serial. Only that
+        // shape: build 4's own lines that mention serialNumber ("no serialNumber in it", "could not zero the
+        // serialNumber", "serialNumber present (…)" / "absent") must pass through.
+        (#"(?<= · )serialNumber -(?= · UDN )"#, "serialNumber absent"),
+        (#"(?<= · )serialNumber (?!present \(|absent(?= · )|\(redacted\)(?= · )|-(?= · ))[^\n]*?(?= · UDN )"#,
+         "serialNumber (redacted)"),
+    ].map { pattern, template in
+        // The patterns are constants: a bad one is a programming error caught the first time the app runs.
+        (try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines]), template)
+    }
+
+    /// Every rule's match contains one of these: a record without any is left alone without running the regexes,
+    /// which keeps the scrub cheap on every launch (up to 2,000 entries and 10,000 measurement contexts).
+    private static let triggers = ["serial", "uuid", "B @", "Imports/"]
+
+    /// `text` with every serial or device UUID of the old formats replaced.
+    static func scrub(_ text: String) -> String {
+        guard triggers.contains(where: { text.contains($0) }) else { return text }
+        var out = text
+        for (regex, template) in rules {
+            let range = NSRange(out.startIndex..., in: out)
+            guard regex.firstMatch(in: out, range: range) != nil else { continue }
+            out = regex.stringByReplacingMatches(in: out, range: range, withTemplate: template)
+        }
+        return out
     }
 }
 

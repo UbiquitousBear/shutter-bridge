@@ -13,7 +13,7 @@ struct WiFiResumeRecord: Codable, Equatable, Sendable {
     var identity: PTPObjectIdentity
     /// Bytes on disk that are trusted: everything before this offset was written by whole chunks.
     var offset: UInt64
-    /// Relative to the Caches directory: "Imports/<serial>/<filename>.part".
+    /// Relative to the Caches directory: "Imports/<serial tag>/<filename>.part" (CameraSerialTag, never the serial).
     var partPath: String
     /// SHA-256 of the same object fetched whole with GetObject ("Reference hash"), if one was taken.
     var referenceSHA256: String?
@@ -64,7 +64,7 @@ enum WiFiResumeStore {
 
     // MARK: Part files
 
-    /// "Imports/<serial>/<filename>.part", with path separators and leading dots made harmless.
+    /// "Imports/<serial tag>/<filename>.part", with path separators and leading dots made harmless.
     static func partRelativePath(serial: String, filename: String) -> String {
         "Imports/\(safeComponent(serial))/\(safeComponent(filename)).part"
     }

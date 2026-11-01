@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit   // CameraSerialTag
 import PTPKit
 
 /// Where captured camera bytes go on the phone, laid out exactly like the repo's `Fixtures/a7c2/` folder:
@@ -91,6 +92,66 @@ enum FixtureStore {
         return Data(bytes)
     }
 
+    /// Saves a UPnP device description as `ptpip/ssdp-description.xml` with the text of every serialNumber element
+    /// zeroed, as scripts/redact-fixtures.py does before a commit. Refuses (and logs why) if the zeroed bytes still
+    /// parse to a serialNumber that isn't all zeros (CDATA, an entity: forms the zeroing pattern can't reach).
+    @discardableResult
+    static func saveSSDPDescription(_ data: Data, log: SpikeLog?) -> URL? {
+        let name = "ssdp-description.xml"
+        guard let zeroed = zeroingSSDPSerial(in: data) else {
+            log?.warn("fixture not saved: ptpip/\(name): could not zero the serialNumber in it")
+            return nil
+        }
+        // Every serialNumber element, CDATA included, not just the first one the summary shows.
+        if let parsed = SSDPDeviceDescription.parse(zeroed.data),
+           parsed.allSerialNumbers.contains(where: { value in value.contains { $0 != "0" && !$0.isWhitespace } }) {
+            log?.warn("fixture not saved: ptpip/\(name): after zeroing, the XML parser still reads a serialNumber that isn't all zeros (CDATA or an entity?)")
+            return nil
+        }
+        return save(zeroed.data, link: .ptpip, name: name, log: log,
+                    detail: zeroed.characters > 0 ? "serial zeroed" : "no serialNumber in it")
+    }
+
+    /// A serialNumber element as DeviceDescriptionParser sees one (it matches local names): any namespace prefix,
+    /// attributes or spaces in the tag, any case. Its text ends at the closing tag, at the next tag if it is never
+    /// closed, or at the end of a truncated description. Same pattern as scripts/redact-fixtures.py.
+    nonisolated private static let ssdpSerialPattern =
+        #"<(?:[\w.-]+:)?serialNumber\b[^>]*>(.*?)(?:</(?:[\w.-]+:)?serialNumber\s*>|(?=<)|\Z)"#
+
+    /// `data` with every non-whitespace byte of each serialNumber element's text replaced by "0", every other byte
+    /// unchanged (the same rule as scripts/redact-fixtures.py), and how many bytes were replaced; nil if that can't
+    /// be done. ISO Latin-1 maps each byte to one character and back, so the edit is byte for byte whatever the
+    /// encoding.
+    nonisolated static func zeroingSSDPSerial(in data: Data) -> (data: Data, characters: Int)? {
+        guard let text = String(data: data, encoding: .isoLatin1),
+              let pattern = try? NSRegularExpression(pattern: ssdpSerialPattern,
+                                                     options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return nil
+        }
+        let ns = NSMutableString(string: text)
+        var replaced = 0
+        for match in pattern.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let range = match.range(at: 1)
+            guard range.location != NSNotFound, range.length > 0 else { continue }
+            let value = ns.substring(with: range)
+            // Per scalar (each one byte here); whitespace is space, tab, CR and LF only, as in the Python.
+            var zeroedValue = String.UnicodeScalarView()
+            for scalar in value.unicodeScalars {
+                if scalar == " " || scalar == "\t" || scalar == "\r" || scalar == "\n" || scalar == "0" {
+                    zeroedValue.append(scalar)
+                } else {
+                    zeroedValue.append("0")
+                    replaced += 1
+                }
+            }
+            let zeroedText = String(zeroedValue)
+            if zeroedText != value { ns.replaceCharacters(in: range, with: zeroedText) }
+        }
+        guard replaced > 0 else { return (data, 0) }
+        guard let out = (ns as String).data(using: .isoLatin1), out.count == data.count else { return nil }
+        return (out, replaced)
+    }
+
     @discardableResult
     static func saveText(_ text: String, link: Link, name: String, log: SpikeLog?) -> URL? {
         save(Data(text.utf8), link: link, name: name, log: log)
@@ -136,5 +197,33 @@ enum FixtureStore {
     static func clear(log: SpikeLog?) {
         try? FileManager.default.removeItem(at: root)
         log?.note("fixtures cleared")
+    }
+}
+
+/// What the spike uses in place of the camera's serial number in object identities and resume paths
+/// (`Imports/<tag>/<file>.part`), both of which reach the exported log: the serial must never reach the public
+/// repo, and findings are written from that log.
+///
+/// "sn-" and the first 12 hex digits of HMAC-SHA-256(serial) under a random key made once per install and kept in
+/// UserDefaults. Stable for the life of the install, so identity equality and resume matching work over USB and
+/// Wi-Fi alike; one-way. A plain SHA-256 would not do: a camera serial has few enough digits that its hash can be
+/// reversed by trying them all. An empty serial stays empty.
+enum CameraSerialTag {
+    private static let keyDefaultsKey = "spike.cameraSerialTag.key"
+
+    static func tag(_ serial: String) -> String {
+        guard !serial.isEmpty else { return "" }
+        let code = HMAC<SHA256>.authenticationCode(for: Data(serial.utf8), using: key)
+        return "sn-" + code.prefix(6).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static var key: SymmetricKey {
+        let defaults = UserDefaults.standard
+        if let stored = defaults.data(forKey: keyDefaultsKey), stored.count == 32 {
+            return SymmetricKey(data: stored)
+        }
+        let fresh = SymmetricKey(size: .bits256)
+        defaults.set(fresh.withUnsafeBytes { Data($0) }, forKey: keyDefaultsKey)
+        return fresh
     }
 }

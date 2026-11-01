@@ -12,7 +12,8 @@ import Observation
 ///   result to record.
 ///
 /// Every reply is logged (status line, ST, USN, SERVER, LOCATION) and the LOCATION description XML is fetched
-/// once and summarised (friendlyName, modelName, serialNumber, UDN, service types).
+/// once and summarised (friendlyName, modelName, whether there is a serialNumber but never its value, UDN, service
+/// types). The description is saved as a fixture with the serial zeroed.
 @Observable
 @MainActor
 final class SSDPProbe {
@@ -229,9 +230,16 @@ final class SSDPProbe {
                 log.warn("SSDP description \(location): HTTP \(status), \(data.count) bytes")
                 return
             }
-            FixtureStore.save(data, link: .ptpip, name: "ssdp-description.xml", log: log)
+            // The description carries the camera's serial: the fixture and the log only ever see it zeroed.
+            FixtureStore.saveSSDPDescription(data, log: log)
             guard let d = SSDPDeviceDescription.parse(data) else {
-                log.warn("SSDP description \(location) did not parse as XML (\(data.count) bytes): \(String(decoding: data.prefix(160), as: UTF8.self))")
+                let zeroed = FixtureStore.zeroingSSDPSerial(in: data)?.data ?? Data()
+                var shown = String(decoding: zeroed.prefix(160), as: UTF8.self)
+                // Belt and braces for malformed XML (a CDATA serial is not zeroed): show nothing from any serialNumber on.
+                if let tag = shown.range(of: "serialNumber", options: .caseInsensitive) {
+                    shown = String(shown[..<tag.lowerBound]) + "…"
+                }
+                log.warn("SSDP description \(location) did not parse as XML (\(data.count) bytes): \(shown)")
                 return
             }
             descriptions[location] = d.shortSummary
@@ -314,6 +322,9 @@ struct SSDPDeviceDescription: Sendable {
     var modelName = ""
     var modelNumber = ""
     var serialNumber = ""
+    /// Every serialNumber element's value, any case, in document order (the summary uses only the first, above): for
+    /// FixtureStore's check that a zeroed description holds no serial.
+    var allSerialNumbers: [String] = []
     var udn = ""
     var serviceTypes: [String] = []
     /// Vendor elements (X_…), e.g. Sony's X_ScalarWebAPI_* entries, as "name=value".
@@ -323,7 +334,7 @@ struct SSDPDeviceDescription: Sendable {
 
     var summary: String {
         var parts = ["friendlyName \"\(friendlyName)\"", "manufacturer \"\(manufacturer)\"",
-                     "modelName \"\(modelName)\" \(modelNumber)", "serialNumber \(serialNumber.isEmpty ? "-" : serialNumber)",
+                     "modelName \"\(modelName)\" \(modelNumber)", "serialNumber \(serialNumber.isEmpty ? "absent" : "present (\(serialNumber.count) chars, redacted)")",
                      "UDN \(udn.isEmpty ? "-" : udn)", "deviceType \(deviceType)",
                      "services [\(serviceTypes.joined(separator: ", "))]"]
         if !vendorFields.isEmpty { parts.append("vendor [\(vendorFields.joined(separator: "; "))]") }
@@ -353,10 +364,16 @@ private final class DeviceDescriptionParser: NSObject, XMLParserDelegate {
         text += string
     }
 
+    /// A value wrapped in <![CDATA[…]]> arrives here, not in foundCharacters.
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        text += String(decoding: CDATABlock, as: UTF8.self)
+    }
+
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         text = ""
         let local = elementName.split(separator: ":").last.map(String.init) ?? elementName
+        if local.caseInsensitiveCompare("serialNumber") == .orderedSame { result.allSerialNumbers.append(value) }
         switch local {
         case "deviceType": if result.deviceType.isEmpty { result.deviceType = value }
         case "friendlyName": if result.friendlyName.isEmpty { result.friendlyName = value }
