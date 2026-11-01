@@ -39,9 +39,10 @@ Permission prompts to expect, the first time each feature is used:
 | Local Network | The first Wi-Fi probe or connection (Day 6 · Probe, Day 7 · Handshake) | If it is denied, connections wait and the log says so with a Local Network hint. Settings › Privacy & Security › Local Network › SB Spike turns it back on. |
 | Bluetooth | Bluetooth › *Scan (Sony only)*, *Scan (everything)* or *Watch in background* | The app does not create a Bluetooth central at launch until the watcher is on or permission is already granted, so the first launch shows no prompt. |
 | Notifications | Bluetooth › Day 6 · Proximity go/no-go › *Watch in background* | *Send test reminder* logs the current permission state. |
+| Photos, add-only and then read/write | Background › *Photos albums, no camera* | See "Photos albums". The album steps may bring up the read/write prompt by themselves. |
 | Join network (system sheet) | Wi-Fi › *Join camera Wi-Fi* | Shown on every `NEHotspotConfiguration` join; not a privacy setting. |
 
-The spike never writes to Photos, so there is no Photos prompt.
+Only the Background tab's Photos album test ("Photos albums", below) uses Photos. It asks for add-only access (`NSPhotoLibraryAddUsageDescription`), then read/write access (`NSPhotoLibraryUsageDescription`), and may bring up the read/write prompt by itself; the steps say what to choose.
 
 ## Week 1 without the Mac (until Thu 5 Nov)
 
@@ -116,6 +117,25 @@ Pass: `GetPartialObject` returns correct bytes (SHA-256 equals the card copy); t
 | Write the week-1 findings page | Log › Day 10 · Export › *Copy measurements table* gives the USB column so far. Fill the wired sections of spike-findings.md: "Wired import is viable", "Byte-range resume on USB", the USB menu wording and "ImageCaptureCore facts". | — | — | — |
 
 Pass: behaviour on lock documented with timings; fixtures committed; findings written.
+
+## Photos albums (any day, no camera; not in the plan)
+
+Added on 1 Nov for a product decision: every import should go into an album in Photos. The proposal asks for add-only access (the small prompt) and puts imports in a per-camera album. Apple doesn't document whether an add-only app can create an album or find it again. One forum report says both calls bring up the full read/write prompt. With limited access, a WWDC21 session says apps can create, fetch and update their own albums since iOS 15, but Apple's privacy article still says they can't. Saving while the phone is locked is documented only for Lock Screen camera extensions. Everything is in Background › *Photos albums, no camera*. The test photos are teal JPEGs labelled "Shutter Bridge spike test". Every line in the log starts with `photos:` and shows both access levels before the step (and after it, if they changed) and how long the step took. A step that brought up a prompt takes as long as the prompt stayed up.
+
+Run it in this order. The access level can be changed at any time in Settings › Apps › SB Spike › Photos (*None*, *Limited Access*, *Add Photos Only*, *Full Access*).
+
+| Step | Do | Log shows | Findings row |
+| --- | --- | --- | --- |
+| A1 | Settings › Apps › SB Spike › Photos must not be set yet; if it is, delete the app and reinstall it from TestFlight. Then *1. Ask for add-only access* › *Allow*. | `ask for add-only access → returned allowed` | — |
+| A2 | *2. Save a test photo, no album*. | `saved <id>`; the photo is in Photos | Add-only: save a photo |
+| A3 | *3. Save a test photo into a new album*. If a second, larger prompt appears, note it and choose *Don't Allow*, so the result is add-only's. | either `saved … into new album …` or `FAILED: <domain> <code>`; the time shows whether a prompt was up | Add-only: create an album |
+| A4 | Swipe the app away in the app switcher, open it again, then *4. Find the album and save into it*. Note any prompt, and again choose *Don't Allow*. | `album found (by identifier n, by title n)` or `album not found …` | Add-only: find the album after a relaunch |
+| L1 | Settings › Apps › SB Spike › Photos › *Limited Access*; select no photos, or one. (If the setting was never asked, *5. Ask for read/write access* › *Limit Access…* does the same.) | the next step's line shows `read/write limited` | — |
+| L2 | *3. Save a test photo into a new album*, then swipe the app away, reopen it, and *4. Find the album and save into it*. | as A3 and A4, now with limited access | Limited: create an album; find it after a relaunch |
+| K1 | Check Settings › Face ID & Passcode › *Require Passcode* is *Immediately*. Keep *Limited Access*. Tap *6. Locked save test: start, then lock the phone*, lock the phone within 2 minutes, and leave it locked for at least a minute (the test waits 15 s after the lock, so the keys for "complete" files are gone). Unlock, open the app and read the log. Then open the test album in Photos. | `phone locked after n s`; `locked save A (complete until first unlock) OK, added to the test album` or `FAILED …`; `locked save B (complete) …` (expected to fail); `album lookup while locked: …` | Locked: save from each file class; find the album while locked |
+| K2 (optional) | Repeat K1 with *Add Photos Only* (Settings). | as K1 | as K1 |
+
+Afterwards delete the test album and the test photos in Photos. These steps show which access level the product has to ask for, and whether a locked import can save as it goes or has to wait until the phone is unlocked.
 
 ## Day 6: find the responder
 
