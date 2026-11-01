@@ -76,6 +76,11 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var ptpHandles: [PTPObjectHandle]?
     @ObservationIgnored private var ptpObjectInfos: [PTPObjectHandle: PTPObjectInfo] = [:]
     @ObservationIgnored private var resolvedHandles: [FileKey: PTPObjectHandle] = [:]
+    /// Requests in a row that got no answer (a timeout, or an empty pass-through reply). On 1 Nov the camera stopped
+    /// answering altogether after one GetObjectPropList, and every later request waited out its full timeout; from
+    /// two in a row this connection is marked stalled and the spike stops sending on it until the camera is replugged.
+    @ObservationIgnored private var consecutiveNoAnswers = 0
+    private(set) var linkStalled = false
     @ObservationIgnored private var mtpSummaries: [PTPObjectHandle: MTPObjectSummary] = [:]
     /// Every object a PTP listing read, set only when its loop finished. `ptpObjectInfos` also holds what
     /// resolveHandle and a stopped listing read, which is not a listing of the card.
@@ -169,6 +174,15 @@ final class CameraSession: NSObject {
     private func requireSession() throws {
         if removed { throw USBSpikeError.deviceRemoved }
         guard isOpen else { throw USBSpikeError.sessionNotOpen }
+        if linkStalled { throw USBSpikeError.linkStalled }
+    }
+
+    /// Counts a request that got no answer; from two in a row the link is marked stalled (see `linkStalled`).
+    private func noteNoAnswer(_ what: String) {
+        consecutiveNoAnswers += 1
+        guard consecutiveNoAnswers >= 2, !linkStalled else { return }
+        linkStalled = true
+        log.warn("The camera has stopped answering: \(consecutiveNoAnswers) requests in a row got no answer (the last was \(what)). Unplug it, plug it back in, choose MTP, then Open session. The spike sends nothing more on this connection.")
     }
 
     // MARK: - Completion-handler plumbing
@@ -422,13 +436,15 @@ final class CameraSession: NSObject {
             var times: [Double] = []
             var bytes = 0
             var failures: [String] = []
+            var thumbFailuresInARow = 0
             for (index, file) in sample.enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
                 if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                if linkStalled { throw USBSpikeError.linkStalled }
                 let name = file.name ?? "?"
                 let start = clock.now
                 do {
-                    let data: Data = try await callback("requestThumbnailData", timeout: 30) { done in
+                    let data: Data = try await callback("requestThumbnailData", timeout: 10) { done in
                         file.requestThumbnailData(options: nil) { data, error in
                             if let error { done(.failure(error)) }
                             else if let data { done(.success(data)) }
@@ -439,9 +455,16 @@ final class CameraSession: NSObject {
                     times.append(ms)
                     bytes += data.count
                     if index < 3 { log.note("  thumbnail \(name): \(data.count) B in \(fmt(ms)) ms, starts \(data.hexDump(limit: 4))") }
+                    thumbFailuresInARow = 0
+                    consecutiveNoAnswers = 0
                 } catch {
                     if removed { throw USBSpikeError.deviceRemoved }
+                    if let e = error as? USBSpikeError, case .timedOut = e { noteNoAnswer("requestThumbnailData") }
                     failures.append("\(name): \(describe(error))")
+                    thumbFailuresInARow += 1
+                    if thumbFailuresInARow >= 3 {
+                        throw USBSpikeError.nothingToDo("3 thumbnail requests in a row failed, so the run stopped: \(failures.suffix(3).joined(separator: "; "))")
+                    }
                 }
                 lifecycle.noteProgress("thumbnail \(index + 1)/\(sample.count)", link: "usb")
                 progressText = "\(index + 1)/\(sample.count)"
@@ -607,10 +630,21 @@ final class CameraSession: NSObject {
         let encoded = command.encode()
         // Shares the link with ImageCaptureCore's catalogue if that is still running for this open.
         if openRequestedAt != nil && !catalogComplete { ptpCommandsDuringCatalogue += 1 }
-        let raw: RawPTPReply = try await callback(name, timeout: timeout) { done in
-            self.device.requestSendPTPCommand(encoded, outData: nil) { first, second, error in
-                done(.success(RawPTPReply(first: first, second: second, error: error)))
+        let raw: RawPTPReply
+        do {
+            raw = try await callback(name, timeout: timeout) { done in
+                self.device.requestSendPTPCommand(encoded, outData: nil) { first, second, error in
+                    done(.success(RawPTPReply(first: first, second: second, error: error)))
+                }
             }
+        } catch let error as USBSpikeError {
+            if case .timedOut = error { noteNoAnswer(name) }
+            throw error
+        }
+        if raw.first.isEmpty && raw.second.isEmpty {
+            noteNoAnswer(name)
+        } else {
+            consecutiveNoAnswers = 0
         }
         let reply: PTPPassThrough.Reply
         do {
@@ -857,7 +891,7 @@ final class CameraSession: NSObject {
                     throw interruption
                 } catch {
                     failures.append("\(handle): \(describe(error))")
-                    if failures.count >= 5 {
+                    if failures.count >= 3 || linkStalled {
                         throw USBSpikeError.noHandle(name, "GetObjectInfo failed \(failures.count) times: \(failures.prefix(3).joined(separator: "; "))")
                     }
                 }
@@ -936,8 +970,8 @@ final class CameraSession: NSObject {
                 } catch {
                     failures.append("\(handle): \(describe(error))")
                     failuresInARow += 1
-                    if failuresInARow >= 5 {
-                        throw USBSpikeError.nothingToDo("GetObjectInfo failed 5 times in a row after \(infos.count) objects: \(failures.suffix(3).joined(separator: "; "))")
+                    if failuresInARow >= 3 || linkStalled {
+                        throw USBSpikeError.nothingToDo("GetObjectInfo failed \(failuresInARow) times in a row after \(infos.count) objects: \(failures.suffix(3).joined(separator: "; "))")
                     }
                 }
                 progressText = "GetObjectInfo \(index + 1)/\(handles.count)"
@@ -998,19 +1032,55 @@ final class CameraSession: NSObject {
         await perform("MTP listing (GetObjectPropList)") {
             try requireSession()
             let iccPercentAtStart: Int? = catalogComplete ? nil : device.contentCatalogPercentCompleted
-            let attempts: [(String, PTPContainer)] = [
-                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", PTPCommand.getAllObjectProps(tx: tx.take())),
-                ("all properties, all objects, depth 0", PTPCommand.getObjectPropList(depth: 0, tx: tx.take())),
-                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", PTPCommand.getObjectPropList(property: .objectFileName, tx: tx.take())),
+            // Narrowest first, stopping at the first request that gets no answer: on 1 Nov the libmtp whole-card form
+            // got no reply, and the camera then answered nothing until it was replugged.
+            let handles = try await objectHandles()
+            guard let newest = handles.max(by: { $0.rawValue < $1.rawValue }) else {
+                throw USBSpikeError.nothingToDo("GetObjectHandles returned no objects")
+            }
+            let attempts: [(label: String, probe: Bool, timeout: Double)] = [
+                ("all properties of the newest object (\(newest)), depth 0", true, 20),
+                ("ObjectFileName only, all objects, depth 0xFFFFFFFF", false, 60),
+                ("all properties, all objects, depth 0xFFFFFFFF (libmtp)", false, 60),
             ]
             let clock = ContinuousClock()
-            for (label, command) in attempts {
+            for (index, attempt) in attempts.enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
+                let label = attempt.label
+                let command: PTPContainer
+                switch index {
+                case 0: command = PTPCommand.getObjectPropList(handle: newest, depth: 0, tx: tx.take())
+                case 1: command = PTPCommand.getObjectPropList(property: .objectFileName, tx: tx.take())
+                default: command = PTPCommand.getAllObjectProps(tx: tx.take())
+                }
                 let start = clock.now
-                let reply = try await send(command, timeout: 120)
+                let reply: PTPPassThrough.Reply
+                do {
+                    reply = try await send(command, timeout: attempt.timeout)
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    let seconds = (clock.now - start).inSeconds
+                    log.warn("GetObjectPropList (\(label)) got no answer after \(fmt(seconds, 1)) s: \(describe(error)). Not trying the larger forms\(linkStalled ? "; replug the camera before anything else" : "").")
+                    log.measure("usb.mtp.proplist", seconds, "s", context: "\(label); no answer")
+                    lastResult = "MTP listing: no answer to \(label)"
+                    return
+                }
                 let seconds = (clock.now - start).inSeconds
                 guard reply.responseCode.isOK else {
                     log.warn("  GetObjectPropList (\(label)): \(reply.responseCode) after \(fmt(seconds, 2)) s, \(reply.data.count) B")
+                    continue
+                }
+                if attempt.probe {
+                    FixtureStore.save(reply.data, link: .usb, name: "objectproplist-one.bin", log: log, detail: label)
+                    if let one = try? MTPObjectPropList.decode(reply.data) {
+                        let names = Set(one.elements.map { $0.property }).map { "\($0)" }.sorted().joined(separator: ", ")
+                        let summary = one.summaries()[newest]
+                        log.note("  GetObjectPropList (\(label)) answered in \(fmt(seconds, 2)) s: \(one.elements.count) properties for \(summary?.filename ?? "?"): \(names)")
+                    } else {
+                        log.warn("  GetObjectPropList (\(label)) answered OK with \(reply.data.count) B in \(fmt(seconds, 2)) s but didn't decode; the fixture has the bytes")
+                    }
+                    log.measure("usb.mtp.proplist.one", seconds, "s", context: label)
                     continue
                 }
                 FixtureStore.save(reply.data, link: .usb, name: "objectproplist.bin", log: log, detail: label)
@@ -1115,16 +1185,24 @@ final class CameraSession: NSObject {
             var times: [Double] = []
             var bytes = 0
             var failures: [String] = []
+            var failuresInARow = 0
             for (index, handle) in picks.enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
                 if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                if linkStalled { throw USBSpikeError.linkStalled }
+                if failuresInARow >= 3 {
+                    for failure in failures.prefix(5) { log.warn("  GetThumb failed: \(failure)") }
+                    throw USBSpikeError.nothingToDo("3 GetThumb requests in a row failed, so the run stopped: \(failures.suffix(3).joined(separator: "; "))")
+                }
                 let start = clock.now
                 do {
-                    let reply = try await send(PTPCommand.getThumb(handle, tx: tx.take()), timeout: 30)
+                    let reply = try await send(PTPCommand.getThumb(handle, tx: tx.take()), timeout: 10)
                     guard reply.responseCode.isOK else {
                         failures.append("\(handle): \(reply.responseCode)")
+                        failuresInARow += 1
                         continue
                     }
+                    failuresInARow = 0
                     let ms = (clock.now - start).inSeconds * 1000
                     times.append(ms)
                     bytes += reply.data.count
@@ -1133,6 +1211,7 @@ final class CameraSession: NSObject {
                     throw interruption
                 } catch {
                     failures.append("\(handle): \(describe(error))")
+                    failuresInARow += 1
                 }
                 progressText = "\(index + 1)/\(picks.count)"
             }
@@ -2077,6 +2156,8 @@ enum USBSpikeError: Error, CustomStringConvertible {
     case catalogueIncomplete(Int, Int)
     /// ImageCaptureCore gave ptpObjectHandle 0 and no PTP object matched (file name, why).
     case noHandle(String, String)
+    /// The camera stopped answering on this connection; only a replug recovers it.
+    case linkStalled
 
     /// The link or the operation went away (cable pull, session closed or replaced, Stop): no answer about the camera.
     var isInterruption: Bool {
@@ -2101,6 +2182,7 @@ enum USBSpikeError: Error, CustomStringConvertible {
         case .diskSpace(let needed, let available): return "not enough free space on the phone: need \(needed / 1_000_000) MB, \(available / 1_000_000) MB free"
         case .catalogueIncomplete(let percent, let count): return "ImageCaptureCore's catalogue is not complete yet (\(percent)%, \(count) files so far); wait for usb.catalog.complete in the log"
         case .noHandle(let name, let detail): return "no PTP handle for \(name) (ImageCaptureCore gave 0): \(detail)"
+        case .linkStalled: return "the camera stopped answering on this connection: unplug it, plug it back in, then Open session"
         }
     }
 }
