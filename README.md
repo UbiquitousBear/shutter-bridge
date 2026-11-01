@@ -17,7 +17,7 @@ proprietary phone protocol.
 | `Packages/PTPKit/` | Pure-Swift PTP and PTP/IP codec with Swift Testing tests. The only code written during the spike that is meant to survive it. |
 | `Spike/` | Throwaway iPhone app for the spike: ImageCaptureCore browser and session, PTP pass-through, PTP/IP client, SSDP probe, BLE advertisement scanner, `BGContinuedProcessingTask` test, measurement log with export. |
 | `Fixtures/` | Bytes captured from the real camera; ground truth for the codec tests. Empty until day 2. |
-| `ci_scripts/` | Xcode Cloud post-clone step (generates the spike project). |
+| `Spike/ci_scripts/` | Xcode Cloud post-clone step (generates the spike project). It must sit next to `Spike.xcodeproj` for Xcode Cloud to find it. |
 
 ## Getting started (spike day 1)
 
