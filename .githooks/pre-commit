@@ -32,6 +32,16 @@ if [ -n "$pcaps" ]; then
     exit 1
 fi
 
+# MTP object property lists carry each file's PersistentUniqueObjectIdentifier, which may embed the camera's serial
+# in a form no check here understands yet, so they stay out of the repository until a redaction exists.
+proplists="$(git diff --cached --name-only --diff-filter=ACMR -- ':(icase)*objectproplist*')"
+if [ -n "$proplists" ]; then
+    echo "pre-commit: refusing to commit MTP property lists; their object IDs may carry the camera's serial:" >&2
+    printf '%s\n' "$proplists" | sed 's/^/  /' >&2
+    echo "  Unstage them (git restore --staged <file>) and keep them outside the checkout. See Fixtures/README.md, Rules." >&2
+    exit 1
+fi
+
 # The camera's serial number never reaches this public repository (owner's decision, 1 Nov 2026): refuse a staged
 # deviceinfo.bin or ssdp-description.xml that still contains one. scripts/redact-fixtures.py zeroes it.
 staged="$(git diff --cached --name-only --diff-filter=ACMR -- '*deviceinfo.bin' '*ssdp-description.xml')"

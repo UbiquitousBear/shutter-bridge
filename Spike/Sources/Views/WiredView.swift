@@ -204,14 +204,23 @@ struct WiredView: View {
     /// Reuses the session if it belongs to the selected camera, the camera is still attached and its connection hasn't
     /// stalled; otherwise starts a new one (after a cable pull the re-plugged camera is a new ICCameraDevice).
     private func openSession() {
-        guard let camera = selectedCamera else {
+        guard let selected = selectedCamera else {
             log.warn("No camera: start browsing and plug the camera in (Day 1)")
             return
         }
         let wait = waitForCatalogue
-        if let session, session.device === camera, !session.removed, !session.linkStalled {
+        if let session, session.device === selected, !session.removed, !session.linkStalled {
             Task { await session.openSession(waitForCatalogue: wait) }
             return
+        }
+        // After a stall or a cable pull, prefer a camera other than the dead one if the browser lists one (the
+        // replugged camera is a new ICCameraDevice, added at the end).
+        var camera = selected
+        if let session, session.device === selected, session.removed || session.linkStalled,
+           let other = browser.cameras.last(where: { $0 !== session.device }) {
+            log.note("Open session: switching to the most recently added camera (\(other.name ?? "?")); the selected one belongs to the \(session.removed ? "disconnected" : "stalled") session")
+            selectedCameraID = ObjectIdentifier(other)
+            camera = other
         }
         if let session {
             // Which case this was is the first thing to know when a replug doesn't recover the camera.

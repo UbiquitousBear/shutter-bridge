@@ -58,6 +58,9 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var loggedDownloadName = false
     @ObservationIgnored private var thumbnailRuns = 0
     @ObservationIgnored private var successfulOpens = 0
+    /// Devices any CameraSession has opened in this process: a new session on one of them (after a stall) is still a
+    /// reopen, and ImageCaptureCore may keep its catalogue. A replugged camera is a new ICCameraDevice.
+    private static var openedDevices: Set<ObjectIdentifier> = []
     @ObservationIgnored private var openIsReopen = false
     /// PTP pass-through commands sent between this open's request and ImageCaptureCore's complete catalogue: they
     /// share the link with the catalogue, so a catalogue time with any of them is not a cold figure.
@@ -238,11 +241,15 @@ final class CameraSession: NSObject {
     func openSession(waitForCatalogue: Bool = true) async {
         await perform("Open session") {
             if isOpen { log.note("Session already open"); return }
+            var staleCloseUnconfirmed = false
             if device.hasOpenSession {
                 // A new CameraSession on a device ImageCaptureCore still has open (the previous one stalled and the
                 // camera was not unplugged): close it first so the open below starts clean. No answer is expected
                 // on a stalled connection, so this waits 10 s at most.
                 log.warn("ImageCaptureCore still has a session open on this camera (no cable pull since the last one); closing it first")
+                // As in closeSession: this close's own didCloseSession must not abort it.
+                closingSession = true
+                defer { closingSession = false }
                 do {
                     let _: Void = try await callback("requestCloseSession (stale)", timeout: 10) { done in
                         self.device.requestCloseSession(options: nil) { error in
@@ -250,9 +257,12 @@ final class CameraSession: NSObject {
                         }
                     }
                     log.note("  stale session closed")
+                } catch USBSpikeError.sessionClosed {
+                    log.note("  stale session closed (didCloseSession)")
                 } catch let interruption as USBSpikeError where interruption.isInterruption {
                     throw interruption
                 } catch {
+                    staleCloseUnconfirmed = true
                     log.warn("  closing the stale session failed: \(describe(error)). If Open session gets no answer, unplug the camera, or turn it off and on.")
                 }
             }
@@ -269,19 +279,30 @@ final class CameraSession: NSObject {
             catalogueTimingNotes = 0
             touchedHandles.removeAll()
             // A reopen on the same ICCameraDevice may find the catalogue ImageCaptureCore kept from the last session.
-            openIsReopen = successfulOpens > 0
+            openIsReopen = successfulOpens > 0 || Self.openedDevices.contains(ObjectIdentifier(device))
             // Only this open may stamp usb.catalog.complete: a ready callback after it (a reopen by ImageCaptureCore,
             // a failed or stopped open) must not be timed from this request. When not waiting, the monitor owns
             // `openRequestedAt` from here and clears it when it ends.
             var monitorOwnsStamp = false
             defer { if !monitorOwnsStamp { openRequestedAt = nil } }
-            let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
-                self.device.requestOpenSession(options: nil) { error in
-                    if let error { done(.failure(error)) } else { done(.success(())) }
+            do {
+                let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
+                    self.device.requestOpenSession(options: nil) { error in
+                        if let error { done(.failure(error)) } else { done(.success(())) }
+                    }
+                }
+            } catch USBSpikeError.sessionClosed where staleCloseUnconfirmed {
+                // The stale close timed out and its didCloseSession arrived late, aborting this open: try once more.
+                log.note("A late didCloseSession from the stale session ended this open; opening again")
+                let _: Void = try await callback("requestOpenSession (again)", timeout: 60) { done in
+                    self.device.requestOpenSession(options: nil) { error in
+                        if let error { done(.failure(error)) } else { done(.success(())) }
+                    }
                 }
             }
             isOpen = true
             successfulOpens += 1
+            Self.openedDevices.insert(ObjectIdentifier(device))
             consecutiveNoAnswers = 0
             log.measure("usb.openSession", (clock.now - start).inSeconds, "s", context: device.name ?? "camera")
             logCapabilities("after open")
@@ -681,7 +702,8 @@ final class CameraSession: NSObject {
         let catalogueOpenedAt: ContinuousClock.Instant? = catalogComplete ? nil : openRequestedAt
         if catalogueOpenedAt != nil { ptpCommandsDuringCatalogue += 1 }
         let sentAt = ContinuousClock().now
-        defer { if let catalogueOpenedAt { noteDuringCatalogue(name, openedAt: catalogueOpenedAt, sentAt: sentAt) } }
+        var outcome = "got no answer"
+        defer { if let catalogueOpenedAt { noteDuringCatalogue(name, outcome, openedAt: catalogueOpenedAt, sentAt: sentAt) } }
         let raw: RawPTPReply
         do {
             raw = try await callback(name, timeout: timeout) { done in
@@ -712,18 +734,19 @@ final class CameraSession: NSObject {
             log.warn("\(name): ImageCaptureCore reported \(describe(iccError)) alongside response \(reply.responseCode)")
         }
         noteLayout(reply, op: name, command: command, raw: raw)
+        outcome = "answered \(reply.responseCode)"
         return reply
     }
 
     /// Whether a pass-through command waits for ImageCaptureCore's catalogue, which decides if the app can show the
     /// newest shots before a 65 s MTP catalogue ends. Logs the first 5 commands of each open that started during the
     /// catalogue, and any that took more than 2 s.
-    private func noteDuringCatalogue(_ name: String, openedAt: ContinuousClock.Instant, sentAt: ContinuousClock.Instant) {
+    private func noteDuringCatalogue(_ name: String, _ outcome: String, openedAt: ContinuousClock.Instant, sentAt: ContinuousClock.Instant) {
         let took = (ContinuousClock().now - sentAt).inSeconds
         guard catalogueTimingNotes < 5 || took > 2 else { return }
         catalogueTimingNotes += 1
         let state = catalogComplete ? "the catalogue had completed by then" : "catalogue still at \(device.contentCatalogPercentCompleted) %"
-        log.note("  during ImageCaptureCore's catalogue: \(name) sent \(fmt((sentAt - openedAt).inSeconds, 1)) s after Open session, finished \(fmt(took * 1000, 0)) ms later; \(state). Findings-page fact: does pass-through wait for the catalogue?")
+        log.note("  during ImageCaptureCore's catalogue: \(name) sent \(fmt((sentAt - openedAt).inSeconds, 1)) s after Open session, \(outcome) \(fmt(took * 1000, 0)) ms later; \(state). Findings-page fact: does pass-through wait for the catalogue?")
     }
 
     /// The (data, response) order and header handling of requestSendPTPCommand is a findings-page fact: logged once
@@ -1098,9 +1121,6 @@ final class CameraSession: NSObject {
             try requireSession()
             let iccAtStart = catalogComplete ? "ImageCaptureCore catalogue complete"
                                              : "ImageCaptureCore catalogue running (\(device.contentCatalogPercentCompleted) % at the start)"
-            // For the serial check on PersistentUniqueObjectIdentifier; before the clock starts.
-            if deviceInfo == nil { _ = try? await deviceInfoOrFetch() }
-            if linkStalled { throw USBSpikeError.linkStalled }
             let touchedBefore = touchedHandles
             let clock = ContinuousClock()
             let start = clock.now
@@ -1109,20 +1129,31 @@ final class CameraSession: NSObject {
             log.note("  GetObjectHandles: \(handles.count) handles in \(fmt(handlesSeconds, 2)) s; \(iccAtStart)")
             var elements: [MTPObjectPropElement] = []
             var summaries: [PTPObjectHandle: MTPObjectSummary] = [:]
+            // Untouched by the spike and sent after ImageCaptureCore's catalogue completed; sent while it ran; touched.
             var coldMs: [Double] = []
+            var duringCatalogueMs: [Double] = []
             var warmMs: [Double] = []
+            var lastHandle: PTPObjectHandle?
             var failures: [String] = []
             var failuresInARow = 0
             var newest50Seconds: Double?
+            var newest50Catalogue = ""
             var savedFixture = false
+            func stalledSoFar() -> USBSpikeError {
+                for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
+                log.warn("  MTP listing stopped by the stall after \(summaries.count) of \(handles.count) objects; the last handle tried was \(lastHandle.map { "\($0)" } ?? "none")")
+                return USBSpikeError.linkStalled
+            }
             for (index, handle) in handles.sorted(by: { $0.rawValue > $1.rawValue }).enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
                 if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
-                if linkStalled { throw USBSpikeError.linkStalled }
+                if linkStalled { throw stalledSoFar() }
                 if failuresInARow >= 3 {
                     for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
-                    throw USBSpikeError.nothingToDo("3 GetObjectPropList requests in a row got no answer after \(summaries.count) objects: \(failures.suffix(3).joined(separator: "; "))")
+                    throw USBSpikeError.nothingToDo("3 GetObjectPropList requests in a row failed without a response after \(summaries.count) objects: \(failures.suffix(3).joined(separator: "; "))")
                 }
+                lastHandle = handle
+                let catalogueRunning = !catalogComplete
                 let requestStart = clock.now
                 do {
                     touchedHandles.insert(handle)
@@ -1130,23 +1161,25 @@ final class CameraSession: NSObject {
                     // Any response shows the camera is answering; only requests with none count toward the stop.
                     failuresInARow = 0
                     let ms = (clock.now - requestStart).inSeconds * 1000
-                    guard reply.responseCode.isOK else {
+                    if !reply.responseCode.isOK {
                         failures.append("\(handle): \(reply.responseCode)")
-                        continue
-                    }
-                    if touchedBefore.contains(handle) { warmMs.append(ms) } else { coldMs.append(ms) }
-                    if !savedFixture {
-                        savedFixture = true
-                        FixtureStore.save(reply.data, link: .usb, name: "objectproplist-one.bin", log: log,
-                                          detail: "all properties of the newest object (\(handle)), depth 0")
-                    }
-                    do {
-                        let list = try MTPObjectPropList.decode(reply.data)
-                        elements.append(contentsOf: list.elements)
-                        if let objectSummary = list.summaries()[handle] { summaries[handle] = objectSummary }
-                        if index < 3 { log.note("  \(handle): \(propSummary(list, handle)) in \(fmt(ms)) ms") }
-                    } catch {
-                        failures.append("\(handle): answered OK with \(reply.data.count) B but didn't decode: \(describe(error)); starts \(reply.data.hexDump(limit: 16))")
+                    } else {
+                        if touchedBefore.contains(handle) { warmMs.append(ms) }
+                        else if catalogueRunning { duringCatalogueMs.append(ms) }
+                        else { coldMs.append(ms) }
+                        if !savedFixture {
+                            savedFixture = true
+                            FixtureStore.save(reply.data, link: .usb, name: "objectproplist-one.bin", log: log,
+                                              detail: "all properties of the newest object (\(handle)), depth 0")
+                        }
+                        do {
+                            let list = try MTPObjectPropList.decode(reply.data)
+                            elements.append(contentsOf: list.elements)
+                            if let objectSummary = list.summaries()[handle] { summaries[handle] = objectSummary }
+                            if index < 3 { log.note("  \(handle): \(propSummary(list, handle)) in \(fmt(ms)) ms") }
+                        } catch {
+                            failures.append("\(handle): answered OK with \(reply.data.count) B but didn't decode: \(describe(error)); starts \(reply.data.hexDump(limit: 16))")
+                        }
                     }
                 } catch let interruption as USBSpikeError where interruption.isInterruption {
                     throw interruption
@@ -1154,11 +1187,15 @@ final class CameraSession: NSObject {
                     failures.append("\(handle): \(describe(error))")
                     failuresInARow += 1
                 }
-                if index + 1 == 50 { newest50Seconds = (clock.now - start).inSeconds }
+                if index + 1 == 50 {
+                    newest50Seconds = (clock.now - start).inSeconds
+                    newest50Catalogue = catalogComplete ? "catalogue complete by the 50th" : "catalogue still running at the 50th"
+                }
                 progressText = "GetObjectPropList \(index + 1)/\(handles.count)"
                 if (index + 1) % 50 == 0 { lifecycle.noteProgress("MTP listing \(index + 1)/\(handles.count)", link: "usb") }
             }
             let seconds = (clock.now - start).inSeconds
+            let iccAtEnd = catalogComplete ? "complete at the end" : "still running at the end"
             for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
             guard !summaries.isEmpty else {
                 throw USBSpikeError.nothingToDo("no object's properties decoded: \(failures.prefix(3).joined(separator: "; "))")
@@ -1184,22 +1221,32 @@ final class CameraSession: NSObject {
                 log.note("  .\(ext): \(group.count), \(mb(group.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }))")
             }
             if keyed < files.count { log.warn("  \(files.count - keyed) files have no name or size, so they can't be matched to ImageCaptureCore's files") }
+            // DeviceInfo for the serial check, after the clock so it can't hold up the listing.
+            if deviceInfo == nil {
+                do {
+                    _ = try await deviceInfoOrFetch()
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    log.warn("  GetDeviceInfo for the serial check failed: \(describe(error))")
+                }
+            }
             notePersistentIDs(elements, summaries: summaries)
 
             func stats(_ values: [Double]) -> String {
                 guard !values.isEmpty else { return "none" }
                 return "\(values.count) at \(fmt(values.reduce(0, +) / Double(values.count))) ms average (min \(fmt(values.min() ?? 0)), max \(fmt(values.max() ?? 0)))"
             }
-            let all = coldMs + warmMs
+            let all = coldMs + duringCatalogueMs + warmMs
             let ptp = sessionPTPListingSeconds.map { "PTP listing \(fmt($0, 2)) s this session" } ?? "no PTP listing this session"
             log.measure("usb.mtp.listing", seconds, "s",
-                        context: "\(split), one GetObjectPropList per object, newest first; GetObjectHandles \(fmt(handlesSeconds, 2)) s; \(ptp); \(iccAtStart)")
+                        context: "\(split), one GetObjectPropList per object, newest first; GetObjectHandles \(fmt(handlesSeconds, 2)) s; \(ptp); \(iccAtStart), \(iccAtEnd)")
             if !all.isEmpty {
                 log.measure("usb.mtp.proplist.perObject", all.reduce(0, +) / Double(all.count), "ms",
-                            context: "not touched earlier this session: \(stats(coldMs)); touched earlier (GetObjectInfo, GetThumb or GetPartialObject): \(stats(warmMs))")
+                            context: "untouched, after ImageCaptureCore's catalogue: \(stats(coldMs)); untouched, while it ran: \(stats(duringCatalogueMs)); touched earlier this session (GetObjectInfo, GetThumb, GetPartialObject, a listing): \(stats(warmMs))")
             }
             if let newest50Seconds {
-                log.measure("usb.mtp.listing.newest50", newest50Seconds, "s", context: "GetObjectHandles plus the 50 highest handles; \(iccAtStart)")
+                log.measure("usb.mtp.listing.newest50", newest50Seconds, "s", context: "GetObjectHandles plus the 50 highest handles; \(iccAtStart), \(newest50Catalogue)")
             }
             lastResult = "MTP listing: \(summaries.count) objects in \(fmt(seconds, 2)) s"
         }
@@ -1231,13 +1278,20 @@ final class CameraSession: NSObject {
         let unique = Set(ids.values).count
         var serialFound = "not checked (no DeviceInfo this session)"
         if let serial = deviceInfo?.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines), !serial.isEmpty {
-            let ascii = Data(serial.utf8)
-            let lower = serial.lowercased()
+            // The serial as sent and without leading zeros (at least 6 characters, so a short tail can't match by
+            // chance), each as ASCII, as UTF-16LE, and as text inside the ID's hex in either byte order.
+            let significant = String(serial.drop { $0 == "0" })
+            let forms = Set([serial, significant].filter { $0.count >= 6 }.map { $0.lowercased() })
             let hit = ids.values.contains { id in
-                id.range(of: ascii) != nil || id.map { String(format: "%02x", $0) }.joined().contains(lower)
-                    || Data(id.reversed()).map { String(format: "%02x", $0) }.joined().contains(lower)
+                let hex = id.map { String(format: "%02x", $0) }.joined()
+                let reversedHex = Data(id.reversed()).map { String(format: "%02x", $0) }.joined()
+                return forms.contains { form in
+                    id.range(of: Data(form.utf8)) != nil || id.range(of: Data(form.uppercased().utf8)) != nil
+                        || id.range(of: Data(form.uppercased().utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] })) != nil
+                        || hex.contains(form) || reversedHex.contains(form)
+                }
             }
-            serialFound = hit ? "YES: objectproplist fixtures carry the serial and must not be committed as they are" : "no"
+            serialFound = hit ? "YES" : forms.isEmpty ? "not checked (serial shorter than 6 characters)" : "not found as text or hex (it could still be encoded some other way)"
         }
         let key = "spike.mtp.persistentIDTags"
         let stored = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
