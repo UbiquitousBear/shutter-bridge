@@ -235,8 +235,8 @@ final class SSDPProbe {
             guard let d = SSDPDeviceDescription.parse(data) else {
                 let zeroed = FixtureStore.zeroingSSDPSerial(in: data)?.data ?? Data()
                 var shown = String(decoding: zeroed.prefix(160), as: UTF8.self)
-                // An unclosed <serialNumber> in malformed XML is not zeroed: show nothing from the tag on.
-                if let tag = shown.range(of: "<serialNumber", options: .caseInsensitive) {
+                // Belt and braces for malformed XML (a CDATA serial is not zeroed): show nothing from any serialNumber on.
+                if let tag = shown.range(of: "serialNumber", options: .caseInsensitive) {
                     shown = String(shown[..<tag.lowerBound]) + "…"
                 }
                 log.warn("SSDP description \(location) did not parse as XML (\(data.count) bytes): \(shown)")

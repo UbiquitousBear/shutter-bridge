@@ -7,7 +7,9 @@ the real layout. Two kinds of file carry it:
 
 - `deviceinfo.bin` (GetDeviceInfo's data phase, USB or PTP/IP; also the copies `make fixtures` puts in the PTPKit
   test bundle as `a7c2-<link>-deviceinfo.bin`): the SerialNumber string, the last field PTP defines.
-- `ssdp-description.xml` (the UPnP device description): the text of each `<serialNumber>` element.
+- `ssdp-description.xml` (the UPnP device description): the text of each serialNumber element, with or without a
+  namespace prefix, attributes or spaces in the tag, closed or not (whitespace is kept). If an XML parser still
+  finds a serialNumber that isn't all zeros afterwards (CDATA, an entity), the file is reported and not written.
 
 Packet captures are not redacted here: a pcap of the PTP/IP handshake also names the Mac, so pcaps stay out of the
 repository altogether (`.gitignore` under `Fixtures/`, and the pre-commit hook refuses any staged `.pcap`).
@@ -24,6 +26,7 @@ A file's kind is taken from its name, so a staged copy in a temporary folder mus
 import pathlib
 import re
 import sys
+from xml.etree import ElementTree
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_GLOBS = [
@@ -90,7 +93,29 @@ def redact_deviceinfo(data):
     return bytes(redacted), (end - start) // 2
 
 
-SERIAL_ELEMENT = re.compile(rb"(<serialNumber>)(.*?)(</serialNumber>)", re.DOTALL | re.IGNORECASE)
+# A <serialNumber> element as DeviceDescriptionParser in the spike sees one: any namespace prefix, attributes or
+# spaces in the tag, any case. Its text ends at the closing tag, at the next tag if it is never closed, or at the end
+# of a truncated file.
+SERIAL_ELEMENT = re.compile(
+    rb"<(?:[\w.-]+:)?serialNumber\b[^>]*>(.*?)(?:</(?:[\w.-]+:)?serialNumber\s*>|(?=<)|\Z)",
+    re.DOTALL | re.IGNORECASE)
+WHITESPACE = b" \t\r\n"
+
+
+def _zeroed(text):
+    """Every non-whitespace byte of `text` becomes "0" (length kept), and how many changed."""
+    out = bytes(c if c in WHITESPACE else 0x30 for c in text)
+    return out, sum(1 for a, b in zip(text, out) if a != b)
+
+
+def _xml_serials(data):
+    """The text of every serialNumber element, by an XML parser, or None if the file doesn't parse."""
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return None
+    return ["".join(e.itertext()) for e in root.iter()
+            if isinstance(e.tag, str) and e.tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower() == "serialnumber"]
 
 
 def redact_ssdp(data):
@@ -98,13 +123,20 @@ def redact_ssdp(data):
 
     def zero(match):
         nonlocal changed
-        text = match.group(2)
-        if text.strip(b"0") == b"":
-            return match.group(0)
-        changed += len(text)
-        return match.group(1) + b"0" * len(text) + match.group(3)
+        start, end = match.span(1)
+        text, count = _zeroed(match.group(1))
+        changed += count
+        whole = match.group(0)
+        offset = start - match.start()
+        return whole[:offset] + text + whole[offset + (end - start):]
 
-    return SERIAL_ELEMENT.sub(zero, data), changed
+    redacted = SERIAL_ELEMENT.sub(zero, data)
+    # Belt and braces: an XML parser must find nothing but zeros either (CDATA, entities, forms the pattern misses).
+    for text in _xml_serials(redacted) or []:
+        if any(ch not in "0 \t\r\n" for ch in text):
+            raise Unreadable("an XML parser still finds a serialNumber that isn't all zeros after zeroing "
+                             "(CDATA or an entity?); don't commit this file")
+    return redacted, changed
 
 
 def kind(path):
