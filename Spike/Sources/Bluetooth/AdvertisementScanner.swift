@@ -1,3 +1,26 @@
+// REQUIREMENT (from Shamil, 1 Nov 2026): the owner's α7C II has Bluetooth on and is paired with Sony's
+// Creators' App on the iPhone for regular transfers. A peripheral that is bonded and connected to another app
+// often stops advertising (or advertises differently), so the day-6 capture and the proximity go/no-go must
+// cover that real setup, not only a free-advertising camera:
+//
+// 1. Pairing context is a second dimension next to power state (on / asleep / off): "Creators' App connected"
+//    (the normal setup), "Creators' App quit / phone Bluetooth link down", and "not paired" if it is tested.
+//    Snapshots record it and are named ble/advert-<on|asleep|off>-<connected|unlinked|unpaired>.json.
+// 2. Scanning alone cannot see a camera that another app holds. Also call
+//    CBCentralManager.retrieveConnectedPeripherals(withServices:) — documented to include peripherals other
+//    apps connected — for every service UUID seen so far plus the chosen proximity UUID, log what it returns,
+//    and include it in the snapshot; record log.flag("ble.connected.<state>.seen", …).
+// 3. ProximityWatcher: besides the filtered background scan, call
+//    registerForConnectionEvents(options: [.serviceUUIDs: [uuid]]) and log every
+//    centralManager(_:connectionEventDidOccur:for:) (peerConnected / peerDisconnected) with the app state, post
+//    the same test notification on peerConnected, and record ble.proximity.connectionEvent.latency [s] from
+//    "Camera switched on now". Whether these events reach a suspended app is unknown: that is a spike question.
+//    This could be the better 1.0 proximity signal: when the camera comes near, Creators' App reconnects to
+//    it and the phone sees the connection, with no advertising and no Sony GATT traffic on our side.
+// 4. If no service UUID is advertised in the paired setup, offer an explicitly experimental "List services"
+//    action (connect, discoverServices(nil), log service UUIDs only, disconnect; no characteristic reads or
+//    writes) so the proximity filter UUID can still be found. Warn in the UI that it opens a GATT connection.
+
 import Foundation
 import Observation
 import CoreBluetooth
