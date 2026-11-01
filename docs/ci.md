@@ -151,8 +151,8 @@ Use Safari's "Request Desktop Website" for the Apple pages.
 
 ### Running it
 
-Actions → **Spike to TestFlight** → Run workflow (branch `main`, Xcode 27.1) → approve the `testflight`
-deployment when GitHub asks. The job checks the environment is complete, generates the project, archives with
+Actions → **Spike to TestFlight** → Run workflow (branch `main`, Xcode 27.1, archive signing `adhoc`) → approve
+the `testflight` deployment when GitHub asks. The job checks the environment is complete, generates the project, archives with
 an ad-hoc signature, fails if the archive lost the Hotspot Configuration entitlement, then exports and uploads.
 Build numbers are the workflow's run number. After a few minutes of processing on Apple's side the build appears
 in the TestFlight app.
@@ -164,8 +164,10 @@ Store Connect → the app → Xcode Cloud → Settings → Build Number), since 
 
 - **Archive fails with a signing or provisioning error:** the ad-hoc archive flags
   (`CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES CODE_SIGN_STYLE=Automatic`) are what Xcode Cloud's own
-  archive uses, but on GitHub runners they rest on a developer-forum report. Paste the log here; the fallback is
-  manual signing with a distribution certificate and profile, which needs a little more setup.
+  archive uses, but on GitHub runners they rest on a developer-forum report. Run again with archive signing
+  **`cloud`**: Xcode then signs the archive itself with an Apple-managed development certificate, using the same
+  key. If both fail, paste the log; the last resort is manual signing with a distribution certificate and
+  profile, which needs a little more setup.
 - **Export fails with a permission or "cloud signing" error:** the key must be a Team key with the Admin role.
 - **Export fails over a capability or profile:** check step 2 (Hotspot Configuration ticked on the App ID).
 - **Upload rejected as a duplicate:** a build with that number already exists; run the workflow again.
@@ -173,9 +175,11 @@ Store Connect → the app → Xcode Cloud → Settings → Build Number), since 
 ### Security
 
 The key can sign and upload apps and manage the account, so: it lives only in the `testflight` environment
-(limited to `main`, approval per run); the workflow never runs on pushes or pull requests, so a fork's code never
-sees it; the `.p8` is written with owner-only permissions to the runner's temp folder and deleted when the step
-ends; nothing prints it. Revoke it in App Store Connect when Xcode Cloud takes over, or at once if it might have
+(limited to `main`, approval per run, and the job refuses to run from any other branch); the workflow never runs
+on pushes or pull requests, so a fork's code never sees it; the job uses no third-party actions (it checks out
+the commit with plain git) and its token can only read the repository; the secrets reach only the step that
+signs and uploads, where the `.p8` is written with owner-only permissions to the runner's temp folder and deleted
+when the step ends; nothing prints it. Revoke it in App Store Connect when Xcode Cloud takes over, or at once if it might have
 leaked.
 
 ## Sources
