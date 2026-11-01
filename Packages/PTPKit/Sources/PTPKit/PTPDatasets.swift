@@ -19,6 +19,38 @@ public struct PTPDeviceInfo: Equatable, Sendable {
     public var deviceVersion: String
     public var serialNumber: String
 
+    public init(
+        standardVersion: UInt16,
+        vendorExtensionID: UInt32,
+        vendorExtensionVersion: UInt16,
+        vendorExtensionDescription: String,
+        functionalMode: UInt16,
+        operationsSupported: [UInt16],
+        eventsSupported: [UInt16],
+        devicePropertiesSupported: [UInt16],
+        captureFormats: [UInt16],
+        imageFormats: [UInt16],
+        manufacturer: String,
+        model: String,
+        deviceVersion: String,
+        serialNumber: String
+    ) {
+        self.standardVersion = standardVersion
+        self.vendorExtensionID = vendorExtensionID
+        self.vendorExtensionVersion = vendorExtensionVersion
+        self.vendorExtensionDescription = vendorExtensionDescription
+        self.functionalMode = functionalMode
+        self.operationsSupported = operationsSupported
+        self.eventsSupported = eventsSupported
+        self.devicePropertiesSupported = devicePropertiesSupported
+        self.captureFormats = captureFormats
+        self.imageFormats = imageFormats
+        self.manufacturer = manufacturer
+        self.model = model
+        self.deviceVersion = deviceVersion
+        self.serialNumber = serialNumber
+    }
+
     public var vendorExtension: PTPVendorExtension? { PTPVendorExtension(rawValue: vendorExtensionID) }
 
     public func supports(_ op: PTPOperationCode) -> Bool { operationsSupported.contains(op.rawValue) }
@@ -73,6 +105,26 @@ public struct PTPStorageInfo: Equatable, Sendable {
     public var freeSpaceInImages: UInt32
     public var storageDescription: String
     public var volumeLabel: String
+
+    public init(
+        storageType: UInt16,
+        filesystemType: UInt16,
+        accessCapability: UInt16,
+        maxCapacity: UInt64,
+        freeSpaceInBytes: UInt64,
+        freeSpaceInImages: UInt32,
+        storageDescription: String,
+        volumeLabel: String
+    ) {
+        self.storageType = storageType
+        self.filesystemType = filesystemType
+        self.accessCapability = accessCapability
+        self.maxCapacity = maxCapacity
+        self.freeSpaceInBytes = freeSpaceInBytes
+        self.freeSpaceInImages = freeSpaceInImages
+        self.storageDescription = storageDescription
+        self.volumeLabel = volumeLabel
+    }
 
     public static func decode(_ data: Data) throws -> PTPStorageInfo {
         var r = PTPReader(data)
@@ -156,6 +208,48 @@ public struct PTPObjectInfo: Equatable, Sendable {
     public var captureDateRaw: String
     public var modificationDateRaw: String
     public var keywords: String
+
+    public init(
+        storageID: PTPStorageID,
+        objectFormat: PTPObjectFormat,
+        protectionStatus: UInt16,
+        objectCompressedSize: UInt32,
+        thumbFormat: PTPObjectFormat,
+        thumbCompressedSize: UInt32,
+        thumbPixWidth: UInt32,
+        thumbPixHeight: UInt32,
+        imagePixWidth: UInt32,
+        imagePixHeight: UInt32,
+        imageBitDepth: UInt32,
+        parentObject: PTPObjectHandle,
+        associationType: UInt16,
+        associationDescription: UInt32,
+        sequenceNumber: UInt32,
+        filename: String,
+        captureDateRaw: String,
+        modificationDateRaw: String,
+        keywords: String
+    ) {
+        self.storageID = storageID
+        self.objectFormat = objectFormat
+        self.protectionStatus = protectionStatus
+        self.objectCompressedSize = objectCompressedSize
+        self.thumbFormat = thumbFormat
+        self.thumbCompressedSize = thumbCompressedSize
+        self.thumbPixWidth = thumbPixWidth
+        self.thumbPixHeight = thumbPixHeight
+        self.imagePixWidth = imagePixWidth
+        self.imagePixHeight = imagePixHeight
+        self.imageBitDepth = imageBitDepth
+        self.parentObject = parentObject
+        self.associationType = associationType
+        self.associationDescription = associationDescription
+        self.sequenceNumber = sequenceNumber
+        self.filename = filename
+        self.captureDateRaw = captureDateRaw
+        self.modificationDateRaw = modificationDateRaw
+        self.keywords = keywords
+    }
 
     public var isFolder: Bool { objectFormat == .association }
     public var captureDate: Date? { PTPDateTime.parse(captureDateRaw) }

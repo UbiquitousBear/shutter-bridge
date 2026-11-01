@@ -138,6 +138,18 @@ public enum PTPCommand {
         PTPContainer(type: .command, code: PTPOperationCode.getDevicePropDesc.rawValue, transactionID: tx, parameters: [UInt32(prop.rawValue)])
     }
 
+    /// Sony SDIO_Connect (libgphoto2's three-phase handshake for PC Remote mode): phase 1, 2, 3. `unverified` on
+    /// the α7C II. Has a data phase (responder → initiator) that libgphoto2 discards.
+    public static func sonySDIOConnect(phase: UInt32, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.sonySDIOConnect.rawValue, transactionID: tx, parameters: [phase, 0, 0])
+    }
+
+    /// Sony SDIO_GetExtDeviceInfo: `version` is the protocol version asked for (0xC8 = 2.00, 0x12C = 3.00); a
+    /// camera that doesn't support it answers with its highest. `unverified` on the α7C II.
+    public static func sonySDIOGetExtDeviceInfo(version: UInt32 = 0x12C, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.sonySDIOGetExtDeviceInfo.rawValue, transactionID: tx, parameters: [version, 1])
+    }
+
     /// ISO 15740 GetPartialObject: 32-bit offset and length. `length == 0xFFFFFFFF` means "to the end".
     public static func getPartialObject(_ handle: PTPObjectHandle, offset: UInt32, length: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.getPartialObject.rawValue, transactionID: tx,

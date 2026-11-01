@@ -74,6 +74,14 @@ struct PTPContainerTests {
         #expect(PTPDevicePropCode(rawValue: 0xD20F).description == "Prop(0xD20F)")
     }
 
+    @Test("Sony SDIO builders use libgphoto2's parameter layout")
+    func sonySDIO() {
+        #expect(PTPCommand.sonySDIOConnect(phase: 2, tx: 3).parameters == [2, 0, 0])
+        #expect(PTPCommand.sonySDIOConnect(phase: 2, tx: 3).operationCode == .sonySDIOConnect)
+        #expect(PTPCommand.sonySDIOGetExtDeviceInfo(tx: 4).parameters == [0x12C, 1])
+        #expect(PTPResponseCode.objectWriteProtected.description == "ObjectWriteProtected")
+    }
+
     @Test("Both the standard and Sony ObjectAdded signal a new object")
     func newObjectEvents() {
         #expect(PTPEventCode.objectAdded.signalsNewObject)
