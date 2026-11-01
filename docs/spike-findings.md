@@ -9,7 +9,7 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 | Item | Value |
 | --- | --- |
 | iPhone model and iOS build (from the Log tab's Device section) | `iPhone18,4`, iOS 27.2 (24B119) |
-| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf |
+| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test) |
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | _to fill_ |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
@@ -211,15 +211,15 @@ Not in the plan; added on 1 Nov because every import should go into an album. St
 
 | Question | Finding | Evidence |
 | --- | --- | --- |
-| Add-only: save a photo (A2) |  |  |
-| Add-only: create an album holding the photo in one change block; did a read/write prompt appear? (A3) |  |  |
-| Add-only: find the album after a relaunch, by identifier and by title (A4) |  |  |
+| Add-only: save a photo (A2) | Works: saved in 0.2 s, no further prompt (1 Nov, build 0.1 (2.1)). | Log 18:34:00: `save a test photo, no album → saved … · 0.2 s · access add-only allowed, read/write not asked` |
+| Add-only: create an album holding the photo in one change block; did a read/write prompt appear? (A3) | **Yes: creating the album brought up the full read/write prompt**, 0.6 s into the step, and the change block waited for the answer. *Allow Full Access* was chosen, so the photo was saved into the new album (1.7 s in all). What happens after *Don't Allow* (does the photo still save without the album?) is still to test. | Log 18:34:05–06: `app went inactive during "save a test photo into a new album…" at +0.6 s`; `saved … into new album … · 1.7 s · access add-only allowed, read/write not asked → add-only allowed, read/write allowed` |
+| Add-only: find the album after a relaunch, by identifier and by title (A4) | Not yet tested under add-only, because full access was granted in A3. Under full access, without a relaunch: found by identifier and by title, accepts new photos, and the save into it worked in 0.2 s. | Log 18:34:08 |
 | Limited: create an album; find it after a relaunch (L2) |  |  |
-| Locked, inside a continued task: A1, complete-until-first-unlock file, no album (K1, K2) |  |  |
-| Locked: A2, the same file class, into the test album (K1, K2) |  |  |
-| Locked: B, complete file, no album (K1, K2) |  |  |
-| Locked: find the album (K1) |  |  |
-| Access level the product needs for an album per import |  |  |
+| Locked, inside a continued task: A1, complete-until-first-unlock file, no album (K1, K2) | **K1, full access: saved in 0.1 s, locked at both ends.** The saves ran about 26 s after the lock. | Log 18:34:53.276: `locked save A1 … OK … · 0.1 s · locked at start yes, at end yes · task stopped or expired no` |
+| Locked: A2, the same file class, into the test album (K1, K2) | **K1, full access: saved and added to the album in 0.1 s, locked at both ends.** | Log 18:34:53.374 |
+| Locked: B, complete file, no album (K1, K2) | Failed, as expected: PHPhotosErrorDomain 3302 in 0.0 s, locked at both ends. A file with "complete" protection can't be read while the phone is locked, so imports must stage files as complete-until-first-unlock (the default). | Log 18:34:53.398 |
+| Locked: find the album (K1) | K1, full access: found by identifier and by title while locked, accepts new photos, 0.0 s. | Log 18:34:53.412. The continued task ran 36.71 s and finished; start latency 0.02 s. `isProtectedDataAvailable` turned false about 10 s after the lock notification (lock at 18:34:26.9, detected 19 s after the 18:34:16.7 start), as Apple's security guide describes for *Require Passcode: Immediately*. |
+| Access level the product needs for an album per import | **Read/write, not add-only:** an add-only app gets the full prompt as soon as it creates an album. Whether *Limited Access* is enough is still to test (L2). |  |
 
 ## Multicast entitlement
 
