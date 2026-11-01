@@ -3,6 +3,7 @@ import Observation
 import CoreGraphics   // CGImage in cameraDevice(_:didReceiveThumbnail:for:error:); don't rely on a re-export
 import ImageCaptureCore
 import CryptoKit
+import ImageIO
 import PTPKit
 
 /// Days 2–5: everything we do with one ICCameraDevice over USB-C.
@@ -30,6 +31,10 @@ final class CameraSession: NSObject {
     private(set) var progressText = ""
     private(set) var lastResult = ""
     private(set) var resumeSummary: String = USBResumeStore.load()?.summary ?? "none saved"
+    /// Called when a resumable read reaches its PULL NOW offset, so the Guided tab can say so in an alert.
+    @ObservationIgnored var onPullNow: (@MainActor () -> Void)?
+    /// Files whose thumbnail was requested in this session: ImageCaptureCore may serve a repeat from its cache.
+    @ObservationIgnored private var thumbnailRequested: Set<ObjectIdentifier> = []
     private(set) var readDataResumeSummary: String = USBResumeStore.load(key: USBResumeStore.readDataKey)?.summary ?? "none saved"
     private(set) var stopRequested = false
     /// ImageCaptureCore's contentCatalogPercentCompleted as last polled while waiting for the catalogue.
@@ -491,6 +496,208 @@ final class CameraSession: NSObject {
 
     // MARK: - Day 2 · thumbnails
 
+    /// Thumbnails with `inFlight` requestThumbnailData at a time, for the `ext` files `offset` ..< `offset + count` in
+    /// newest-first order: one extension so every run has the same kind of file, and a different slice per run so
+    /// ImageCaptureCore's cache doesn't serve them (a file already requested this session is counted and warned about).
+    /// Records usb.thumb.inFlight<n>: wall time per successful thumbnail, the figure that sets how fast a grid fills.
+    func timeThumbnailsConcurrent(ext: String = "ARW", count: Int = 50, offset: Int = 0, inFlight: Int) async {
+        await perform("Thumbnails, \(count) \(ext) from #\(offset + 1), \(inFlight) at a time") {
+            try requireOpen()
+            let sample = Array(files.filter { Self.ext($0) == ext }.dropFirst(offset).prefix(count))
+            guard !sample.isEmpty else { throw USBSpikeError.nothingToDo("fewer than \(offset + 1) \(ext) files on the card") }
+            let repeats = sample.filter { thumbnailRequested.contains(ObjectIdentifier($0)) }.count
+            if repeats > 0 {
+                log.warn("  \(repeats) of these \(sample.count) thumbnails were already requested this session: ImageCaptureCore may serve them from its cache. Replug for a cold figure.")
+            }
+            for file in sample { thumbnailRequested.insert(ObjectIdentifier(file)) }
+            let clock = ContinuousClock()
+            let start = clock.now
+            var latencies: [Double] = []
+            var failures = 0
+            var failuresInARow = 0
+            try await withThrowingTaskGroup(of: Double?.self) { group in
+                var next = 0
+                while next < min(inFlight, sample.count) {
+                    let file = sample[next]
+                    next += 1
+                    group.addTask { @MainActor in await self.thumbnailOnce(file) }
+                }
+                while let result = try await group.next() {
+                    if let ms = result {
+                        latencies.append(ms)
+                        failuresInARow = 0
+                    } else {
+                        failures += 1
+                        failuresInARow += 1
+                    }
+                    if stopRequested { group.cancelAll(); throw USBSpikeError.stopped }
+                    if !isOpen { group.cancelAll(); throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                    if linkStalled { group.cancelAll(); throw USBSpikeError.linkStalled }
+                    if failuresInARow >= 3 {
+                        group.cancelAll()
+                        throw USBSpikeError.nothingToDo("3 thumbnail requests in a row failed, so the run stopped")
+                    }
+                    progressText = "\(latencies.count + failures)/\(sample.count)"
+                    if next < sample.count {
+                        let file = sample[next]
+                        next += 1
+                        group.addTask { @MainActor in await self.thumbnailOnce(file) }
+                    }
+                }
+            }
+            let wallMs = (clock.now - start).inSeconds * 1000
+            guard !latencies.isEmpty else { throw USBSpikeError.nothingToDo("every thumbnail request failed") }
+            let avgLatency = latencies.reduce(0, +) / Double(latencies.count)
+            log.measure("usb.thumb.inFlight\(inFlight)", wallMs / Double(latencies.count), "ms",
+                        context: "wall time per successful thumbnail; \(latencies.count) of \(sample.count) \(ext) ok (#\(offset + 1)–\(offset + sample.count) newest), \(failures) failed, \(repeats) requested before this session, \(inFlight) in flight; each request \(fmt(avgLatency)) ms on average (min \(fmt(latencies.min() ?? 0)), max \(fmt(latencies.max() ?? 0))); \(device.transportType ?? "?") [\(lifecycle.stateDescription)]")
+            lastResult = "Thumbnails, \(inFlight) in flight: \(fmt(wallMs / Double(latencies.count))) ms each"
+        }
+    }
+
+    /// One requestThumbnailData, timed: milliseconds, or nil if it failed.
+    private func thumbnailOnce(_ file: ICCameraFile) async -> Double? {
+        let clock = ContinuousClock()
+        let start = clock.now
+        do {
+            let _: Data = try await callback("requestThumbnailData", timeout: 10) { done in
+                file.requestThumbnailData(options: nil) { data, error in
+                    if let error { done(.failure(error)) }
+                    else if let data { done(.success(data)) }
+                    else { done(.failure(USBSpikeError.noData("requestThumbnailData"))) }
+                }
+            }
+            return (clock.now - start).inSeconds * 1000
+        } catch {
+            return nil
+        }
+    }
+
+    /// The preview a camera file carries, read with requestReadData (no PTP, so it works in MSC too), as the app could
+    /// show it in a grid. ARW: the first `kilobytes` KB give the TIFF header, whose IFD0 and IFD1 point at the embedded
+    /// JPEGs (tags 0x0201 offset, 0x0202 length); the largest is then read on its own and made into a 320 px thumbnail.
+    /// JPG: ImageIO's EXIF thumbnail from the first `kilobytes` KB. Records usb.preview.<ext> (ms per file, read +
+    /// decode, successes only) when at least one preview was made.
+    func timeHeaderPreviews(ext: String, count: Int = 20, offset: Int = 0, kilobytes: Int) async {
+        await perform("Embedded previews, \(count) \(ext)") {
+            try requireOpen()
+            let all = files.filter { Self.ext($0) == ext }
+            let sample = Array(all.dropFirst(min(offset, max(0, all.count - count))).prefix(count))
+            guard !sample.isEmpty else { throw USBSpikeError.nothingToDo("no \(ext) on the card") }
+            let clock = ContinuousClock()
+            var times: [Double] = []
+            var failures: [String] = []
+            var largest = (0, 0)
+            var previewBytes: [Int] = []
+            for (index, file) in sample.enumerated() {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                let name = file.name ?? "?"
+                let size = UInt64(max(0, file.fileSize))
+                let start = clock.now
+                do {
+                    let header = try await readRange(file, offset: 0, length: min(UInt64(kilobytes) * 1024, size))
+                    var made: (Int, Int)?
+                    var detail = ""
+                    if ext == "ARW" {
+                        let jpegs = Self.tiffEmbeddedJPEGs(header)
+                        detail = jpegs.isEmpty ? "no JPEG pointer in IFD0 or IFD1" : jpegs.map { "IFD\($0.ifd) JPEG at \($0.offset), \($0.length) B" }.joined(separator: "; ")
+                        if let preview = jpegs.max(by: { $0.length < $1.length }), preview.length > 0,
+                           UInt64(preview.offset) + UInt64(preview.length) <= size {
+                            let jpeg = try await readRange(file, offset: UInt64(preview.offset), length: UInt64(preview.length))
+                            made = Self.thumbnailSize(jpeg, maxPixels: 320, fromImage: true)
+                            previewBytes.append(jpeg.count)
+                        }
+                    } else {
+                        made = Self.thumbnailSize(header, maxPixels: 320, fromImage: false)
+                        if let source = CGImageSourceCreateWithData(header as CFData, nil) {
+                            detail = "ImageIO type \(CGImageSourceGetType(source).map { $0 as String } ?? "none"), status \(CGImageSourceGetStatus(source).rawValue)"
+                        }
+                    }
+                    let ms = (clock.now - start).inSeconds * 1000
+                    if let made {
+                        times.append(ms)
+                        if made.0 * made.1 > largest.0 * largest.1 { largest = made }
+                    } else {
+                        failures.append("\(name): no preview (\(detail))")
+                    }
+                    if index < 3 { log.note("  \(name): \(detail); \(made.map { "\($0.0)×\($0.1) thumbnail" } ?? "no thumbnail") in \(fmt(ms)) ms") }
+                } catch let interruption as USBSpikeError where interruption.isInterruption {
+                    throw interruption
+                } catch {
+                    failures.append("\(name): \(describe(error))")
+                }
+                progressText = "\(index + 1)/\(sample.count)"
+            }
+            for failure in failures.prefix(5) { log.warn("  \(failure)") }
+            guard !times.isEmpty else {
+                log.warn("usb.preview.\(ext.lowercased()) not recorded: no preview made from any of \(sample.count) \(ext) (see the lines above for why)")
+                lastResult = "\(ext) previews: none made"
+                return
+            }
+            let avg = times.reduce(0, +) / Double(times.count)
+            let bytes = previewBytes.isEmpty ? "" : ", embedded JPEG \(previewBytes.reduce(0, +) / previewBytes.count / 1000) KB on average"
+            log.measure("usb.preview.\(ext.lowercased())", avg, "ms",
+                        context: "\(times.count) of \(sample.count) \(ext) made a 320 px thumbnail (largest \(largest.0)×\(largest.1)) from requestReadData: header \(kilobytes) KB\(ext == "ARW" ? " then the largest embedded JPEG" : "")\(bytes); read + decode, min \(fmt(times.min() ?? 0)) max \(fmt(times.max() ?? 0)) ms; \(device.transportType ?? "?") [\(lifecycle.stateDescription)]")
+            lastResult = "\(ext) previews: \(times.count)/\(sample.count), \(fmt(avg)) ms each"
+        }
+    }
+
+    /// One requestReadData of `length` bytes at `offset` (the whole range in one request).
+    private func readRange(_ file: ICCameraFile, offset: UInt64, length: UInt64) async throws -> Data {
+        let readOffset = off_t(offset)
+        let readLength = off_t(length)
+        let data: Data = try await callback("requestReadData", timeout: 30) { done in
+            file.requestReadData(atOffset: readOffset, length: readLength) { bytes, error in
+                if let error { done(.failure(error)) }
+                else if let bytes, !bytes.isEmpty { done(.success(bytes)) }
+                else { done(.failure(USBSpikeError.noData("requestReadData at \(readOffset)"))) }
+            }
+        }
+        return data.count > Int(length) ? Data(data.prefix(Int(length))) : data
+    }
+
+    /// The JPEGs a little-endian TIFF (ARW) points at from IFD0 and IFD1: tags 0x0201 (offset) and 0x0202 (length).
+    /// Bounds-checked: entries beyond `data` are skipped, never read.
+    nonisolated static func tiffEmbeddedJPEGs(_ data: Data) -> [(ifd: Int, offset: UInt32, length: UInt32)] {
+        let bytes = [UInt8](data)
+        func u16(_ at: Int) -> Int? { at + 2 <= bytes.count ? Int(bytes[at]) | Int(bytes[at + 1]) << 8 : nil }
+        func u32(_ at: Int) -> UInt32? {
+            guard at + 4 <= bytes.count else { return nil }
+            return UInt32(bytes[at]) | UInt32(bytes[at + 1]) << 8 | UInt32(bytes[at + 2]) << 16 | UInt32(bytes[at + 3]) << 24
+        }
+        guard bytes.count >= 8, bytes[0] == 0x49, bytes[1] == 0x49, u16(2) == 42, var ifd = u32(4).map(Int.init) else { return [] }
+        var found: [(ifd: Int, offset: UInt32, length: UInt32)] = []
+        for index in 0..<2 {
+            guard ifd > 0, let entries = u16(ifd), entries < 512 else { break }
+            var offset: UInt32?
+            var length: UInt32?
+            for entry in 0..<entries {
+                let at = ifd + 2 + entry * 12
+                guard let tag = u16(at), let value = u32(at + 8) else { break }
+                if tag == 0x0201 { offset = value }
+                if tag == 0x0202 { length = value }
+            }
+            if let offset, let length { found.append((index, offset, length)) }
+            guard let nextIFD = u32(ifd + 2 + entries * 12) else { break }
+            ifd = Int(nextIFD)
+        }
+        return found
+    }
+
+    /// ImageIO's 320 px thumbnail: from the image's own embedded thumbnail only (`fromImage` false), or decoded from
+    /// the image itself (`fromImage` true, for a preview JPEG read on its own). Its size, or nil.
+    nonisolated static func thumbnailSize(_ data: Data, maxPixels: Int, fromImage: Bool) -> (Int, Int)? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: fromImage,
+            kCGImageSourceCreateThumbnailFromImageAlways: fromImage,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return (image.width, image.height)
+    }
+
     func timeThumbnails(count: Int = 50) async {
         await perform("Thumbnails, \(count) newest") {
             try requireOpen()
@@ -501,6 +708,7 @@ final class CameraSession: NSObject {
             }
             let sample = Array(files.prefix(count))
             guard !sample.isEmpty else { throw USBSpikeError.nothingToDo("no files on the card") }
+            for file in sample { thumbnailRequested.insert(ObjectIdentifier(file)) }
             let clock = ContinuousClock()
             var times: [Double] = []
             var bytes = 0
@@ -1877,6 +2085,7 @@ final class CameraSession: NSObject {
                                                pause: .milliseconds(400), writer: writer, label: "resumable read") { previous, current in
                 if previous < pullAt && current >= pullAt {
                     self.log.warn("PULL NOW: pull the USB-C cable out (offset \(current) of \(identity.size))")
+                    self.onPullNow?()
                 }
                 if PTPPartialRead.crossesCheckpoint(from: previous, to: current) {
                     try? writer.flush()
@@ -2059,6 +2268,7 @@ final class CameraSession: NSObject {
                                             writer: writer, label: "resumable requestReadData") { previous, current in
                 if previous < pullAt && current >= pullAt {
                     self.log.warn("PULL NOW: pull the USB-C cable out (offset \(current) of \(identity.size))")
+                    self.onPullNow?()
                 }
                 if PTPPartialRead.crossesCheckpoint(from: previous, to: current) {
                     try? writer.flush()
@@ -2327,6 +2537,52 @@ final class CameraSession: NSObject {
             var finished = false
             await self.perform("Continued-task download", transfer: true) {
                 finished = try await self.downloadSequence(selection, label: "continued task", report: report, shouldStop: shouldStop)
+            }
+            return finished
+        }
+    }
+
+    /// Day 5 at a real import length: a continued task over every ARW, JPG and HEIF on the card, again from the start
+    /// until `minutes` have passed (each copy is deleted once measured), for locking the phone through a long import.
+    /// Progress is reported by time, so the system's progress UI moves forward once, as in a real import.
+    func continuedLongDownload(using continued: ContinuedTask, minutes: Int) {
+        guard activity == nil else { log.warn("Busy with \(activity ?? ""); wait for it or tap Stop"); return }
+        guard isOpen, !removed else { log.error("Open a session first (Day 2 · Open session)"); return }
+        guard catalogComplete else { log.error("Continued-task download: \(USBSpikeError.catalogueIncomplete(device.contentCatalogPercentCompleted, device.mediaFiles?.count ?? 0))"); return }
+        guard !linkStalled else { log.error("Continued-task download: \(USBSpikeError.linkStalled)"); return }
+        let selection = files.filter { ["ARW", "JPG", "HIF"].contains(Self.ext($0)) }
+        guard !selection.isEmpty else { log.warn("No ARW, JPG or HEIF on the card"); return }
+        let totalSeconds = minutes * 60
+        log.note("Submitting a \(minutes)-minute continued task over \(selection.count) files (repeated until the time is up); lock the phone once it has started.")
+        continued.run(title: "Importing from camera (spike)", subtitle: "\(minutes)-minute run", totalUnits: totalSeconds) { [weak self] report, shouldStop in
+            guard let self else { return false }
+            let startedAt = Date()
+            let deadline = startedAt.addingTimeInterval(Double(totalSeconds))
+            let byTime: ContinuedTask.Report = { _, subtitle in
+                report(min(totalSeconds, Int(Date().timeIntervalSince(startedAt))), subtitle)
+            }
+            var finished = false
+            await self.perform("Continued-task download, \(minutes) min", transfer: true) {
+                var pass = 0
+                var failed = false
+                while Date() < deadline && !shouldStop() && self.isOpen && !self.stopRequested && !self.linkStalled {
+                    pass += 1
+                    let complete = try await self.downloadSequence(selection, label: "continued \(minutes) min, pass \(pass)", report: byTime,
+                                                                   shouldStop: { shouldStop() || Date() >= deadline })
+                    // A pass cut short by anything but the time limit (failures, a lost session) ends the run.
+                    if !complete && Date() < deadline && !shouldStop() {
+                        failed = true
+                        break
+                    }
+                }
+                // Only the time limit counts as finishing: not failures, the system expiring the task, Stop, or a lost session.
+                finished = !failed && Date() >= deadline && !shouldStop() && self.isOpen && !self.stopRequested
+                let why = finished ? "ran to the time limit"
+                    : failed ? "a pass failed (see the errors above)"
+                    : shouldStop() ? "the system or Stop ended the task"
+                    : !self.isOpen ? "the session closed (\(self.removed ? "camera disconnected" : "closed"))"
+                    : "stopped"
+                self.log.note("Continued \(minutes)-minute run: \(pass) pass(es) in \(Int(Date().timeIntervalSince(startedAt))) s; \(why) [\(self.lifecycle.stateDescription)]")
             }
             return finished
         }

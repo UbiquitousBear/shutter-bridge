@@ -2,6 +2,13 @@
 
 Written 1 Nov 2026 after spike build 6, from `docs/spike-plan.md`, `docs/proposal.md` and `docs/spike-findings.md`, and checked against them. It proposes; the decisions stay with Shamil and the 13 Nov go/no-go.
 
+## Decisions (Shamil, 2 Nov)
+
+- **Wireless is in 1.0.** The wireless go/no-go is no longer whether to ship it but which path works and how well. PTP/IP browsing on the camera's access point is the first choice; if no camera mode lists the card, the camera's *Send to Smartphone* is the path. Iteration 3 is in 1.0 either way, so both need testing: every camera Wi-Fi mode, the join and pairing flow, resume after a drop, behaviour under lock, and the fallback.
+- **Battery per GB and MP4 are out of the spike.** 1.0 imports stills; nothing in it depends on battery use per GB.
+- **Scaling is measured, not assumed:** the guided *Scaling* run lists the card cold in MSC (and MTP), adds a burst of about 300 frames, lists again, and projects 2,000 and 5,000 files from the two sizes.
+- **More of the testing runs as guided runs** in the spike's *Guided* tab (build 8), so each evening needs fewer builds and less reading of the runbook.
+
 ## What I checked against the repo, and what changes the inputs
 
 - **Build 7** (PR #14) adds the requestReadData resume for MSC and fixes two false readings. The phone runs spike build 6 (TestFlight 0.1 (5.1)). Merging build 7 and running *Spike to TestFlight* is the first step.
