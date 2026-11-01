@@ -26,7 +26,9 @@ Go if `ImageCaptureCore` enumerates the card in some USB mode and sustains ≥ 2
 
 Measurements: `usb.catalog.complete`, `usb.catalog.count`, `usb.download.throughput.serial`, `usb.download.memory.peak`.
 
-**Finding:** **Go.** In *Image Transfer (MTP)* mode, ImageCaptureCore lists the card and downloads 20 ARW (839 MB) at **38.19 MB/s** one at a time and **39.05 MB/s** two at a time, on a USB 2 iPhone. That is about 80 % of USB 2's 480 Mb/s, so the cable is the limit and a second download in flight gains nothing. 20 JPG (440 MB) come at **25.61 MB/s**: smaller files pay a fixed cost per file. Memory peaks at 70 MB, 3 MB over the 67 MB baseline, so downloads stream to disk. The weak point is listing: ImageCaptureCore takes **65 s** for 391 files in MTP mode (12 s in MSC). Build 3 times listing the card over PTP and in one MTP request instead.
+**Finding:** **Go.** In *Image Transfer (MTP)* mode, ImageCaptureCore lists the card and downloads 20 ARW (839 MB) at **38.19 MB/s** one at a time and **39.05 MB/s** two at a time, on a USB 2 iPhone. That is about 80 % of USB 2's 480 Mb/s, so the cable is the limit and a second download in flight gains nothing. 20 JPG (440 MB) come at **25.61 MB/s**: smaller files pay a fixed cost per file. Memory peaks at 70 MB, 3 MB over the 67 MB baseline, so downloads stream to disk. The weak point is listing: ImageCaptureCore takes **65 s** for 391 files in MTP mode. Build 3 times listing the card over PTP and in one MTP request instead.
+
+**MSC mode is faster on every count** (same card, 19:45). Listing takes **7.17 s** against 65 s. ARW runs at **39.89 MB/s** one at a time and **41.73 MB/s** two at a time. JPG runs at **41.66 MB/s** against 25.61: a 24.8 MB JPG takes 0.58 s instead of 0.93 s, so MTP's fixed cost per file is gone. Memory peaks at 71 MB. But in MSC the camera answers no PTP commands: no GetPartialObject for resume, no events, and no GetThumb. Whether ImageCaptureCore's `requestReadData` at an offset gives MSC a resume of its own is a day-4 question. Which mode the product should prefer waits for build 3's PTP and MTP listing times.
 
 **Evidence:** Log, 1 Nov 2026 19:43, build 0.1 (2.1), MTP: `usb.download.throughput.serial` 38.19 MB/s (20 of 20, 839.0 MB in 21.97 s); `usb.download.throughput.parallel2` 39.05 MB/s (839.0 MB in 21.49 s); `usb.download.jpg.throughput` 25.61 MB/s (439.5 MB in 17.16 s); `usb.download.memory.peak` 70.04 MB; `usb.catalog.complete` 64.96 s, 391 files. Full measurements under "Measurements".
 
@@ -122,10 +124,10 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 
 | Measurement | USB-C (USB 2 iPhone) | Wi-Fi, camera AP | Wi-Fi, UniFi LAN |
 | --- | --- | --- | --- |
-| Time to enumerate 200 files | 64.96 s for 391 files (MTP, ImageCaptureCore); 12.23 s in MSC |  |  |
-| Thumbnail fetch, average per item | 144.8 ms (MTP); 187.6 ms (MSC) |  |  |
-| ARW throughput, single file | 38.19 MB/s |  |  |
-| ARW throughput, two in flight | 39.05 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
+| Time to enumerate 200 files | 391 files: MTP 64.96 s; MSC 7.17 s (12.23 s on the first MSC run) |  |  |
+| Thumbnail fetch, average per item | MTP 144.8 ms; MSC 187.6 ms |  |  |
+| ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s |  |  |
+| ARW throughput, two in flight | MTP 39.05 MB/s; MSC 41.73 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
 | `GetPartialObject` supported | advertised (0x101B, 32-bit); not yet exercised |  |  |
 | Resume after link drop verified |  |  |  |
@@ -148,6 +150,19 @@ All measurements, MTP, from *Copy measurements table* (1 Nov 2026 19:43; the log
 | `usb.openSession` | 0.03 | s | 1 | ILCE-7CM2 |
 
 Device: iPhone18,4; iOS 27.2 (24B119); spike 0.1 (2.1); Low Power Mode off; thermal nominal.
+
+All measurements, MSC (1 Nov 2026 19:45, same device and build):
+
+| Name | Latest value | Unit | Count | Latest context |
+| --- | --- | --- | --- | --- |
+| `usb.catalog.complete` | 7.17 | s | 1 | open request → complete catalogue, 391 files |
+| `usb.catalog.count` | 391.00 | files | 1 | mediaFiles; contents tree has 391 files; walk 0.5 ms |
+| `usb.download.file` | 42.57 | MB/s | 60 | DSC01925.JPG 24.8 MB in 0.58 s, 20 newest JPG, serial [foreground] |
+| `usb.download.jpg.throughput` | 41.66 | MB/s | 1 | 20 of 20 files, 439.5 MB on disk in 10.55 s, 1 in flight |
+| `usb.download.memory.peak` | 71.03 | MB | 3 | baseline 68 MB, 20 newest JPG, serial |
+| `usb.download.throughput.parallel2` | 41.73 | MB/s | 1 | 20 of 20 files, 839.0 MB on disk in 20.11 s, 2 in flight |
+| `usb.download.throughput.serial` | 39.89 | MB/s | 1 | 20 of 20 files, 839.0 MB on disk in 21.03 s, 1 in flight |
+| `usb.openSession` | 0.03 | s | 1 | Untitled |
 
 ## Day-6 mode matrix
 
