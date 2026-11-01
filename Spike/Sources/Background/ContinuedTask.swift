@@ -59,14 +59,19 @@ final class ContinuedTask {
         let request = BGContinuedProcessingTaskRequest(identifier: Self.identifier, title: title, subtitle: subtitle)
         // .fail: start now or tell us immediately; .queue would let the system defer it, which we don't want for a tap.
         request.strategy = .fail
-        do {
-            try BGTaskScheduler.shared.submit(request)
-            log?.note("BGContinuedProcessingTaskRequest submitted: \(title)")
-        } catch {
-            Self.pending = nil
-            isRunning = false
-            state = "submit failed"
-            log?.error("BGContinuedProcessingTask submit failed: \(error) (the Simulator has no scheduler; test on the device)")
+        // iOS 27 deprecates submit(_:) for submitTaskRequest, which reports every error condition (identifier not
+        // permitted, too many pending, background refresh off, not eligible to run now). The launch handler may
+        // run before this await returns; `pending` is already set, so that is fine.
+        Task { @MainActor [weak self] in
+            do {
+                try await BGTaskScheduler.shared.submitTaskRequest(request)
+                self?.log?.note("BGContinuedProcessingTaskRequest submitted: \(title)")
+            } catch {
+                Self.pending = nil
+                self?.isRunning = false
+                self?.state = "submit failed"
+                self?.log?.error("BGContinuedProcessingTask submit failed: \(error) (the Simulator has no scheduler; test on the device)")
+            }
         }
     }
 

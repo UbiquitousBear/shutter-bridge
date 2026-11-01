@@ -1,4 +1,7 @@
 import Foundation
+// DispatchWorkItem is not yet annotated Sendable; its cancel() is thread-safe, which is all the receive
+// callback uses it for.
+@preconcurrency import Dispatch
 import Network
 import CryptoKit
 import PTPKit

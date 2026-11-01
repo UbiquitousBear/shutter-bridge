@@ -87,14 +87,13 @@ final class ProximityWatcher: NSObject {
 
     // MARK: - Launch
 
-    /// Called from the app delegate's didFinishLaunching, before any UI exists. In a scene-based (SwiftUI) app
-    /// `launchOptions` is always nil, so `.bluetoothCentrals` never says why we were launched: the central is
-    /// recreated here on every launch with the same restore identifier, and `willRestoreState` tells us if iOS
-    /// relaunched the app for it.
+    /// Called from the app delegate's didFinishLaunching, before any UI exists. As Apple asks since iOS 26 (the
+    /// `.bluetoothCentrals` launch option is deprecated, and always nil in a scene-based app anyway), the central
+    /// is recreated here on every launch with the stored restore identifier, and `willRestoreState` tells us if
+    /// iOS relaunched the app for it.
     func launch(log: SpikeLog, launchOptions: [UIApplication.LaunchOptionsKey: Any]?) {
         self.log = log
         registerNotificationCategory()
-        let restoreIDs = (launchOptions?[.bluetoothCentrals] as? [String]) ?? []
         let optionsText = launchOptions.map { opts in
             opts.keys.map(\.rawValue).sorted().joined(separator: ", ")
         } ?? "none (expected for a scene-based app)"
@@ -102,12 +101,11 @@ final class ProximityWatcher: NSObject {
         var line = "proximity watcher at launch: \(enabled ? "on" : "off"), filter \(storedServiceUUID ?? "none")"
         line += ", Bluetooth permission \(Self.describe(authorization)), app \(Self.appStateDescription())"
         line += ", launch options: \(optionsText)"
-        if !restoreIDs.isEmpty { line += ", Bluetooth centrals to restore: \(restoreIDs)" }
         log.note(line)
         // Creating a central prompts for Bluetooth permission, so only do it at launch once the watcher has been
         // switched on or permission is already granted (the enabled flag can't be read before the first unlock
         // after a reboot, but the authorisation can).
-        if enabled || authorization == .allowedAlways || !restoreIDs.isEmpty {
+        if enabled || authorization == .allowedAlways {
             makeCentral()
         }
         Task { await refreshNotificationStatus() }
