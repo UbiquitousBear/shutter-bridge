@@ -5,7 +5,8 @@
 
 name: Spike
 options:
-  # 2.46.0 is what Homebrew installs today; pinning it keeps local and CI generation the same.
+  # Floor, not a pin: XcodeGen refuses to generate with anything older than 2.46.0 (the Homebrew version when this
+  # was written). CI and local setups install the latest Homebrew release, so a newer XcodeGen can still change the output.
   minimumXcodeGenVersion: "2.46.0"
   bundleIdPrefix: com.ubiquitousbear.shutterbridge
   deploymentTarget:

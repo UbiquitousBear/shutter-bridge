@@ -11,7 +11,7 @@
 # "env"). Never fails the session: every step is best effort.
 
 repo="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
-[ -n "$repo" ] && [ -d "$repo/.git" ] || exit 0
+[ -n "$repo" ] && [ -e "$repo/.git" ] || exit 0
 cd "$repo" || exit 0
 
 owner_name="${SB_GIT_NAME:-Shamil}"
