@@ -1757,12 +1757,14 @@ final class CameraSession: NSObject {
     }
 
     /// The resume identity's camera key: a one-way tag of GetDeviceInfo's serial (CameraSerialTag; the serial itself
-    /// must not reach identities and `.part` paths, which are logged), or the device UUID if the camera sends none.
+    /// must not reach identities and `.part` paths, which are logged), or "uuid-" and a tag of the device UUID if the
+    /// camera sends none: ImageCaptureCore's UUID appears to embed the camera's USB serial, so it is tagged too.
     /// ICDevice.serialNumberString is macOS-only.
     private func cameraSerial(_ info: PTPDeviceInfo) -> String {
         let serial = info.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         if !serial.isEmpty { return CameraSerialTag.tag(serial) }
-        let fallback = "uuid-" + (device.uuidString ?? "unknown")
+        let uuid = device.uuidString ?? ""
+        let fallback = "uuid-" + (uuid.isEmpty ? "unknown" : CameraSerialTag.tag(uuid))
         log.warn("DeviceInfo has an empty serial number; using \(fallback) for the resume identity")
         return fallback
     }

@@ -94,7 +94,7 @@ struct PTPDatasetTests {
     func identityDescriptionOmitsSerial() throws {
         let identity = PTPObjectIdentity(cameraSerial: "4012345", filename: "DSC04512.ARW",
                                          captureDateRaw: "20261031T211412", size: 36_412_928)
-        #expect(identity.description == "DSC04512.ARW 20261031T211412 36412928B @serial(7 chars)")
+        #expect(identity.description == "DSC04512.ARW 20261031T211412 36412928B @camera-key(7 chars)")
         #expect(!"\(identity)".contains("4012345"))
         // Equality and Codable still use the serial itself.
         #expect(identity != PTPObjectIdentity(cameraSerial: "4012346", filename: "DSC04512.ARW",
