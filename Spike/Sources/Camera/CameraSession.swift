@@ -60,7 +60,7 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var successfulOpens = 0
     /// Devices any CameraSession has opened in this process: a new session on one of them (after a stall) is still a
     /// reopen, and ImageCaptureCore may keep its catalogue. A replugged camera is a new ICCameraDevice.
-    private static var openedDevices: Set<ObjectIdentifier> = []
+    private static let openedDevices = NSHashTable<ICCameraDevice>.weakObjects()
     @ObservationIgnored private var openIsReopen = false
     /// PTP pass-through commands sent between this open's request and ImageCaptureCore's complete catalogue: they
     /// share the link with the catalogue, so a catalogue time with any of them is not a cold figure.
@@ -263,8 +263,11 @@ final class CameraSession: NSObject {
                     throw interruption
                 } catch {
                     staleCloseUnconfirmed = true
-                    log.warn("  closing the stale session failed: \(describe(error)). If Open session gets no answer, unplug the camera, or turn it off and on.")
+                    log.warn("  closing the stale session failed: \(describe(error))")
                 }
+            }
+            if staleCloseUnconfirmed {
+                throw USBSpikeError.nothingToDo("ImageCaptureCore didn't confirm closing the stalled session within 10 s, so the camera is still not answering. Unplug it and plug it back in (if the camera is then listed twice, tap the lower row), or turn the camera off and on, then Open session.")
             }
             stopCatalogueMonitor()
             clearPTPCaches()
@@ -279,30 +282,20 @@ final class CameraSession: NSObject {
             catalogueTimingNotes = 0
             touchedHandles.removeAll()
             // A reopen on the same ICCameraDevice may find the catalogue ImageCaptureCore kept from the last session.
-            openIsReopen = successfulOpens > 0 || Self.openedDevices.contains(ObjectIdentifier(device))
+            openIsReopen = successfulOpens > 0 || Self.openedDevices.contains(device)
             // Only this open may stamp usb.catalog.complete: a ready callback after it (a reopen by ImageCaptureCore,
             // a failed or stopped open) must not be timed from this request. When not waiting, the monitor owns
             // `openRequestedAt` from here and clears it when it ends.
             var monitorOwnsStamp = false
             defer { if !monitorOwnsStamp { openRequestedAt = nil } }
-            do {
-                let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
-                    self.device.requestOpenSession(options: nil) { error in
-                        if let error { done(.failure(error)) } else { done(.success(())) }
-                    }
-                }
-            } catch USBSpikeError.sessionClosed where staleCloseUnconfirmed {
-                // The stale close timed out and its didCloseSession arrived late, aborting this open: try once more.
-                log.note("A late didCloseSession from the stale session ended this open; opening again")
-                let _: Void = try await callback("requestOpenSession (again)", timeout: 60) { done in
-                    self.device.requestOpenSession(options: nil) { error in
-                        if let error { done(.failure(error)) } else { done(.success(())) }
-                    }
+            let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
+                self.device.requestOpenSession(options: nil) { error in
+                    if let error { done(.failure(error)) } else { done(.success(())) }
                 }
             }
             isOpen = true
             successfulOpens += 1
-            Self.openedDevices.insert(ObjectIdentifier(device))
+            Self.openedDevices.add(device)
             consecutiveNoAnswers = 0
             log.measure("usb.openSession", (clock.now - start).inSeconds, "s", context: device.name ?? "camera")
             logCapabilities("after open")
@@ -712,7 +705,12 @@ final class CameraSession: NSObject {
                 }
             }
         } catch let error as USBSpikeError {
-            if case .timedOut = error { noteNoAnswer(name) }
+            if case .timedOut = error {
+                noteNoAnswer(name)
+                outcome = "got no answer (timed out)"
+            } else {
+                outcome = "ended (\(describe(error)))"
+            }
             throw error
         }
         if raw.first.isEmpty && raw.second.isEmpty {
@@ -724,6 +722,8 @@ final class CameraSession: NSObject {
         do {
             reply = try PTPPassThrough.decodeReply(raw.first, raw.second, for: command)
         } catch {
+            outcome = raw.first.isEmpty && raw.second.isEmpty ? "got no answer (two empty values)"
+                : "sent no response container (\(raw.first.count) + \(raw.second.count) B)"
             let bytes = "first \(raw.first.count) B [\(raw.first.hexDump(limit: 24))], second \(raw.second.count) B [\(raw.second.hexDump(limit: 24))]"
             if let iccError = raw.error {
                 throw USBSpikeError.passThrough(name, "\(describe(iccError)); \(bytes)")
@@ -1139,15 +1139,15 @@ final class CameraSession: NSObject {
             var newest50Seconds: Double?
             var newest50Catalogue = ""
             var savedFixture = false
-            func stalledSoFar() -> USBSpikeError {
-                for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
-                log.warn("  MTP listing stopped by the stall after \(summaries.count) of \(handles.count) objects; the last handle tried was \(lastHandle.map { "\($0)" } ?? "none")")
-                return USBSpikeError.linkStalled
-            }
             for (index, handle) in handles.sorted(by: { $0.rawValue > $1.rawValue }).enumerated() {
                 if stopRequested { throw USBSpikeError.stopped }
                 if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
-                if linkStalled { throw stalledSoFar() }
+                if linkStalled {
+                    // How far the listing got, before the stall ends it.
+                    for failure in failures.suffix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
+                    log.warn("  MTP listing stopped by the stall after \(summaries.count) of \(handles.count) objects; the last handle tried was \(lastHandle.map { "\($0)" } ?? "none")")
+                    throw USBSpikeError.linkStalled
+                }
                 if failuresInARow >= 3 {
                     for failure in failures.prefix(5) { log.warn("  GetObjectPropList failed: \(failure)") }
                     throw USBSpikeError.nothingToDo("3 GetObjectPropList requests in a row failed without a response after \(summaries.count) objects: \(failures.suffix(3).joined(separator: "; "))")

@@ -192,7 +192,8 @@ struct WiredView: View {
         if let id = selectedCameraID, let camera = browser.cameras.first(where: { ObjectIdentifier($0) == id }) {
             return camera
         }
-        return browser.cameras.first
+        // The selected camera has gone (cable pulled): the most recently added one is likely the replugged camera.
+        return browser.cameras.last
     }
 
     private var isBusy: Bool { session?.isBusy ?? false }
@@ -213,12 +214,13 @@ struct WiredView: View {
             Task { await session.openSession(waitForCatalogue: wait) }
             return
         }
-        // After a stall or a cable pull, prefer a camera other than the dead one if the browser lists one (the
-        // replugged camera is a new ICCameraDevice, added at the end).
+        // After a cable pull, if the browser still lists the dead device, prefer the camera added since (the
+        // replugged camera is a new ICCameraDevice, added at the end). A stalled but still attached camera stays
+        // selected, so it can be retried and the warning below shows.
         var camera = selected
-        if let session, session.device === selected, session.removed || session.linkStalled,
+        if let session, session.device === selected, session.removed,
            let other = browser.cameras.last(where: { $0 !== session.device }) {
-            log.note("Open session: switching to the most recently added camera (\(other.name ?? "?")); the selected one belongs to the \(session.removed ? "disconnected" : "stalled") session")
+            log.note("Open session: switching to the most recently added camera (\(other.name ?? "?")); the selected one was disconnected")
             selectedCameraID = ObjectIdentifier(other)
             camera = other
         }
