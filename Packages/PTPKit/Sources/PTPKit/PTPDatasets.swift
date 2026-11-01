@@ -87,6 +87,53 @@ public struct PTPStorageInfo: Equatable, Sendable {
             volumeLabel: try r.string()
         )
     }
+
+    public func encode() -> Data {
+        var w = PTPWriter()
+        w.u16(storageType)
+        w.u16(filesystemType)
+        w.u16(accessCapability)
+        w.u64(maxCapacity)
+        w.u64(freeSpaceInBytes)
+        w.u32(freeSpaceInImages)
+        w.string(storageDescription)
+        w.string(volumeLabel)
+        return w.data
+    }
+}
+
+// MARK: - Array datasets (GetStorageIDs, GetObjectHandles)
+
+extension PTPStorageID {
+    /// Data phase of GetStorageIDs: a u32 count, then that many storage IDs.
+    public static func decodeArray(_ data: Data) throws -> [PTPStorageID] {
+        var r = PTPReader(data)
+        return try r.u32Array().map(PTPStorageID.init(rawValue:))
+    }
+
+    public static func encodeArray(_ ids: [PTPStorageID]) -> Data {
+        var w = PTPWriter()
+        w.u32Array(ids.map(\.rawValue))
+        return w.data
+    }
+
+    /// The physical-store half of the ID; ISO 15740 puts the physical store in the high 16 bits and the logical
+    /// partition in the low 16. A low half of 0 means "no logical store", e.g. an empty card slot.
+    public var hasLogicalStore: Bool { rawValue & 0xFFFF != 0 }
+}
+
+extension PTPObjectHandle {
+    /// Data phase of GetObjectHandles: a u32 count, then that many handles.
+    public static func decodeArray(_ data: Data) throws -> [PTPObjectHandle] {
+        var r = PTPReader(data)
+        return try r.u32Array().map(PTPObjectHandle.init(rawValue:))
+    }
+
+    public static func encodeArray(_ handles: [PTPObjectHandle]) -> Data {
+        var w = PTPWriter()
+        w.u32Array(handles.map(\.rawValue))
+        return w.data
+    }
 }
 
 public struct PTPObjectInfo: Equatable, Sendable {
@@ -123,6 +170,34 @@ public struct PTPObjectInfo: Equatable, Sendable {
     public var fileExtension: String {
         if let dot = filename.lastIndex(of: ".") { return String(filename[filename.index(after: dot)...]).uppercased() }
         return ""
+    }
+
+    /// What the file is, for filtering and RAW+JPEG pairing. Vendor format codes vary by body and firmware, so the
+    /// filename extension decides first and the format code is the fallback.
+    public var mediaKind: PTPMediaKind {
+        if isFolder { return .folder }
+        switch fileExtension {
+        case "ARW", "SRF", "SR2", "DNG": return .raw
+        case "JPG", "JPEG": return .jpeg
+        case "HIF", "HEIF", "HEIC": return .heif
+        case "MP4", "MOV", "MTS", "M2TS": return .video
+        case "XML": return .sidecar
+        default: break
+        }
+        switch objectFormat {
+        case .sonyARW, .dng: return .raw
+        case .exifJPEG, .jfif: return .jpeg
+        case .sonyHEIF: return .heif
+        case .mp4, .quickTime: return .video
+        case .xmlDocument, .text: return .sidecar
+        default: return .other
+        }
+    }
+
+    /// Identity of this object for diffing and resume: handles are not stable across sessions, and filenames
+    /// alone collide after the camera's counter wraps (proposal § Import engine design, stage 3).
+    public func identity(cameraSerial: String) -> PTPObjectIdentity {
+        PTPObjectIdentity(cameraSerial: cameraSerial, filename: filename, captureDateRaw: captureDateRaw, size: UInt64(objectCompressedSize))
     }
 
     public static func decode(_ data: Data) throws -> PTPObjectInfo {
@@ -173,6 +248,31 @@ public struct PTPObjectInfo: Equatable, Sendable {
         w.string(keywords)
         return w.data
     }
+}
+
+public enum PTPMediaKind: String, Sendable, Codable, CaseIterable {
+    case raw, jpeg, heif, video, sidecar, folder, other
+
+    /// Stills are what 1.0 imports; video and sidecars are hidden by the default filter until 1.1.
+    public var isStill: Bool { self == .raw || self == .jpeg || self == .heif }
+}
+
+/// `(camera serial, filename, capture date, size)`: the key the catalogue diffs on. The capture date is kept as
+/// the camera's raw string so identity never depends on the phone's time zone.
+public struct PTPObjectIdentity: Hashable, Sendable, Codable, CustomStringConvertible {
+    public var cameraSerial: String
+    public var filename: String
+    public var captureDateRaw: String
+    public var size: UInt64
+
+    public init(cameraSerial: String, filename: String, captureDateRaw: String, size: UInt64) {
+        self.cameraSerial = cameraSerial
+        self.filename = filename
+        self.captureDateRaw = captureDateRaw
+        self.size = size
+    }
+
+    public var description: String { "\(filename) \(captureDateRaw) \(size)B @\(cameraSerial)" }
 }
 
 /// PTP DateTime strings: "YYYYMMDDThhmmss", optionally ".s" tenths, optionally "Z" or "±hhmm".

@@ -146,8 +146,12 @@ public enum PTPCommand {
 /// Monotonic transaction IDs for one session. PTP requires them to start at 1 after OpenSession
 /// (which itself is sent with 0) and increase by one per operation.
 public struct PTPTransactionCounter: Sendable {
-    private var next: UInt32 = 1
-    public init() {}
+    private var next: UInt32
+    public init() { next = 1 }
+    /// For tests and for resuming a counter; 0 is reserved for OpenSession and becomes 1.
+    public init(next: UInt32) { self.next = next == 0 ? 1 : next }
+    /// The ID the next `take()` will return.
+    public var peek: UInt32 { next }
     public mutating func take() -> UInt32 {
         defer { next = next == UInt32.max ? 1 : next + 1 }
         return next

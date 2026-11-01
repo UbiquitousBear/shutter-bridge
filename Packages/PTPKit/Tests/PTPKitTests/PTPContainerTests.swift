@@ -48,12 +48,28 @@ struct PTPContainerTests {
         var c = PTPTransactionCounter()
         #expect(c.take() == 1)
         #expect(c.take() == 2)
+        #expect(c.peek == 3)
+
+        var w = PTPTransactionCounter(next: .max)
+        #expect(w.take() == .max)
+        #expect(w.take() == 1, "0 is reserved for OpenSession, so the counter skips it")
+        #expect(PTPTransactionCounter(next: 0).peek == 1)
     }
 
     @Test("Unknown codes still describe themselves in hex")
     func descriptions() {
         #expect(PTPOperationCode.getPartialObject.description == "GetPartialObject")
-        #expect(PTPOperationCode(rawValue: 0x9201).description == "Op(0x9201)")
+        #expect(PTPOperationCode(rawValue: 0x9FFF).description == "Op(0x9FFF)")
         #expect(PTPEventCode.objectAdded.description == "ObjectAdded")
+        #expect(PTPOperationCode.sonySDIOConnect.description == "Sony SDIO_Connect")
+        #expect(PTPObjectFormat.sonyHEIF.description == "Sony HEIF")
+    }
+
+    @Test("Both the standard and Sony ObjectAdded signal a new object")
+    func newObjectEvents() {
+        #expect(PTPEventCode.objectAdded.signalsNewObject)
+        #expect(PTPEventCode.sonyObjectAdded.signalsNewObject)
+        #expect(!PTPEventCode.objectRemoved.signalsNewObject)
+        #expect(!PTPEventCode.devicePropChanged.signalsNewObject)
     }
 }
