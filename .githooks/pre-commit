@@ -18,8 +18,12 @@ done
 # Packet captures never enter the repo: a tcpdump of the PTP/IP handshake holds GetDeviceInfo with the camera's
 # serial, and Init packets and SSDP/mDNS traffic name the Mac. .gitignore drops them under Fixtures/, but
 # `git add -f` gets past that, so refuse any staged one, anywhere. Pathspecs ignore core.ignorecase, hence :(icase).
+# Any suffix after .pcap or .pcapng (a compressed capture); after .cap only compression suffixes, because
+# "<name>.cap.<ext>" is also an ordinary file name (escape.cap.txt).
 pcaps="$(git diff --cached --name-only --diff-filter=ACMR -- \
-    ':(icase)*.pcap' ':(icase)*.pcapng' ':(icase)*.pcap.gz' ':(icase)*.pcapng.gz' ':(icase)*.cap')"
+    ':(icase)*.pcap' ':(icase)*.pcapng' ':(icase)*.cap' ':(icase)*.pcap.*' ':(icase)*.pcapng.*' \
+    ':(icase)*.cap.gz' ':(icase)*.cap.xz' ':(icase)*.cap.zst' ':(icase)*.cap.bz2' ':(icase)*.cap.lz4' \
+    ':(icase)*.cap.lzma' ':(icase)*.cap.z' ':(icase)*.cap.zip' ':(icase)*.cap.7z' ':(icase)*.cap.br')"
 if [ -n "$pcaps" ]; then
     echo "pre-commit: refusing to commit packet captures; they carry the camera's serial and the Mac's name:" >&2
     printf '%s\n' "$pcaps" | sed 's/^/  /' >&2
