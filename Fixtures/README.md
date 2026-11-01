@@ -70,6 +70,4 @@ and `.pcap` files stay here as the record.
 - Never edit a fixture by hand. If a test fails on one, the codec is wrong.
 - Nothing in here may contain the camera's Wi-Fi password or a QR payload. The spike app never writes either;
   scrub any pcap of the QR or join step.
-- The camera's serial number must never reach this repo. The spike app writes `deviceinfo.bin` with every
-  character of the SerialNumber replaced by "0" (same length; log line `fixture saved: … (serial zeroed)`), and
-  doesn't log the serial. `ssdp-description.xml` may still contain it: check before committing one.
+- No serial numbers: `deviceinfo.bin` and `ssdp-description.xml` carry the camera's, and the repository is public. Each character of it becomes `0`, keeping the length and every other byte (owner's decision, 1 Nov 2026), so this is the one permitted edit. The spike app zeroes it in `deviceinfo.bin` as it saves (from build 3; log line `fixture saved: … (serial zeroed)`) and doesn't log it; `make fixtures` runs `scripts/redact-fixtures.py` over this folder and the test bundle, which also covers `ssdp-description.xml`; the pre-commit hook refuses a staged file that still has one.
