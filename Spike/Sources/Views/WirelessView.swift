@@ -235,8 +235,12 @@ private struct WirelessPanel: View {
         }
     }
 
-    /// "192.168.122.1:15740" → "192.168.122.1" (IPv4 host:port only; anything else is returned as is).
+    /// "192.168.122.1:15740" → "192.168.122.1"; "[fe80::1%en0]:15740" → "fe80::1%en0" (NetFormat brackets IPv6
+    /// host:port). Anything else is returned as is.
     static func hostPart(_ address: String) -> String {
+        if address.hasPrefix("["), let close = address.firstIndex(of: "]") {
+            return String(address[address.index(after: address.startIndex) ..< close])
+        }
         let parts = address.split(separator: ":")
         return parts.count == 2 ? String(parts[0]) : address
     }
@@ -487,6 +491,9 @@ final class WirelessLab {
         objectAddedCount = 0
         eventCount = 0
         batteryWindow = nil
+        batteryLine = nil
+        // Per session: BatteryLevel support depends on the camera mode, and day 6–8 switch modes between connects.
+        batteryUnsupported = false
         let c = PTPIPClient(host: t.host, guid: t.guid, log: PTPIPClient.logger(log))
         client = c
         sessionNet = t.net
@@ -634,7 +641,7 @@ final class WirelessLab {
                 }
                 let (si, siRaw) = try await c.getStorageInfo(id)
                 if !fixtures.contains(where: { $0.0 == "storageinfo.bin" }) { fixtures.append(("storageinfo.bin", siRaw)) }
-                storageNotes.append(String(format: "%@ \"%@\" label \"%@\", %.1f GB free of %.1f GB, type %d fs %d access %d",
+                storageNotes.append(String(format: "%@ \"%@\" label \"%@\", %.1f GB free of %.1f GB, type %ld fs %ld access %ld",
                                            idText, si.storageDescription, si.volumeLabel,
                                            Double(si.freeSpaceInBytes) / 1e9, Double(si.maxCapacity) / 1e9,
                                            Int(si.storageType), Int(si.filesystemType), Int(si.accessCapability)))
@@ -694,7 +701,7 @@ final class WirelessLab {
             let average = times.reduce(0, +) / Double(times.count) * 1000
             let slowest = (times.max() ?? 0) * 1000
             self.log.measure("ptpip.\(net).thumb.avg", average, "ms",
-                             context: String(format: "%d thumbnails, %d KB, slowest %.0f ms, %d failed", times.count, bytes / 1024, slowest, failures.count))
+                             context: String(format: "%ld thumbnails, %ld KB, slowest %.0f ms, %ld failed", times.count, bytes / 1024, slowest, failures.count))
             if !failures.isEmpty { self.log.note("GetThumb failures: \(failures.prefix(10).joined(separator: "; "))") }
         }
     }
@@ -710,7 +717,7 @@ final class WirelessLab {
             }
             if result.files > 0 {
                 self.log.throughput("\(prefix).getObject.throughput", bytes: Int(result.bytes), seconds: result.seconds,
-                                    context: String(format: "%d ARW, %.1f MB, batch wall time %.1f s (first Cmd_Request to last response)%@",
+                                    context: String(format: "%ld ARW, %.1f MB, batch wall time %.1f s (first Cmd_Request to last response)%@",
                                                     result.files, Double(result.bytes) / 1e6, result.seconds,
                                                     result.failures > 0 ? ", \(result.failures) failed" : ""))
             }
@@ -762,10 +769,17 @@ final class WirelessLab {
                 log.warn("continued batch stopping after \(done) of \(items.count) files (\(lifecycle.stateDescription))")
                 return false
             }
+            let url: URL
             do {
-                let url = try downloadURL(for: o)
+                url = try downloadURL(for: o)
+            } catch {
+                log.error("continued batch: no temporary file for \(o.info.filename): \(error)")
+                return false
+            }
+            // Also on a link drop mid-file: the partial download must not stay in tmp.
+            defer { try? FileManager.default.removeItem(at: url) }
+            do {
                 let r = try await c.getObject(o.handle, to: url)
-                try? FileManager.default.removeItem(at: url)
                 bytes += r.bytes
                 done += 1
                 log.throughput("\(prefix).getObject.file", bytes: Int(r.bytes), seconds: r.seconds,
@@ -779,7 +793,7 @@ final class WirelessLab {
                 return false
             }
         }
-        log.note(String(format: "continued batch finished: %d files, %.1f MB in %.1f s", done, Double(bytes) / 1e6, (clock.now - started).inSeconds))
+        log.note(String(format: "continued batch finished: %ld files, %.1f MB in %.1f s", done, Double(bytes) / 1e6, (clock.now - started).inSeconds))
         return true
     }
 
@@ -864,15 +878,15 @@ final class WirelessLab {
         guard let level = await readBattery(c) else { return }
         let gigabytes = Double(window.bytes) / 1e9
         let minutes = Date().timeIntervalSince(window.startedAt) / 60
-        batteryLine = String(format: "%d %% → %d %% over %.2f GB", window.startPercent, level, gigabytes)
+        batteryLine = String(format: "%ld %% → %ld %% over %.2f GB", window.startPercent, level, gigabytes)
         if window.bytes >= 1_000_000_000 {
             let used = Double(window.startPercent - level)
             log.measure("\(prefix).battery.per1GB", used / gigabytes, "%/GB",
-                        context: String(format: "%d %% → %d %% over %.2f GB in %.0f min (BatteryLevel 0x5001; includes idle drain between batches)",
+                        context: String(format: "%ld %% → %ld %% over %.2f GB in %.0f min (BatteryLevel 0x5001; includes idle drain between batches)",
                                         window.startPercent, level, gigabytes, minutes))
             batteryWindow = nil
         } else {
-            log.note(String(format: "battery %d %% → %d %% after %.2f GB; the window needs ≥ 1 GB", window.startPercent, level, gigabytes))
+            log.note(String(format: "battery %ld %% → %ld %% after %.2f GB; the window needs ≥ 1 GB", window.startPercent, level, gigabytes))
         }
     }
 
@@ -948,6 +962,11 @@ final class WirelessLab {
             }
             let variant = listed ?? .standard32
             let relative = WiFiResumeStore.partRelativePath(serial: identity.cameraSerial, filename: identity.filename)
+            // Only one record is kept: an earlier read of another file would otherwise leave its .part in Caches.
+            if let previous = WiFiResumeStore.load(), previous.partPath != relative {
+                WiFiPartFile.remove(WiFiResumeStore.url(forRelativePath: previous.partPath))
+                self.log.note("discarded the earlier partial read of \(previous.identity.filename)")
+            }
             WiFiPartFile.remove(WiFiResumeStore.url(forRelativePath: relative))
             let record = WiFiResumeRecord(identity: identity, offset: 0, partPath: relative, referenceSHA256: reference,
                                           variant: variant.rawValue, chunkSize: PTPPartialRead.defaultChunkSize, net: net,
@@ -986,7 +1005,7 @@ final class WirelessLab {
                 self.log.warn("the part file holds \(onDisk) bytes, less than the saved offset \(offset); resuming from \(onDisk)")
                 offset = onDisk
             }
-            self.log.note(String(format: "Resume read: found %@ as handle %@ after %d ObjectInfo(s) in %.2f s; resuming at %llu of %llu (%.1f %%), dropping %llu byte(s) written after the last checkpoint",
+            self.log.note(String(format: "Resume read: found %@ as handle %@ after %ld ObjectInfo(s) in %.2f s; resuming at %llu of %llu (%.1f %%), dropping %llu byte(s) written after the last checkpoint",
                                  found.info.filename, found.handle.description, found.scanned, found.seconds, offset, current.size,
                                  Double(offset) / Double(max(current.size, 1)) * 100, onDisk > offset ? onDisk - offset : 0))
             var record = saved
@@ -1068,10 +1087,14 @@ final class WirelessLab {
                     }
                     throw PTPIPClient.ClientError.response(operation: op, code: code)
                 }
+                // "Supported" means OK with usable bytes: an OK with no data (or more than asked) is a no.
+                let usable = !data.isEmpty && data.count <= Int(chunk.length)
                 if chunks == 0, !partialSupportFlagged.contains(prefix) {
                     partialSupportFlagged.insert(prefix)
-                    log.flag("\(prefix).getPartialObject.supported", true,
-                             context: "\(variant.rawValue) returned \(data.count) bytes for \(chunk) of \(name)")
+                    log.flag("\(prefix).getPartialObject.supported", usable,
+                             context: usable
+                                ? "\(variant.rawValue) returned \(data.count) bytes for \(chunk) of \(name)"
+                                : "\(variant.rawValue) answered OK but with \(data.count) bytes for the \(chunk.length)-byte request \(chunk) of \(name)")
                 }
                 chunks += 1
                 guard !data.isEmpty else { throw WiFiLabError.message("the camera returned 0 bytes for \(chunk)") }
@@ -1159,7 +1182,7 @@ final class WirelessLab {
         let clock = ContinuousClock()
         let started = clock.now
         activity = String(format: "Paused at %.0f %% — turn Wi-Fi off now", fraction * 100)
-        log.note(String(format: "Paused at %.0f %%: turn Wi-Fi off now (Control Centre). Waiting up to %d s for the link to drop…", fraction * 100, Int(seconds)))
+        log.note(String(format: "Paused at %.0f %%: turn Wi-Fi off now (Control Centre). Waiting up to %ld s for the link to drop…", fraction * 100, Int(seconds)))
         while (clock.now - started).inSeconds < seconds {
             if await c.linkFailure != nil { break }
             try? await Task.sleep(for: .milliseconds(250))

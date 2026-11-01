@@ -579,25 +579,19 @@ actor PTPIPClient {
 
     /// GetDevicePropValue: the raw value bytes (BatteryLevel 0x5001 is one UINT8).
     func getDevicePropValue(_ code: UInt16) async throws -> Data {
-        let cmd = PTPContainer(type: .command, code: PTPOperationCode.getDevicePropValue.rawValue,
-                               transactionID: tx.take(), parameters: [UInt32(code)])
-        return try await collect(cmd, limit: 1024 * 1024)
+        try await collect(PTPCommand.getDevicePropValue(PTPDevicePropCode(rawValue: code), tx: tx.take()), limit: 1024 * 1024)
     }
 
-    /// Experimental, PC Remote modes: Sony SDIO_Connect phase 1, 2 or 3 (libgphoto2 sends p2 = p3 = 0 and reads a
-    /// short data phase). `unverified` on the α7C II.
+    /// Experimental, PC Remote modes: Sony SDIO_Connect phase 1, 2 or 3 (PTPKit's builder: p2 = p3 = 0, and a short
+    /// data phase that libgphoto2 discards). `unverified` on the α7C II.
     func sonySDIOConnect(phase: UInt32) async throws -> Data {
-        let cmd = PTPContainer(type: .command, code: PTPOperationCode.sonySDIOConnect.rawValue,
-                               transactionID: tx.take(), parameters: [phase, 0, 0])
-        return try await collect(cmd, limit: 1024 * 1024)
+        try await collect(PTPCommand.sonySDIOConnect(phase: phase, tx: tx.take()), limit: 1024 * 1024)
     }
 
-    /// Experimental: Sony SDIO_GetExtDeviceInfo with protocol `version` (0x12C = 3.00, 0xC8 = 2.00) and p2 = 1, as
-    /// PTPKit records it. The data phase lists Sony's vendor operation/property codes. `unverified`.
+    /// Experimental: Sony SDIO_GetExtDeviceInfo with protocol `version` (0x12C = 3.00, 0xC8 = 2.00) and p2 = 1, via
+    /// PTPKit's builder. The data phase lists Sony's vendor operation/property codes. `unverified`.
     func sonySDIOGetExtDeviceInfo(version: UInt32 = 0x12C) async throws -> Data {
-        let cmd = PTPContainer(type: .command, code: PTPOperationCode.sonySDIOGetExtDeviceInfo.rawValue,
-                               transactionID: tx.take(), parameters: [version, 1])
-        return try await collect(cmd, limit: 1024 * 1024)
+        try await collect(PTPCommand.sonySDIOGetExtDeviceInfo(version: version, tx: tx.take()), limit: 1024 * 1024)
     }
 
     // MARK: Helpers

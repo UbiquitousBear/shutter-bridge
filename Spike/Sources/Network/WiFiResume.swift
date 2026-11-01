@@ -29,7 +29,7 @@ struct WiFiResumeRecord: Codable, Equatable, Sendable {
     var fractionDone: Double { identity.size == 0 ? 0 : Double(offset) / Double(identity.size) }
 
     var summary: String {
-        String(format: "%@ at %.0f %% (%llu of %llu bytes), %d resume(s), saved %@",
+        String(format: "%@ at %.0f %% (%llu of %llu bytes), %ld resume(s), saved %@",
                identity.filename, fractionDone * 100, offset, identity.size, resumes,
                DateFormatter.localizedString(from: savedAt, dateStyle: .none, timeStyle: .medium))
     }

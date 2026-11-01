@@ -109,6 +109,8 @@ final class BonjourProbe {
             connection.start(queue: queue)
             queue.asyncAfter(deadline: .now() + timeout) { once.resume(returning: nil) }
         }
+        // The handler captures the connection; drop it so the cancelled connection is released.
+        connection.stateUpdateHandler = nil
         connection.cancel()
         return address
     }

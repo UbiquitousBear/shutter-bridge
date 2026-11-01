@@ -166,9 +166,14 @@ enum NetFormat {
     static func endpoint(_ endpoint: NWEndpoint) -> String {
         switch endpoint {
         case .hostPort(let host, let port):
-            return port.rawValue == 0 ? Self.host(host) : "\(Self.host(host)):\(port.rawValue)"
+            let text = Self.host(host)
+            guard port.rawValue != 0 else { return text }
+            // Brackets keep an IPv6 address separable from its port ("Use … as camera IP" strips them).
+            if case .ipv6 = host { return "[\(text)]:\(port.rawValue)" }
+            return "\(text):\(port.rawValue)"
         case .service(let name, let type, let domain, _):
-            return "\(name).\(type)\(domain)"
+            // "ILCE-7CM2._ptp._tcp.local." (the domain carries its own trailing dot).
+            return "\(name).\(type).\(domain)"
         default:
             return "\(endpoint)"
         }
