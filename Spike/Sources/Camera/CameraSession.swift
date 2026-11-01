@@ -676,6 +676,7 @@ final class CameraSession: NSObject {
             throw error
         }
         consecutiveNoAnswers = 0
+        lifecycle.noteProgress("downloaded \(name)", link: "usb")
         let seconds = (clock.now - start).inSeconds
         // verify on day 1: the completion's String is documented only as "String?"; treated as a file name inside
         // `dir`, or as a path if it is absolute. The log line below shows which.
@@ -2109,9 +2110,12 @@ final class CameraSession: NSObject {
             // The file decides the offset (name, size, creation date); the SHA-256 check catches a wrong file. The
             // device key (a tag of the device UUID) is compared separately: whether it survives a re-plug in MSC is
             // one of the things this test finds out.
-            let sameFile = current.filename == saved.identity.filename && current.size == saved.identity.size
-                && current.captureDateRaw == saved.identity.captureDateRaw
             let sameDevice = current.cameraSerial == saved.identity.cameraSerial
+            // Without a creation date on either side, name and size alone could pick another camera's file: then the
+            // device key has to match too.
+            let datesKnown = !current.captureDateRaw.isEmpty && !saved.identity.captureDateRaw.isEmpty
+            let sameFile = current.filename == saved.identity.filename && current.size == saved.identity.size
+                && (datesKnown ? current.captureDateRaw == saved.identity.captureDateRaw : sameDevice)
             log.note("  device key \(sameDevice ? "same as" : "DIFFERENT from") the saved read's; transport now \(device.transportType ?? "?"), saved read started over \(saved.transport ?? "?")")
             var offset = sameFile ? saved.offset : 0
             if offset == 0 && saved.offset > 0 {
@@ -2119,6 +2123,7 @@ final class CameraSession: NSObject {
                 if current.filename != saved.identity.filename { changed.append("name") }
                 if current.size != saved.identity.size { changed.append("size") }
                 if current.captureDateRaw != saved.identity.captureDateRaw { changed.append("creation date '\(saved.identity.captureDateRaw)' → '\(current.captureDateRaw)'") }
+                if !datesKnown && !sameDevice { changed.append("no creation date to compare, and the device key differs") }
                 log.warn("The file changed (\(changed.joined(separator: ", "))): restarting from zero, as the resume rule says.")
             }
             if offset > onDisk {
@@ -2475,8 +2480,13 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
         abortPending(.deviceRemoved)
         // A requestReadData read this session saved (possibly a moment before this callback, from the read's own
         // error) was cut by the link going away: only then does its resume count as a link-drop resume.
+        // Only a read that was running when the camera went away: its loop is still going (activity), or it saved
+        // its own error a moment ago. A read stopped minutes earlier and a later unplug is not a link drop.
+        let readDataRunning = activity == "Start resumable read (requestReadData)" || activity == "Resume read (requestReadData)"
         if var saved = USBResumeStore.load(key: USBResumeStore.readDataKey), saved.sessionID == sessionID,
-           saved.offset < saved.identity.size, saved.linkDropped != true {
+           saved.offset < saved.identity.size, saved.linkDropped != true,
+           readDataRunning || Date().timeIntervalSince(saved.savedAt) < 5,
+           saved.reason != "error: \(USBSpikeError.stopped.description)" {
             saved.linkDropped = true
             persistReadDataResume(saved)
         }
