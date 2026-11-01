@@ -74,7 +74,7 @@ Measurements: `usb.event.objectAdded`, `ptpip.ap.event.objectAdded`, `ptpip.lan.
 
 Go if the camera advertises a stable service UUID, at least while on, that iOS background scanning can filter on. Otherwise the reminder works only with the camera switched on, or falls back to a Shortcuts automation on the home Wi-Fi SSID.
 
-Measurements: `ble.advert.<on/asleep/off>.seen`, `ble.connected.<state>.seen`, `ble.proximity.latency`, `ble.proximity.detectToNotify`, `ble.proximity.connectionEvent.latency`. Fixtures: `Fixtures/a7c2/ble/advert-*.json`.
+Measurements: `ble.advert.<on/asleep/off>.<pairing>.seen`, `ble.connected.<state>.<pairing>.seen`, `ble.proximity.latency`, `ble.proximity.detectToNotify`, `ble.proximity.connectionEvent.latency`. Fixtures: `Fixtures/a7c2/ble/advert-*.json`.
 
 **Finding:** _to fill_
 
@@ -170,7 +170,7 @@ With Bluetooth Function on and Remote Power ON/OFF on. Interval is the median ga
 
 By pairing context (the setup with Creators' App paired on the same iPhone):
 
-| Pairing context | Advertises (on / asleep / off) | Connected to the system (`ble.connected.<state>.seen`) | Connection event received | Notes |
+| Pairing context | Advertises (on / asleep / off) | Connected to the system (`ble.connected.<state>.<pairing>.seen`) | Connection event received | Notes |
 | --- | --- | --- | --- | --- |
 | Creators' App connected |  |  |  |  |
 | Creators' App quit, link down |  |  |  |  |

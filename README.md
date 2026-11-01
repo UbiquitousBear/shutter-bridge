@@ -39,8 +39,9 @@ make fixtures         # copies captured fixtures into the PTPKit test bundle und
 ```
 
 Then follow `docs/spike-plan.md`, with `docs/spike-runbook.md` for what to tap and run at each step. The first
-thing to do on day 1 needs no code at all: set the camera's USB mode to *Still Img Transfer (MTP)*, plug it into
-the iPhone, and see whether the Photos app offers to import.
+thing to do on day 1 needs no code at all: set the camera's USB Connection Mode to each candidate in turn (the
+candidates are in `docs/spike-plan.md`; their α7C II menu wording is unverified until checked on the camera),
+plug it into the iPhone each time, and note which modes make the Photos app offer to import.
 
 The multicast entitlement (for SSDP discovery) must be requested from Apple on day 1; the key is commented
 out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhile.
