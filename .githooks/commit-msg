@@ -1,0 +1,34 @@
+#!/bin/sh
+# Commits in this repo are attributed to the owner only (see AGENTS.md). This hook removes any line that
+# credits an AI tool from the commit message: Co-Authored-By trailers for AI agents, Claude-Session and
+# similar session-link trailers, "Generated with …" footers and bare claude.ai session links.
+#
+# Matching is by AI product/vendor names and addresses. A human co-author whose trailer contains one of those
+# words (for example someone literally named Claude) would be stripped too; add them back after the hook runs
+# with `git commit --amend` and `--no-verify` if that ever happens.
+#
+# POSIX sh, grep and awk only, so it behaves the same on macOS and Linux.
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+ai='(claude|anthropic|copilot|openai|chatgpt|codex|cursor|gemini|devin|aider|windsurf|codeium)'
+tmp="${msg_file}.sb-attrib.$$"
+
+grep -v -i -E \
+    -e "^[[:space:]]*co-authored-by:.*${ai}" \
+    -e '^[[:space:]]*(claude|ai|agent|assistant)-session:' \
+    -e "^[[:space:]]*(🤖[[:space:]]*)?generated (with|by) \\[?${ai}" \
+    -e '^[[:space:]]*🤖' \
+    -e '^[[:space:]]*https://claude\.ai/code/session' \
+    "$msg_file" > "$tmp"
+
+# Drop the blank lines a removed trailer block leaves at the end of the message.
+awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print lines[i] }' "$tmp" > "${tmp}.2"
+
+if ! cmp -s "$msg_file" "${tmp}.2"; then
+    echo "commit-msg: removed AI attribution lines (commits here are attributed to the owner only; see AGENTS.md)" >&2
+    cat "${tmp}.2" > "$msg_file"
+fi
+rm -f "$tmp" "${tmp}.2"
+exit 0
