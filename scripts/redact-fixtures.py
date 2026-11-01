@@ -9,6 +9,9 @@ the real layout. Two kinds of file carry it:
   test bundle as `a7c2-<link>-deviceinfo.bin`): the SerialNumber string, the last field PTP defines.
 - `ssdp-description.xml` (the UPnP device description): the text of each `<serialNumber>` element.
 
+Packet captures are not redacted here: a pcap of the PTP/IP handshake also names the Mac, so pcaps stay out of the
+repository altogether (`.gitignore` under `Fixtures/`, and the pre-commit hook refuses any staged `.pcap`).
+
 Usage:
     scripts/redact-fixtures.py            zero the serial in every such file under Fixtures/ and the test bundle
     scripts/redact-fixtures.py FILE...    the same, for these files only

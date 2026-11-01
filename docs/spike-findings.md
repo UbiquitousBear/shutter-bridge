@@ -56,7 +56,7 @@ Measurements: `ptpip.ap.enumerate`, `ptpip.ap.objects`, `ptpip.ap.getObject.thro
 
 Go if the entitlement is granted and the camera announces. Otherwise typed IP and mDNS only; revisit when the entitlement lands.
 
-Measurements: `ptpip.<net>.discovery.ssdp` (unicast or multicast, named in its context), `ptpip.<net>.discovery.bonjour`. Fixtures: `Fixtures/a7c2/ptpip/ssdp-description.xml` and the Mac's SSDP pcaps.
+Measurements: `ptpip.<net>.discovery.ssdp` (unicast or multicast, named in its context), `ptpip.<net>.discovery.bonjour`. Fixtures: `Fixtures/a7c2/ptpip/ssdp-description.xml`; what the Mac's SSDP capture showed is written here (the pcaps stay on the Mac, out of the repo).
 
 **Finding:** _to fill_
 

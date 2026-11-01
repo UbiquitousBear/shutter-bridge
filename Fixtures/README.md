@@ -33,7 +33,6 @@ earlier capture of the same name. Which button saves what, day by day, is in
 | `a7c2/ptpip/getpartialobject.sha256` | Text: SHA-256, filename, size, `GetPartialObject` variant and number of resumes of the reassembled ARW | *Start resumable read (newest ARW)* and *Resume read*, when the file is complete | 9 |
 | `a7c2/ptpip/sdio-extdeviceinfo.bin` | Data phase of Sony's `SDIO_GetExtDeviceInfo` (experimental) | Day 7 · Handshake › *Sony SDIO connect (PC Remote modes)* | 7 |
 | `a7c2/ptpip/ssdp-description.xml` | The UPnP device description fetched from an SSDP reply's `LOCATION`, with the serial zeroed | Day 6 · Probe › *SSDP M-SEARCH to camera IP* or *SSDP M-SEARCH multicast* | 6, 9 |
-| `a7c2/ptpip/<what>.pcap` | `tcpdump` captures on the Mac: SSDP and the handshake, per camera mode (for example `ssdp-<mode>.pcap`, `handshake-<mode>.pcap`) | Mac, by hand | 6, 9 |
 | `a7c2/ble/advert-<on\|asleep\|off>.json` | The latest advertisement snapshot for that camera power state | Bluetooth › Day 6 · BLE advertisement › *Save snapshot* | 6 |
 | `a7c2/ble/advert-<on\|asleep\|off>-<connected\|unlinked\|unpaired>.json` | The same snapshot, named by pairing context as well: *Creators' App connected*, *Creators' App quit, link down*, *Not paired* | the same | 6 |
 
@@ -51,7 +50,8 @@ and a note on how to read it.
 - Hashes: `<what>.sha256`, plain text.
 - BLE: `advert-<state>.json` and `advert-<state>-<pairing>.json`.
 - `FIRMWARE` in `usb/` and `ptpip/`: the model and firmware the fixtures in that folder came from.
-- Mac captures: `<what>.pcap`.
+- Mac captures (`tcpdump`): never here. They go in `~/spike-captures/<what>.pcap` on the Mac, outside the checkout,
+  and what they show is written up in `docs/spike-findings.md`; see the last rule.
 
 ## Getting them off the phone
 
@@ -62,12 +62,13 @@ and a note on how to read it.
 
 Then run `make fixtures`. It copies every `Fixtures/a7c2/<link>/<name>.bin` to
 `Packages/PTPKit/Tests/PTPKitTests/Fixtures/a7c2-<link>-<name>.bin`, where the PTPKit tests find them
-automatically; `make test` then runs them. Only `.bin` files are copied: `FIRMWARE`, `.sha256`, `.json`, `.xml`
-and `.pcap` files stay here as the record.
+automatically; `make test` then runs them. Only `.bin` files are copied: `FIRMWARE`, `.sha256`, `.json` and `.xml`
+files stay here as the record.
 
 ## Rules
 
 - Never edit a fixture by hand. If a test fails on one, the codec is wrong.
 - Nothing in here may contain the camera's Wi-Fi password or a QR payload. The spike app never writes either;
-  scrub any pcap of the QR or join step.
-- No serial numbers: `deviceinfo.bin` and `ssdp-description.xml` carry the camera's, and the repository is public. Each character of it becomes `0`, keeping the length and every other byte (owner's decision, 1 Nov 2026), so this is the one permitted edit. The spike app zeroes it as it saves `deviceinfo.bin` (from build 3) and `ssdp-description.xml` (from build 4); the log line is `fixture saved: … (serial zeroed)`. From build 4 the app doesn't log it either: the DeviceInfo and SSDP lines say only whether there is one, object identities and `.part` paths (`Imports/sn-…/`) carry a one-way tag of it instead (`CameraSerialTag`), an identity prints as `@serial(N chars)`, and a serial mismatch on resume is reported without either value. Logs exported from builds 1–3 can still hold it (the resume identity and `.part` path, a serial-mismatch warning, the SSDP description summary), so check one before quoting it in the repo. `make fixtures` runs `scripts/redact-fixtures.py` over this folder and the test bundle, which also covers `ssdp-description.xml`; the pre-commit hook refuses a staged file that still has one.
+  the Mac's captures stay out (below).
+- No serial numbers: `deviceinfo.bin` and `ssdp-description.xml` carry the camera's, and the repository is public. Each character of it becomes `0`, keeping the length and every other byte (owner's decision, 1 Nov 2026), so this is the one permitted edit. The spike app zeroes it as it saves `deviceinfo.bin` (from build 3) and `ssdp-description.xml` (from build 4); the log line is `fixture saved: … (serial zeroed)`. From build 4 the app doesn't log it either: the DeviceInfo and SSDP lines say only whether there is one, object identities and `.part` paths (`Imports/sn-…/`) carry a one-way tag of it instead (`CameraSerialTag`), an identity prints as `@serial(N chars)`, and a serial mismatch on resume is reported without either value. Logs exported from builds 1–3 can still hold it (the resume identity and `.part` path, a serial-mismatch warning, the SSDP description summary), so check one before quoting it in the repo. `make fixtures` runs `scripts/redact-fixtures.py` over this folder and the test bundle, which also covers `ssdp-description.xml`; the pre-commit hook refuses a staged file that still has one. Packet captures can't be zeroed this way, so they stay off the repo altogether (next rule).
+- No packet captures (`.pcap`, `.pcapng`): a `tcpdump` of the PTP/IP handshake holds GetDeviceInfo with the camera's serial, and its Init packets and any SSDP or mDNS traffic name the Mac. Capture to `~/spike-captures/` on the Mac and write what a capture shows in `docs/spike-findings.md`. `.gitignore` drops `.pcap` and `.pcapng` files under `Fixtures/`, and the pre-commit hook refuses a staged one anywhere (`git add -f` gets past `.gitignore`, not the hook).

@@ -15,6 +15,18 @@ for role in AUTHOR COMMITTER; do
     fi
 done
 
+# Packet captures never enter the repo: a tcpdump of the PTP/IP handshake holds GetDeviceInfo with the camera's
+# serial, and Init packets and SSDP/mDNS traffic name the Mac. .gitignore drops them under Fixtures/, but
+# `git add -f` gets past that, so refuse any staged one, anywhere.
+pcaps="$(git diff --cached --name-only --diff-filter=ACMR -- '*.pcap' '*.pcapng' '*.PCAP' '*.PCAPNG')"
+if [ -n "$pcaps" ]; then
+    echo "pre-commit: refusing to commit packet captures; they carry the camera's serial and the Mac's name:" >&2
+    printf '%s\n' "$pcaps" | sed 's/^/  /' >&2
+    echo "  Unstage them (git restore --staged <file>), keep them in ~/spike-captures/ outside the checkout, and" >&2
+    echo "  write what they show in docs/spike-findings.md. See Fixtures/README.md, Rules." >&2
+    exit 1
+fi
+
 # The camera's serial number never reaches this public repository (owner's decision, 1 Nov 2026): refuse a staged
 # deviceinfo.bin or ssdp-description.xml that still contains one. scripts/redact-fixtures.py zeroes it.
 staged="$(git diff --cached --name-only --diff-filter=ACMR -- '*deviceinfo.bin' '*ssdp-description.xml')"
