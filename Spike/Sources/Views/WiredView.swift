@@ -63,10 +63,10 @@ struct WiredView: View {
                     Toggle("Wait for ImageCaptureCore's catalogue", isOn: $waitForCatalogue)
                         .disabled(isBusy)
                     Button("Open session") { openSession() }
-                        .disabled(selectedCamera == nil || isBusy || isOpen)
+                        .disabled(selectedCamera == nil || isBusy || (isOpen && !isStalled))
                     Button("PTP listing (GetObjectHandles + GetObjectInfo for every object)") { run { await $0.ptpListing() } }
                         .disabled(!canRun)
-                    Button("MTP listing (GetObjectPropList, one request)") { run { await $0.mtpListing() } }
+                    Button("MTP listing (GetObjectPropList per object, newest first)") { run { await $0.mtpListing() } }
                         .disabled(!canRun)
                     Button("GetThumb, 50 newest (PTP)") { run { await $0.ptpThumbnails(count: 50) } }
                         .disabled(!canRun)
@@ -197,19 +197,31 @@ struct WiredView: View {
 
     private var isBusy: Bool { session?.isBusy ?? false }
     private var isOpen: Bool { session?.isOpen ?? false }
-    private var canRun: Bool { isOpen && !isBusy }
+    /// The camera stopped answering on this session's connection: only Open session (a new session) is offered.
+    private var isStalled: Bool { session?.linkStalled ?? false }
+    private var canRun: Bool { isOpen && !isBusy && !isStalled }
 
-    /// Reuses the session if it belongs to the selected camera and the camera is still attached; otherwise starts a
-    /// new one (after a cable pull the re-plugged camera is a new ICCameraDevice).
+    /// Reuses the session if it belongs to the selected camera, the camera is still attached and its connection hasn't
+    /// stalled; otherwise starts a new one (after a cable pull the re-plugged camera is a new ICCameraDevice).
     private func openSession() {
         guard let camera = selectedCamera else {
             log.warn("No camera: start browsing and plug the camera in (Day 1)")
             return
         }
         let wait = waitForCatalogue
-        if let session, session.device === camera, !session.removed {
+        if let session, session.device === camera, !session.removed, !session.linkStalled {
             Task { await session.openSession(waitForCatalogue: wait) }
             return
+        }
+        if let session {
+            // Which case this was is the first thing to know when a replug doesn't recover the camera.
+            let why = session.removed ? "the camera was disconnected"
+                : session.device !== camera ? "a different camera (or the replugged one) is selected"
+                : "the connection stalled and ImageCaptureCore hasn't reported a disconnect, so this is the same connection"
+            log.note("Open session: starting a new session (\(why))")
+            if session.linkStalled && session.device === camera && !session.removed {
+                log.warn("The camera hasn't been unplugged since it stopped answering. If this open gets no answer, unplug it and plug it back in; if that doesn't help, turn the camera off and on.")
+            }
         }
         session?.detach()
         let fresh = CameraSession(device: camera, log: log, lifecycle: lifecycle)
