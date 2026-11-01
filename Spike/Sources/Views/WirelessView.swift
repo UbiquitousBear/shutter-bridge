@@ -376,12 +376,15 @@ final class WirelessLab {
 
     // MARK: Running actions
 
-    private func runCamera(_ label: String, _ work: @escaping @MainActor () async throws -> Void) {
+    /// `transferLink` ("ptpip.ap" / "ptpip.lan") marks a download or resumable read, so locking the phone during it
+    /// counts as locking during a transfer even before its first file finishes.
+    private func runCamera(_ label: String, transferLink: String? = nil, _ work: @escaping @MainActor () async throws -> Void) {
         guard !busy else { log.warn("\(label): wait for \(activity) to finish"); return }
         guard !continued.isRunning else { log.warn("\(label): a continued task is running; stop it first"); return }
         busy = true
         activity = label
         progress = nil
+        if let transferLink { lifecycle.transferStarted(link: transferLink) }
         Task { @MainActor in
             do {
                 try await work()
@@ -391,16 +394,18 @@ final class WirelessLab {
             self.busy = false
             self.activity = ""
             self.progress = nil
+            if transferLink != nil { self.lifecycle.transferEnded() }
+            self.lifecycle.operationEnded()
         }
     }
 
     /// Runs `work` with the open session's client and its net ("ap" / "lan").
-    private func runSession(_ label: String, _ work: @escaping @MainActor (PTPIPClient, String) async throws -> Void) {
+    private func runSession(_ label: String, transfer: Bool = false, _ work: @escaping @MainActor (PTPIPClient, String) async throws -> Void) {
         guard let c = client, let net = sessionNet else {
             log.warn("\(label): not connected; tap Connect first")
             return
         }
-        runCamera(label) { try await work(c, net) }
+        runCamera(label, transferLink: transfer ? "ptpip.\(net)" : nil) { try await work(c, net) }
     }
 
     private func failed(_ label: String, _ error: Error) async {
@@ -709,7 +714,7 @@ final class WirelessLab {
     }
 
     func downloadARW() {
-        runSession("GetObject 20 newest ARW") { c, net in
+        runSession("GetObject 20 newest ARW", transfer: true) { c, net in
             let prefix = "ptpip.\(net)"
             let items = self.newest(ext: "ARW", count: 20)
             guard !items.isEmpty else { throw WiFiLabError.message("no ARW listed; tap List card first") }
@@ -728,7 +733,7 @@ final class WirelessLab {
     }
 
     func downloadMP4() {
-        runSession("GetObject 3 newest MP4") { c, net in
+        runSession("GetObject 3 newest MP4", transfer: true) { c, net in
             let prefix = "ptpip.\(net)"
             let items = self.newest(ext: "MP4", count: 3)
             guard !items.isEmpty else { throw WiFiLabError.message("no MP4 listed; tap List card first") }
@@ -764,10 +769,13 @@ final class WirelessLab {
                                 report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> Bool {
         busy = true
         activity = "Continued task: ARW batch"
+        lifecycle.transferStarted(link: prefix)
         defer {
             busy = false
             activity = ""
             progress = nil
+            lifecycle.transferEnded()
+            lifecycle.operationEnded()
         }
         var done = 0
         var bytes: UInt64 = 0
@@ -956,7 +964,7 @@ final class WirelessLab {
     }
 
     func startResumableRead(pauseAtHalf: Bool) {
-        runSession("Resumable read") { c, net in
+        runSession("Resumable read", transfer: true) { c, net in
             guard let o = self.newest(ext: "ARW", count: 1).first, let di = self.deviceInfo else {
                 throw WiFiLabError.message("no ARW listed; tap List card first")
             }
@@ -996,7 +1004,7 @@ final class WirelessLab {
             log.warn("Resume read: nothing saved; tap Start resumable read first")
             return
         }
-        runCamera("Resume read") {
+        runCamera("Resume read", transferLink: "ptpip.\(saved.net)") {
             if saved.net != t.net { self.log.warn("the saved read started on \(saved.net); it stays in the ptpip.\(saved.net) column") }
             let target = WiFiTarget(net: saved.net, host: t.host, guid: t.guid)
             self.log.note("Resume read: \(saved.summary). Reconnecting (handshake + OpenSession)…")

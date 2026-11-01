@@ -20,6 +20,12 @@ final class LifecycleMonitor {
     private var observers: [NSObjectProtocol] = []
     /// Whether a transfer was making progress when the app left the foreground (see `activeWindow`).
     private var transferWasActive = false
+    /// When the last operation (a button's run) ended: progress from before then is a finished operation's.
+    private var lastOperationEndAt: Date?
+    /// Transfers (downloads, resumable reads) running now, and the link of the latest to start: a transfer locked
+    /// before its first file finishes has reported no progress yet but is still running.
+    private var runningTransfers = 0
+    private var runningLink = "usb"
     /// Progress this recent when the app is backgrounded means a transfer was running.
     private static let activeWindow: TimeInterval = 60
 
@@ -54,12 +60,33 @@ final class LifecycleMonitor {
         if !isInForeground { log?.note("progress while \(stateDescription): \(what)") }
     }
 
+    /// An operation finished (or failed or stopped). Without this, a listing that ended seconds before the phone
+    /// was locked counted as a transfer that made no progress while away (1 Nov 23:39, a false 0.00 s).
+    func operationEnded() {
+        lastOperationEndAt = Date()
+    }
+
+    /// A download or resumable read started on `link` ("usb", "ptpip.ap", "ptpip.lan"); pair with transferEnded().
+    func transferStarted(link: String) {
+        runningTransfers += 1
+        runningLink = link
+    }
+
+    func transferEnded() {
+        runningTransfers = max(0, runningTransfers - 1)
+    }
+
     private func enteredBackground() {
         let now = Date()
         backgroundedAt = now
-        // A transfer counts as running if it reported progress in the last minute (Wi-Fi reports once per file):
-        // only then does "no progress while away" mean the session died, rather than that nothing was running.
-        transferWasActive = lastProgressAt.map { now.timeIntervalSince($0) < Self.activeWindow } ?? false
+        // A transfer counts as running if it reported progress in the last minute (Wi-Fi reports once per file) and
+        // no operation has ended since: only then does "no progress while away" mean the session died, rather than
+        // that nothing was running.
+        let recent = lastProgressAt.map { now.timeIntervalSince($0) < Self.activeWindow } ?? false
+        let endedSince = lastProgressAt.map { progress in lastOperationEndAt.map { $0 >= progress } ?? false } ?? false
+        transferWasActive = runningTransfers > 0 || (recent && !endedSince)
+        // A 0 s result belongs in the running transfer's column even before it has reported progress.
+        if runningTransfers > 0 { lastProgressLink = runningLink }
         log?.note("app entered background" + (transferWasActive ? " during a transfer" : ""))
     }
 
