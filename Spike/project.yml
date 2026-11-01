@@ -45,6 +45,11 @@ targets:
         # ImageCaptureCore on iOS reuses the camera privacy string for external cameras.
         NSCameraUsageDescription: "Reads photos from a camera connected by USB-C, and scans the pairing code on the camera's screen."
         NSPhotoLibraryAddUsageDescription: "Saves imported photos to your library."
+        # Only the Background tab's Photos album test reads the library, to find its own test album again.
+        NSPhotoLibraryUsageDescription: "Finds the test album the spike created, to check that imports can go into an album."
+        # As the product will: no once-per-launch "Select More Photos / Keep Current Selection" alert under limited
+        # access, which the Photos album test could mistake for a read/write prompt.
+        PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSLocalNetworkUsageDescription: "Finds your camera on the local network."
         NSBonjourServices: [_ptp._tcp]
         # The SSDP device description is fetched over plain HTTP from the camera's IP address, which App

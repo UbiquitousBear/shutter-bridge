@@ -13,6 +13,7 @@ struct SpikeApp: App {
     @State private var continued = ContinuedTask()
     @State private var lifecycle = LifecycleMonitor()
     @State private var proximity = ProximityWatcher.shared
+    @State private var photos = PhotosProbe()
 
     init() {
         // Must be registered before the app finishes launching (day 5 test).
@@ -27,11 +28,13 @@ struct SpikeApp: App {
                 .environment(continued)
                 .environment(lifecycle)
                 .environment(proximity)
+                .environment(photos)
                 .task {
                     browser.log = log
                     continued.log = log
                     lifecycle.log = log
                     proximity.log = log
+                    photos.log = log
                     log.note("Spike UI ready. Day plan: docs/spike-plan.md")
                 }
         }

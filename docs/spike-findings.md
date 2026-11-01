@@ -205,6 +205,22 @@ Proximity test:
 | `deviceDidBecomeReady(withCompleteContentCatalog:)` on a reopen of the same device |  |  |
 | `ICCameraDevice.batteryLevel` compared with PTP BatteryLevel (0x5001) |  |  |
 
+## Photos albums
+
+Not in the plan; added on 1 Nov because every import should go into an album. Steps: [spike-runbook.md](spike-runbook.md), "Photos albums".
+
+| Question | Finding | Evidence |
+| --- | --- | --- |
+| Add-only: save a photo (A2) |  |  |
+| Add-only: create an album holding the photo in one change block; did a read/write prompt appear? (A3) |  |  |
+| Add-only: find the album after a relaunch, by identifier and by title (A4) |  |  |
+| Limited: create an album; find it after a relaunch (L2) |  |  |
+| Locked, inside a continued task: A1, complete-until-first-unlock file, no album (K1, K2) |  |  |
+| Locked: A2, the same file class, into the test album (K1, K2) |  |  |
+| Locked: B, complete file, no album (K1, K2) |  |  |
+| Locked: find the album (K1) |  |  |
+| Access level the product needs for an album per import |  |  |
+
 ## Multicast entitlement
 
 | Item | Value |
