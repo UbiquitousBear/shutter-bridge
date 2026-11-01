@@ -24,9 +24,14 @@ The *Guided* tab runs the sessions in [spike-remaining.md](spike-remaining.md) a
 | MSC: app switch, continued task, lock | *Long serial download* while you switch apps; the 20-ARW continued task while the phone is locked; *Long serial download* while it is locked | 12 min |
 | PC Remote: DeviceInfo and ObjectAdded | *Open session* (no wait), *GetDeviceInfo*, *Watch for ObjectAdded (60 s)* while you press the shutter, whether it fired (`usb.pcRemote.shutterEnabled`) | 5 min |
 | MTP: RAW+JPEG pair | *GetObjectInfo: newest ARW + pair* after you shoot RAW+JPEG and RAW+HEIF frames | 3 min |
+| USB: thumbnail speed-ups | *Thumbnails* with 1, 2 and 4 requests in flight on different files (`usb.thumb.inFlight1`, `2`, `4`: wall time per thumbnail); the previews built into the files, read with `requestReadData` and made into thumbnails by ImageIO (`usb.preview.arw.256k`, `.1024k`, `usb.preview.jpg.64k`) | 5 min |
+| USB: 10-minute continued task under lock | *10-minute continued task (whole card, repeated)* with the phone locked throughout | 12 min |
+| Scaling: listing time vs card size | a cold listing in MSC (and MTP), a burst of about 300 small JPGs, a cold listing again; `usb.msc.catalog.perFile` [ms] and `usb.msc.catalog.projected2000`, `projected5000` [s] (and `usb.mtp.…`) | 20–30 min |
 | Wi-Fi: one camera mode | the network, the QR code and join (or the LAN IP), the four day-6 probes, *Connect + OpenSession + GetDeviceInfo* (and *Sony SDIO connect* in PC Remote), *List card*, *Thumbnails for 50 newest*, *GetObject 20 newest ARW*, *Shutter test*; run once per camera Wi-Fi mode | 15 min |
 | Wi-Fi: GUID after a power cycle | *Reconnect (same GUID)* after a camera restart, then a new GUID and *Connect*, with your answer on whether the camera asked | 5 min |
 | Wi-Fi: resume after Wi-Fi off | *Reference hash*, *Start resumable read* paused at 50 %, Wi-Fi off and on, *Resume read* | 5 min |
+| Wi-Fi: lock during a transfer | *GetObject 20 newest ARW* with the phone locked, then *Continued task: 20 ARW* locked | 8 min |
+| Wi-Fi: Send to Smartphone | the fallback: choose photos on the camera and send; connect, *List card* and *Thumbnails*; whether a session opens (`ptpip.<net>.sendToSmartphone.connects`) and lists just the chosen photos (`.listsSelection`) | 5 min |
 | Bluetooth: what the camera advertises | 30 s scans and snapshots with the camera on, asleep and off (Creators' App quit), connected, and optionally not paired; then the filter UUID from those advertised | 15 min |
 | Bluetooth: proximity reminder | *Watch in background*, then the camera switched on with the phone locked, same room and next room (`ble.proximity.reminder.sameRoom`, `.nextRoom`) | 15 min |
 

@@ -73,6 +73,14 @@ struct WiredView: View {
                         .disabled(!canRun)
                     Button("Thumbnails, 50 newest") { run { await $0.timeThumbnails(count: 50) } }
                         .disabled(!canRun)
+                    Button("Thumbnails, 2 in flight (files 51–100)") { run { await $0.timeThumbnailsConcurrent(count: 50, offset: 50, inFlight: 2) } }
+                        .disabled(!canRun)
+                    Button("Thumbnails, 4 in flight (files 101–150)") { run { await $0.timeThumbnailsConcurrent(count: 50, offset: 100, inFlight: 4) } }
+                        .disabled(!canRun)
+                    Button("Embedded previews: 20 ARW, first 256 KB") { run { await $0.timeHeaderPreviews(ext: "ARW", kilobytes: 256) } }
+                        .disabled(!canRun)
+                    Button("Embedded previews: 20 JPG, first 64 KB") { run { await $0.timeHeaderPreviews(ext: "JPG", kilobytes: 64) } }
+                        .disabled(!canRun)
                     Button("Close session", role: .destructive) { run { await $0.closeSession() } }
                         .disabled(!canRun)
                     Text("Wait off: Open session returns at once and the catalogue is logged every 2 s until usb.catalog.complete; the PTP and MTP buttons work meanwhile (a catalogue they overlap is recorded as usb.catalog.complete.contended), ImageCaptureCore's thumbnails and downloads wait for it. MTP mode only: the camera answers no PTP commands in MSC mode.")
@@ -140,6 +148,8 @@ struct WiredView: View {
                     Button("Long serial download (lock the phone now)") { run { await $0.longSerialDownload() } }
                         .disabled(!canRun)
                     Button("Download 20 newest ARW inside a continued task") { session?.continuedDownload(using: continued) }
+                        .disabled(!canRun || continued.isRunning)
+                    Button("10-minute continued task (whole card, repeated)") { session?.continuedLongDownload(using: continued, minutes: 10) }
                         .disabled(!canRun || continued.isRunning)
                     LabeledContent("Continued task", value: "\(continued.state) · \(continued.completed)/\(continued.total)")
                     Button("Stop continued task") { continued.stop() }

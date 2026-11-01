@@ -5,6 +5,9 @@ import ImageCaptureCore
 // functions as the Wired, Wi-Fi and Bluetooth tabs' buttons, so it logs and measures exactly what they do; the
 // alerts only replace "now do this on the camera" in the runbook.
 
+/// One decimal by default, as in the log lines elsewhere.
+private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
+
 extension GuidedScript {
     static let all: [GuidedScript] = [
         GuidedScript(id: "usb.evening", group: "USB (session S1)", title: "USB evening: checks, MSC, PC Remote, MTP",
@@ -26,12 +29,23 @@ extension GuidedScript {
         GuidedScript(id: "usb.mtp.pair", group: "USB (session S1)", title: "MTP: RAW+JPEG pair",
                      summary: "GetObjectInfo of the newest ARW and its JPG or HEIF (3 min).") { r in try await r.mtpPair() },
 
+        GuidedScript(id: "usb.browse", group: "USB (session S1)", title: "USB: thumbnail speed-ups",
+                     summary: "Thumbnails 1, 2 and 4 at a time; previews read from the file headers (5 min, MSC or MTP).") { r in try await r.usbBrowseSpeed() },
+        GuidedScript(id: "usb.long.lock", group: "USB (session S1)", title: "USB: 10-minute continued task under lock",
+                     summary: "A continued task over the whole card for 10 min with the phone locked (12 min, mostly unattended).") { r in try await r.usbLongLock() },
+        GuidedScript(id: "usb.scaling", group: "Scaling", title: "Scaling: listing time vs card size",
+                     summary: "Cold listing now, a burst of about 300 frames, cold listing again; projects 2,000 and 5,000 files (20–30 min).") { r in try await r.scaling() },
+
         GuidedScript(id: "wifi.mode", group: "Wi-Fi (session S2)", title: "Wi-Fi: one camera mode",
                      summary: "Join, probes, connect, list, thumbnails, 20 ARW, shutter (15 min). Run once per mode.") { r in try await r.wifiModePass() },
         GuidedScript(id: "wifi.guid", group: "Wi-Fi (session S2)", title: "Wi-Fi: GUID after a power cycle",
                      summary: "Reconnect with the same GUID, then a new one; note the camera's prompts (5 min).") { r in try await r.wifiGUID() },
         GuidedScript(id: "wifi.resume", group: "Wi-Fi (session S2)", title: "Wi-Fi: resume after Wi-Fi off",
                      summary: "Reference hash, read paused at 50 %, Wi-Fi off and on, resume and verify (5 min).") { r in try await r.wifiResume() },
+        GuidedScript(id: "wifi.lock", group: "Wi-Fi (session S2)", title: "Wi-Fi: lock during a transfer",
+                     summary: "20 ARW with the phone locked, then the same inside a continued task (8 min).") { r in try await r.wifiLock() },
+        GuidedScript(id: "wifi.send", group: "Wi-Fi (session S2)", title: "Wi-Fi: Send to Smartphone",
+                     summary: "The fallback: choose 2 photos on the camera and send; does the app see just those? (5 min).") { r in try await r.wifiSendToSmartphone() },
 
         GuidedScript(id: "ble.adverts", group: "Bluetooth (session S3)", title: "Bluetooth: what the camera advertises",
                      summary: "30 s scans with the camera on, asleep and off; snapshots; pick the filter UUID (15 min).") { r in try await r.bleAdverts() },
@@ -269,6 +283,98 @@ extension GuidedRunner {
         }
     }
 
+    func usbBrowseSpeed() async throws {
+        try await section("USB: thumbnail speed-ups",
+                          "Works in MSC or MTP, about 5 minutes. Thumbnails one, two and four at a time on different files (so none comes from a cache), then the previews built into the files, read with requestReadData.") {
+            try await prepareMode("Image Transfer (MSC) or (MTP)")
+            try await openSession(wait: true)
+            try await operation("Thumbnails, 1 at a time (files 1–50)", "", timeout: 300) { await $0.timeThumbnailsConcurrent(count: 50, offset: 0, inFlight: 1) }
+            try await operation("Thumbnails, 2 at a time (files 51–100)", "", timeout: 300) { await $0.timeThumbnailsConcurrent(count: 50, offset: 50, inFlight: 2) }
+            try await operation("Thumbnails, 4 at a time (files 101–150)", "", timeout: 300) { await $0.timeThumbnailsConcurrent(count: 50, offset: 100, inFlight: 4) }
+            try await operation("ARW previews, first 256 KB", "", timeout: 300) { await $0.timeHeaderPreviews(ext: "ARW", count: 20, offset: 0, kilobytes: 256) }
+            try await operation("ARW previews, first 1 MB", "", timeout: 300) { await $0.timeHeaderPreviews(ext: "ARW", count: 20, offset: 20, kilobytes: 1024) }
+            try await operation("JPG previews, first 64 KB", "", timeout: 300) { await $0.timeHeaderPreviews(ext: "JPG", count: 20, offset: 0, kilobytes: 64) }
+        }
+    }
+
+    func usbLongLock() async throws {
+        try await section("USB: 10-minute continued task under lock",
+                          "Image Transfer (MSC), about 12 minutes, mostly unattended: a continued task over the whole card, repeated for 10 min, with the phone locked throughout.") {
+            try await prepareMode("Image Transfer (MSC)")
+            try await openSession(wait: true)
+            try await ask("Ready to lock", "Tap Start, then lock the phone as soon as the import shows on the Lock Screen or in the Dynamic Island. Leave it locked for the 10 minutes, then unlock.",
+                          buttons: ["Start"])
+            let returns = lifecycle.foregroundReturns
+            usb.session?.continuedLongDownload(using: continued, minutes: 10)
+            try await waitUntil("Starting the continued task", "Waiting for iOS to start it.", timeout: 30) { self.continued.isRunning }
+            try await waitUntil("Lock the phone now", "Lock the phone and leave it for 10 minutes. Unlock afterwards.", timeout: 1500) {
+                self.lifecycle.foregroundReturns > returns || !self.continued.isRunning
+            }
+            try await waitUntil("Finishing the continued task", "Waiting for it to end.", timeout: 900) { !self.continued.isRunning }
+        }
+    }
+
+    /// A cold catalogue on a fresh plug: (files, seconds), or nil if ImageCaptureCore had kept it (asks for a replug).
+    private func coldCatalogue(mode: String, massStorage: Bool) async throws -> (files: Int, seconds: Double) {
+        for _ in 0..<2 {
+            let old = usb.selectedCamera
+            if old != nil {
+                try await waitUntil("Unplug the camera", "Pull the cable out of the phone, for a cold listing.", timeout: 300) {
+                    !self.browser.cameras.contains { $0 === old } || (self.usb.session?.removed ?? false)
+                }
+            }
+            try await waitForCamera(mode: mode, excluding: old)
+            let openedAt = Date()
+            try await openSession(wait: true)
+            try await expectTransport(massStorage: massStorage, mode: mode)
+            if let m = log.measurements.last(where: { $0.at >= openedAt && $0.name.hasPrefix("usb.catalog.complete") }) {
+                let files = usb.session?.files.count ?? 0
+                if m.name == "usb.catalog.complete" {
+                    log.note("  guided: \(mode): \(files) files listed cold in \(fmt(m.value, 2)) s")
+                    return (files, m.value)
+                }
+                log.warn("  guided: \(mode): \(m.name) is not a cold figure; replugging")
+            } else {
+                log.warn("  guided: \(mode): no catalogue figure after the open; replugging")
+            }
+        }
+        throw GuidedStop("no cold catalogue figure for \(mode)")
+    }
+
+    func scaling() async throws {
+        try await section("Scaling: listing time vs card size",
+                          "About 20–30 minutes. A cold listing in each mode now, then you shoot a burst of about 300 small JPGs, then a cold listing again. From the two sizes the app works out the cost per file and projects 2,000 and 5,000 files.") {
+            let modes = try await ask("Which modes?", "MTP adds about 65 s per listing.", buttons: ["MSC only", "MSC and MTP"])
+            var plan: [(mode: String, massStorage: Bool, key: String)] = [("Image Transfer (MSC)", true, "msc")]
+            if modes == "MSC and MTP" { plan.append(("Image Transfer (MTP)", false, "mtp")) }
+            var before: [String: (files: Int, seconds: Double)] = [:]
+            for entry in plan {
+                step("Cold listing before the burst: \(entry.mode)")
+                before[entry.key] = try await coldCatalogue(mode: entry.mode, massStorage: entry.massStorage)
+            }
+            try await ask("Shoot a burst", "Pull the cable. On the camera: Image Quality JPEG, Image Size S, Drive Mode Continuous Shooting Hi. Shoot about 300 frames (a few long presses of the shutter), then tap Done.",
+                          buttons: ["Done"])
+            for entry in plan {
+                step("Cold listing after the burst: \(entry.mode)")
+                let after = try await coldCatalogue(mode: entry.mode, massStorage: entry.massStorage)
+                guard let first = before[entry.key], after.files > first.files else {
+                    log.warn("  guided: \(entry.mode): the card didn't grow, so no scaling figure")
+                    continue
+                }
+                let perFile = (after.seconds - first.seconds) / Double(after.files - first.files)
+                let fixed = first.seconds - perFile * Double(first.files)
+                let context = "cold catalogue \(first.files) files \(fmt(first.seconds, 2)) s → \(after.files) files \(fmt(after.seconds, 2)) s; fixed part \(fmt(fixed, 2)) s"
+                log.measure("usb.\(entry.key).catalog.perFile", perFile * 1000, "ms", context: context)
+                for target in [2_000, 5_000] {
+                    log.measure("usb.\(entry.key).catalog.projected\(target)", fixed + perFile * Double(target), "s",
+                                context: "straight-line projection from two card sizes; " + context)
+                }
+            }
+            try await ask("Tidy the card", "If you don't want the burst frames, delete them on the camera (Playback → Delete → Multiple Images, or protect the rest and delete all).",
+                          buttons: ["OK"])
+        }
+    }
+
     // MARK: - Wi-Fi helpers
 
     /// The same target the Wi-Fi tab builds from its stored settings.
@@ -407,6 +513,59 @@ extension GuidedRunner {
             if wireless.resumeSummary == nil { throw GuidedStop("the read finished without an interruption, so there's nothing to resume") }
             try await ask("Back on the camera's network?", "Tap OK once Wi-Fi is on and the phone has rejoined the camera's network.", buttons: ["OK"])
             try await wifi("Resume read", "Reconnecting, finding the file again and reading the rest.", timeout: 600) { wireless.resumeRead(wifiTarget()) }
+        }
+    }
+
+    func wifiLock() async throws {
+        try await section("Lock during a Wi-Fi transfer", "Needs a connected session with the card listed (Wi-Fi: one camera mode). About 8 minutes.") {
+            guard wireless.isConnected else { throw GuidedStop("connect first (Wi-Fi: one camera mode)") }
+            if wireless.objects.isEmpty {
+                try await wifi("List card", "The transfer needs the card listed.", timeout: 900) { wireless.listCard() }
+            }
+            try await ask("Plain transfer, phone locked", "Tap Start, then lock the phone within 10 s and leave it locked about 2 minutes.", buttons: ["Start"])
+            var returns = lifecycle.foregroundReturns
+            step("GetObject 20 newest ARW, phone locked")
+            wireless.downloadARW()
+            try await waitUntil("Lock the phone now", "Lock the phone. Unlock after about 2 minutes.", timeout: 1200) {
+                self.lifecycle.foregroundReturns > returns || !self.wireless.busy
+            }
+            try await waitUntil("Finishing the transfer", "Waiting for it to end or fail.", timeout: 1200) { !self.wireless.busy }
+
+            try await ask("Continued task, phone locked", "Tap Start, then lock the phone once the import shows on the Lock Screen or in the Dynamic Island; unlock after about 2 minutes.",
+                          buttons: ["Start"])
+            returns = lifecycle.foregroundReturns
+            step("Continued task: 20 ARW over Wi-Fi, phone locked")
+            wireless.downloadARWContinued()
+            try await waitUntil("Starting the continued task", "Waiting for iOS to start it.", timeout: 30) { self.continued.isRunning }
+            try await waitUntil("Lock the phone now", "Lock the phone. Unlock after about 2 minutes.", timeout: 1200) {
+                self.lifecycle.foregroundReturns > returns || !self.continued.isRunning
+            }
+            try await waitUntil("Finishing the continued task", "Waiting for it to end.", timeout: 1200) { !self.continued.isRunning }
+        }
+    }
+
+    func wifiSendToSmartphone() async throws {
+        try await section("Send to Smartphone", "If PTP/IP browsing fails, 1.0's wireless path is the camera's own Send to Smartphone. Does our app see the photos the camera sends? About 5 minutes.") {
+            let chosen = try await ask("Choose photos on the camera", "On the camera: Playback, then the Send to Smartphone function (Select on This Device or Select on Camera & Send). Choose 2 photos and start sending, so the camera waits for a phone. How many did you choose?",
+                                       buttons: ["1", "2", "3", "More"])
+            try await wifiJoin()
+            let t = wifiTarget()
+            try await wifi("Connect + OpenSession + GetDeviceInfo", "Connecting as the camera waits to send.", timeout: 120) { wireless.connect(t) }
+            guard wireless.isConnected, wireless.connectionState.hasPrefix("connected") else {
+                log.flag("\(t.prefix).sendToSmartphone.connects", false, context: "Send to Smartphone: \(wireless.connectionState)")
+                throw GuidedStop("the app couldn't open a PTP/IP session while the camera was sending")
+            }
+            log.flag("\(t.prefix).sendToSmartphone.connects", true, context: "Send to Smartphone: a PTP/IP session opened")
+            try await wifi("List card", "Listing what the camera offers.", timeout: 600) { wireless.listCard() }
+            let listed = wireless.objects.count
+            let expected = Int(chosen) ?? -1
+            log.flag("\(t.prefix).sendToSmartphone.listsSelection", expected > 0 ? listed == expected : listed > 0 && listed < 10,
+                     context: "listed \(listed) objects; \(chosen) chosen on the camera")
+            if listed > 0 {
+                try await wifi("Thumbnails", "GetThumb for what was listed.", timeout: 300) { wireless.thumbnails() }
+            }
+            let camera = try await ask("On the camera", "What does the camera show now?", buttons: ["Sent / complete", "Still waiting", "An error"])
+            log.note("◆ Send to Smartphone: camera shows \(camera)")
         }
     }
 
