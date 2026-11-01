@@ -1,0 +1,193 @@
+# Builds the spike on GitHub's xcode-27 runner and uploads it to TestFlight (internal testing only), so the app
+# reaches the iPhone without a Mac. Xcode Cloud remains the long-term route (docs/ci.md); this one exists because
+# its onboarding needs Xcode on a Mac.
+#
+# Safety, because the repository is public and the key it uses can sign and upload as the account:
+# - Manual trigger only (Actions → "Spike to TestFlight" → Run workflow). Never runs on pushes or pull requests,
+#   so code from a fork can never reach the key.
+# - The key lives only in the `testflight` environment, which is limited to `main` and needs Shamil's approval
+#   for every run before any secret is handed to the job.
+# - No third-party actions: the job checks out the exact commit with plain git (the repository is public, so no
+#   credentials are needed), and the only job token permission is read access to contents.
+# - The secrets are given only to the step that signs and uploads (the first step only learns whether each is
+#   set). The .p8 is written to the runner's temp folder with owner-only permissions and deleted when that step
+#   ends; nothing prints it. GitHub-hosted runners are discarded after each job.
+# - Residual risks (docs/ci.md, Security): `brew install xcodegen` runs unpinned third-party code in the same
+#   job before the signing step; and anyone who can push to main can change this file, so protect main with a
+#   ruleset that requires pull requests.
+#
+# Environment `testflight`: secrets ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY (the whole .p8 text of an Admin
+# team key: Apple-managed signing needs Admin) and variable APPLE_TEAM_ID. Setup steps: docs/ci.md.
+name: Spike to TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      xcode:
+        description: Xcode on the xcode-27 image (27.2 is the release candidate until the image updates)
+        type: choice
+        options:
+          - Xcode_27.1
+          - Xcode_27.2
+        default: Xcode_27.1
+      archive_signing:
+        description: >-
+          How the archive is signed before the export re-signs it for TestFlight. "adhoc" (the default, what Xcode
+          Cloud does) needs no certificate. "cloud" lets Xcode sign the archive with an Apple-managed development
+          certificate, which needs at least one device registered to the team (see docs/ci.md).
+        type: choice
+        options:
+          - adhoc
+          - cloud
+        default: adhoc
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    runs-on: xcode-27
+    environment: testflight
+    timeout-minutes: 60
+    env:
+      XCODE: ${{ inputs.xcode }}
+      ARCHIVE_SIGNING: ${{ inputs.archive_signing }}
+      DEVELOPER_DIR: /Applications/${{ inputs.xcode }}.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      # Unique per upload, as App Store Connect requires: run number plus attempt, so a re-run of a run that
+      # already uploaded still gets a new, higher number (CFBundleVersion allows up to three integers).
+      BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check the run and the testflight environment
+        env:
+          # Whether each secret is set, never the secret itself.
+          HAS_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID != '' }}
+          HAS_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID != '' }}
+          HAS_ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (it was started on $GITHUB_REF)"
+            exit 1
+          fi
+          case "$XCODE" in Xcode_27.1|Xcode_27.2) ;; *) echo "::error::Unknown Xcode choice"; exit 1 ;; esac
+          case "$ARCHIVE_SIGNING" in adhoc|cloud) ;; *) echo "::error::Unknown archive_signing choice"; exit 1 ;; esac
+          missing=()
+          [ -n "$TEAM_ID" ] || missing+=("variable APPLE_TEAM_ID")
+          [ "$HAS_ASC_KEY_ID" = true ] || missing+=("secret ASC_KEY_ID")
+          [ "$HAS_ASC_ISSUER_ID" = true ] || missing+=("secret ASC_ISSUER_ID")
+          [ "$HAS_ASC_PRIVATE_KEY" = true ] || missing+=("secret ASC_PRIVATE_KEY")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::The testflight environment is missing: ${missing[*]} (see docs/ci.md)"
+            exit 1
+          fi
+
+      - name: Check out this commit (plain git, no credentials)
+        run: |
+          git init -q .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch -q --depth 1 origin "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+          git log -1 --format='%h %s'
+
+      - name: Tool versions
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen --version
+          make spike
+          git diff --exit-code -- Spike/Spike.entitlements
+
+      - name: Archive, sign with Apple-managed certificates and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -o pipefail
+          case "$ASC_PRIVATE_KEY" in
+            *"BEGIN PRIVATE KEY"*"END PRIVATE KEY"*) ;;
+            *) echo "::error::ASC_PRIVATE_KEY must be the whole .p8 text, including the BEGIN and END lines"; exit 1 ;;
+          esac
+          umask 077
+          key="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$key"
+          unset ASC_PRIVATE_KEY
+          auth=(-allowProvisioningUpdates -authenticationKeyPath "$key"
+                -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          archive="$RUNNER_TEMP/Spike.xcarchive"
+
+          # 1. Archive. "adhoc": an ad-hoc signature keeps the entitlements for the export to re-sign (these are
+          #    the flags Xcode Cloud's own archive uses; CODE_SIGNING_ALLOWED=NO would drop the entitlements).
+          #    "cloud": Xcode signs the archive itself, using the key to fetch an Apple-managed certificate.
+          if [ "$ARCHIVE_SIGNING" = adhoc ]; then
+            xcodebuild archive \
+              -project Spike/Spike.xcodeproj -scheme Spike -configuration Release \
+              -destination 'generic/platform=iOS' -archivePath "$archive" \
+              DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+              CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES \
+              CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+              | xcbeautify --renderer github-actions
+          else
+            xcodebuild archive "${auth[@]}" \
+              -project Spike/Spike.xcodeproj -scheme Spike -configuration Release \
+              -destination 'generic/platform=iOS' -archivePath "$archive" \
+              DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+              CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+              | xcbeautify --renderer github-actions
+          fi
+
+          # 2. The archive must still carry the Hotspot Configuration entitlement (the day-9 camera AP join).
+          app="$(find "$archive/Products/Applications" -maxdepth 1 -name '*.app' | head -n 1)"
+          if [ -z "$app" ]; then echo "::error::No app found in the archive"; exit 1; fi
+          if ! codesign -d --entitlements - --xml "$app" 2>/dev/null | grep -q com.apple.developer.networking.HotspotConfiguration; then
+            echo "::error::The archived app is signed without com.apple.developer.networking.HotspotConfiguration"
+            exit 1
+          fi
+          for k in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
+            printf '%s: %s\n' "$k" "$(/usr/libexec/PlistBuddy -c "Print :$k" "$app/Info.plist")"
+          done
+
+          # 3. Export with Apple-managed distribution signing and upload to TestFlight (internal testing only).
+          #    Not piped through xcbeautify: its output is short, and on failure the detail lines (the
+          #    IDEDistribution error and the .xcdistributionlogs path) are the ones xcbeautify would drop.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>testFlightInternalTestingOnly</key><true/>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive "${auth[@]}" \
+            -archivePath "$archive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Uploaded to TestFlight"
+            echo "Build **$BUILD_NUMBER** of net.shamil.shutter-bridge.spike, built with $XCODE ($ARCHIVE_SIGNING archive)."
+            echo "App Store Connect processes it for a few minutes; then install it from the TestFlight app."
+          } >> "$GITHUB_STEP_SUMMARY"

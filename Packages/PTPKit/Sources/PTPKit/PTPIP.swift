@@ -3,7 +3,9 @@
 //
 //   u32 length (whole packet)   u32 packetType   payload
 //
-// This file only encodes and decodes packets; the socket work lives in the app's IPLink.
+// This file only encodes and decodes packets; the socket work lives in the app's IPLink. PTPIPStream.swift
+// turns a TCP byte stream into packets without buffering large data phases, and assembles one transaction.
+// Responder-side encoders (Init_Command_Ack, Cmd_Response, Data …) exist for tests and the future PTPSimulator.
 
 import Foundation
 
@@ -103,6 +105,109 @@ public enum PTPIP {
     public static func decodeInitFail(_ p: Packet) -> UInt32 {
         var r = PTPReader(p.payload)
         return (try? r.u32()) ?? 0
+    }
+
+    /// Init_Fail reasons as listed in CIPA DC-005. Record what the α7C II actually sends (spike day 7): a camera
+    /// that hasn't paired this initiator GUID is expected to answer `rejectedInitiator` until the user confirms
+    /// on its screen.
+    public enum InitFailReason: UInt32, Sendable, CustomStringConvertible {
+        case rejectedInitiator = 1
+        case busy = 2
+        case unspecified = 3
+
+        public var description: String {
+            switch self {
+            case .rejectedInitiator: "rejected initiator (not paired / refused on camera)"
+            case .busy: "busy (another initiator connected?)"
+            case .unspecified: "unspecified"
+            }
+        }
+
+        public static func describe(_ raw: UInt32) -> String {
+            InitFailReason(rawValue: raw).map(\.description) ?? String(format: "reason 0x%08X", raw)
+        }
+    }
+
+    // MARK: Responder side (tests, PTPSimulator)
+
+    public static func initCommandAck(connectionNumber: UInt32, guid: UUID, name: String, version: UInt32 = protocolVersion) -> Packet {
+        var w = PTPWriter()
+        w.u32(connectionNumber)
+        w.bytes(guidBytes(guid))
+        w.bytes(utf16z(name))
+        w.u32(version)
+        return Packet(type: .initCommandAck, payload: w.data)
+    }
+
+    public static func initEventAck() -> Packet { Packet(type: .initEventAck) }
+
+    public static func initFail(reason: UInt32) -> Packet {
+        var w = PTPWriter()
+        w.u32(reason)
+        return Packet(type: .initFail, payload: w.data)
+    }
+
+    /// Decodes an Init_Command_Request: initiator GUID, friendly name, protocol version.
+    public static func decodeInitCommandRequest(_ p: Packet) throws -> (guid: UUID, friendlyName: String, protocolVersion: UInt32) {
+        var r = PTPReader(p.payload)
+        let guid = try uuid(from: try r.bytes(16))
+        let (name, used) = try utf16zDecode(r.rest())
+        var tail = PTPReader(p.payload.suffix(from: p.payload.startIndex + 16 + used))
+        return (guid, name, (try? tail.u32()) ?? 0)
+    }
+
+    /// Decodes a Cmd_Request back into its data-phase flag and PTP command container.
+    public static func decodeCmdRequest(_ p: Packet) throws -> (dataPhase: UInt32, command: PTPContainer) {
+        var r = PTPReader(p.payload)
+        let phase = try r.u32()
+        let code = try r.u16()
+        let tx = try r.u32()
+        return (phase, PTPContainer(type: .command, code: code, transactionID: tx, payload: r.rest()))
+    }
+
+    public static func cmdResponse(_ code: PTPResponseCode, transactionID: UInt32, parameters: [UInt32] = []) -> Packet {
+        var w = PTPWriter()
+        w.u16(code.rawValue)
+        w.u32(transactionID)
+        for v in parameters { w.u32(v) }
+        return Packet(type: .cmdResponse, payload: w.data)
+    }
+
+    public static func event(_ code: PTPEventCode, transactionID: UInt32 = 0, parameters: [UInt32] = []) -> Packet {
+        var w = PTPWriter()
+        w.u16(code.rawValue)
+        w.u32(transactionID)
+        for v in parameters { w.u32(v) }
+        return Packet(type: .event, payload: w.data)
+    }
+
+    /// A Data packet (not the last one of a data phase; that is End_Data).
+    public static func data(transactionID: UInt32, bytes: Data) -> Packet {
+        var w = PTPWriter()
+        w.u32(transactionID)
+        w.bytes(bytes)
+        return Packet(type: .data, payload: w.data)
+    }
+
+    /// The whole responder-side data phase for `payload`: Start_Data, zero or more Data packets of at most
+    /// `packetSize` bytes, then End_Data with the remainder.
+    public static func dataPhase(transactionID: UInt32, payload: Data, packetSize: Int = 64 * 1024) -> [Packet] {
+        precondition(packetSize > 0)
+        var packets = [startData(transactionID: transactionID, totalLength: UInt64(payload.count))]
+        var offset = payload.startIndex
+        while payload.endIndex - offset > packetSize {
+            packets.append(data(transactionID: transactionID, bytes: payload.subdata(in: offset ..< offset + packetSize)))
+            offset += packetSize
+        }
+        packets.append(endData(transactionID: transactionID, bytes: payload.subdata(in: offset ..< payload.endIndex)))
+        return packets
+    }
+
+    /// Cancel packet (either direction): the transaction being cancelled.
+    public static func cancel(transactionID: UInt32) -> Packet {
+        var w = PTPWriter()
+        w.u32(transactionID)
+        return Packet(type: .cancel, payload: w.data)
     }
 
     // MARK: Operations

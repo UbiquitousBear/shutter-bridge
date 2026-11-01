@@ -1,6 +1,10 @@
 // PTPKit — codes from ISO 15740 (PTP) plus the vendor values we expect to see on Sony bodies.
-// Pure Swift, no I/O. Vendor codes marked `unverified` are to be confirmed against the camera's
-// GetDeviceInfo on spike day 2 and recorded in Fixtures/a7c2/.
+// Pure Swift, no I/O. Sony vendor values come from libgphoto2's camlibs/ptp2/ptp.h (the best public record of
+// Sony's PTP extension); they are `unverified` on the α7C II until the camera's own GetDeviceInfo and
+// GetObjectInfo, captured into Fixtures/a7c2/ during the spike, confirm them. Vendor codes in the 0x9000,
+// 0xB000 and 0xC000 ranges only mean what they say here when the device is Sony (`PTPDeviceInfo.isSony`):
+// vendorExtensionID 0x11, or an MTP ID (0xFFFFFFFF, or 0x6) with a Sony manufacturer. libgphoto2 treats
+// 0xFFFFFFFF from "Sony Corporation" as Sony ("Mostly for PTP/IP mode"), so Sony bodies do send it.
 
 public enum PTPContainerType: UInt16, Sendable {
     case command = 1
@@ -27,8 +31,18 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     public static let getDevicePropDesc = PTPOperationCode(rawValue: 0x1014)
     public static let getDevicePropValue = PTPOperationCode(rawValue: 0x1015)
     public static let getPartialObject  = PTPOperationCode(rawValue: 0x101B)
-    /// MTP extension: 64-bit offset variant. Some bodies support only this one for large files.
+    /// Android's MTP extension (libgphoto2 `PTP_OC_ANDROID_GetPartialObject64`): 64-bit offset variant.
     public static let getPartialObject64 = PTPOperationCode(rawValue: 0x95C1)
+
+    // Sony SDIO extension (libgphoto2 names). `unverified` on the α7C II.
+    /// Three-phase handshake (param 1 = phase 1, 2, 3) that PC Remote mode needs before vendor ops work.
+    public static let sonySDIOConnect = PTPOperationCode(rawValue: 0x9201)
+    /// Param 1 = protocol version (0xC8 = 2.00, 0x12C = 3.00), param 2 = 1. Data phase lists vendor codes.
+    public static let sonySDIOGetExtDeviceInfo = PTPOperationCode(rawValue: 0x9202)
+    /// Sony's own 64-bit partial read. Parameter layout undocumented; probe it in the spike.
+    public static let sonySDIOGetPartialLargeObject = PTPOperationCode(rawValue: 0x9211)
+    /// Switches the camera into its contents-transfer (card browsing) mode. Parameters undocumented.
+    public static let sonySDIOSetContentsTransferMode = PTPOperationCode(rawValue: 0x9212)
 
     public var description: String {
         switch self {
@@ -46,7 +60,11 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
         case .getDevicePropDesc: "GetDevicePropDesc"
         case .getDevicePropValue: "GetDevicePropValue"
         case .getPartialObject: "GetPartialObject"
-        case .getPartialObject64: "GetPartialObject64 (MTP)"
+        case .getPartialObject64: "GetPartialObject64 (Android/MTP)"
+        case .sonySDIOConnect: "Sony SDIO_Connect"
+        case .sonySDIOGetExtDeviceInfo: "Sony SDIO_GetExtDeviceInfo"
+        case .sonySDIOGetPartialLargeObject: "Sony SDIO_GetPartialLargeObject"
+        case .sonySDIOSetContentsTransferMode: "Sony SDIO_SetContentsTransferMode"
         default: String(format: "Op(0x%04X)", rawValue)
         }
     }
@@ -97,6 +115,14 @@ public struct PTPResponseCode: RawRepresentable, Hashable, Sendable, CustomStrin
         case .accessDenied: "AccessDenied"
         case .noThumbnailPresent: "NoThumbnailPresent"
         case .storeNotAvailable: "StoreNotAvailable"
+        case .devicePropNotSupported: "DevicePropNotSupported"
+        case .invalidObjectFormatCode: "InvalidObjectFormatCode"
+        case .storeFull: "StoreFull"
+        case .objectWriteProtected: "ObjectWriteProtected"
+        case .partialDeletion: "PartialDeletion"
+        case .undefined: "Undefined"
+        case .storeReadOnly: "StoreReadOnly"
+        case .invalidParentObject: "InvalidParentObject"
         case .invalidParameter: "InvalidParameter"
         case .sessionAlreadyOpen: "SessionAlreadyOpen"
         case .transactionCancelled: "TransactionCancelled"
@@ -123,6 +149,13 @@ public struct PTPEventCode: RawRepresentable, Hashable, Sendable, CustomStringCo
     public static let deviceReset        = PTPEventCode(rawValue: 0x400B)
     public static let storageInfoChanged = PTPEventCode(rawValue: 0x400C)
     public static let captureComplete    = PTPEventCode(rawValue: 0x400D)
+    /// Sony vendor ObjectAdded (libgphoto2 `PTP_EC_Sony_ObjectAdded`). Sony bodies in PC Remote mode report new
+    /// shots with this rather than 0x4002. `unverified` on the α7C II.
+    public static let sonyObjectAdded    = PTPEventCode(rawValue: 0xC201)
+    public static let sonyObjectRemoved  = PTPEventCode(rawValue: 0xC202)
+
+    /// True for the standard and the Sony vendor ObjectAdded: the event transfer-while-shooting would act on.
+    public var signalsNewObject: Bool { self == .objectAdded || self == .sonyObjectAdded }
 
     public var description: String {
         switch self {
@@ -138,6 +171,9 @@ public struct PTPEventCode: RawRepresentable, Hashable, Sendable, CustomStringCo
         case .deviceReset: "DeviceReset"
         case .storageInfoChanged: "StorageInfoChanged"
         case .captureComplete: "CaptureComplete"
+        case .cancelTransaction: "CancelTransaction"
+        case .sonyObjectAdded: "Sony ObjectAdded"
+        case .sonyObjectRemoved: "Sony ObjectRemoved"
         default: String(format: "Event(0x%04X)", rawValue)
         }
     }
@@ -155,10 +191,17 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
     public static let jfif        = PTPObjectFormat(rawValue: 0x3808)
     public static let tiff        = PTPObjectFormat(rawValue: 0x380D)
     public static let dng         = PTPObjectFormat(rawValue: 0x3811)
+    public static let quickTime   = PTPObjectFormat(rawValue: 0x300D)
     /// MTP: MP4 container.
     public static let mp4         = PTPObjectFormat(rawValue: 0xB982)
-    /// Sony vendor format code for ARW. `unverified` — read the real value from GetObjectInfo on day 2.
-    public static let sonyRAWUnverified = PTPObjectFormat(rawValue: 0xB101)
+    /// MTP: XML document (the sidecars the camera writes beside video clips).
+    public static let xmlDocument = PTPObjectFormat(rawValue: 0xBA82)
+    /// Sony vendor format for ARW (libgphoto2 `PTP_OFC_SONY_RAW`). `unverified` on the α7C II.
+    public static let sonyARW     = PTPObjectFormat(rawValue: 0xB101)
+    /// Sony vendor format for HEIF / .HIF (libgphoto2 `PTP_OFC_SONY_HEIF`). `unverified` on the α7C II.
+    public static let sonyHEIF    = PTPObjectFormat(rawValue: 0xB110)
+    /// Sony vendor format for MPO (libgphoto2 `PTP_OFC_SONY_MPO`).
+    public static let sonyMPO     = PTPObjectFormat(rawValue: 0xB301)
 
     public var description: String {
         switch self {
@@ -170,21 +213,52 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
         case .jfif: "JFIF"
         case .tiff: "TIFF"
         case .dng: "DNG"
+        case .quickTime: "QuickTime"
         case .mp4: "MP4"
-        case .sonyRAWUnverified: "Sony RAW (unverified code)"
+        case .xmlDocument: "XML"
+        case .sonyARW: "Sony ARW"
+        case .sonyHEIF: "Sony HEIF"
+        case .sonyMPO: "Sony MPO"
         default: String(format: "Format(0x%04X)", rawValue)
         }
     }
 }
 
+/// PTP vendor extension IDs (DeviceInfo.vendorExtensionID), as in libgphoto2's ptp.h. Sony is 0x11, but Sony
+/// bodies in PTP/IP and MTP modes report `mtp` (0xFFFFFFFF) instead; see `PTPDeviceInfo.isSony`.
 public enum PTPVendorExtension: UInt32, Sendable {
     case none = 0x0000
     case kodak = 0x0001
     case canon = 0x000B
     case nikon = 0x000A
     case microsoftMTP = 0x0006
+    case fujifilm = 0x000E
     case sony = 0x0011
-    case fujifilm = 0x0012
+    /// PTP_VENDOR_MTP: what Sony (and some other MTP devices) report instead of their own ID.
+    case mtp = 0xFFFF_FFFF
+}
+
+/// Device property codes (ISO 15740 §13) the spike reads.
+public struct PTPDevicePropCode: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: UInt16
+    public init(rawValue: UInt16) { self.rawValue = rawValue }
+
+    /// UINT8, percent of a full battery.
+    public static let batteryLevel = PTPDevicePropCode(rawValue: 0x5001)
+    public static let functionalMode = PTPDevicePropCode(rawValue: 0x5002)
+    public static let imageSize = PTPDevicePropCode(rawValue: 0x5003)
+    /// String, "YYYYMMDDThhmmss".
+    public static let dateTime = PTPDevicePropCode(rawValue: 0x5011)
+
+    public var description: String {
+        switch self {
+        case .batteryLevel: "BatteryLevel"
+        case .functionalMode: "FunctionalMode"
+        case .imageSize: "ImageSize"
+        case .dateTime: "DateTime"
+        default: String(format: "Prop(0x%04X)", rawValue)
+        }
+    }
 }
 
 public struct PTPStorageID: RawRepresentable, Hashable, Sendable {

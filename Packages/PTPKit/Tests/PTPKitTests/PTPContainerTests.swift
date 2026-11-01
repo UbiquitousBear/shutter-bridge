@@ -48,12 +48,45 @@ struct PTPContainerTests {
         var c = PTPTransactionCounter()
         #expect(c.take() == 1)
         #expect(c.take() == 2)
+        #expect(c.peek == 3)
+
+        var w = PTPTransactionCounter(next: .max)
+        #expect(w.take() == .max)
+        #expect(w.take() == 1, "0 is reserved for OpenSession, so the counter skips it")
+        #expect(PTPTransactionCounter(next: 0).peek == 1)
     }
 
     @Test("Unknown codes still describe themselves in hex")
     func descriptions() {
         #expect(PTPOperationCode.getPartialObject.description == "GetPartialObject")
-        #expect(PTPOperationCode(rawValue: 0x9201).description == "Op(0x9201)")
+        #expect(PTPOperationCode(rawValue: 0x9FFF).description == "Op(0x9FFF)")
         #expect(PTPEventCode.objectAdded.description == "ObjectAdded")
+        #expect(PTPOperationCode.sonySDIOConnect.description == "Sony SDIO_Connect")
+        #expect(PTPObjectFormat.sonyHEIF.description == "Sony HEIF")
+    }
+
+    @Test("GetDevicePropValue(BatteryLevel) carries the property code as its only parameter")
+    func devicePropValue() {
+        let c = PTPCommand.getDevicePropValue(.batteryLevel, tx: 4)
+        #expect(c.operationCode == .getDevicePropValue)
+        #expect(c.parameters == [0x5001])
+        #expect(PTPDevicePropCode.batteryLevel.description == "BatteryLevel")
+        #expect(PTPDevicePropCode(rawValue: 0xD20F).description == "Prop(0xD20F)")
+    }
+
+    @Test("Sony SDIO builders use libgphoto2's parameter layout")
+    func sonySDIO() {
+        #expect(PTPCommand.sonySDIOConnect(phase: 2, tx: 3).parameters == [2, 0, 0])
+        #expect(PTPCommand.sonySDIOConnect(phase: 2, tx: 3).operationCode == .sonySDIOConnect)
+        #expect(PTPCommand.sonySDIOGetExtDeviceInfo(tx: 4).parameters == [0x12C, 1])
+        #expect(PTPResponseCode.objectWriteProtected.description == "ObjectWriteProtected")
+    }
+
+    @Test("Both the standard and Sony ObjectAdded signal a new object")
+    func newObjectEvents() {
+        #expect(PTPEventCode.objectAdded.signalsNewObject)
+        #expect(PTPEventCode.sonyObjectAdded.signalsNewObject)
+        #expect(!PTPEventCode.objectRemoved.signalsNewObject)
+        #expect(!PTPEventCode.devicePropChanged.signalsNewObject)
     }
 }

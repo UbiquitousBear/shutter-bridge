@@ -1,0 +1,222 @@
+# Spike runbook
+
+How to run each step of [spike-plan.md](spike-plan.md) with the spike app and the Mac. The plan says what to find out and what counts as a pass; this page says which button to tap, what the log shows, which measurements are recorded and which fixture files are saved. Results go in [spike-findings.md](spike-findings.md).
+
+How to read the tables:
+
+- **Do** is *tab › section › button* in the spike app (*SB Spike* on the phone), or a camera menu, or **Mac** with the command to run for the code-free steps. The app has five tabs: Wired, Wi-Fi, Bluetooth, Background and Log.
+- **Log shows** is what appears on the Log tab. Every button writes there, with the app state (foreground, background, locked) where it matters. The log is kept across launches in `Documents/spike-log.jsonl`.
+- **Measurements** are the names recorded on the Log tab. `<net>` is `ap` or `lan`, from the Wi-Fi tab's *Network* picker. On day 10, *Copy measurements table* fills the plan's table from the latest value of each name; the "Day 10: export" section lists which name feeds which cell.
+- **Fixtures** are saved on the phone under `Documents/fixtures/a7c2/` and go in the repo under `Fixtures/a7c2/` with the same path: `usb/deviceinfo.bin` on the phone is `Fixtures/a7c2/usb/deviceinfo.bin` in the repo. Saving again replaces the earlier file of the same name. See [Fixtures/README.md](../Fixtures/README.md).
+- The Wired tab runs one operation at a time: the other buttons are disabled while it runs, and the overlay at the bottom shows it with a *Stop* button, which ends loops at the next file or chunk. The Wi-Fi tab also runs one camera operation at a time.
+
+The spike app compiles with Xcode 27 for iPhone (the unsigned build in `.github/workflows/spike-build.yml`), but it has not yet run on a phone. Behaviour that only a device can confirm is commented `verify on day 1` in the sources.
+
+## Before day 1
+
+| Done | Item | How |
+| --- | --- | --- |
+| [ ] | Mac tools | `brew install xcodegen gphoto2 nmap`; Wireshark, or the `tcpdump` that ships with macOS. |
+| [ ] | Git hooks | `make hooks` once per clone. Commits are attributed to Shamil only (`AGENTS.md`). |
+| [ ] | Generate and open the project | `make open` (runs `make spike`, which is `xcodegen generate` in `Spike/`). Regenerate after any change to `Spike/project.yml`; `Spike.xcodeproj` is never committed. |
+| [ ] | Signing team | Xcode › Spike target › Signing & Capabilities › Team. `project.yml` leaves `DEVELOPMENT_TEAM` empty so the team stays out of the repo, and regenerating the project writes that empty value back, so check the team after each `make spike`. |
+| [ ] | Multicast entitlement request | Submit it on the morning of day 1 with Apple's form, linked in `Spike/Spike.entitlements` (https://developer.apple.com/contact/request/networking-multicast). The answer text is drafted in [proposal.md](proposal.md), section "Privacy, permissions, entitlements and App Store", paragraph *Multicast entitlement request (draft)*. Note the date and any reference in spike-findings.md. Keep the key commented out in `Spike.entitlements` until Apple grants it, or automatic signing fails. |
+| [ ] | ATS exception for the SSDP description | Already in `Spike/project.yml` (`NSAppTransportSecurity` › `NSAllowsLocalNetworking: true`): the day-6 SSDP probe fetches the camera's UPnP description over plain HTTP from an IP address, which iOS blocks otherwise. If that fetch fails with error -1022, check the generated Info.plist. |
+| [ ] | Optional: Access Wi-Fi Information | With `com.apple.developer.networking.wifi-info` in `Spike.entitlements` (and the capability on the App ID), the day-9 join can confirm the SSID and BSSID it joined. Without it the join still works and is timed; the log says the SSID was not confirmed. |
+| [ ] | Developer Mode | iPhone: Settings › Privacy & Security › Developer Mode, then restart. |
+| [ ] | Install route | Without a Mac: the **Spike to TestFlight** GitHub workflow, then the TestFlight app ([ci.md](ci.md), "TestFlight from GitHub Actions"). With the Mac: run from Xcode (needs the team set), or Xcode Cloud once it is set up. The bundle ID is `net.shamil.shutter-bridge.spike`. |
+| [ ] | Xcode over the network | Pair the phone with Xcode over the cable once, so Xcode can reach it over the network: from day 1 the phone's only USB-C port is taken by the camera. |
+| [ ] | Phone state | At least 20 GB free (the download tests check free space before they start and stop if there isn't enough). Low Power Mode off: it stops background Bluetooth scanning and may end continued tasks early (the launch line in the log records it). Bluetooth on. |
+| [ ] | Files sharing | Already on in `project.yml` (`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`). The app's Documents folder shows in the Files app under On My iPhone › SB Spike, and in Finder on the Mac (select the iPhone, then Files › SB Spike). Fixtures are in `fixtures/a7c2/`, the log in `spike-log.jsonl`. |
+| [ ] | Camera and card | Firmware 2.00 or later (the plan's path is `Setup → Setup Option → Version`). The plan's mixed card of about 200 files. The app's presets need at least 20 ARW, 20 JPG and 3 MP4 (the MP4 row averages the three newest MP4s on every link, so make those three about 1 GB each, or record their sizes), RAW+JPEG or RAW+HEIF pairs for the ObjectInfo step, and at least 1 GB of files for the battery test. Battery charged. |
+
+Permission prompts to expect, the first time each feature is used:
+
+| Prompt | Shown by | Notes |
+| --- | --- | --- |
+| Camera access (`NSCameraUsageDescription`, which `ImageCaptureCore` reuses on iOS) | Wired › Day 1 · Browser › *Start browsing* asks for contents and control authorisation | The *Authorisation* row and the log show the result. The log warns if a request returns notDetermined without showing a prompt (the iOS 26.1 beta behaviour the proposal mentions), and logs an error on denied or restricted. Whether a prompt appears at all is a day-1 finding. |
+| Camera access, for the QR scanner | Wi-Fi › Day 9 · Resume, discovery, join › *Scan camera QR code* | Same permission as above. |
+| Local Network | The first Wi-Fi probe or connection (Day 6 · Probe, Day 7 · Handshake) | If it is denied, connections wait and the log says so with a Local Network hint. Settings › Privacy & Security › Local Network › SB Spike turns it back on. |
+| Bluetooth | Bluetooth › *Scan (Sony only)*, *Scan (everything)* or *Watch in background* | The app does not create a Bluetooth central at launch until the watcher is on or permission is already granted, so the first launch shows no prompt. |
+| Notifications | Bluetooth › Day 6 · Proximity go/no-go › *Watch in background* | *Send test reminder* logs the current permission state. |
+| Join network (system sheet) | Wi-Fi › *Join camera Wi-Fi* | Shown on every `NEHotspotConfiguration` join; not a privacy setting. |
+
+The spike never writes to Photos, so there is no Photos prompt.
+
+## Week 1 without the Mac (until Thu 5 Nov)
+
+The app comes from TestFlight (above), so only the Mac-side probes wait for the Mac:
+
+| When | What |
+| --- | --- |
+| First days, phone and camera only | Day 1's camera and iPhone steps (each USB mode → Photos → Import, menu wording, the app's Wired tab), the multicast entitlement request, then days 2–5 in the app. Fixtures stay on the phone (Log › Fixtures). Day 6's BLE capture (nRF Connect or LightBlue, and the Bluetooth tab) needs no Mac either and can come forward. |
+| Thu 5 Nov, with the Mac | Day 1's Mac steps (Image Capture, `gphoto2 --auto-detect` and `--summary`); copy the fixtures off the phone into `Fixtures/a7c2/`, then `make fixtures && make test`; optionally set up Xcode Cloud. |
+| From Fri 6 Nov | Week 2 as planned, with day 6's Mac probes. |
+
+Without Xcode attached, the app's own log (Log tab, persisted across launches) and TestFlight's crash reports are the record; export the log at the end of each day.
+
+## Day 1: baseline with zero code
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| Set each USB mode in turn, plug into the iPhone, open Photos → Import | Camera: `Setup → USB → USB Connection Mode`, one mode at a time (the plan's candidates: *Select on Connect*, *Still Img Transfer (MTP)*, *Remote Shoot (PC Remote)*, *Webcam*). iPhone: Photos, and look for the import option. Note the exact menu wording. | — | — | — |
+| On the Mac: Image Capture, `gphoto2 --auto-detect`, `gphoto2 --summary` | **Mac**, camera on the Mac's cable, for each mode: open Image Capture, note the device name, then quit it; `gphoto2 --auto-detect`; `sudo killall -9 ptpcamerad; gphoto2 --summary`. macOS's `ptpcamerad` claims the camera when it is plugged in and Image Capture shares it, so quit Image Capture first and run the kill right before each `gphoto2` command that opens the camera. If `--summary` still says `Could not claim the USB device`, record "claimed by macOS", not "mode does not enumerate": `--auto-detect` listing the camera means the mode enumerates. Paste the device name and operations list into spike-findings.md as evidence. | — | — | — |
+| Create the Xcode 27 project, add the external-camera usage string | **Mac**: `make open`, set the team, run on the phone. The usage string is already in `Spike/project.yml`. | `── launch · <device summary>` once per launch, then `Spike UI ready.` | — | — |
+| Start an `ICDeviceBrowser` and log `didAdd` | Wired › Day 1 · Browser: leave *Device mask* on *Cameras, local*, tap *Start browsing*, plug the camera in. If nothing arrives: *Stop browsing*, choose *Cameras* or *System default*, *Start browsing* again, and try each USB mode. If more than one camera is listed, tap its row to select it (a checkmark shows). | Contents and control authorisation; `browsedDeviceTypeMask: 0x… before → 0x… (<choice>)`; isBrowsing and isSuspended; on didAdd: name, productKind, transport, type, USB VID:PID, uuid, then every capability and `acceptsPTPCommands=yes/no`; didRemove, rename, and the browser's suspend and resume callbacks | — | — |
+| Submit the multicast entitlement request | See "Before day 1". | — | — | — |
+
+Pass: Photos imports at least one JPG, and the didAdd lines name the α7C II with its capabilities. Record which USB mode enumerates and which device mask worked.
+
+## Day 2: enumerate the card
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| `requestOpenSession`, walk `contents` / `mediaFiles`, log count, names, sizes, dates, `ptpObjectHandle` | Wired › Day 2 · Catalogue › *Open session* | open time; catalogue percentage every 2 s; capabilities after open; file count with the contents-tree walk time; count and MB per extension; the 5 newest files with name, size, created date, ptpObjectHandle and UTI | `usb.openSession` [s], `usb.catalog.complete` [s], `usb.catalog.count` [files] | — |
+| Time a full listing of the 200-file card, and of a 2,000-file card if available | Re-plug the cable before each timed run, then *Open session*. *Refresh catalogue* re-walks the card without reopening. | `usb.catalog.complete` runs from the open request to `deviceDidBecomeReady(withCompleteContentCatalog:)`. If that callback never comes, it is stamped when the catalogue reads 100 % (after a 10 s wait) and labelled as such. On a reopen of the same device whose catalogue already read 100 %, nothing is recorded and the log says to re-plug; a reopen timed by the callback carries "REOPEN on the same device, the catalogue may be cached" | `usb.catalog.complete`, `usb.catalog.count` | — |
+| `requestThumbnailData` for 50 items, timed | *Thumbnails, 50 newest*, once per session for a cold figure | ok and total, min and max, average KB, app state; size and first bytes of the first 3 thumbnails; up to 5 failures; from the second run in a session, a warning that the cache may answer | `usb.thumb.avg` [ms], context "run N this session" | — |
+| Metadata matches the card | Compare the "5 newest" lines with the camera's playback screen. | — | — | — |
+| (housekeeping) | *Close session* | `Session closed` or the failure | — | — |
+
+Pass: listing of 200 files ≤ 2 s; thumbnails ≤ 50 ms each on average; metadata matches the card.
+
+## Day 3: download and throughput
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| `requestDownloadFile` for 20 ARW | Wired › Day 3 · Throughput › *20 newest ARW, serial* | free-space check; per file: name, MB, seconds, MB/s, app state; then the batch figure (bytes on disk over the batch's wall time). Copies are deleted afterwards. A stopped batch records no batch figure; a cable pull ends it as disconnected. | `usb.download.file` [MB/s] per file, `usb.download.throughput.serial` [MB/s], `usb.download.memory.peak` [MB] | — |
+| … 20 JPG | *20 newest JPG, serial* | as above | `usb.download.file`, `usb.download.jpg.throughput`, `usb.download.memory.peak` | — |
+| … 3 MP4 | *3 newest MP4* | as above; downloads have no timeout | `usb.download.file`, `usb.download.mp4`, `usb.download.memory.peak` | — |
+| Repeat with two downloads in flight | *20 newest ARW, 2 in flight* | as above; the per-file figures overlap in time | `usb.download.file`, `usb.download.throughput.parallel2`, `usb.download.memory.peak` | — |
+| Memory with Instruments (Allocations), CPU with the Energy gauge | **Mac**: run from Xcode over the network and watch the Memory and Energy gauges in the Debug navigator, or Product › Profile › Allocations. | — | `usb.download.memory.peak` is the app's own reading of the same physical-footprint figure, sampled every 100 ms | — |
+
+Pass: sustained ≥ 25 MB/s on the USB 2 iPhone; high-water memory ≤ 150 MB.
+
+## Day 4: PTP pass-through
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| `requestSendPTPCommand` with `GetDeviceInfo`; parse the operations and vendor-extension lists | Wired › Day 4 · PTP pass-through › *GetDeviceInfo* | once per session, the pass-through reply layout and whether `ImageCaptureCore` renumbers transaction IDs; manufacturer, model, firmware, serial; PTP version, vendor extension ID, version and description; operations, events, device properties, capture and image formats, each as hex and name; yes or no for GetPartialObject 0x101B, GetPartialObject64 0x95C1, Sony 0x9211, GetObjectHandles, ObjectAdded 0x4002, Sony ObjectAdded 0xC201 and BatteryLevel 0x5001 | — | `usb/deviceinfo.bin`, `usb/FIRMWARE` |
+| (storage datasets for the fixtures) | *GetStorageIDs + GetStorageInfo* | store IDs with the logical-store flag; per store: description, label, capacity, free space, free images, storage, filesystem and access types | — | `usb/storageids.bin`, `usb/storageinfo.bin` |
+| (does `ImageCaptureCore` let `GetObjectHandles` through?) | *GetObjectHandles* | "ImageCaptureCore allows it: yes/no" with the response code or error; handle count and time; how many handles match `ICCameraFile.ptpObjectHandle`. A cable pull or *Stop* ends it as interrupted, not as "no". | — | `usb/objecthandles.bin` |
+| `GetObjectInfo` | *GetObjectInfo: newest ARW + pair* (shoot a RAW+JPEG or RAW+HEIF frame first) | every ObjectInfo field; comparison with the `ICCameraFile` (name, size, capture date ±1 s), with a warning on any mismatch | — | `usb/objectinfo-arw.bin`; `usb/objectinfo-jpg.bin` and/or `usb/objectinfo-hif.bin` (the pair, or the newest JPG and HIF if there is no pair); `usb/objectinfo-mp4.bin` if the card has a clip |
+| `GetPartialObject` in 4 MiB chunks to reassemble one ARW; compare its MB/s to day 3 | Run *20 newest ARW, serial* earlier in the same session, then *GetPartialObject: newest ARW* | the variant used (from DeviceInfo; 0x101B is tried if neither is listed); a line per chunk; reference copies by `requestReadData` and `requestDownload`; MATCH or MISMATCH per reference; difference from `requestDownload` of the same file with PASS or FAIL at 15 %, and from this session's day-3 serial figure. An InvalidTransactionID response stops the test with a warning and records nothing: that is our transaction numbering against `ImageCaptureCore`'s, to fix before re-running, not a finding. | `usb.getPartialObject.throughput` [MB/s], `usb.getPartialObject.supported`, `usb.readData.throughput` [MB/s], `usb.download.file` (the reference copy, marked in its context), `usb.getPartialObject.sha256Match` | `usb/getpartialobject-<filename>.sha256` |
+| Press the shutter with the session open and log `didReceivePTPEvent` | *Watch for ObjectAdded (60 s)*, then press the shutter. Events are decoded and logged whenever a session is open, not only during the watch. | every event by code name with parameters and app state, from `ptpEventHandler` or the delegate (duplicates ignored); on timeout, `ImageCaptureCore`'s own didAdd names and the event counts per source | `usb.event.objectAdded`: yes on the first new-object event (0x4002 or 0xC201); no on a timeout if none was seen this session | `usb/event-objectadded.bin`; `usb/event-<xxxx>.bin`, the first container of every other event code |
+| (measurements row "Camera battery used per 1 GB") | Camera: `Setup → USB → USB Power Supply` to Off, or the camera charges from the phone. Then *Battery test size: N GB* and *Battery per GB*. | battery before and after from GetDevicePropValue 0x5001, with `ICCameraDevice.batteryLevel` alongside (and as the fallback; sources are never mixed); downloads at least N GB, deleting each copy; a warning if the level did not move at 1 % resolution | `usb.battery.per1GB` [%/GB] | — |
+| (measurements row "Resume after link drop verified", USB column) | Wired › Day 4 · Resume over USB › *Start resumable read*; pull the cable when the log says **PULL NOW**; plug it back in; Day 2 · Catalogue › *Open session*; *Resume read*. *Forget saved read* deletes a stale one. | the object identity; the saved state (identity, offset, part file, reason) at the start, every 16 MiB and on any error; interruption offset and percentage. On resume: the saved identity and offset, the object found again by name and confirmed with GetObjectInfo, the resume offset, then the SHA-256 against a `requestReadData` copy. A run that finished without a pull says so. | `usb.resume.verified`; not recorded if the read had to restart from 0 | — (the `.part` file stays in the app's `Caches/Imports/<serial>/`) |
+
+Pass: `GetPartialObject` returns correct bytes (SHA-256 equals the card copy); throughput within 15 % of `requestDownloadFile`; event behaviour recorded either way.
+
+## Day 5: lifecycle and fixtures
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| Lock the phone and switch apps during a download: does the session survive, and for how long? | Wired › Day 5 · Lifecycle › *Long serial download (lock the phone now)*, then lock the phone. Unlock after a few minutes and return to the app. Repeat, switching to another app instead of locking. Order matters for the table: `usb.lifecycle.progressAfterBackground` is one name for every run, and the Day 10 cell takes the latest, so do the app-switch run and the continued-task run (next row) first and the plain lock run last (or repeat it last). | one line per file with MB/s and the app state ("locked +x s", "background +x s"); "app entered background", "device locked", "progress while …", "app returning to foreground after x s"; stops after a cable pull or 3 failures | `usb.lifecycle.progressAfterBackground` [s]: how long downloads kept making progress after the app left the foreground (0 if nothing moved) | — |
+| Wrap a download in `BGContinuedProcessingTask` and repeat | *Download 20 newest ARW inside a continued task*, then lock the phone. *Stop continued task* ends it at the next file. Its `usb.lifecycle.progressAfterBackground` value is the continued task's (the context says "continued task"), not the plain session's. Without a camera: Background › Day 5 · Continued task, no camera › *Length*, *Start timer test, then lock the phone*, *Stop*. | the system's progress UI on the phone; "n of 20" per file; when the task started, how long it ran, whether the system expired it, and how many files were done | `bgcontinued.startLatency` [s], `bgcontinued.ran` [s], `usb.lifecycle.progressAfterBackground` [s] | — |
+| Capture raw PTP request/response bytes from days 2–4 into `Fixtures/a7c2/usb/` | Log › Fixtures › *Refresh list*, *Share fixtures (zip)*, then steps 3–6 of "Day 10: export". Commit `Fixtures/a7c2/usb/` and the copies `make fixtures` made. | "fixtures zipped: <name>, N files, B bytes" | — | everything under `usb/` |
+| Write the week-1 findings page | Log › Day 10 · Export › *Copy measurements table* gives the USB column so far. Fill the wired sections of spike-findings.md: "Wired import is viable", "Byte-range resume on USB", the USB menu wording and "ImageCaptureCore facts". | — | — | — |
+
+Pass: behaviour on lock documented with timings; fixtures committed; findings written.
+
+## Day 6: find the responder
+
+The plan runs the Mac probes first; they need no code. Do the Wi-Fi rows once for each camera mode: *Smartphone Connect*, *PC Remote* over *Wi-Fi Direct*, and *PC Remote* over *Wi-Fi Access Point*.
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| Put the camera in the mode | Camera: `Network → Cnct./PC Remote → Smartphone Connect`, or `Network → Cnct./PC Remote → PC Remote Function` with *PC Remote Cnct Method* set to *Wi-Fi Direct* or *Wi-Fi Access Point*. Note the exact wording. | — | — | — |
+| Join from the Mac | **Mac**: join the network the camera shows (Wi-Fi Direct, Smartphone Connect), or the home LAN the camera joined (Access Point; registered with `Network → Wi-Fi → Access Point Set.`). Note the camera's IP. | — | — | — |
+| `tcpdump -i en0 udp port 1900` to capture SSDP | **Mac**: `sudo tcpdump -i en0 -w Fixtures/a7c2/ptpip/ssdp-<mode>.pcap udp port 1900` while the camera is in the mode; stop with Ctrl-C | — | — | `ptpip/ssdp-<mode>.pcap` (Mac capture) |
+| `nmap -p 15740 <camera ip>` | **Mac**: `nmap -p 15740 <camera ip>` | — | — | — |
+| `gphoto2 --port ptpip:<camera ip> --summary` and `--list-files` | **Mac**: `gphoto2 --port ptpip:<camera ip> --summary`, then `--list-files`. To keep the handshake, run `sudo tcpdump -i en0 -w Fixtures/a7c2/ptpip/handshake-<mode>.pcap host <camera ip>` at the same time. | — | — | `ptpip/handshake-<mode>.pcap` (Mac capture) |
+| Record for each mode: port open, handshake accepted, on-card objects listed or only tethered captures | spike-findings.md, "Day-6 mode matrix" | — | — | — |
+| (the same probes from the phone) | Phone joined to the same network. Wi-Fi › Camera: *Network* (*Camera AP* or *Home LAN*; this picks the measurement column) and *Camera IP*. Then Wi-Fi › Day 6 · Probe: *TCP connect to port 15740*; *Bonjour browse _ptp._tcp (5 s)*; *SSDP M-SEARCH to camera IP*; *SSDP M-SEARCH multicast*. A Bonjour or SSDP result offers *Use … as camera IP* or *Use this IP (…)*. | time to TCP ready, or refused, timed out, or waiting with a Local Network hint; each Bonjour service with its interfaces and TXT record; each SSDP reply (status, ST, USN, SERVER, LOCATION), then the fetched description (friendlyName, manufacturer, modelName, serialNumber, UDN, deviceType, services, vendor fields). Multicast without the entitlement logs the policy failure, which is the expected result until Apple grants it. | `ptpip.<net>.port15740` [s], `ptpip.<net>.discovery.bonjour` [s], `ptpip.<net>.discovery.ssdp` [s] (unicast or multicast, named in the context) | `ptpip/ssdp-description.xml` |
+| Capture the camera's BLE advertisement with the camera on, asleep and powered off (Bluetooth Function on, Remote Power ON/OFF on) | Bluetooth › Day 6 · BLE advertisement: set *Camera power* (*On*, *Asleep*, *Off*) and *Pairing* (*Creators' App connected*, *Creators' App quit, link down*, *Not paired*); *Scan (Sony only)*; wait 30 s or more; *Stop and summarise*; *Save snapshot*. If the camera isn't listed, use *Scan (everything)* and the row's … menu › *Mark as camera*. *Check connected (other apps)* asks iOS for peripherals already connected by another app. nRF Connect or LightBlue remain a cross-check. | per camera-like peripheral: name, RSSI range and average, count, median gap between callbacks, service, overflow and solicited UUIDs, service and manufacturer data, TX power, connectable; a summary line each on Stop; on Save, which rule picked the camera ("chosen by …") | `ble.advert.<state>.<pairing>.seen`, `ble.advert.<state>.<pairing>.rssi` [dBm], `ble.advert.<state>.<pairing>.interval` [ms] (a median of callback gaps, so an upper bound); `ble.connected.<state>.<pairing>.seen` (not in the plan's table); `<pairing>` is `connected`, `unlinked` or `unpaired`, matching the three *Pairing* choices in order | `ble/advert-<state>.json`, `ble/advert-<state>-<pairing>.json` |
+| … the advertised service UUIDs, manufacturer data and interval | Read them from the Seen rows and the snapshot. If the `.seen` context says "chosen by Sony company ID 0x012D only", mark the camera by hand and save again: other Sony devices (headphones, speakers) use the same company ID. | — | — | — |
+| … whether the phone can see it from the next room | Repeat *Scan (Sony only)* from the next room. | — | — | — |
+| … the service UUID the proximity reminder will filter on | Seen › row's … menu › *Use <uuid> as proximity filter*, or Day 6 · Proximity filter › *Advertised*, or *Or type one* and *Use typed UUID*. If no UUID is advertised while paired: row's … menu › *List services (GATT)…* (Experimental · GATT; opens a GATT connection, lists service UUIDs only, then disconnects). | the change of filter; for GATT: the service UUIDs and connect time | goes into the BLE row of the measurements table | — |
+| (go/no-go row "Proximity reminder in 1.0") | Bluetooth › Day 6 · Proximity go/no-go: switch on *Watch in background* (allow Bluetooth and notifications); set *Debounce*; switch the camera off for a minute; tap *Camera switched on now* as you switch it on; lock the phone; wait for the reminder and pick an action. Repeat from the next room, with Creators' App connected and quit, and after *Kill app to test relaunch*. Don't swipe the app away in the app switcher: iOS doesn't relaunch an app the user force-quit. *Send test reminder* checks the notification itself. | each discovery and connection event with name, RSSI and app state; debounce and snooze suppression; the action chosen with seconds since delivery; after a Bluetooth relaunch, the `willRestoreState` lines and "proximity: kept the restored scan for <uuid> and re-registered connection events" | `ble.proximity.latency` [s], `ble.proximity.detectToNotify` [s], `ble.proximity.connectionEvent.latency` [s] (not in the plan's table) | — |
+
+Pass: a table of mode → (SSDP yes/no, 15740 open yes/no, card listed yes/no); the BLE advertisement recorded in all three power states, with the service UUID the reminder will filter on.
+
+## Day 7: Swift PTP/IP handshake on the iPhone
+
+Use the camera mode day 6 found to answer on port 15740.
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| `NWConnection` to port 15740: Init_Command → Init_Event, then `OpenSession`, `GetDeviceInfo` | Wi-Fi › Camera: *Network*, *Camera IP*. Wi-Fi › Day 7 · Handshake › *Connect + OpenSession + GetDeviceInfo* | responder name, GUID, connection number, protocol version; OpenSession OK (SessionAlreadyOpen counts as success); manufacturer, model, firmware, serial, vendor extension; every operation, event, property and image format by name; yes or no for GetPartialObject, GetPartialObject64, GetThumb, the four Sony SDIO operations and both ObjectAdded events. From then on, every event received on either channel. | `ptpip.<net>.handshake` [s], with a per-step breakdown in the context. The app waits up to 60 s for each ack, so the time includes any prompt accepted on the camera. | `ptpip/deviceinfo.bin`, `ptpip/FIRMWARE` |
+| … `GetStorageIDs` | Day 8 · Enumerate and download › *List card* starts with it. | see day 8 | — | `ptpip/storageids.bin` |
+| Power-cycle the camera and reconnect with the same GUID | Switch the camera off and on, rejoin its Wi-Fi, *Reconnect (same GUID)*. Note what the camera shows. | another handshake; an Init_Fail is logged with its decoded reason | `ptpip.<net>.handshake` | `ptpip/deviceinfo.bin` (replaced) |
+| … then with a new GUID | Wi-Fi › Camera › *New GUID (re-pair test)*, then *Connect + OpenSession + GetDeviceInfo*. Note what the camera shows. | the new initiator GUID; another handshake | `ptpip.<net>.handshake` | — |
+| Note what the camera asks on screen each time | spike-findings.md, "PTP/IP and join facts": no prompt, prompt once, or prompt every time | — | — | — |
+| (experiment for the PC Remote modes) | *Sony SDIO connect (PC Remote modes)* | each SDIO step's response code and a hex dump of its data; the ExtDeviceInfo lists; the operation count before and after | — | `ptpip/sdio-extdeviceinfo.bin` |
+| (housekeeping) | *Disconnect* | CloseSession, then both channels closed | — | — |
+
+Pass: the session opens from the iPhone; GUID persistence recorded.
+
+## Day 8: enumerate and download over Wi-Fi
+
+Run the day twice: with *Network* on *Camera AP* (5 GHz, phone 1 m from the camera), then with the camera and phone on the home LAN, *Network* on *Home LAN* and Day 7 · Handshake › *Connect + OpenSession + GetDeviceInfo* again. A session keeps the column it connected with; an orange note appears if the picker changes while connected.
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| `GetObjectHandles` and `GetObjectInfo` for the card | Wi-Fi › Day 8 · Enumerate and download › *List card* | GetStorageIDs, then per storage GetStorageInfo, GetObjectHandles and one GetObjectInfo per handle (empty slots skipped and logged); the time for the whole walk; per-extension counts and folders; each storage's description and free space; the newest file | `ptpip.<net>.enumerate` [s], `ptpip.<net>.objects` [count] | `ptpip/storageids.bin`, `ptpip/storageinfo.bin`, `ptpip/objecthandles.bin`, `ptpip/objectinfo-arw.bin`, `-jpg.bin`, `-hif.bin`, `-mp4.bin` (first of each kind in the listing) |
+| `GetThumb` for 50 items | *Thumbnails for 50 newest* | count, KB, slowest item; non-OK responses listed and left out of the average | `ptpip.<net>.thumb.avg` [ms] | — |
+| `GetObject` for 20 ARW; MB/s on the camera AP and on the LAN | *GetObject 20 newest ARW* | per file: MB/s, with a warning if the size differs from ObjectInfo; the battery level before and after. Files stream to a temporary folder, are hashed and timed, then deleted. | `ptpip.<net>.getObject.file` [MB/s] per file, `ptpip.<net>.getObject.throughput` [MB/s] for the batch, `ptpip.<net>.download.memory.peak` [MB]; `ptpip.<net>.battery.per1GB` [%/GB] once 1 GB has been downloaded in one session | — |
+| … and 3 MP4 | *GetObject 3 newest MP4* | as above | `ptpip.<net>.getObject.file` [MB/s] per file, `ptpip.<net>.getObject.mp4` [MB/s] for the batch (bytes over wall time, like `usb.download.mp4`), `ptpip.<net>.download.memory.peak` | — |
+| Check `NWPath` for the phone's internet loss on the camera AP | Wi-Fi › Day 6 · Probe: the *Network path* and *Internet* rows update by themselves; *Check internet* | every path change while the tab is visible (status, interfaces, Wi-Fi and cellular use, expensive, constrained, gateways, link quality); "reachable", "captive" or "no internet" with the current path | — | — |
+| (the day-5 lock test over Wi-Fi) | Plain session: *GetObject 20 newest ARW*, then lock the phone and unlock after a few minutes. Continued task: *GetObject 20 newest ARW in a continued task*, then lock the phone; Status › *Stop continued task* ends it. Both write `ptpip.<net>.lifecycle.progressAfterBackground` and the table takes the latest, so run the continued task first and the plain lock run last. | per file with the app state; how far it got if stopped | `ptpip.<net>.getObject.file`, `ptpip.<net>.lifecycle.progressAfterBackground` [s], `bgcontinued.startLatency`, `bgcontinued.ran` | — |
+| (go/no-go row "Transfer-while-shooting feasible later") | *Shutter test (20 s)*, then press the shutter. Events are logged throughout the session, not only during the test. | each event by name, code, transaction ID and parameters; the *ObjectAdded events* row counts them | `ptpip.<net>.event.objectAdded`: yes on the first ObjectAdded (0x4002 or 0xC201) of a session; no after the test only if no yes exists for that column | `ptpip/event-objectadded.bin`; `ptpip/event-<xxxx>.bin`, the first Event packet of every other code |
+
+Pass: listing of 200 files ≤ 5 s; ≥ 8 MB/s on the camera AP; LAN figure recorded.
+
+## Day 9: resume, discovery and the join flow
+
+| Step (plan) | Do | Log shows | Measurements | Fixtures |
+| --- | --- | --- | --- | --- |
+| `GetPartialObject` chunked download; kill Wi-Fi at 50 % and reconnect; resume from the offset and verify SHA-256 | Wi-Fi › Day 9 · Resume, discovery, join › *Reference hash (GetObject newest ARW)*; leave *Pause at 50 % for Wi-Fi off* on; *Start resumable read (newest ARW)*. When the status reads "Paused at N % — turn Wi-Fi off now", turn Wi-Fi off in Control Centre. Turn it on, rejoin the camera, then *Resume read*. *Forget partial read* deletes a stale one. | the reference SHA-256 and MB/s; the variant; progress every 10 %; the pause and when the drop was detected; on resume: a new handshake, how many ObjectInfos were scanned to find the object again, the resume offset, the SHA-256 against the reference | `ptpip.<net>.getPartialObject.supported` (from the first chunk), `ptpip.<net>.getPartialObject.throughput` [MB/s], `ptpip.<net>.resume.verified`, another `ptpip.<net>.handshake` | `ptpip/getobject.sha256`, `ptpip/getpartialobject.sha256` |
+| SSDP `M-SEARCH` from the iPhone with `NWConnectionGroup` | Wi-Fi › Day 6 · Probe › *SSDP M-SEARCH multicast*. If the entitlement has not arrived: the Mac capture from day 6, and *SSDP M-SEARCH to camera IP* (unicast, needs no entitlement) | as on day 6 | `ptpip.<net>.discovery.ssdp` (method in the context) | `ptpip/ssdp-description.xml` |
+| Scan the camera's QR with `DataScannerViewController` and decode the SSID and password | Camera: `Network → Cnct./PC Remote → Smartphone Connect` shows the code. Wi-Fi › Day 9 › *Scan camera QR code* | whether the scanner is supported and available; then a masked description (passphrase as ••••), the keys present and the parser's notes, for example that the SSID was assembled from fields (unverified). The payload is never logged or saved. | — | — (never save a QR payload or password) |
+| Join with `NEHotspotConfiguration`; observe the Local Network prompt | *Join camera Wi-Fi* (the *Camera SSID* and *Passphrase* fields are the manual fallback), confirm the system sheet; then *Use gateway as camera IP (…)*. *Forget joined network (to re-time the join)* lets you time it again. Note when the Local Network prompt appears; if it was answered on day 6, Settings › Privacy & Security › Local Network shows its state. | the gateway and path once joined; the joined SSID and BSSID, or why they could not be read; NetworkExtension errors by name. An already-joined network is logged but not timed. | `ptpip.ap.join` [s], from the join request to a Wi-Fi path with a new gateway (includes the tap on the system sheet) | — |
+
+Pass: the resumed file is byte-identical; the join flow completes end to end without typing a password.
+
+## Day 10: export
+
+1. Log › Day 10 · Export › *Copy measurements table* (or *Share measurements table*). Paste it over the measurements table in spike-findings.md. Before trusting a cell, read the same name's latest context under "All measurements" (for example a `usb.thumb.avg` from a second run, or a `usb.catalog.complete` marked REOPEN). *Export JSON* gives the whole log with the device context first, if a full copy is wanted.
+2. Log › Fixtures › *Share fixtures (zip)*, and AirDrop or save the `a7c2-fixtures-<timestamp>.zip` to the Mac. The same files are in the Files app (On My iPhone › SB Spike › fixtures › a7c2) and in Finder (the iPhone › Files › SB Spike).
+3. On the Mac, check the zip holds an `a7c2` folder, unzip it and copy that folder over `Fixtures/a7c2/`:
+
+   ```sh
+   unzip -l ~/Downloads/a7c2-fixtures-<timestamp>.zip
+   unzip -o ~/Downloads/a7c2-fixtures-<timestamp>.zip -d /tmp/a7c2-fixtures
+   ditto /tmp/a7c2-fixtures/a7c2 Fixtures/a7c2
+   ```
+
+4. `make fixtures` copies every `Fixtures/a7c2/<link>/<name>.bin` to `Packages/PTPKit/Tests/PTPKitTests/Fixtures/a7c2-<link>-<name>.bin` and lists each copy.
+5. `make test` (or `make test-docker`). The fixture tests now run against the camera's bytes. A failure means the codec disagrees with the camera: fix `PTPKit`, never the fixture.
+6. Check that nothing under `Fixtures/` holds a Wi-Fi password or a QR payload (the app never writes one; the Mac pcaps could), then commit `Fixtures/a7c2/` and the copies in `Packages/PTPKit/Tests/PTPKitTests/Fixtures/`.
+7. Fill [spike-findings.md](spike-findings.md): each go/no-go section, the menu wording, the mode matrix, the BLE tables, the `ImageCaptureCore` facts, the entitlement status and the decision record.
+8. The rest of the plan's day 10: record the decision in the proposal with the numbers behind it (transport table, performance budget, roadmap), and finalise [iteration-1-backlog.md](iteration-1-backlog.md).
+
+Where each cell of the plan's measurements table comes from (the latest value of each name; `—` when nothing was recorded):
+
+| Measurement | USB-C (USB 2 iPhone) | Wi-Fi, camera AP | Wi-Fi, UniFi LAN |
+| --- | --- | --- | --- |
+| Time to enumerate 200 files | `usb.catalog.complete` | `ptpip.ap.enumerate` | `ptpip.lan.enumerate` |
+| Thumbnail fetch, average per item | `usb.thumb.avg` | `ptpip.ap.thumb.avg` | `ptpip.lan.thumb.avg` |
+| ARW throughput, single file | `usb.download.throughput.serial` | `ptpip.ap.getObject.throughput` | `ptpip.lan.getObject.throughput` |
+| ARW throughput, two in flight | `usb.download.throughput.parallel2` | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
+| MP4 throughput (1 GB clip) | `usb.download.mp4` | `ptpip.ap.getObject.mp4` | `ptpip.lan.getObject.mp4` |
+| `GetPartialObject` supported | `usb.getPartialObject.supported` | `ptpip.ap.getPartialObject.supported` | `ptpip.lan.getPartialObject.supported` |
+| Resume after link drop verified | `usb.resume.verified` | `ptpip.ap.resume.verified` | `ptpip.lan.resume.verified` |
+| `ObjectAdded` event received | `usb.event.objectAdded` | `ptpip.ap.event.objectAdded` | `ptpip.lan.event.objectAdded` |
+| Session survives phone lock (seconds) | `usb.lifecycle.progressAfterBackground` | `ptpip.ap.lifecycle.progressAfterBackground` | `ptpip.lan.lifecycle.progressAfterBackground` |
+| Camera battery used per 1 GB | `usb.battery.per1GB` | `ptpip.ap.battery.per1GB` | `ptpip.lan.battery.per1GB` |
+| BLE: advertises when on / asleep / off; service UUID | `ble.advert.<on/asleep/off>.<pairing>.seen` and the proximity filter UUID | — | — |
+
+The MP4 cell is the average over the three newest MP4s on every link (`usb.download.mp4` and `ptpip.<net>.getObject.mp4` are both batch figures), not one 1 GB clip: the count and size are in each value's context under "All measurements", and a single clip's figure is its `usb.download.file` or `ptpip.<net>.getObject.file` line in the Log. The lock row takes the latest value of `<link>.lifecycle.progressAfterBackground`, which the plain lock run, the app-switch run and the continued-task run all write; see the order in days 5 and 8.
+
+The other names (`usb.openSession`, `usb.catalog.count`, `usb.download.file`, `usb.download.jpg.throughput`, `usb.download.memory.peak`, `usb.readData.throughput`, `usb.getPartialObject.throughput`, `usb.getPartialObject.sha256Match`, `ptpip.<net>.port15740`, `ptpip.<net>.discovery.bonjour`, `ptpip.<net>.discovery.ssdp`, `ptpip.<net>.handshake`, `ptpip.<net>.objects`, `ptpip.<net>.getObject.file`, `ptpip.<net>.download.memory.peak`, `ptpip.<net>.getPartialObject.throughput`, `ptpip.ap.join`, `ble.advert.<state>.<pairing>.rssi`, `ble.advert.<state>.<pairing>.interval`, `ble.connected.<state>.<pairing>.seen`, `ble.proximity.latency`, `ble.proximity.detectToNotify`, `ble.proximity.connectionEvent.latency`, `bgcontinued.startLatency`, `bgcontinued.ran`) are listed under "All measurements" in the same export, with their count and latest context.
+
+Don't tap Log › *Clear* or *Clear fixtures* before the table is pasted and the zip has reached the Mac: both delete the data on the phone.

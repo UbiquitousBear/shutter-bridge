@@ -36,22 +36,30 @@ struct PTPDatasetTests {
         #expect(decoded.model == "ILCE-7CM2")
     }
 
-    @Test("Real DeviceInfo fixture parses, once it exists")
-    func deviceInfoFixture() throws {
-        guard let url = Bundle.module.url(forResource: "a7c2-deviceinfo", withExtension: "bin") else {
-            // Fixture not captured yet (spike day 2). Not a failure: the test is a placeholder for the real bytes.
-            return
-        }
-        let info = try PTPDeviceInfo.decode(try Data(contentsOf: url))
-        #expect(info.manufacturer.lowercased().contains("sony"))
-        #expect(info.vendorExtension == .sony)
+    @Test("Vendor extension IDs match libgphoto2; Sony over PTP/IP or MTP (0xFFFFFFFF) still counts as Sony")
+    func vendorExtension() throws {
+        #expect(PTPVendorExtension(rawValue: 0x0E) == .fujifilm)
+        #expect(PTPVendorExtension(rawValue: 0x12) == nil)
+        var info = Self.syntheticSonyDeviceInfo
+        #expect(info.isSony)
+        info.vendorExtensionID = 0xFFFF_FFFF
+        let decoded = try PTPDeviceInfo.decode(info.encode())
+        #expect(decoded.vendorExtension == .mtp)
+        #expect(decoded.isSony)
+        info.vendorExtensionID = PTPVendorExtension.microsoftMTP.rawValue
+        #expect(info.isSony)
+        info.manufacturer = "Acme"
+        #expect(!info.isSony)
+        info.vendorExtensionID = PTPVendorExtension.canon.rawValue
+        info.manufacturer = "Sony Corporation"
+        #expect(!info.isSony)
     }
 
     @Test("ObjectInfo round trip and derived fields")
     func objectInfoRoundTrip() throws {
         let info = PTPObjectInfo(
             storageID: PTPStorageID(rawValue: 0x0001_0001),
-            objectFormat: .sonyRAWUnverified,
+            objectFormat: .sonyARW,
             protectionStatus: 0,
             objectCompressedSize: 36_412_928,
             thumbFormat: .exifJPEG,
@@ -71,6 +79,63 @@ struct PTPDatasetTests {
         #expect(decoded.fileExtension == "ARW")
         #expect(!decoded.isFolder)
         #expect(decoded.captureDate != nil)
+        #expect(decoded.mediaKind == .raw)
+        #expect(decoded.identity(cameraSerial: "S1") == PTPObjectIdentity(cameraSerial: "S1", filename: "DSC04512.ARW", captureDateRaw: "20261031T211412", size: 36_412_928))
+        #expect(!decoded.sizeExceeds32Bits)
+
+        var clip = decoded
+        clip.filename = "C0042.MP4"
+        clip.objectCompressedSize = .max   // ≥ 4 GiB: the 32-bit field saturates
+        #expect(clip.sizeExceeds32Bits)
+        #expect(clip.identity(cameraSerial: "S1", size: 6_442_450_944).size == 6_442_450_944)
+    }
+
+    @Test("Media kind: extension first, vendor format code as fallback", arguments: [
+        ("DSC00001.ARW", PTPObjectFormat.undefined, PTPMediaKind.raw),
+        ("DSC00001.JPG", .undefined, .jpeg),
+        ("DSC00001.HIF", .undefined, .heif),
+        ("C0001.MP4", .undefined, .video),
+        ("C0001M01.XML", .undefined, .sidecar),
+        ("NOEXT", .sonyARW, .raw),
+        ("NOEXT", .sonyHEIF, .heif),
+        ("NOEXT", .exifJPEG, .jpeg),
+        ("NOEXT", .mp4, .video),
+        ("DCIM", .association, .folder),
+        ("README.TXT", .undefined, .other),
+    ])
+    func mediaKind(name: String, format: PTPObjectFormat, kind: PTPMediaKind) {
+        var info = PTPObjectInfo(
+            storageID: PTPStorageID(rawValue: 0x0001_0001), objectFormat: format, protectionStatus: 0,
+            objectCompressedSize: 1, thumbFormat: .undefined, thumbCompressedSize: 0, thumbPixWidth: 0, thumbPixHeight: 0,
+            imagePixWidth: 0, imagePixHeight: 0, imageBitDepth: 0, parentObject: .root, associationType: 0,
+            associationDescription: 0, sequenceNumber: 0, filename: name, captureDateRaw: "", modificationDateRaw: "", keywords: "")
+        #expect(info.mediaKind == kind)
+        info.filename = name.lowercased()
+        #expect(info.mediaKind == kind, "extension match is case-insensitive")
+        #expect(kind.isStill == [.raw, .jpeg, .heif].contains(kind))
+    }
+
+    @Test("StorageInfo round trip")
+    func storageInfoRoundTrip() throws {
+        let info = PTPStorageInfo(storageType: 0x0004, filesystemType: 0x0002, accessCapability: 0x0000,
+                                  maxCapacity: 256_000_000_000, freeSpaceInBytes: 190_000_000_000, freeSpaceInImages: 4_200,
+                                  storageDescription: "SLOT 1", volumeLabel: "")
+        #expect(try PTPStorageInfo.decode(info.encode()) == info)
+    }
+
+    @Test("GetStorageIDs and GetObjectHandles arrays")
+    func arrays() throws {
+        let ids = [PTPStorageID(rawValue: 0x0001_0001), PTPStorageID(rawValue: 0x0002_0000)]
+        #expect(try PTPStorageID.decodeArray(PTPStorageID.encodeArray(ids)) == ids)
+        #expect(ids[0].hasLogicalStore && !ids[1].hasLogicalStore)
+
+        let handles = (1 ... 500).map { PTPObjectHandle(rawValue: UInt32($0)) }
+        #expect(try PTPObjectHandle.decodeArray(PTPObjectHandle.encodeArray(handles)) == handles)
+        #expect(try PTPObjectHandle.decodeArray(PTPObjectHandle.encodeArray([])).isEmpty)
+
+        // A count larger than the bytes that follow throws instead of reading past the end.
+        var w = PTPWriter(); w.u32(1_000_000); w.u32(1)
+        #expect(throws: PTPDecodingError.self) { try PTPObjectHandle.decodeArray(w.data) }
     }
 
     @Test("PTP strings: empty, ASCII, non-Latin")

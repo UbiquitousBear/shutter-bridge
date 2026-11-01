@@ -1,338 +1,1490 @@
 import Foundation
 import Observation
+import CoreGraphics   // CGImage in cameraDevice(_:didReceiveThumbnail:for:error:); don't rely on a re-export
 import ImageCaptureCore
 import CryptoKit
 import PTPKit
 
 /// Days 2–5: everything we do with one ICCameraDevice over USB-C.
 ///
-/// Every public method logs what it measured; nothing here is production code. Expect to adjust delegate
-/// signatures against the iOS 27 SDK on day 1 — the ImageCaptureCore Swift overlay has shifted names before.
+/// Every action is one tap in the Wired tab, runs one at a time (`perform`), logs what it observed and records
+/// the measurement names the Log tab's Markdown export maps onto docs/spike-plan.md. Nothing here is production
+/// code. ImageCaptureCore calls the delegate on the main thread; completion blocks arrive on any queue and are
+/// funnelled through `callback`, which also stops waiting when the cable is pulled (didRemove) or a timeout hits.
 @Observable
 @MainActor
 final class CameraSession: NSObject {
     let device: ICCameraDevice
     let log: SpikeLog
+    let lifecycle: LifecycleMonitor
 
+    // Shown by the Wired tab.
     private(set) var isOpen = false
     private(set) var catalogComplete = false
+    private(set) var removed = false
+    /// Newest first (creation date, then name).
     private(set) var files: [ICCameraFile] = []
     private(set) var deviceInfo: PTPDeviceInfo?
-    private var tx = PTPTransactionCounter()
-    private var readyContinuation: CheckedContinuation<Void, Never>?
+    /// The running operation; nil when idle. The Wired tab disables its buttons while this is set.
+    private(set) var activity: String?
+    private(set) var progressText = ""
+    private(set) var lastResult = ""
+    private(set) var resumeSummary: String = USBResumeStore.load()?.summary ?? "none saved"
+    private(set) var stopRequested = false
 
-    init(device: ICCameraDevice, log: SpikeLog) {
+    var isBusy: Bool { activity != nil }
+
+    var stateDescription: String {
+        if removed { return "camera disconnected" }
+        if !isOpen { return "closed" }
+        return catalogComplete ? "open" : "open, cataloguing"
+    }
+
+    @ObservationIgnored private var tx = PTPTransactionCounter()
+    @ObservationIgnored private var openRequestedAt: ContinuousClock.Instant?
+    @ObservationIgnored private var abortHandlers: [UUID: (Error) -> Void] = [:]
+    @ObservationIgnored private var layoutsSeen: Set<String> = []
+    @ObservationIgnored private var recentEvents: [RecentEvent] = []
+    @ObservationIgnored private var eventSourceCounts: [String: Int] = [:]
+    @ObservationIgnored private var savedEventCodes: Set<UInt16> = []
+    @ObservationIgnored private var objectAddedFlagged = false
+    @ObservationIgnored private var newObjectEventAt: Date?
+    @ObservationIgnored private var iccAddedAfterCatalogue: [String] = []
+    @ObservationIgnored private var lastSerialARWThroughput: Double?
+    @ObservationIgnored private var closingSession = false
+    @ObservationIgnored private var loggedDownloadName = false
+    @ObservationIgnored private var thumbnailRuns = 0
+    @ObservationIgnored private var successfulOpens = 0
+    @ObservationIgnored private var openIsReopen = false
+    /// Stamped into USBResumeState: a resume counts as a link-drop resume only in a different CameraSession.
+    private let sessionID = UUID()
+
+    private struct RecentEvent {
+        let data: Data
+        let at: Date
+        let source: String
+    }
+
+    init(device: ICCameraDevice, log: SpikeLog, lifecycle: LifecycleMonitor) {
         self.device = device
         self.log = log
+        self.lifecycle = lifecycle
         super.init()
         device.delegate = self
-        // Events arrive here as raw PTP event containers (day 4: press the shutter and watch for 0x4002).
-        device.ptpEventHandler = { [weak self] data in
-            Task { @MainActor in self?.handleEvent(data) }
+        // Day 4: raw PTP event containers. Apple: when this handler is set it is called *instead of*
+        // cameraDevice(_:didReceivePTPEvent:); both paths feed `receiveEvent`, which de-duplicates.
+        // @Sendable: the handler runs on an ImageCaptureCore queue, so it must not inherit this init's main-actor
+        // isolation (Swift 6 mode or DynamicActorIsolation would trap on the executor check).
+        device.ptpEventHandler = { @Sendable [weak self] data in
+            Task { @MainActor in self?.receiveEvent(data, source: "ptpEventHandler") }
         }
     }
 
-    // MARK: Day 2 — session and catalogue
+    /// Call before replacing this session: ICDevice.delegate is unowned(unsafe).
+    func detach() {
+        device.delegate = nil
+        device.ptpEventHandler = { _ in }
+        abortPending(.sessionReplaced)
+    }
 
-    func open() async {
+    func requestStop() {
+        guard let activity else { return }
+        stopRequested = true
+        log.note("Stop requested: \(activity)")
+    }
+
+    // MARK: - One operation at a time
+
+    private func perform(_ title: String, _ work: () async throws -> Void) async {
+        if let activity {
+            log.warn("\(title): busy with \(activity); wait for it or tap Stop")
+            return
+        }
+        if removed {
+            log.error("\(title): the camera was disconnected. Plug it back in, then Day 2 · Open session.")
+            return
+        }
+        activity = title
+        stopRequested = false
+        progressText = ""
+        let running = "\(title): running…"
+        lastResult = running
+        log.note("▶ \(title)")
         do {
-            try await log.timed("usb.openSession") {
-                try await device.requestOpenSession(options: nil)
-            }
-            isOpen = true
-            log.note("Session open. Waiting for the complete content catalog…")
-            await log.timed("usb.catalog.complete") {
-                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-                    if catalogComplete { c.resume() } else { readyContinuation = c }
+            try await work()
+            if lastResult == running { lastResult = "\(title): done" }
+        } catch USBSpikeError.stopped {
+            log.warn("\(title): stopped [\(lifecycle.stateDescription)]")
+            lastResult = "\(title): stopped"
+        } catch {
+            log.error("\(title) failed: \(describe(error)) [\(lifecycle.stateDescription)]")
+            lastResult = "\(title): failed — \(describe(error))"
+        }
+        activity = nil
+        progressText = ""
+        stopRequested = false
+    }
+
+    private func requireOpen() throws {
+        if removed { throw USBSpikeError.deviceRemoved }
+        guard isOpen else { throw USBSpikeError.sessionNotOpen }
+        if !catalogComplete { log.warn("The catalogue is not complete yet; results may be partial.") }
+    }
+
+    // MARK: - Completion-handler plumbing
+
+    /// Starts an ImageCaptureCore request and waits for its completion, a timeout, or the camera going away.
+    private func callback<T>(_ what: String, timeout: Double?,
+                             _ start: (_ done: @escaping @Sendable (Result<T, Error>) -> Void) -> Void) async throws -> T {
+        if removed { throw USBSpikeError.deviceRemoved }
+        let id = UUID()
+        var timeoutTask: Task<Void, Never>?
+        defer {
+            timeoutTask?.cancel()
+            abortHandlers[id] = nil
+        }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            let box = PendingRequest<T>(continuation)
+            abortHandlers[id] = { error in box.finish(.failure(error)) }
+            if let timeout {
+                timeoutTask = Task {
+                    try? await Task.sleep(for: .seconds(timeout))
+                    if !Task.isCancelled { box.finish(.failure(USBSpikeError.timedOut(what, timeout))) }
                 }
             }
-            refreshFiles()
-        } catch {
-            log.error("openSession failed: \(error)")
+            start { result in box.finish(result) }
         }
     }
 
-    func close() async {
-        do {
-            try await device.requestCloseSession(options: nil)
-            isOpen = false
-            log.note("Session closed")
-        } catch {
-            log.error("closeSession failed: \(error)")
-        }
+    private func abortPending(_ error: USBSpikeError) {
+        let handlers = abortHandlers
+        abortHandlers.removeAll()
+        for handler in handlers.values { handler(error) }
     }
 
-    func refreshFiles() {
-        let items = device.mediaFiles ?? []
-        files = items.compactMap { $0 as? ICCameraFile }
-        log.measure("usb.catalog.count", Double(files.count), "files")
-        let byExt = Dictionary(grouping: files) { ($0.name as NSString?)?.pathExtension.uppercased() ?? "?" }
-        for (ext, group) in byExt.sorted(by: { $0.key < $1.key }) {
-            let bytes = group.reduce(0) { $0 + Int($1.fileSize) }
-            log.note("  \(ext): \(group.count) files, \(bytes / 1_000_000) MB")
-        }
-        if let newest = files.max(by: { ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast) }) {
-            log.note("  newest: \(newest.name ?? "?") \(newest.creationDate.map { "\($0)" } ?? "no date") handle=\(String(format: "0x%08X", newest.ptpObjectHandle))")
-        }
-    }
+    // MARK: - Day 2 · session and catalogue
 
-    // MARK: Day 2 — thumbnails
-
-    func timeThumbnails(count: Int = 50) async {
-        let sample = Array(files.prefix(count))
-        guard !sample.isEmpty else { log.warn("No files to thumbnail"); return }
-        var total = 0.0
-        var failures = 0
-        for file in sample {
+    func openSession() async {
+        await perform("Open session") {
+            if isOpen { log.note("Session already open"); return }
+            catalogComplete = false
             let clock = ContinuousClock()
             let start = clock.now
+            openRequestedAt = start
+            // A reopen on the same ICCameraDevice may find the catalogue ImageCaptureCore kept from the last session.
+            openIsReopen = successfulOpens > 0
+            // Only this open may stamp usb.catalog.complete: a ready callback after it (a reopen by ImageCaptureCore,
+            // a failed or stopped open) must not be timed from this request.
+            defer { openRequestedAt = nil }
+            let _: Void = try await callback("requestOpenSession", timeout: 60) { done in
+                self.device.requestOpenSession(options: nil) { error in
+                    if let error { done(.failure(error)) } else { done(.success(())) }
+                }
+            }
+            isOpen = true
+            successfulOpens += 1
+            log.measure("usb.openSession", (clock.now - start).inSeconds, "s", context: device.name ?? "camera")
+            logCapabilities("after open")
+            let percentAtOpen = device.contentCatalogPercentCompleted
+
+            // usb.catalog.complete is recorded by deviceDidBecomeReady(withCompleteContentCatalog:) itself, from
+            // `openRequestedAt`; this loop only waits for it.
+            // If the callback never comes (possible when a session is reopened on the same device), the first
+            // moment contentCatalogPercentCompleted reads 100 is used instead, 10 s later, and labelled as such. If
+            // it already read 100 when the open completed, ImageCaptureCore kept the catalogue from an earlier
+            // session: that is not a listing of the card, so nothing is recorded.
+            var lastNote = clock.now
+            var fullAt: ContinuousClock.Instant?
+            while !catalogComplete {
+                if removed { throw USBSpikeError.deviceRemoved }
+                if stopRequested { throw USBSpikeError.stopped }
+                if clock.now - start > .seconds(300) { throw USBSpikeError.timedOut("the complete content catalogue", 300) }
+                let percentDone = device.contentCatalogPercentCompleted
+                progressText = "cataloguing \(percentDone)%"
+                if percentDone >= 100, fullAt == nil { fullAt = clock.now }
+                if let fullAt, clock.now - fullAt > .seconds(10) {
+                    if openIsReopen && percentAtOpen >= 100 {
+                        log.warn("Reopen: the catalogue already read 100 % when the session opened (kept from the earlier session) and no ready callback came, so this was not a listing of the card: usb.catalog.complete not recorded. Unplug and re-plug the camera for a cold listing.")
+                    } else {
+                        log.warn("deviceDidBecomeReady(withCompleteContentCatalog:) did not arrive within 10 s of the catalogue reading 100 %; using that moment instead")
+                        log.measure("usb.catalog.complete", (fullAt - start).inSeconds, "s",
+                                    context: "open request → contentCatalogPercentCompleted = 100 (no ready callback), \(device.mediaFiles?.count ?? 0) files")
+                    }
+                    catalogComplete = true
+                    break
+                }
+                if clock.now - lastNote > .seconds(2) {
+                    lastNote = clock.now
+                    log.note("  catalogue \(percentDone)%, \(device.mediaFiles?.count ?? 0) files so far")
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            refreshCatalogue(record: true)
+            lastResult = "Open session: \(files.count) files"
+        }
+    }
+
+    func closeSession() async {
+        await perform("Close session") {
+            guard isOpen else { log.note("Session is not open"); return }
+            closingSession = true
+            defer { closingSession = false }
+            let _: Void = try await callback("requestCloseSession", timeout: 30) { done in
+                self.device.requestCloseSession(options: nil) { error in
+                    if let error { done(.failure(error)) } else { done(.success(())) }
+                }
+            }
+            isOpen = false
+            catalogComplete = false
+            log.note("Session closed")
+        }
+    }
+
+    /// Walks `mediaFiles` (and the `contents` tree, to compare) and logs what the findings page needs to check
+    /// "metadata matches the card". `record` adds usb.catalog.count.
+    func refreshCatalogue(record: Bool) {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let flat = (device.mediaFiles ?? []).compactMap { $0 as? ICCameraFile }
+        var treeCount = 0
+        countFiles(in: device.contents ?? [], into: &treeCount)
+        files = flat.sorted(by: Self.isNewer)
+        let walkSeconds = (clock.now - start).inSeconds
+        guard record else { return }
+
+        log.measure("usb.catalog.count", Double(files.count), "files",
+                    context: "mediaFiles; contents tree has \(treeCount) files; walk \(fmt(walkSeconds * 1000, 1)) ms")
+        let byExtension = Dictionary(grouping: files) { Self.ext($0) }
+        for (ext, group) in byExtension.sorted(by: { $0.key < $1.key }) {
+            let bytes = group.reduce(Int64(0)) { $0 + Int64($1.fileSize) }
+            log.note("  .\(ext.isEmpty ? "?" : ext): \(group.count) files, \(mb(bytes))")
+        }
+        for file in files.prefix(5) {
+            log.note("  \(file.name ?? "?") \(file.fileSize) B, created \(file.creationDate.map { $0.formatted(date: .numeric, time: .standard) } ?? "no date"), handle \(hex32(file.ptpObjectHandle)), uti \(file.uti ?? "?")")
+        }
+        if files.count > 5 { log.note("  … \(files.count - 5) more. Compare these with the camera's playback screen.") }
+    }
+
+    private func countFiles(in items: [ICCameraItem], into count: inout Int) {
+        for item in items {
+            if let folder = item as? ICCameraFolder {
+                countFiles(in: folder.contents ?? [], into: &count)
+            } else if item is ICCameraFile {
+                count += 1
+            }
+        }
+    }
+
+    // MARK: - Day 2 · thumbnails
+
+    func timeThumbnails(count: Int = 50) async {
+        await perform("Thumbnails, \(count) newest") {
+            try requireOpen()
+            thumbnailRuns += 1
+            let run = thumbnailRuns
+            if run > 1 {
+                log.warn("Thumbnail run \(run) in this session: ImageCaptureCore may serve these from its cache. For the cold figure use the first run after Open session.")
+            }
+            let sample = Array(files.prefix(count))
+            guard !sample.isEmpty else { throw USBSpikeError.nothingToDo("no files on the card") }
+            let clock = ContinuousClock()
+            var times: [Double] = []
+            var bytes = 0
+            var failures: [String] = []
+            for (index, file) in sample.enumerated() {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                let name = file.name ?? "?"
+                let start = clock.now
+                do {
+                    let data: Data = try await callback("requestThumbnailData", timeout: 30) { done in
+                        file.requestThumbnailData(options: nil) { data, error in
+                            if let error { done(.failure(error)) }
+                            else if let data { done(.success(data)) }
+                            else { done(.failure(USBSpikeError.noData("requestThumbnailData"))) }
+                        }
+                    }
+                    let ms = (clock.now - start).inSeconds * 1000
+                    times.append(ms)
+                    bytes += data.count
+                    if index < 3 { log.note("  thumbnail \(name): \(data.count) B in \(fmt(ms)) ms, starts \(data.hexDump(limit: 4))") }
+                } catch {
+                    if removed { throw USBSpikeError.deviceRemoved }
+                    failures.append("\(name): \(describe(error))")
+                }
+                lifecycle.noteProgress("thumbnail \(index + 1)/\(sample.count)", link: "usb")
+                progressText = "\(index + 1)/\(sample.count)"
+            }
+            guard !times.isEmpty else { throw USBSpikeError.nothingToDo("every thumbnail request failed: \(failures.prefix(3).joined(separator: "; "))") }
+            let avg = times.reduce(0, +) / Double(times.count)
+            let minMs = times.min() ?? 0
+            let maxMs = times.max() ?? 0
+            log.measure("usb.thumb.avg", avg, "ms",
+                        context: "\(times.count) of \(sample.count) newest ok, min \(fmt(minMs)) max \(fmt(maxMs)) ms, avg \(bytes / max(times.count, 1) / 1000) KB, run \(run) this session [\(lifecycle.stateDescription)]")
+            for failure in failures.prefix(5) { log.warn("  thumbnail failed: \(failure)") }
+            lastResult = "Thumbnails: \(fmt(avg)) ms average"
+        }
+    }
+
+    // MARK: - Day 3 · downloads and throughput
+
+    func downloadBatch(_ preset: USBDownloadPreset) async {
+        await perform(preset.label) {
+            try requireOpen()
+            let selection = newest(preset.fileExtension, preset.count)
+            guard !selection.isEmpty else { throw USBSpikeError.nothingToDo("no .\(preset.fileExtension) files on the card") }
+            if selection.count < preset.count {
+                log.warn("only \(selection.count) .\(preset.fileExtension) files on the card (the plan asks for \(preset.count))")
+            }
+            let total = selection.reduce(Int64(0)) { $0 + Int64($1.fileSize) }
+            try ensureFreeSpace(for: total)
+            let dir = try freshDirectory("Downloads")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            log.note("Downloading \(selection.count) × .\(preset.fileExtension), \(mb(total)), \(preset.parallel) in flight…")
+
+            let result = await log.withMemoryPeak("usb.download", context: preset.label) {
+                await self.runBatch(selection, parallel: preset.parallel, dir: dir, title: preset.label)
+            }
+            if removed { throw USBSpikeError.deviceRemoved }
+            if !isOpen {
+                log.warn("The camera closed the session after \(result.ok) of \(selection.count) files; \(preset.measurement) not recorded (the per-file figures above stand).")
+                throw USBSpikeError.sessionClosed
+            }
+            if result.stopped {
+                log.warn("Batch stopped after \(result.ok) of \(selection.count) files; \(preset.measurement) not recorded (the per-file figures above stand).")
+                throw USBSpikeError.stopped
+            }
+            guard result.ok > 0, result.seconds > 0 else { throw USBSpikeError.nothingToDo("no file downloaded") }
+            let mbps = Double(result.bytes) / result.seconds / 1_000_000
+            log.throughput(preset.measurement, bytes: Int(result.bytes), seconds: result.seconds,
+                           context: "\(result.ok) of \(selection.count) files, \(mb(result.bytes)) on disk in \(fmt(result.seconds, 2)) s, \(preset.parallel) in flight" + (result.failed.isEmpty ? "" : ", \(result.failed.count) failed"))
+            if preset == .arwSerial { lastSerialARWThroughput = mbps }
+            lastResult = "\(preset.label): \(fmt(mbps)) MB/s"
+        }
+    }
+
+    private struct BatchResult {
+        var bytes: Int64 = 0
+        var seconds: Double = 0
+        var ok = 0
+        var failed: [String] = []
+        var stopped = false
+    }
+
+    private struct DownloadOutcome: Sendable {
+        let name: String
+        let bytes: Int64
+        let seconds: Double
+        let error: String?
+    }
+
+    /// Downloads `selection` with `parallel` requests in flight. The batch time is the wall time from the first
+    /// request to the last completion; copies are deleted by the caller after the batch, outside that time.
+    private func runBatch(_ selection: [ICCameraFile], parallel: Int, dir: URL, title: String) async -> BatchResult {
+        var result = BatchResult()
+        let clock = ContinuousClock()
+        let start = clock.now
+        var finished = 0
+        await withTaskGroup(of: DownloadOutcome.self) { group in
+            var next = 0
+            while next < min(max(parallel, 1), selection.count) {
+                let file = selection[next]
+                next += 1
+                group.addTask { @MainActor in await self.downloadOutcome(file, dir: dir) }
+            }
+            while let outcome = await group.next() {
+                finished += 1
+                if let error = outcome.error {
+                    result.failed.append("\(outcome.name): \(error)")
+                    log.error("  ✗ \(outcome.name): \(error) [\(lifecycle.stateDescription)]")
+                } else {
+                    result.ok += 1
+                    result.bytes += outcome.bytes
+                    log.throughput("usb.download.file", bytes: Int(outcome.bytes), seconds: outcome.seconds,
+                                   context: "\(outcome.name) \(mb(outcome.bytes)) in \(fmt(outcome.seconds, 2)) s, \(title) [\(lifecycle.stateDescription)]")
+                    lifecycle.noteProgress("downloaded \(outcome.name) (\(finished)/\(selection.count))", link: "usb")
+                }
+                progressText = "\(finished)/\(selection.count)"
+                if stopRequested || removed || !isOpen {
+                    result.stopped = true
+                } else if next < selection.count {
+                    let file = selection[next]
+                    next += 1
+                    group.addTask { @MainActor in await self.downloadOutcome(file, dir: dir) }
+                }
+            }
+        }
+        result.seconds = (clock.now - start).inSeconds
+        return result
+    }
+
+    private func downloadOutcome(_ file: ICCameraFile, dir: URL) async -> DownloadOutcome {
+        let name = file.name ?? "?"
+        do {
+            let downloaded = try await downloadFile(file, to: dir)
+            return DownloadOutcome(name: name, bytes: downloaded.bytes, seconds: downloaded.seconds, error: nil)
+        } catch {
+            return DownloadOutcome(name: name, bytes: 0, seconds: 0, error: describe(error))
+        }
+    }
+
+    /// One requestDownload. Bytes are the size of the file on disk afterwards; seconds are request → completion.
+    private func downloadFile(_ file: ICCameraFile, to dir: URL) async throws -> (url: URL, bytes: Int64, seconds: Double) {
+        let name = file.name ?? "?"
+        let options: [ICDownloadOption: Any] = [
+            .downloadsDirectoryURL: dir,
+            .overwrite: true,
+        ]
+        let clock = ContinuousClock()
+        let start = clock.now
+        // No timeout: a long clip can take minutes, and a cable pull ends the wait through didRemove.
+        let saved: String = try await callback("requestDownload \(name)", timeout: nil) { done in
+            // The completion is not declared @Sendable but runs "on any available queue" (Apple): keep it nonisolated.
+            _ = file.requestDownload(options: options) { @Sendable filename, error in
+                if let error { done(.failure(error)) } else { done(.success(filename ?? name)) }
+            }
+        }
+        let seconds = (clock.now - start).inSeconds
+        // verify on day 1: the completion's String is documented only as "String?"; treated as a file name inside
+        // `dir`, or as a path if it is absolute. The log line below shows which.
+        let url = saved.hasPrefix("/") ? URL(fileURLWithPath: saved) : dir.appendingPathComponent(saved)
+        if !loggedDownloadName {
+            loggedDownloadName = true
+            log.note("requestDownload completion string for \(name): '\(saved)' (\(saved.hasPrefix("/") ? "a path" : "a file name")). Findings-page fact.")
+        }
+        guard let size = PartFileWriter.sizeOnDisk(url) else {
+            throw USBSpikeError.noData("requestDownload said '\(saved)' but no such file is in \(dir.lastPathComponent)")
+        }
+        let bytes = Int64(size)
+        if bytes != Int64(file.fileSize) {
+            log.warn("  \(name): \(bytes) B on disk, the camera reported \(file.fileSize) B")
+        }
+        return (url, bytes, seconds)
+    }
+
+    // MARK: - Day 4 · PTP pass-through
+
+    private struct RawPTPReply: Sendable {
+        let first: Data
+        let second: Data
+        let error: Error?
+    }
+
+    /// Sends one command through requestSendPTPCommand and decodes the reply with PTPPassThrough.
+    private func send(_ command: PTPContainer, timeout: Double = 60) async throws -> PTPPassThrough.Reply {
+        let name = command.operationCode.description
+        let encoded = command.encode()
+        let raw: RawPTPReply = try await callback(name, timeout: timeout) { done in
+            self.device.requestSendPTPCommand(encoded, outData: nil) { first, second, error in
+                done(.success(RawPTPReply(first: first, second: second, error: error)))
+            }
+        }
+        let reply: PTPPassThrough.Reply
+        do {
+            reply = try PTPPassThrough.decodeReply(raw.first, raw.second, for: command)
+        } catch {
+            let bytes = "first \(raw.first.count) B [\(raw.first.hexDump(limit: 24))], second \(raw.second.count) B [\(raw.second.hexDump(limit: 24))]"
+            if let iccError = raw.error {
+                throw USBSpikeError.passThrough(name, "\(describe(iccError)); \(bytes)")
+            }
+            throw USBSpikeError.passThrough(name, "no response container; \(bytes)")
+        }
+        if let iccError = raw.error {
+            log.warn("\(name): ImageCaptureCore reported \(describe(iccError)) alongside response \(reply.responseCode)")
+        }
+        noteLayout(reply, op: name, command: command, raw: raw)
+        return reply
+    }
+
+    /// The (data, response) order and header handling of requestSendPTPCommand is a findings-page fact: logged once
+    /// per session, and again only if another operation shows a different layout.
+    private func noteLayout(_ reply: PTPPassThrough.Reply, op: String, command: PTPContainer, raw: RawPTPReply) {
+        let key = reply.layout.rawValue
+        guard !layoutsSeen.contains(key) else { return }
+        layoutsSeen.insert(key)
+        let renumbered = reply.response.transactionID != command.transactionID
+        log.note("Pass-through layout: \(key) — first seen on \(op): first value \(raw.first.count) B, second \(raw.second.count) B, data phase \(reply.data.count) B; response transaction \(reply.response.transactionID), ours \(command.transactionID)\(renumbered ? " (ImageCaptureCore renumbers transactions)" : ""). Findings-page fact.")
+        if layoutsSeen.count > 1 { log.warn("Pass-through layout differs between operations: \(layoutsSeen.sorted().joined(separator: ", "))") }
+    }
+
+    private func check(_ reply: PTPPassThrough.Reply, _ what: String) throws {
+        guard reply.responseCode.isOK else {
+            if reply.responseCode == .invalidTransactionID {
+                log.warn("\(what): InvalidTransactionID. ImageCaptureCore seems to pass our transaction ID through unchanged while it runs its own counter; findings-page fact.")
+            }
+            throw USBSpikeError.ptp(what, reply.responseCode)
+        }
+    }
+
+    func ptpGetDeviceInfo() async {
+        await perform("GetDeviceInfo") {
+            try requireOpen()
+            let info = try await loadDeviceInfo()
+            lastResult = "DeviceInfo: \(info.model) \(info.deviceVersion), \(info.operationsSupported.count) operations"
+        }
+    }
+
+    private func deviceInfoOrFetch() async throws -> PTPDeviceInfo {
+        if let deviceInfo { return deviceInfo }
+        log.note("Fetching DeviceInfo first…")
+        return try await loadDeviceInfo()
+    }
+
+    @discardableResult
+    private func loadDeviceInfo() async throws -> PTPDeviceInfo {
+        let reply = try await send(PTPCommand.getDeviceInfo(tx: tx.take()))
+        try check(reply, "GetDeviceInfo")
+        FixtureStore.save(reply.data, link: .usb, name: "deviceinfo.bin", log: log)
+        let info = try PTPDeviceInfo.decode(reply.data)
+        deviceInfo = info
+        FixtureStore.recordFirmware(model: info.model, version: info.deviceVersion, link: .usb, log: log)
+        let vendor = info.vendorExtension.map { "\($0)" } ?? "unknown"
+        log.note("DeviceInfo: \(info.manufacturer) \(info.model), firmware \(info.deviceVersion), serial \(info.serialNumber.isEmpty ? "(empty)" : info.serialNumber)")
+        log.note("  PTP \(info.standardVersion), vendor extension \(hex32(info.vendorExtensionID)) (\(vendor)) v\(info.vendorExtensionVersion) '\(info.vendorExtensionDescription)', functional mode \(info.functionalMode)")
+        log.note("  operations (\(info.operationsSupported.count)): " + info.operationsSupported.map { named($0, PTPOperationCode(rawValue: $0).description) }.joined(separator: ", "))
+        log.note("  events (\(info.eventsSupported.count)): " + info.eventsSupported.map { named($0, PTPEventCode(rawValue: $0).description) }.joined(separator: ", "))
+        log.note("  device properties (\(info.devicePropertiesSupported.count)): " + info.devicePropertiesSupported.map { named($0, devicePropertyNames[$0] ?? "") }.joined(separator: ", "))
+        log.note("  capture formats (\(info.captureFormats.count)): " + info.captureFormats.map { named($0, PTPObjectFormat(rawValue: $0).description) }.joined(separator: ", "))
+        log.note("  image formats (\(info.imageFormats.count)): " + info.imageFormats.map { named($0, PTPObjectFormat(rawValue: $0).description) }.joined(separator: ", "))
+        log.note("  GetPartialObject 0x101B \(yesNo(info.supports(.getPartialObject))) · GetPartialObject64 0x95C1 \(yesNo(info.supports(.getPartialObject64))) · Sony GetPartialLargeObject 0x9211 \(yesNo(info.supports(.sonySDIOGetPartialLargeObject))) · GetObjectHandles \(yesNo(info.supports(.getObjectHandles))) · ObjectAdded 0x4002 \(yesNo(info.emits(.objectAdded))) · Sony ObjectAdded 0xC201 \(yesNo(info.emits(.sonyObjectAdded))) · BatteryLevel 0x5001 \(yesNo(info.devicePropertiesSupported.contains(batteryLevelProperty)))")
+        return info
+    }
+
+    func ptpStorage() async {
+        await perform("GetStorageIDs + GetStorageInfo") {
+            try requireOpen()
+            let reply = try await send(PTPCommand.getStorageIDs(tx: tx.take()))
+            try check(reply, "GetStorageIDs")
+            FixtureStore.save(reply.data, link: .usb, name: "storageids.bin", log: log)
+            let ids = try PTPStorageID.decodeArray(reply.data)
+            log.note("GetStorageIDs: \(ids.count) store(s): " + ids.map { "\(hex32($0.rawValue))\($0.hasLogicalStore ? "" : " (no logical store)")" }.joined(separator: ", "))
+            var savedFirst = false
+            for id in ids {
+                let infoReply = try await send(PTPCommand.getStorageInfo(id, tx: tx.take()))
+                guard infoReply.responseCode.isOK else {
+                    log.warn("  GetStorageInfo \(hex32(id.rawValue)): \(infoReply.responseCode)")
+                    continue
+                }
+                if !savedFirst {
+                    FixtureStore.save(infoReply.data, link: .usb, name: "storageinfo.bin", log: log)
+                    savedFirst = true
+                }
+                let si = try PTPStorageInfo.decode(infoReply.data)
+                log.note("  \(hex32(id.rawValue)) '\(si.storageDescription)' label '\(si.volumeLabel)': capacity \(gb(si.maxCapacity)), free \(gb(si.freeSpaceInBytes)), free images \(si.freeSpaceInImages), storage type \(si.storageType), filesystem \(si.filesystemType), access \(si.accessCapability)")
+            }
+            lastResult = "\(ids.count) store(s)"
+        }
+    }
+
+    func ptpObjectHandles() async {
+        await perform("GetObjectHandles") {
+            try requireOpen()
+            let clock = ContinuousClock()
+            let start = clock.now
+            let reply: PTPPassThrough.Reply
             do {
-                let data = try await thumbnailData(for: file)
-                let elapsed = clock.now - start
-                total += seconds(elapsed)
-                if file === sample.first { log.note("first thumbnail: \(data.count) bytes, \(data.hexDump(limit: 8))") }
+                reply = try await send(PTPCommand.getObjectHandles(storage: .all, tx: tx.take()), timeout: 120)
+            } catch let interruption as USBSpikeError where interruption.isInterruption {
+                // A cable pull, a session closed under us or Stop says nothing about what ImageCaptureCore allows.
+                throw interruption
+            } catch {
+                log.warn("GetObjectHandles through pass-through: no reply (\(describe(error))). ImageCaptureCore allows it: no.")
+                lastResult = "GetObjectHandles: not allowed"
+                return
+            }
+            let seconds = (clock.now - start).inSeconds
+            guard reply.responseCode.isOK else {
+                log.warn("GetObjectHandles through pass-through: response \(reply.responseCode). ImageCaptureCore allows it: no (or the camera refused it).")
+                lastResult = "GetObjectHandles: \(reply.responseCode)"
+                return
+            }
+            FixtureStore.save(reply.data, link: .usb, name: "objecthandles.bin", log: log)
+            let handles = try PTPObjectHandle.decodeArray(reply.data)
+            let iccHandles = Set(files.map { $0.ptpObjectHandle })
+            let known = handles.filter { iccHandles.contains($0.rawValue) }.count
+            log.note("GetObjectHandles through pass-through: allowed. \(handles.count) handles in \(fmt(seconds, 2)) s; \(known) match an ICCameraFile.ptpObjectHandle, ImageCaptureCore lists \(files.count) files (the difference is folders and objects it hides).")
+            lastResult = "GetObjectHandles: \(handles.count) handles"
+        }
+    }
+
+    func ptpObjectInfo() async {
+        await perform("GetObjectInfo") {
+            try requireOpen()
+            guard let arw = newest("ARW", 1).first else { throw USBSpikeError.nothingToDo("no ARW on the card") }
+            let arwInfo = try await objectInfo(for: arw, saveFixture: true, compare: true)
+            let siblings = files.filter { file in
+                let ext = Self.ext(file)
+                return (ext == "JPG" || ext == "HIF") && Self.stem(file) == arwInfo.pairStem
+            }
+            if siblings.isEmpty {
+                log.note("No JPG/HIF sibling of \(arwInfo.pairStem) (shoot RAW+JPEG or RAW+HEIF to capture a pair); using the newest JPG and HIF instead.")
+                for ext in ["JPG", "HIF"] {
+                    if let other = newest(ext, 1).first { try await objectInfo(for: other, saveFixture: true, compare: true) }
+                }
+            }
+            for sibling in siblings { try await objectInfo(for: sibling, saveFixture: true, compare: true) }
+            if let mp4 = newest("MP4", 1).first { try await objectInfo(for: mp4, saveFixture: true, compare: true) }
+            lastResult = "ObjectInfo: \(arwInfo.filename) + \(siblings.count) sibling(s)"
+        }
+    }
+
+    @discardableResult
+    private func objectInfo(for file: ICCameraFile, saveFixture: Bool, compare: Bool) async throws -> PTPObjectInfo {
+        let name = file.name ?? "?"
+        guard file.ptpObjectHandle != 0 else { throw USBSpikeError.nothingToDo("\(name) has no PTP object handle") }
+        let handle = PTPObjectHandle(rawValue: file.ptpObjectHandle)
+        let reply = try await send(PTPCommand.getObjectInfo(handle, tx: tx.take()))
+        try check(reply, "GetObjectInfo \(name)")
+        let info = try PTPObjectInfo.decode(reply.data)
+        if saveFixture {
+            let ext = (info.fileExtension.isEmpty ? Self.ext(file) : info.fileExtension).lowercased()
+            FixtureStore.save(reply.data, link: .usb, name: "objectinfo-\(ext.isEmpty ? "unknown" : ext).bin", log: log)
+        }
+        if compare {
+            log.note("GetObjectInfo \(handle): \(info.filename), format \(info.objectFormat) (\(info.mediaKind.rawValue)), \(info.objectCompressedSize) B, \(info.imagePixWidth)×\(info.imagePixHeight) \(info.imageBitDepth)-bit, captured '\(info.captureDateRaw)', modified '\(info.modificationDateRaw)', thumb \(info.thumbFormat) \(info.thumbCompressedSize) B \(info.thumbPixWidth)×\(info.thumbPixHeight), storage \(hex32(info.storageID.rawValue)), parent \(info.parentObject), sequence \(info.sequenceNumber), keywords '\(info.keywords)'")
+            compareWithCatalogue(info, file)
+        }
+        return info
+    }
+
+    private func compareWithCatalogue(_ info: PTPObjectInfo, _ file: ICCameraFile) {
+        var mismatches: [String] = []
+        let iccName = file.name ?? ""
+        if info.filename != iccName { mismatches.append("name '\(info.filename)' vs '\(iccName)'") }
+        let iccSize = UInt64(max(0, file.fileSize))
+        if info.objectCompressedSize == UInt32.max {
+            log.note("  ObjectCompressedSize is 0xFFFFFFFF (object of 4 GiB or more); ImageCaptureCore reports \(iccSize) B")
+        } else if UInt64(info.objectCompressedSize) != iccSize {
+            mismatches.append("size \(info.objectCompressedSize) vs \(iccSize)")
+        }
+        if let ptpDate = info.captureDate, let iccDate = file.creationDate {
+            let delta = ptpDate.timeIntervalSince(iccDate)
+            if abs(delta) > 1 {
+                mismatches.append("date '\(info.captureDateRaw)' vs \(iccDate.formatted(date: .numeric, time: .standard)) (Δ \(fmt(delta, 0)) s)")
+            }
+        } else {
+            mismatches.append("date '\(info.captureDateRaw)' vs \(file.creationDate.map { $0.formatted(date: .numeric, time: .standard) } ?? "none") (one side missing or unparsable)")
+        }
+        if mismatches.isEmpty {
+            log.note("  matches ICCameraFile (name, size, date)")
+        } else {
+            log.warn("  ObjectInfo vs ICCameraFile mismatch: " + mismatches.joined(separator: "; "))
+        }
+    }
+
+    // MARK: Day 4 · battery
+
+    /// GetDevicePropValue(BatteryLevel 0x5001); ISO 15740 types it UINT8 (0–100).
+    private func readBattery() async throws -> Int {
+        let reply = try await send(PTPCommand.getDevicePropValue(.batteryLevel, tx: tx.take()))
+        try check(reply, "GetDevicePropValue(BatteryLevel 0x5001)")
+        var reader = PTPReader(reply.data)
+        let value = try reader.u8()
+        if reply.data.count != 1 {
+            log.warn("BatteryLevel value is \(reply.data.count) bytes, expected one UINT8: \(reply.data.hexDump(limit: 8))")
+        }
+        return Int(value)
+    }
+
+    /// PTP BatteryLevel, or ImageCaptureCore's batteryLevel when the property read fails.
+    private func batteryLevel() async throws -> (percent: Int, source: String) {
+        do {
+            return (try await readBattery(), "PTP 0x5001")
+        } catch {
+            if removed { throw USBSpikeError.deviceRemoved }
+            guard device.batteryLevelAvailable else {
+                throw USBSpikeError.nothingToDo("GetDevicePropValue(BatteryLevel) failed (\(describe(error))) and ImageCaptureCore has no battery level")
+            }
+            log.warn("GetDevicePropValue(BatteryLevel) failed (\(describe(error))); using ImageCaptureCore batteryLevel")
+            return (device.batteryLevel, "ImageCaptureCore")
+        }
+    }
+
+    func batteryPerGB(targetGB: Int) async {
+        await perform("Battery per GB") {
+            try requireOpen()
+            let pool = files.filter { $0.fileSize > 0 }
+            guard !pool.isEmpty else { throw USBSpikeError.nothingToDo("no files on the card") }
+            let target = Int64(max(targetGB, 1)) * 1_000_000_000
+            let largest = pool.map { Int64($0.fileSize) }.max() ?? 0
+            try ensureFreeSpace(for: largest)
+            let first = try await batteryLevel()
+            let before = first.percent
+            let iccBefore = device.batteryLevelAvailable ? "\(device.batteryLevel)%" : "not available"
+            log.note("Battery before: \(before)% (\(first.source)); ImageCaptureCore batteryLevel \(iccBefore). Downloading at least \(mb(target)), each copy deleted after it lands…")
+            let dir = try freshDirectory("Battery")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let clock = ContinuousClock()
+            let start = clock.now
+            var bytes: Int64 = 0
+            var count = 0
+            while bytes < target {
+                if stopRequested { throw USBSpikeError.stopped }
+                if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+                let file = pool[count % pool.count]
+                let downloaded = try await downloadFile(file, to: dir)
+                try? FileManager.default.removeItem(at: downloaded.url)
+                bytes += downloaded.bytes
+                count += 1
+                lifecycle.noteProgress("battery run \(mb(bytes))", link: "usb")
+                progressText = "\(mb(bytes)) of \(mb(target))"
+                if count % 10 == 0 { log.note("  \(count) files, \(mb(bytes)) [\(lifecycle.stateDescription)]") }
+            }
+            let seconds = (clock.now - start).inSeconds
+            let last = try await batteryLevel()
+            let after = last.percent
+            if last.source != first.source {
+                throw USBSpikeError.nothingToDo("battery read from \(first.source) before and \(last.source) after; not comparable, run it again")
+            }
+            let iccAfter = device.batteryLevelAvailable ? "\(device.batteryLevel)%" : "not available"
+            let gigabytes = Double(bytes) / 1_000_000_000
+            let perGB = Double(before - after) / gigabytes
+            log.measure("usb.battery.per1GB", perGB, "%/GB",
+                        context: "\(before)% → \(after)% (\(first.source)) over \(fmt(gigabytes, 2)) GB (\(count) files, \(fmt(seconds, 0)) s); ImageCaptureCore \(iccBefore) → \(iccAfter); USB Power Supply must be Off")
+            if before == after { log.warn("No change at 1 % resolution: repeat with a larger size for a usable figure.") }
+            lastResult = "Battery: \(fmt(perGB, 2)) %/GB"
+        }
+    }
+
+    // MARK: Day 4 · GetPartialObject vs requestReadData vs requestDownload
+
+    func getPartialObjectTest() async {
+        await perform("GetPartialObject, newest ARW") {
+            try requireOpen()
+            guard let file = newest("ARW", 1).first else { throw USBSpikeError.nothingToDo("no ARW on the card") }
+            let name = file.name ?? "?"
+            let size = UInt64(max(0, file.fileSize))
+            guard size > 0 else { throw USBSpikeError.nothingToDo("\(name) reports size 0") }
+            let info = try await deviceInfoOrFetch()
+            let variant = chooseVariant(size: size, info: info)
+            // The reassembly is kept and the requestDownload reference lands beside it.
+            try ensureFreeSpace(for: Int64(size) * 2)
+            let dir = try freshDirectory("GetPartialObject")
+            let partURL = dir.appendingPathComponent(USBResumePaths.sanitised(name))
+
+            // 1. GetPartialObject, 4 MiB chunks, streamed to disk.
+            log.note("1/3 GetPartialObject (\(variant.rawValue), 4 MiB chunks) of \(name), \(mb(size))…")
+            let writer = try PartFileWriter(url: partURL, startingAt: 0)
+            let gpo = await partialReadLoop(handle: PTPObjectHandle(rawValue: file.ptpObjectHandle), name: name, size: size,
+                                            from: 0, variant: variant, chunkSize: PTPPartialRead.defaultChunkSize,
+                                            pause: nil, writer: writer, label: "GetPartialObject") { _, _ in }
+            writer.close()
+            if let interruption = gpo.error as? USBSpikeError {
+                switch interruption {
+                case .stopped, .deviceRemoved, .sessionClosed, .sessionReplaced:
+                    log.warn("GetPartialObject interrupted at \(gpo.offset) of \(size) bytes (\(interruption.description)); usb.getPartialObject.supported not recorded")
+                    throw interruption
+                case .ptp(_, let code) where code == .invalidTransactionID:
+                    // Our transaction numbering versus ImageCaptureCore's, not the camera refusing the operation:
+                    // recording "unsupported" here would put a harness problem into the go/no-go table.
+                    log.warn("GetPartialObject got InvalidTransactionID at \(gpo.offset) of \(size) bytes; usb.getPartialObject.supported not recorded (a transaction-ID problem in the pass-through, not an answer about the camera)")
+                    throw interruption
+                default:
+                    break
+                }
+            }
+            let complete = gpo.error == nil && gpo.offset == size
+            var gpoSHA: String?
+            if complete {
+                gpoSHA = try sha256(of: partURL)
+                log.throughput("usb.getPartialObject.throughput", bytes: Int(gpo.bytesThisRun), seconds: gpo.seconds,
+                               context: "\(name), \(variant.rawValue), 4 MiB chunks [\(lifecycle.stateDescription)]")
+                log.note("  reassembled file kept at Caches/Spike/GetPartialObject/\(partURL.lastPathComponent)")
+            } else {
+                log.error("GetPartialObject stopped at \(gpo.offset) of \(size) bytes: \(gpo.error.map { describe($0) } ?? "short read")")
+            }
+            // "No" only when the camera itself answered the first chunk with a non-OK response, or OK with no bytes
+            // (same rule as the Wi-Fi path). Timeouts, pass-through decode failures, local write errors and failures
+            // after good chunks are not an answer about the camera.
+            var cameraRefused = false
+            if gpo.offset == 0, let e = gpo.error as? USBSpikeError {
+                switch e {
+                case .ptp, .noData: cameraRefused = true
+                default: break
+                }
+            }
+            if complete || cameraRefused {
+                log.flag("usb.getPartialObject.supported", complete,
+                         context: complete ? "\(name) fully reassembled with \(variant.rawValue)"
+                                           : "\(variant.rawValue) refused on the first chunk: \(gpo.error.map { describe($0) } ?? "short read")")
+            } else {
+                log.warn("usb.getPartialObject.supported not recorded: \(variant.rawValue) failed at \(gpo.offset)/\(size) with \(gpo.error.map { describe($0) } ?? "short read"), which is not the camera refusing the operation. Re-run, or try Start resumable read (1 MiB chunks).")
+            }
+            if removed { throw USBSpikeError.deviceRemoved }
+
+            // 2. requestReadData, same chunk size.
+            log.note("2/3 requestReadData (4 MiB chunks) of \(name)…")
+            var readSHA: String?
+            do {
+                readSHA = try await readDataSHA(file, measure: true).sha
+            } catch let interruption as USBSpikeError where interruption.isInterruption {
+                // Stop or a cable pull: don't go on to write a .sha256 fixture whose references say "failed".
+                throw interruption
+            } catch {
+                log.error("requestReadData failed: \(describe(error))")
+            }
+
+            // 3. requestDownload of the same file: the throughput reference and a second SHA.
+            log.note("3/3 requestDownload of \(name)…")
+            var downloadSHA: String?
+            var downloadMBps: Double?
+            do {
+                let referenceDir = dir.appendingPathComponent("reference", isDirectory: true)
+                try FileManager.default.createDirectory(at: referenceDir, withIntermediateDirectories: true)
+                let downloaded = try await downloadFile(file, to: referenceDir)
+                log.throughput("usb.download.file", bytes: Int(downloaded.bytes), seconds: downloaded.seconds,
+                               context: "\(name), reference copy for the GetPartialObject comparison [\(lifecycle.stateDescription)]")
+                if downloaded.seconds > 0 { downloadMBps = Double(downloaded.bytes) / downloaded.seconds / 1_000_000 }
+                downloadSHA = try sha256(of: downloaded.url)
+                try? FileManager.default.removeItem(at: referenceDir)
+            } catch let interruption as USBSpikeError where interruption.isInterruption {
+                throw interruption
+            } catch {
+                log.error("requestDownload failed: \(describe(error))")
+            }
+
+            guard let gpoSHA else {
+                log.warn("usb.getPartialObject.sha256Match not recorded: there is no complete GetPartialObject reassembly to compare.")
+                lastResult = cameraRefused ? "GetPartialObject: not supported here" : "GetPartialObject: incomplete"
+                return
+            }
+            var references: [(String, String)] = []
+            if let readSHA { references.append(("requestReadData", readSHA)) }
+            if let downloadSHA { references.append(("requestDownload", downloadSHA)) }
+            log.note("  GetPartialObject SHA-256 \(gpoSHA)")
+            for (source, sha) in references { log.note("  \(source) SHA-256 \(sha): \(sha == gpoSHA ? "MATCH" : "MISMATCH")") }
+            var matched = false
+            if references.isEmpty {
+                log.warn("usb.getPartialObject.sha256Match not recorded: both reference reads failed.")
+            } else {
+                matched = references.allSatisfy { $0.1 == gpoSHA }
+                log.flag("usb.getPartialObject.sha256Match", matched,
+                         context: "\(name): " + references.map { "\($0.0) \($0.1 == gpoSHA ? "MATCH" : "MISMATCH")" }.joined(separator: ", "))
+            }
+            let fixture = """
+            \(gpoSHA)  \(name)
+            # \(name), \(size) bytes, captured over USB with GetPartialObject (\(variant.rawValue), 4 MiB chunks)
+            # getPartialObject SHA-256 \(gpoSHA)
+            # requestReadData  SHA-256 \(readSHA ?? "failed")
+            # requestDownload  SHA-256 \(downloadSHA ?? "failed")
+
+            """
+            FixtureStore.saveText(fixture, link: .usb, name: "getpartialobject-\(USBResumePaths.sanitised(name)).sha256", log: log)
+
+            if gpo.seconds > 0 {
+                let gpoMBps = Double(gpo.bytesThisRun) / gpo.seconds / 1_000_000
+                if let downloadMBps, downloadMBps > 0 {
+                    let diff = (gpoMBps - downloadMBps) / downloadMBps * 100
+                    log.note("GetPartialObject \(fmt(gpoMBps)) MB/s vs requestDownload \(fmt(downloadMBps)) MB/s of the same file: \(String(format: "%+.1f", diff)) % → \(abs(diff) <= 15 ? "PASS" : "FAIL") (criterion: within 15 %)")
+                }
+                if let serial = lastSerialARWThroughput, serial > 0 {
+                    let diff = (gpoMBps - serial) / serial * 100
+                    log.note("  vs this session's Day 3 ARW serial batch (\(fmt(serial)) MB/s): \(String(format: "%+.1f", diff)) %")
+                }
+                lastResult = "GetPartialObject \(fmt(gpoMBps)) MB/s, SHA \(references.isEmpty ? "unchecked" : (matched ? "match" : "MISMATCH"))"
+            }
+        }
+    }
+
+    private func chooseVariant(size: UInt64, info: PTPDeviceInfo) -> PTPPartialRead.Variant {
+        if let variant = PTPPartialRead.variant(objectSize: size, device: info) { return variant }
+        log.warn("DeviceInfo lists neither GetPartialObject (0x101B) nor GetPartialObject64 (0x95C1); trying 0x101B anyway.")
+        return .standard32
+    }
+
+    private struct PartialReadResult {
+        var offset: UInt64
+        var bytesThisRun: UInt64
+        /// Request → bytes on disk, summed over chunks: excludes pacing pauses and log lines.
+        var seconds: Double
+        var error: Error?
+    }
+
+    /// GetPartialObject from `start` to the end of the object, appending to `writer`. Returns at the first error,
+    /// cable pull or Stop with the offset reached; `onChunk(previous, current)` runs after each chunk is on disk.
+    private func partialReadLoop(handle: PTPObjectHandle, name: String, size: UInt64, from start: UInt64,
+                                 variant: PTPPartialRead.Variant, chunkSize: UInt32, pause: Duration?,
+                                 writer: PartFileWriter, label: String,
+                                 onChunk: (_ previous: UInt64, _ current: UInt64) -> Void) async -> PartialReadResult {
+        var offset = start
+        var seconds = 0.0
+        var warnedAboutParameter = false
+        let clock = ContinuousClock()
+        while let chunk = PTPPartialRead.nextChunk(at: offset, objectSize: size, chunkSize: chunkSize) {
+            if stopRequested {
+                return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.stopped)
+            }
+            if removed {
+                return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.deviceRemoved)
+            }
+            if !isOpen {
+                return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: USBSpikeError.sessionClosed)
+            }
+            let chunkStart = clock.now
+            do {
+                let command = try PTPPartialRead.command(handle, chunk: chunk, variant: variant, tx: tx.take())
+                let reply = try await send(command, timeout: 60)
+                try check(reply, "\(label) at \(chunk.offset)")
+                var bytes = reply.data
+                guard !bytes.isEmpty else { throw USBSpikeError.noData("\(label) at offset \(chunk.offset)") }
+                if bytes.count > Int(chunk.length) {
+                    log.warn("\(label): \(bytes.count) B for a \(chunk.length)-byte request at \(chunk.offset); keeping \(chunk.length)")
+                    bytes = Data(bytes.prefix(Int(chunk.length)))
+                }
+                if !warnedAboutParameter, let sent = reply.response.parameters.first, Int(sent) != reply.data.count {
+                    warnedAboutParameter = true
+                    log.warn("\(label): response parameter 1 says \(sent) B, the data phase holds \(reply.data.count) B")
+                }
+                try writer.append(bytes)
+                seconds += (clock.now - chunkStart).inSeconds
+                let previous = offset
+                offset += UInt64(bytes.count)
+                onChunk(previous, offset)
+            } catch {
+                seconds += (clock.now - chunkStart).inSeconds
+                return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: error)
+            }
+            lifecycle.noteProgress("\(label) \(name) \(offset)/\(size)", link: "usb")
+            progressText = "\(label): \(percent(offset, size)) %"
+            log.note("  \(label) \(name): \(offset)/\(size) B (\(percent(offset, size)) %) [\(lifecycle.stateDescription)]")
+            if let pause { try? await Task.sleep(for: pause) }
+        }
+        return PartialReadResult(offset: offset, bytesThisRun: offset - start, seconds: seconds, error: nil)
+    }
+
+    /// requestReadData over the whole file in 4 MiB chunks, hashing as it goes. Records usb.readData.throughput
+    /// when `measure` is set (time is the sum of the reads themselves).
+    private func readDataSHA(_ file: ICCameraFile, measure: Bool) async throws -> (sha: String, bytes: UInt64, seconds: Double) {
+        let name = file.name ?? "?"
+        let size = UInt64(max(0, file.fileSize))
+        let chunk = UInt64(PTPPartialRead.defaultChunkSize)
+        var hasher = SHA256()
+        var offset: UInt64 = 0
+        var seconds = 0.0
+        let clock = ContinuousClock()
+        while offset < size {
+            if stopRequested { throw USBSpikeError.stopped }
+            if !isOpen { throw removed ? USBSpikeError.deviceRemoved : USBSpikeError.sessionClosed }
+            let length = min(chunk, size - offset)
+            let readOffset = off_t(offset)
+            let readLength = off_t(length)
+            let start = clock.now
+            var data: Data = try await callback("requestReadData", timeout: 60) { done in
+                file.requestReadData(atOffset: readOffset, length: readLength) { data, error in
+                    if let error { done(.failure(error)) }
+                    else if let data, !data.isEmpty { done(.success(data)) }
+                    else { done(.failure(USBSpikeError.noData("requestReadData"))) }
+                }
+            }
+            seconds += (clock.now - start).inSeconds
+            if UInt64(data.count) > length {
+                log.warn("requestReadData returned \(data.count) B for \(length) B at \(offset); keeping \(length)")
+                data = Data(data.prefix(Int(length)))
+            }
+            hasher.update(data: data)
+            offset += UInt64(data.count)
+            lifecycle.noteProgress("requestReadData \(name) \(offset)/\(size)", link: "usb")
+            progressText = "requestReadData: \(percent(offset, size)) %"
+            log.note("  requestReadData \(name): \(offset)/\(size) B (\(percent(offset, size)) %) [\(lifecycle.stateDescription)]")
+        }
+        let sha = hexString(hasher.finalize())
+        if measure {
+            log.throughput("usb.readData.throughput", bytes: Int(offset), seconds: seconds,
+                           context: "\(name), 4 MiB chunks [\(lifecycle.stateDescription)]")
+        }
+        return (sha, offset, seconds)
+    }
+
+    // MARK: Day 4 · events
+
+    /// Day 4 shutter test: watch for a new-object event for `seconds`, then record usb.event.objectAdded either way.
+    func watchForObjectAdded(seconds: Int = 60) async {
+        await perform("Watch for ObjectAdded") {
+            try requireOpen()
+            let started = Date()
+            newObjectEventAt = nil
+            iccAddedAfterCatalogue = []
+            log.note("Press the shutter now (watching \(seconds) s for ObjectAdded 0x4002 or Sony 0xC201).")
+            while newObjectEventAt == nil {
+                let elapsed = Date().timeIntervalSince(started)
+                if elapsed >= Double(seconds) { break }
+                if stopRequested { throw USBSpikeError.stopped }
+                if removed { throw USBSpikeError.deviceRemoved }
+                progressText = "\(Int(Double(seconds) - elapsed)) s left; press the shutter"
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            let iccNote = iccAddedAfterCatalogue.isEmpty
+                ? "ImageCaptureCore didAdd: none"
+                : "ImageCaptureCore didAdd: \(iccAddedAfterCatalogue.joined(separator: ", "))"
+            let sources = eventSourceCounts.isEmpty ? "none" : eventSourceCounts.map { "\($0.key) \($0.value)" }.sorted().joined(separator: ", ")
+            if let at = newObjectEventAt {
+                log.note("New-object event \(fmt(at.timeIntervalSince(started))) s after the watch started. \(iccNote). Events this session by source: \(sources).")
+                lastResult = "ObjectAdded received"
+            } else if objectAddedFlagged || log.measurements.contains(where: { $0.name == "usb.event.objectAdded" && $0.value == 1 }) {
+                // ObjectAdded is a property of the camera mode, not of one session: a timeout after an earlier yes
+                // (this session, an earlier session or an earlier launch) must not overwrite it with no.
+                log.note("No new-object event in this window (one was recorded earlier). \(iccNote). Events by source: \(sources).")
+                lastResult = "No ObjectAdded this time"
+            } else {
+                log.flag("usb.event.objectAdded", false,
+                         context: "no ObjectAdded (0x4002/0xC201) within \(seconds) s of the shutter test; \(iccNote); PTP events by source: \(sources)")
+                lastResult = "No ObjectAdded"
+            }
+        }
+    }
+
+    private func receiveEvent(_ data: Data, source: String) {
+        let now = Date()
+        recentEvents.removeAll { now.timeIntervalSince($0.at) > 2 }
+        if let first = recentEvents.first(where: { $0.data == data && $0.source != source }) {
+            log.note("PTP event also delivered via \(source) (first via \(first.source)); duplicate ignored")
+            return
+        }
+        recentEvents.append(RecentEvent(data: data, at: now, source: source))
+        eventSourceCounts[source, default: 0] += 1
+
+        guard let decoded = try? PTPContainer.decode(data) else {
+            log.warn("PTP event via \(source) is not a container: \(data.hexDump())")
+            return
+        }
+        let event = decoded.container
+        if event.type != .event { log.warn("PTP event via \(source) has container type \(event.type)") }
+        let code = event.eventCode
+        log.note("PTP event via \(source): \(code) \(hex16(event.code)), transaction \(event.transactionID), parameters [\(event.parameters.map { hex32($0) }.joined(separator: ", "))] [\(lifecycle.stateDescription)]")
+        if code.signalsNewObject {
+            newObjectEventAt = now
+            if !objectAddedFlagged {
+                objectAddedFlagged = true
+                FixtureStore.save(data, link: .usb, name: "event-objectadded.bin", log: log)
+                log.flag("usb.event.objectAdded", true,
+                         context: "\(code) \(hex16(event.code)) via \(source), handle \(event.parameters.first.map { hex32($0) } ?? "none")")
+            }
+        } else if !savedEventCodes.contains(event.code) {
+            savedEventCodes.insert(event.code)
+            FixtureStore.save(data, link: .usb, name: String(format: "event-%04x.bin", event.code), log: log)
+        }
+    }
+
+    // MARK: - Resume over USB (pure half in USBResume.swift)
+
+    /// Paced so there is time to pull the cable: 1 MiB chunks, 0.4 s apart (a 35 MB ARW takes about 15 s).
+    func startResumableRead() async {
+        await perform("Start resumable read") {
+            try requireOpen()
+            guard let file = newest("ARW", 1).first else { throw USBSpikeError.nothingToDo("no ARW on the card") }
+            let info = try await deviceInfoOrFetch()
+            let serial = cameraSerial(info)
+            let objectInfo = try await objectInfo(for: file, saveFixture: false, compare: false)
+            let identity = objectInfo.identity(cameraSerial: serial)
+            guard identity.size > 0, objectInfo.objectCompressedSize != UInt32.max else {
+                throw USBSpikeError.nothingToDo("ObjectInfo size \(objectInfo.objectCompressedSize) is not usable for this test")
+            }
+            if identity.size != UInt64(max(0, file.fileSize)) {
+                log.warn("ObjectInfo size \(identity.size) ≠ ICCameraFile size \(file.fileSize)")
+            }
+            let variant = chooseVariant(size: identity.size, info: info)
+            let relative = USBResumePaths.relativePartPath(serial: serial, filename: objectInfo.filename)
+            let writer = try PartFileWriter(url: USBResumePaths.url(relative: relative), startingAt: 0)
+            // Only one saved read is kept: say so if an unfinished one is replaced, and don't orphan another file's .part.
+            if let previous = USBResumeStore.load() {
+                if previous.offset < previous.identity.size {
+                    log.warn("Replacing the saved read of \(previous.identity.filename) at \(fmt(previous.percent, 0)) % (\(previous.reason)); its resume is discarded")
+                }
+                if previous.partPath != relative {
+                    try? FileManager.default.removeItem(at: USBResumePaths.url(relative: previous.partPath))
+                    log.note("Discarded the earlier .part Caches/\(previous.partPath)")
+                }
+            }
+            var state = USBResumeState(identity: identity, offset: 0, partPath: relative, savedAt: Date(), reason: "started",
+                                       sessionID: sessionID)
+            persistResume(state)
+
+            let chunkSize: UInt32 = 1024 * 1024
+            let pullAt = identity.size * 2 / 5
+            let estimate = Double(identity.size) / Double(chunkSize) * 0.45
+            log.note("Resumable read of \(identity) into Caches/\(relative), \(variant.rawValue), 1 MiB chunks 0.4 s apart (about \(Int(estimate)) s). Pull the USB-C cable when the log says PULL NOW.")
+            let result = await partialReadLoop(handle: PTPObjectHandle(rawValue: file.ptpObjectHandle), name: identity.filename,
+                                               size: identity.size, from: 0, variant: variant, chunkSize: chunkSize,
+                                               pause: .milliseconds(400), writer: writer, label: "resumable read") { previous, current in
+                if previous < pullAt && current >= pullAt {
+                    self.log.warn("PULL NOW: pull the USB-C cable out (offset \(current) of \(identity.size))")
+                }
+                if PTPPartialRead.crossesCheckpoint(from: previous, to: current) {
+                    try? writer.flush()
+                    state.offset = current
+                    state.reason = "checkpoint"
+                    state.savedAt = Date()
+                    self.persistResume(state)
+                    self.log.note("  checkpoint saved at offset \(current)")
+                }
+            }
+            writer.close()
+            state.offset = writer.offset
+            state.savedAt = Date()
+            if let error = result.error {
+                state.reason = "error: \(describe(error))"
+                persistResume(state)
+                log.warn("Resumable read interrupted at offset \(writer.offset) of \(identity.size) (\(percent(writer.offset, identity.size)) %): \(describe(error)). Saved for resume. Plug the camera back in, Day 2 · Open session, then Resume read.")
+                lastResult = "Interrupted at \(percent(writer.offset, identity.size)) %; saved"
+            } else {
+                state.reason = "complete"
+                persistResume(state)
+                log.warn("The read finished without an interruption, so there is nothing to resume. Start again and pull the cable at PULL NOW.")
+                lastResult = "Finished without interruption"
+            }
+        }
+    }
+
+    func resumeRead() async {
+        await perform("Resume read") {
+            try requireOpen()
+            guard let saved = USBResumeStore.load() else {
+                throw USBSpikeError.nothingToDo("no saved read; tap Start resumable read first")
+            }
+            guard saved.offset < saved.identity.size else {
+                throw USBSpikeError.nothingToDo("the saved read of \(saved.identity.filename) completed without an interruption; start a new one and pull the cable at PULL NOW")
+            }
+            log.note("Saved read: \(saved.identity), offset \(saved.offset) (\(fmt(saved.percent, 0)) %), \(saved.reason), saved \(saved.savedAt.formatted(date: .omitted, time: .standard))")
+            let info = try await deviceInfoOrFetch()
+            let serial = cameraSerial(info)
+            if serial != saved.identity.cameraSerial {
+                log.warn("Camera serial \(serial) is not the saved \(saved.identity.cameraSerial): the identity check will restart from zero.")
+            }
+
+            // Handles are not stable across sessions: find candidates by name, then confirm the identity (capture date
+            // and size, both from GetObjectInfo like the saved one) per candidate. Matching on ICCameraFile.fileSize
+            // here would compare ImageCaptureCore's size with ObjectInfo's and could miss the object.
+            let candidates = files.filter { ($0.name ?? "") == saved.identity.filename }
+            guard !candidates.isEmpty else {
+                throw USBSpikeError.nothingToDo("\(saved.identity.filename) is not on the card any more; Forget saved read")
+            }
+            var chosen = candidates[0]
+            var current: PTPObjectIdentity?
+            var firstSeen: PTPObjectIdentity?
+            for candidate in candidates {
+                let candidateInfo = try await objectInfo(for: candidate, saveFixture: false, compare: false)
+                let identity = candidateInfo.identity(cameraSerial: serial)
+                if firstSeen == nil { firstSeen = identity }
+                if identity == saved.identity {
+                    chosen = candidate
+                    current = identity
+                    break
+                }
+                log.warn("  handle \(hex32(candidate.ptpObjectHandle)) is \(identity), not the saved object")
+            }
+            guard let currentIdentity = current ?? firstSeen else {
+                throw USBSpikeError.nothingToDo("could not read ObjectInfo for any candidate")
+            }
+
+            let partURL = USBResumePaths.url(relative: saved.partPath)
+            let onDisk = PartFileWriter.sizeOnDisk(partURL) ?? 0
+            var offset = PTPPartialRead.resumeOffset(savedOffset: saved.offset, saved: saved.identity, current: currentIdentity)
+            if offset == 0 && saved.offset > 0 {
+                log.warn("Identity changed (\(currentIdentity) vs \(saved.identity)): restarting from zero, as the resume rule says.")
+            }
+            if offset > onDisk {
+                log.warn(".part holds \(onDisk) B on disk, fewer than the saved offset \(offset); continuing from \(onDisk)")
+                offset = onDisk
+            }
+            log.note("Interrupted at offset \(saved.offset); .part on disk \(onDisk) B; resuming at offset \(offset) (\(percent(offset, currentIdentity.size)) %) with this session's handle \(hex32(chosen.ptpObjectHandle))")
+
+            let variant = chooseVariant(size: currentIdentity.size, info: info)
+            let writer = try PartFileWriter(url: partURL, startingAt: offset)
+            var state = USBResumeState(identity: currentIdentity, offset: writer.offset, partPath: saved.partPath, savedAt: Date(), reason: "resumed",
+                                       sessionID: sessionID)
+            persistResume(state)
+            let result = await partialReadLoop(handle: PTPObjectHandle(rawValue: chosen.ptpObjectHandle), name: currentIdentity.filename,
+                                               size: currentIdentity.size, from: writer.offset, variant: variant,
+                                               chunkSize: PTPPartialRead.defaultChunkSize, pause: nil, writer: writer,
+                                               label: "resume") { previous, now in
+                if PTPPartialRead.crossesCheckpoint(from: previous, to: now) {
+                    try? writer.flush()
+                    state.offset = now
+                    state.reason = "checkpoint"
+                    state.savedAt = Date()
+                    self.persistResume(state)
+                }
+            }
+            writer.close()
+            state.offset = writer.offset
+            state.savedAt = Date()
+            if let error = result.error {
+                state.reason = "error: \(describe(error))"
+                persistResume(state)
+                log.warn("Resume interrupted again at offset \(writer.offset): \(describe(error)). Reconnect and tap Resume read again.")
+                lastResult = "Resume interrupted at \(percent(writer.offset, currentIdentity.size)) %"
+                return
+            }
+
+            log.note("Verifying the .part against requestReadData of the same file…")
+            let partSHA = try sha256(of: partURL)
+            let partSize = PartFileWriter.sizeOnDisk(partURL) ?? 0
+            let reference = try await readDataSHA(chosen, measure: false)
+            let verified = partSHA == reference.sha && partSize == currentIdentity.size
+            log.note("  .part SHA-256 \(partSHA) (\(partSize) B)")
+            log.note("  reference SHA-256 \(reference.sha) (\(reference.bytes) B): \(verified ? "MATCH" : "MISMATCH")")
+            if offset == 0 {
+                log.warn("The read restarted from zero, so this was not a resume; usb.resume.verified not recorded.")
+            } else if saved.sessionID == sessionID {
+                log.warn("The read was cut by \(saved.reason) in this same session (no cable pull, no re-plug), so this was not a link-drop resume; usb.resume.verified not recorded. Start again and pull the cable at PULL NOW.")
+            } else {
+                log.flag("usb.resume.verified", verified,
+                         context: "\(currentIdentity.filename): interrupted at \(saved.offset) (\(saved.reason)), resumed at \(offset) in a new request sequence, \(verified ? "SHA-256 match" : "SHA-256 MISMATCH")")
+            }
+            if verified {
+                USBResumeStore.clear()
+                resumeSummary = "none saved"
+                try? FileManager.default.removeItem(at: partURL)
+            } else {
+                state.reason = "verify failed"
+                persistResume(state)
+                log.warn("  .part kept at Caches/\(saved.partPath) for inspection")
+            }
+            lastResult = "Resume \(verified ? "verified" : "MISMATCH")"
+        }
+    }
+
+    func forgetSavedRead() {
+        guard activity == nil else { log.warn("Busy; stop the running operation first"); return }
+        if let saved = USBResumeStore.load() {
+            try? FileManager.default.removeItem(at: USBResumePaths.url(relative: saved.partPath))
+        }
+        USBResumeStore.clear()
+        resumeSummary = "none saved"
+        log.note("Saved resumable read forgotten (.part deleted)")
+    }
+
+    private func persistResume(_ state: USBResumeState) {
+        do {
+            try USBResumeStore.save(state)
+            resumeSummary = state.summary
+        } catch {
+            log.error("Could not save the resume state: \(describe(error))")
+        }
+    }
+
+    /// GetDeviceInfo's serial (ICDevice.serialNumberString is macOS-only); the device UUID if the camera sends none.
+    private func cameraSerial(_ info: PTPDeviceInfo) -> String {
+        let serial = info.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !serial.isEmpty { return serial }
+        let fallback = "uuid-" + (device.uuidString ?? "unknown")
+        log.warn("DeviceInfo has an empty serial number; using \(fallback) for the resume identity")
+        return fallback
+    }
+
+    // MARK: - Day 5 · lifecycle
+
+    func longSerialDownload() async {
+        await perform("Long serial download") {
+            try requireOpen()
+            let selection = files.filter { Self.ext($0) == "ARW" }
+            guard !selection.isEmpty else { throw USBSpikeError.nothingToDo("no ARW on the card") }
+            let total = selection.reduce(Int64(0)) { $0 + Int64($1.fileSize) }
+            log.note("Long serial download: \(selection.count) ARW, \(mb(total)). Lock the phone or switch apps now; each file logs the app state.")
+            _ = try await downloadSequence(selection, label: "long serial", report: nil, shouldStop: nil)
+        }
+    }
+
+    /// Wraps a 20-ARW download in BGContinuedProcessingTask (ContinuedTask). The work starts when the system starts
+    /// the task; it reports one unit per file and stops cleanly when the system expires the task.
+    func continuedDownload(using continued: ContinuedTask) {
+        guard activity == nil else { log.warn("Busy with \(activity ?? ""); wait for it or tap Stop"); return }
+        guard isOpen, !removed else { log.error("Open a session first (Day 2 · Open session)"); return }
+        let selection = newest("ARW", 20)
+        guard !selection.isEmpty else { log.warn("No ARW on the card"); return }
+        log.note("Submitting a continued task for \(selection.count) ARW; lock the phone once the log says it started.")
+        continued.run(title: "Importing from camera (spike)", subtitle: "0 of \(selection.count)", totalUnits: selection.count) { [weak self] report, shouldStop in
+            guard let self else { return false }
+            var finished = false
+            await self.perform("Continued-task download") {
+                finished = try await self.downloadSequence(selection, label: "continued task", report: report, shouldStop: shouldStop)
+            }
+            return finished
+        }
+    }
+
+    /// Serial downloads with a log line per file carrying the lifecycle state; each copy is deleted once measured.
+    private func downloadSequence(_ selection: [ICCameraFile], label: String,
+                                  report: ContinuedTask.Report?, shouldStop: ContinuedTask.ShouldStop?) async throws -> Bool {
+        let largest = selection.map { Int64($0.fileSize) }.max() ?? 0
+        try ensureFreeSpace(for: largest)
+        let dir = try freshDirectory("Lifecycle")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let clock = ContinuousClock()
+        let start = clock.now
+        var done = 0
+        var bytes: Int64 = 0
+        var failures = 0
+        for file in selection {
+            if stopRequested || (shouldStop?() ?? false) {
+                log.warn("\(label): stopping cleanly after \(done) of \(selection.count) files [\(lifecycle.stateDescription)]")
+                lastResult = "\(label): stopped after \(done)/\(selection.count)"
+                return false
+            }
+            if !isOpen {
+                log.warn("\(label): \(removed ? "camera disconnected" : "the camera closed the session") after \(done) of \(selection.count) files; stopping [\(lifecycle.stateDescription)]")
+                lastResult = "\(label): session closed after \(done)/\(selection.count)"
+                return false
+            }
+            let name = file.name ?? "?"
+            do {
+                let downloaded = try await downloadFile(file, to: dir)
+                try? FileManager.default.removeItem(at: downloaded.url)
+                done += 1
+                bytes += downloaded.bytes
+                lifecycle.noteProgress("\(label): \(name) (\(done)/\(selection.count))", link: "usb")
+                let rate = downloaded.seconds > 0 ? Double(downloaded.bytes) / downloaded.seconds / 1_000_000 : 0
+                log.note("  \(label) \(done)/\(selection.count): \(name) \(mb(downloaded.bytes)) in \(fmt(downloaded.seconds, 2)) s = \(fmt(rate)) MB/s [\(lifecycle.stateDescription)]")
+                report?(done, "\(done) of \(selection.count)")
+                progressText = "\(done)/\(selection.count)"
             } catch {
                 failures += 1
-            }
-        }
-        log.measure("usb.thumb.avg", total / Double(sample.count) * 1000, "ms", context: "\(sample.count) files, \(failures) failures")
-    }
-
-    private func thumbnailData(for file: ICCameraFile) async throws -> Data {
-        try await withCheckedThrowingContinuation { c in
-            file.requestThumbnailData(options: nil) { data, error in
-                if let error { c.resume(throwing: error) } else { c.resume(returning: data ?? Data()) }
-            }
-        }
-    }
-
-    // MARK: Day 3 — downloads and throughput
-
-    /// Downloads `files` one after another (or `parallel` at a time) into the temp directory and records MB/s.
-    func download(_ selection: [ICCameraFile], parallel: Int = 1) async {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spike-downloads", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let clock = ContinuousClock()
-        let start = clock.now
-        var bytes = 0
-        await withTaskGroup(of: Int.self) { group in
-            var iterator = selection.makeIterator()
-            var inFlight = 0
-            func enqueue() {
-                guard let file = iterator.next() else { return }
-                inFlight += 1
-                group.addTask { @MainActor in
-                    await self.downloadOne(file, to: dir)
+                log.error("  \(label): \(name) failed after \(done) files [\(lifecycle.stateDescription)]: \(describe(error))")
+                if removed {
+                    log.warn("\(label): camera disconnected; stopping")
+                    return false
+                }
+                if failures >= 3 {
+                    log.error("\(label): three failures; stopping")
+                    return false
                 }
             }
-            for _ in 0 ..< max(1, parallel) { enqueue() }
-            for await done in group {
-                bytes += done
-                inFlight -= 1
-                enqueue()
-            }
         }
-        let elapsed = seconds(clock.now - start)
-        log.throughput("usb.download.throughput", bytes: bytes, seconds: elapsed, context: "\(selection.count) files, parallel=\(parallel)")
+        let seconds = (clock.now - start).inSeconds
+        log.note("\(label): \(done) of \(selection.count) files, \(mb(bytes)) in \(fmt(seconds)) s [\(lifecycle.stateDescription)]")
+        lastResult = "\(label): \(done)/\(selection.count) files"
+        return done == selection.count
     }
 
-    private func downloadOne(_ file: ICCameraFile, to dir: URL) async -> Int {
-        let clock = ContinuousClock()
-        let start = clock.now
-        do {
-            let name: String = try await withCheckedThrowingContinuation { c in
-                let options: [ICDownloadOption: Any] = [
-                    .downloadsDirectoryURL: dir,
-                    .overwrite: true,
-                ]
-                _ = file.requestDownload(options: options) { filename, error in
-                    if let error { c.resume(throwing: error) } else { c.resume(returning: filename ?? file.name ?? "?") }
-                }
-            }
-            let elapsed = seconds(clock.now - start)
-            let size = Int(file.fileSize)
-            log.throughput("usb.download.file", bytes: size, seconds: elapsed, context: name)
-            return size
-        } catch {
-            log.error("download \(file.name ?? "?") failed: \(error)")
-            return 0
-        }
+    // MARK: - Helpers
+
+    /// The newest `count` files with extension `ext` (upper case, no dot).
+    func newest(_ ext: String, _ count: Int) -> [ICCameraFile] {
+        Array(files.filter { Self.ext($0) == ext }.prefix(count))
     }
 
-    // MARK: Day 4 — partial reads, two ways
+    nonisolated static func ext(_ item: ICCameraItem) -> String {
+        ((item.name ?? "") as NSString).pathExtension.uppercased()
+    }
 
-    /// ImageCaptureCore's own byte-range read. If this works at full speed, we may not need PTP pass-through at all.
-    func readPartialViaICC(_ file: ICCameraFile, chunk: Int = 4 * 1024 * 1024) async {
-        let size = Int(file.fileSize)
-        var offset = 0
+    nonisolated static func stem(_ item: ICCameraItem) -> String {
+        ((item.name ?? "") as NSString).deletingPathExtension
+    }
+
+    nonisolated static func isNewer(_ a: ICCameraFile, _ b: ICCameraFile) -> Bool {
+        let da = a.creationDate ?? .distantPast
+        let db = b.creationDate ?? .distantPast
+        if da != db { return da > db }
+        return (a.name ?? "") > (b.name ?? "")
+    }
+
+    private func logCapabilities(_ when: String) {
+        let caps = device.capabilities
+        let acceptsPTP = caps.contains(ICDeviceCapability.cameraDeviceCanAcceptPTPCommands.rawValue)
+        log.note("  capabilities \(when) (\(caps.count)): \(caps.joined(separator: ", ")); acceptsPTPCommands=\(acceptsPTP ? "yes" : "no")")
+    }
+
+    private func ensureFreeSpace(for bytes: Int64) throws {
+        let values = try? USBResumePaths.caches.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        guard let available = values?.volumeAvailableCapacityForImportantUsage else {
+            log.warn("Could not read the phone's free space; continuing")
+            return
+        }
+        let needed = bytes + 1_000_000_000
+        if available < needed { throw USBSpikeError.diskSpace(needed: needed, available: available) }
+    }
+
+    /// Caches/Spike/<name>, emptied first.
+    private func freshDirectory(_ name: String) throws -> URL {
+        let dir = USBResumePaths.caches.appendingPathComponent("Spike", isDirectory: true).appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func sha256(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
         var hasher = SHA256()
-        let clock = ContinuousClock()
-        let start = clock.now
-        do {
-            while offset < size {
-                let length = min(chunk, size - offset)
-                let data: Data = try await withCheckedThrowingContinuation { c in
-                    file.requestReadData(atOffset: off_t(offset), length: off_t(length)) { data, error in
-                        if let error { c.resume(throwing: error) } else { c.resume(returning: data ?? Data()) }
-                    }
-                }
-                guard !data.isEmpty else { log.error("requestReadData returned no bytes at \(offset)"); break }
-                hasher.update(data: data)
-                offset += data.count
-            }
-            let elapsed = seconds(clock.now - start)
-            log.throughput("usb.readData.throughput", bytes: offset, seconds: elapsed, context: file.name ?? "?")
-            log.note("SHA-256 via requestReadData: \(hasher.finalize().compactMap { String(format: "%02x", $0) }.joined())")
-        } catch {
-            log.error("requestReadData failed at offset \(offset): \(error)")
+        while let data = try handle.read(upToCount: 4 * 1024 * 1024), !data.isEmpty {
+            hasher.update(data: data)
         }
+        return hexString(hasher.finalize())
     }
 
-    /// Raw PTP through requestSendPTPCommand. Day 4 question: are the two Data values (data phase, response
-    /// container) in that order? Decode both and log; adjust `decodePassThrough` if the SDK disagrees.
-    func send(_ command: PTPContainer) async throws -> (response: PTPContainer, data: Data) {
-        let (a, b) = try await device.requestSendPTPCommand(command.encode(), outData: nil)
-        return try decodePassThrough(first: a, second: b, for: command)
+    private func hexString(_ digest: SHA256.Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func decodePassThrough(first: Data, second: Data, for command: PTPContainer) throws -> (PTPContainer, Data) {
-        // Try the documented reading first: second = response container, first = data phase.
-        if let (resp, _) = try? PTPContainer.decode(second), resp.type == .response {
-            return (resp, first)
-        }
-        if let (resp, _) = try? PTPContainer.decode(first), resp.type == .response {
-            log.warn("requestSendPTPCommand returned (response, data) — opposite of the assumed order. Note for the findings page.")
-            return (resp, second)
-        }
-        // Some stacks return the data phase as a full data container; peel it.
-        let all = (try? PTPContainer.decodeAll(first + second)) ?? []
-        if let resp = all.first(where: { $0.type == .response }) {
-            let payload = all.first(where: { $0.type == .data })?.payload ?? Data()
-            return (resp, payload)
-        }
-        log.error("Could not find a response container. first=\(first.hexDump()) second=\(second.hexDump())")
-        throw PTPDecodingError.unknownContainerType(0)
-    }
-
-    func fetchDeviceInfo() async {
-        do {
-            let (resp, data) = try await send(PTPCommand.getDeviceInfo(tx: tx.take()))
-            log.note("GetDeviceInfo response: \(resp.responseCode) data=\(data.count) bytes")
-            let info = try PTPDeviceInfo.decode(data)
-            deviceInfo = info
-            log.note("  \(info.manufacturer) \(info.model) fw=\(info.deviceVersion) serial=\(info.serialNumber) vendorExt=\(info.vendorExtension.map { "\($0)" } ?? String(info.vendorExtensionID))")
-            log.note("  ops: \(info.operationsSupported.map { PTPOperationCode(rawValue: $0).description }.joined(separator: ", "))")
-            log.note("  events: \(info.eventsSupported.map { PTPEventCode(rawValue: $0).description }.joined(separator: ", "))")
-            log.note("  GetPartialObject=\(info.supports(.getPartialObject)) GetPartialObject64=\(info.supports(.getPartialObject64)) ObjectAdded=\(info.emits(.objectAdded))")
-            saveFixture(data, name: "a7c2-deviceinfo.bin")
-        } catch {
-            log.error("GetDeviceInfo failed: \(error)")
-        }
-    }
-
-    func fetchObjectInfo(_ file: ICCameraFile) async {
-        do {
-            let (resp, data) = try await send(PTPCommand.getObjectInfo(PTPObjectHandle(rawValue: file.ptpObjectHandle), tx: tx.take()))
-            log.note("GetObjectInfo \(file.name ?? "?"): \(resp.responseCode), \(data.count) bytes")
-            let info = try PTPObjectInfo.decode(data)
-            log.note("  format=\(info.objectFormat) size=\(info.objectCompressedSize) \(info.imagePixWidth)x\(info.imagePixHeight) capture=\(info.captureDateRaw) thumb=\(info.thumbFormat) \(info.thumbCompressedSize)B")
-            saveFixture(data, name: "a7c2-objectinfo-\(info.fileExtension.lowercased()).bin")
-        } catch {
-            log.error("GetObjectInfo failed: \(error)")
-        }
-    }
-
-    /// Reassembles a whole file with GetPartialObject and checks it against requestReadData / the card copy.
-    func readPartialViaPTP(_ file: ICCameraFile, chunk: UInt32 = 4 * 1024 * 1024) async {
-        let size = UInt32(clamping: Int(file.fileSize))
-        var offset: UInt32 = 0
-        var hasher = SHA256()
-        let clock = ContinuousClock()
-        let start = clock.now
-        do {
-            while offset < size {
-                let length = min(chunk, size - offset)
-                let (resp, data) = try await send(PTPCommand.getPartialObject(PTPObjectHandle(rawValue: file.ptpObjectHandle), offset: offset, length: length, tx: tx.take()))
-                guard resp.responseCode.isOK else { log.error("GetPartialObject at \(offset): \(resp.responseCode)"); return }
-                guard !data.isEmpty else { log.error("GetPartialObject returned no data at \(offset)"); return }
-                hasher.update(data: data)
-                offset += UInt32(data.count)
-            }
-            let elapsed = seconds(clock.now - start)
-            log.throughput("usb.getPartialObject.throughput", bytes: Int(offset), seconds: elapsed, context: file.name ?? "?")
-            log.note("SHA-256 via GetPartialObject: \(hasher.finalize().compactMap { String(format: "%02x", $0) }.joined())")
-        } catch {
-            log.error("GetPartialObject failed at \(offset): \(error)")
-        }
-    }
-
-    // MARK: Events
-
-    private func handleEvent(_ data: Data) {
-        if let (event, _) = try? PTPContainer.decode(data) {
-            log.note("PTP event: \(event.eventCode) params=\(event.parameters.map { String(format: "0x%08X", $0) })")
-            if event.eventCode == .objectAdded { saveFixture(data, name: "a7c2-event-objectadded.bin") }
-        } else {
-            log.note("PTP event (raw): \(data.hexDump())")
-        }
-    }
-
-    // MARK: Helpers
-
-    private func saveFixture(_ data: Data, name: String) {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fixtures", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(name)
-        do {
-            try data.write(to: url)
-            log.note("fixture saved: \(url.lastPathComponent) (\(data.count) bytes) — share it from the Log tab into Fixtures/a7c2/usb/")
-        } catch {
-            log.warn("could not save fixture \(name): \(error)")
-        }
-    }
-
-    private func seconds(_ d: Duration) -> Double {
-        Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+    private func describe(_ error: Error) -> String {
+        if let e = error as? USBSpikeError { return e.description }
+        if error is PTPDecodingError || error is PTPPassThrough.Failure || error is PTPPartialRead.PlanError { return "\(error)" }
+        let ns = error as NSError
+        return "\(ns.domain) \(ns.code): \(ns.localizedDescription)"
     }
 }
 
+// MARK: - Delegate
+
 extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
     func device(_ device: ICDevice, didOpenSessionWithError error: (any Error)?) {
-        log.note("didOpenSession error=\(error.map { "\($0)" } ?? "nil")")
+        log.note("didOpenSession error=\(error.map { describe($0) } ?? "nil")")
     }
 
     func device(_ device: ICDevice, didCloseSessionWithError error: (any Error)?) {
-        log.note("didCloseSession error=\(error.map { "\($0)" } ?? "nil")")
+        log.note("didCloseSession error=\(error.map { describe($0) } ?? "nil") [\(lifecycle.stateDescription)]")
         isOpen = false
+        catalogComplete = false
+        if !closingSession { abortPending(.sessionClosed) }
     }
 
     func didRemove(_ device: ICDevice) {
-        log.warn("device removed mid-session (cable pulled?)")
+        removed = true
         isOpen = false
+        log.warn("Camera removed (cable pulled?) [\(lifecycle.stateDescription)]. Re-plug, then Day 2 · Open session.")
+        abortPending(.deviceRemoved)
+    }
+
+    func device(_ device: ICDevice, didEncounterError error: (any Error)?) {
+        log.warn("device error: \(error.map { describe($0) } ?? "nil") [\(lifecycle.stateDescription)]")
+    }
+
+    func device(_ device: ICDevice, didReceiveStatusInformation status: [ICDeviceStatus: Any]) {
+        log.note("device status: \(status)")
     }
 
     func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
+        let now = ContinuousClock.now
+        if !catalogComplete, let start = openRequestedAt {
+            openRequestedAt = nil
+            log.measure("usb.catalog.complete", (now - start).inSeconds, "s",
+                        context: "open request → complete catalogue, \(device.mediaFiles?.count ?? 0) files"
+                            + (openIsReopen ? "; REOPEN on the same device, the catalogue may be cached (re-plug for a cold figure)" : ""))
+        } else {
+            log.note("deviceDidBecomeReady(withCompleteContentCatalog:) again")
+        }
         catalogComplete = true
-        readyContinuation?.resume()
-        readyContinuation = nil
     }
 
     func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {
-        log.note("didAdd \(items.count) items (catalog \(Int(camera.contentCatalogPercentCompleted))%)")
+        guard catalogComplete else { return }   // the initial catalogue arrives as many didAdd calls
+        let names = items.map { $0.name ?? "?" }
+        iccAddedAfterCatalogue.append(contentsOf: names)
+        log.note("ImageCaptureCore didAdd after the catalogue: \(names.joined(separator: ", ")) [\(lifecycle.stateDescription)]")
+        refreshCatalogue(record: false)
     }
 
     func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {
-        log.note("didRemove \(items.count) items")
+        log.note("ImageCaptureCore didRemove \(items.count) item(s): \(items.prefix(5).map { $0.name ?? "?" }.joined(separator: ", "))")
+        if catalogComplete { refreshCatalogue(record: false) }
     }
 
     func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {
-        log.note("didRename \(items.count) items")
+        log.note("ImageCaptureCore didRename \(items.count) item(s)")
     }
 
-    func cameraDevice(_ camera: ICCameraDevice, didCompleteDeleteFilesWithError error: (any Error)?) {}
-
     func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {
-        log.note("capabilities changed: \(camera.capabilities.joined(separator: ", "))")
+        logCapabilities("changed")
     }
 
     func cameraDevice(_ camera: ICCameraDevice, didReceiveThumbnail thumbnail: CGImage?, for item: ICCameraItem, error: (any Error)?) {}
@@ -340,7 +1492,7 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
     func cameraDevice(_ camera: ICCameraDevice, didReceiveMetadata metadata: [AnyHashable: Any]?, for item: ICCameraItem, error: (any Error)?) {}
 
     func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {
-        handleEvent(eventData)
+        receiveEvent(eventData, source: "delegate")
     }
 
     func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
@@ -348,6 +1500,135 @@ extension CameraSession: @preconcurrency ICCameraDeviceDelegate {
     }
 
     func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
-        log.warn("access restriction enabled — unlock the camera / phone")
+        log.warn("access restriction enabled: unlock the camera and the phone")
     }
+}
+
+// MARK: - Supporting types
+
+/// Day 3 batches. Measurement names are the contract with the Log tab's export.
+enum USBDownloadPreset: String, CaseIterable, Identifiable {
+    case arwSerial, arwParallel2, jpgSerial, mp4
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .arwSerial: return "20 newest ARW, serial"
+        case .arwParallel2: return "20 newest ARW, 2 in flight"
+        case .jpgSerial: return "20 newest JPG, serial"
+        case .mp4: return "3 newest MP4"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .arwSerial, .arwParallel2: return "ARW"
+        case .jpgSerial: return "JPG"
+        case .mp4: return "MP4"
+        }
+    }
+
+    var count: Int { self == .mp4 ? 3 : 20 }
+    var parallel: Int { self == .arwParallel2 ? 2 : 1 }
+
+    var measurement: String {
+        switch self {
+        case .arwSerial: return "usb.download.throughput.serial"
+        case .arwParallel2: return "usb.download.throughput.parallel2"
+        case .jpgSerial: return "usb.download.jpg.throughput"
+        case .mp4: return "usb.download.mp4"
+        }
+    }
+}
+
+enum USBSpikeError: Error, CustomStringConvertible {
+    case sessionNotOpen
+    case deviceRemoved
+    case sessionClosed
+    case sessionReplaced
+    case stopped
+    case timedOut(String, Double)
+    case noData(String)
+    case nothingToDo(String)
+    case ptp(String, PTPResponseCode)
+    case passThrough(String, String)
+    case diskSpace(needed: Int64, available: Int64)
+
+    /// The link or the operation went away (cable pull, session closed or replaced, Stop): no answer about the camera.
+    var isInterruption: Bool {
+        switch self {
+        case .stopped, .deviceRemoved, .sessionClosed, .sessionReplaced: return true
+        default: return false
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .sessionNotOpen: return "no open session (Day 2 · Open session first)"
+        case .deviceRemoved: return "the camera was disconnected"
+        case .sessionClosed: return "the camera closed the session"
+        case .sessionReplaced: return "a new session replaced this one"
+        case .stopped: return "stopped"
+        case .timedOut(let what, let seconds): return "\(what) did not complete within \(Int(seconds)) s"
+        case .noData(let what): return "\(what): no data"
+        case .nothingToDo(let why): return why
+        case .ptp(let what, let code): return "\(what): \(code) (\(hex16(code.rawValue)))"
+        case .passThrough(let what, let detail): return "\(what) pass-through failed: \(detail)"
+        case .diskSpace(let needed, let available): return "not enough free space on the phone: need \(needed / 1_000_000) MB, \(available / 1_000_000) MB free"
+        }
+    }
+}
+
+/// One ImageCaptureCore request whose completion may never come (cable pulled, app suspended). Resumed exactly
+/// once: by the completion, by its timeout, or by didRemove.
+private final class PendingRequest<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+
+    init(_ continuation: CheckedContinuation<T, Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<T, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+}
+
+// MARK: - Formatting and names
+
+private let batteryLevelProperty: UInt16 = PTPDevicePropCode.batteryLevel.rawValue
+
+/// ISO 15740 §13 and MTP device property names, for logging DeviceInfo. Sony's 0xD2xx properties stay hex.
+private let devicePropertyNames: [UInt16: String] = [
+    0x5001: "BatteryLevel", 0x5002: "FunctionalMode", 0x5003: "ImageSize", 0x5004: "CompressionSetting",
+    0x5005: "WhiteBalance", 0x5006: "RGBGain", 0x5007: "FNumber", 0x5008: "FocalLength", 0x5009: "FocusDistance",
+    0x500A: "FocusMode", 0x500B: "ExposureMeteringMode", 0x500C: "FlashMode", 0x500D: "ExposureTime",
+    0x500E: "ExposureProgramMode", 0x500F: "ExposureIndex", 0x5010: "ExposureBiasCompensation", 0x5011: "DateTime",
+    0x5012: "CaptureDelay", 0x5013: "StillCaptureMode", 0x5014: "Contrast", 0x5015: "Sharpness",
+    0x5016: "DigitalZoom", 0x5017: "EffectMode", 0x5018: "BurstNumber", 0x5019: "BurstInterval",
+    0x501A: "TimelapseNumber", 0x501B: "TimelapseInterval", 0x501C: "FocusMeteringMode", 0x501D: "UploadURL",
+    0x501E: "Artist", 0x501F: "CopyrightInfo",
+    0xD401: "MTP SynchronizationPartner", 0xD402: "MTP DeviceFriendlyName", 0xD406: "MTP SessionInitiatorVersionInfo",
+    0xD407: "MTP PerceivedDeviceType",
+]
+
+/// "0x1001 GetDeviceInfo", or just the hex when PTPKit has no name for the code.
+private func named(_ code: UInt16, _ name: String) -> String {
+    (name.isEmpty || name.contains("0x")) ? hex16(code) : "\(hex16(code)) \(name)"
+}
+
+private func hex16(_ value: UInt16) -> String { String(format: "0x%04X", value) }
+private func hex32(_ value: UInt32) -> String { String(format: "0x%08X", value) }
+private func yesNo(_ value: Bool) -> String { value ? "yes" : "no" }
+private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
+private func mb<T: BinaryInteger>(_ bytes: T) -> String { fmt(Double(bytes) / 1_000_000) + " MB" }
+private func gb(_ bytes: UInt64) -> String { fmt(Double(bytes) / 1_000_000_000, 2) + " GB" }
+
+private func percent(_ part: UInt64, _ whole: UInt64) -> String {
+    whole == 0 ? "0" : fmt(Double(part) / Double(whole) * 100, 0)
 }

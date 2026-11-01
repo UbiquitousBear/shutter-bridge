@@ -1,0 +1,77 @@
+# Compiles the spike app with real Xcode 27 on GitHub's xcode-27 runner (public preview; free for public
+# repositories) and runs PTPKit's tests on macOS. No signing and no secrets: this is a compile check for every
+# change to the spike or the codec. TestFlight builds come from Xcode Cloud (docs/ci.md).
+name: Spike build (Xcode 27)
+
+on:
+  pull_request:
+    paths:
+      - "Spike/**"
+      - "Packages/PTPKit/**"
+      - "Makefile"
+      - ".github/workflows/spike-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Spike/**"
+      - "Packages/PTPKit/**"
+      - "Makefile"
+      - ".github/workflows/spike-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      # 27.1 is the image default and a public release; switch to Xcode_27.2 once the image has the release
+      # build (it currently symlinks the 27.2 release candidate there).
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Tool versions
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen --version
+          make spike
+
+      - name: Entitlements survive generation
+        # XcodeGen rewrites an entitlements file it is given as `entitlements: path:` with an empty dictionary;
+        # project.yml uses CODE_SIGN_ENTITLEMENTS instead. This catches a regression.
+        run: |
+          git diff --exit-code -- Spike/Spike.entitlements
+          grep -q com.apple.developer.networking.HotspotConfiguration Spike/Spike.entitlements
+
+      - name: Build the spike for iPhone (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Spike/Spike.xcodeproj -scheme Spike -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions
+
+      - name: PTPKit tests on macOS
+        working-directory: Packages/PTPKit
+        run: swift test

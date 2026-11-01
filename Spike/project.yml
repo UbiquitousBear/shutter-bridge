@@ -5,7 +5,10 @@
 
 name: Spike
 options:
-  bundleIdPrefix: com.ubiquitousbear.shutterbridge
+  # Floor, not a pin: XcodeGen refuses to generate with anything older than 2.46.0 (the Homebrew version when this
+  # was written). CI and local setups install the latest Homebrew release, so a newer XcodeGen can still change the output.
+  minimumXcodeGenVersion: "2.46.0"
+  bundleIdPrefix: net.shamil.shutter-bridge
   deploymentTarget:
     iOS: "27.0"
   createIntermediateGroups: true
@@ -21,16 +24,21 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+      # App icon (Assets.xcassets) and privacy manifest (PrivacyInfo.xcprivacy): both required for TestFlight.
+      - path: Resources
     dependencies:
       - package: PTPKit
-    entitlements:
-      path: Spike.entitlements
+    # Entitlements are referenced through CODE_SIGN_ENTITLEMENTS below, not XcodeGen's `entitlements:` key:
+    # given only a path, XcodeGen rewrites the file with an empty dictionary on every generate, which would
+    # silently sign every build without the Hotspot Configuration entitlement.
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: SB Spike
-        CFBundleShortVersionString: "0.1"
-        CFBundleVersion: "1"
+        # From build settings so CI can set the build number (Xcode Cloud does; a GitHub upload passes
+        # CURRENT_PROJECT_VERSION). Each upload to App Store Connect needs a new build number.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
@@ -39,21 +47,33 @@ targets:
         NSPhotoLibraryAddUsageDescription: "Saves imported photos to your library."
         NSLocalNetworkUsageDescription: "Finds your camera on the local network."
         NSBonjourServices: [_ptp._tcp]
+        # The SSDP device description is fetched over plain HTTP from the camera's IP address, which App
+        # Transport Security blocks by default since iOS 17.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         NSBluetoothAlwaysUsageDescription: "Notices when your camera is nearby so it can remind you about new photos."
         UIBackgroundModes: [bluetooth-central]
+        # Captured fixtures live in Documents/fixtures and are visible in the Files app and Finder.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         BGTaskSchedulerPermittedIdentifiers:
-          - com.ubiquitousbear.shutterbridge.spike.import
+          - net.shamil.shutter-bridge.spike.import
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ubiquitousbear.shutterbridge.spike
+        PRODUCT_BUNDLE_IDENTIFIER: net.shamil.shutter-bridge.spike
+        CODE_SIGN_ENTITLEMENTS: Spike.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
         # Swift 5 language mode on the Swift 6 compiler: the spike talks to Objective-C delegate APIs all day
         # and strict concurrency checking would be noise here. PTPKit, the code that survives the spike, is a
-        # swift-tools-version 6.0 package and is built in Swift 6 mode with full checking.
+        # swift-tools-version 6.2 package and is built in Swift 6 mode with full checking.
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
-        # Set your team once in Xcode (Signing & Capabilities); XcodeGen keeps it out of the repo.
+        # Set your team once in Xcode (Signing & Capabilities); XcodeGen keeps it out of the repo, and each
+        # `make spike` resets it locally. CI passes it on the command line (Xcode Cloud does so itself).
         DEVELOPMENT_TEAM: ""
         ENABLE_USER_SCRIPT_SANDBOXING: true
         SWIFT_EMIT_LOC_STRINGS: false
@@ -65,3 +85,10 @@ schemes:
         Spike: all
     run:
       config: Debug
+    # Xcode Cloud's Test action and `xcodebuild test` run the codec's tests from the app's scheme.
+    test:
+      config: Debug
+      targets:
+        - package: PTPKit/PTPKitTests
+    archive:
+      config: Release

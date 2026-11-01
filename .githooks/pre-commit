@@ -1,0 +1,17 @@
+#!/bin/sh
+# Commits in this repo are attributed to the owner only (see AGENTS.md). Refuse a commit whose author or
+# committer is an AI identity, such as the "Claude <noreply@anthropic.com>" default in cloud containers.
+
+ai='anthropic|^claude[[:space:]]|copilot|openai|codex|cursor|gemini|devin|aider'
+
+for role in AUTHOR COMMITTER; do
+    ident="$(git var "GIT_${role}_IDENT" 2>/dev/null | sed -E 's/ [0-9]+ [-+][0-9]{4}$//')"
+    if printf '%s\n' "$ident" | grep -i -E -q "$ai"; then
+        lower="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
+        echo "pre-commit: refusing to commit with $lower \"$ident\"." >&2
+        echo "  Commits here are attributed to the repository owner only. For this repo run:" >&2
+        echo "    git config user.name \"Shamil\" && git config user.email \"claude.ai@shamil.email\"" >&2
+        exit 1
+    fi
+done
+exit 0
