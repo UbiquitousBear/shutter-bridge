@@ -80,6 +80,8 @@ Pass: Photos imports at least one JPG, and the didAdd lines name the α7C II wit
 
 Pass: listing of 200 files ≤ 2 s; thumbnails ≤ 50 ms each on average; metadata matches the card.
 
+Also in *Image Transfer (MSC)* (added 1 Nov): in that mode `ImageCaptureCore` sees the card as a mass-storage device, and the Files app mounts it. Run *Open session* and the thumbnails in MSC as well as MTP, and on day 3 time the same downloads in both. Mass storage may be faster and lets the app read any byte range of a file directly, but the camera presents no PTP operations or events in that mode. Note which mode each log line came from.
+
 ## Day 3: download and throughput
 
 | Step (plan) | Do | Log shows | Measurements | Fixtures |
