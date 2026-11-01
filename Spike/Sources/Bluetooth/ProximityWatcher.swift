@@ -202,7 +202,11 @@ final class ProximityWatcher: NSObject {
     /// switcher) still allows a Bluetooth relaunch: the way to test state restoration without waiting for memory
     /// pressure. verify on day 1: that iOS 27 still relaunches after a self-SIGKILL.
     func terminateForRelaunchTest() {
-        log?.warn("proximity: killing the app (SIGKILL) to test a Bluetooth relaunch. Lock the phone, switch the camera on, wait for the reminder, then reopen and check this log for willRestoreState.")
+        // Arm this test like "Camera switched on now": the relaunch discovery records ble.proximity.latency
+        // (measured from this tap), the debounce is cleared and the scan restarts so the camera is reported afresh.
+        if enabled { markCameraSwitchedOn() }
+        defaults.synchronize()   // flush the re-armed state before SIGKILL
+        log?.warn("proximity: killing the app (SIGKILL) to test a Bluetooth relaunch; latency is measured from now. Lock the phone and switch the camera on straight away, wait for the reminder, then reopen and check this log for willRestoreState.")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             kill(getpid(), SIGKILL)
         }
@@ -222,10 +226,13 @@ final class ProximityWatcher: NSObject {
             return
         }
         guard let raw = storedServiceUUID, let uuid = Self.serviceUUID(from: raw) else {
+            rearmTask?.cancel()
             central.stopScan()
+            // stopScan leaves the connection-event registration in place; swap it for one no peer can match.
+            central.registerForConnectionEvents(options: [.serviceUUIDs: [CBUUID(nsuuid: UUID())]])
             isScanning = false
             scanFilter = "none"
-            log?.warn("proximity watcher: no valid service UUID. Pick one under Day 6 · Proximity filter; background scans need one.")
+            log?.warn("proximity watcher: no valid service UUID, so scan and connection events are off. Pick one under Day 6 · Proximity filter; background scans need one.")
             return
         }
         rearmTask?.cancel()

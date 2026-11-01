@@ -43,7 +43,7 @@ struct BluetoothView: View {
             Button("Kill app", role: .destructive) { watcher.terminateForRelaunchTest() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The app ends as if the system had stopped it. Lock the phone, switch the camera on, wait for the reminder, then reopen the app and check the log for willRestoreState.")
+            Text("Switch the camera off for a minute first. The app ends as if the system had stopped it; the latency is measured from this tap. Lock the phone and switch the camera on straight away, wait for the reminder, then reopen the app and check the log for willRestoreState.")
         }
         .task {
             scanner.log = log
@@ -83,10 +83,10 @@ struct BluetoothView: View {
             Button("Check connected (other apps)") { scanner.checkConnected(extra: serviceUUID.isEmpty ? nil : serviceUUID) }
                 .disabled(scanner.gattBusy)
             ForEach(scanner.connected) { c in
-                Text("Connected to the system: \(c.name) [\(String(c.identifier.prefix(8)))] · \(c.state)")
+                Text("Connected to the system: \(c.name) [\(String(c.identifier.prefix(8)))] · \(c.state)\(c.isCamera ? " · camera" : "")")
                     .font(.caption)
             }
-            Text("For each power state (camera on, asleep, powered off with Bluetooth Function and Remote Power ON/OFF on) and pairing context: set both pickers, Scan, wait 30 s or more, Save snapshot. It writes ble/advert-\(power.rawValue).json and ble/advert-\(power.rawValue)-\(pairing.rawValue).json and records ble.advert.\(power.rawValue).seen, .rssi and .interval. If the camera isn't listed, try Scan (everything) and mark it by hand.")
+            Text("For each power state (camera on, asleep, powered off with Bluetooth Function and Remote Power ON/OFF on) and pairing context: set both pickers, Scan, wait 30 s or more, Save snapshot. It writes ble/advert-\(power.rawValue).json and ble/advert-\(power.rawValue)-\(pairing.rawValue).json and records ble.advert.\(power.rawValue).\(pairing.rawValue).seen, .rssi and .interval, and ble.connected.\(power.rawValue).\(pairing.rawValue).seen. If the camera isn't listed, try Scan (everything) and mark it by hand.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -239,7 +239,7 @@ struct BluetoothView: View {
             }
             Button("Kill app to test relaunch", role: .destructive) { confirmKill = true }
                 .disabled(!watcher.enabled)
-            Text("Pick the filter UUID, switch on Watch in background (allow Bluetooth and notifications), switch the camera off for a minute, then tap Camera switched on now as you switch it on and lock the phone. Wait for the reminder and pick an action. Repeat from the next room, with Creators' App connected and quit, and after Kill app. Don't swipe the spike away in the app switcher: iOS won't relaunch an app the user force-quit.")
+            Text("Pick the filter UUID, switch on Watch in background (allow Bluetooth and notifications), switch the camera off for a minute, then tap Camera switched on now as you switch it on and lock the phone. Wait for the reminder and pick an action. Repeat from the next room, with Creators' App connected and quit, and after Kill app to test relaunch (camera off first; Kill app re-arms the measurement like Camera switched on now, so lock the phone and switch the camera on straight away). Don't swipe the spike away in the app switcher: iOS won't relaunch an app the user force-quit.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

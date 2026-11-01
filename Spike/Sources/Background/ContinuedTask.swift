@@ -78,7 +78,8 @@ final class ContinuedTask {
     private func execute(_ task: BGContinuedProcessingTask, title: String, submittedAt: Date,
                          work: @MainActor (_ report: @escaping Report, _ shouldStop: @escaping ShouldStop) async -> Bool) async {
         let startedAt = Date()
-        state = "running"
+        // Stop may have been tapped while the request was still submitting: keep it, so shouldStop ends the work.
+        if state != "stopped" { state = "running" }
         log?.measure("bgcontinued.startLatency", startedAt.timeIntervalSince(submittedAt), "s", context: title)
         log?.note("BGContinuedProcessingTask started (\(title)); lock the phone now")
         task.progress.totalUnitCount = Int64(total)

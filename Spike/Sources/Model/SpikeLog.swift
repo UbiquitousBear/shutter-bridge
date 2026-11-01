@@ -252,6 +252,9 @@ final class SpikeLog {
             }
             linesInFile = 0
         }
+        // The file could not be read at launch (locked since boot): load it now that it is accessible, before the
+        // unwritten lines are flushed, so the Log tab and the measurements table include the earlier launches.
+        if fileUnreadable, let data = try? Data(contentsOf: fileURL) { mergePersisted(data) }
         do {
             let h = try FileHandle(forWritingTo: fileURL)
             let size = try h.seekToEnd()
@@ -261,6 +264,33 @@ final class SpikeLog {
         } catch {
             reportPersistence("could not open \(fileURL.lastPathComponent): \(error)")
         }
+    }
+
+    /// Puts the file's records in front of what this process logged before the file became readable.
+    private func mergePersisted(_ data: Data) {
+        fileUnreadable = false
+        fileEndsMidLine = data.last.map { $0 != 0x0A } ?? false
+        let decoder = JSONDecoder()
+        var oldEntries: [Entry] = []
+        var oldMeasurements: [Measurement] = []
+        var lines = 0
+        for line in data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true) {
+            lines += 1
+            guard let record = try? decoder.decode(Record.self, from: Data(line)) else { continue }
+            if let e = record.e { oldEntries.append(e) }
+            if let m = record.m { oldMeasurements.append(m) }
+        }
+        // Anything already written by this process is in memory too: keep the in-memory copy.
+        let entryIDs = Set(entries.map(\.id)), measurementIDs = Set(measurements.map(\.id))
+        oldEntries.removeAll { entryIDs.contains($0.id) }
+        oldMeasurements.removeAll { measurementIDs.contains($0.id) }
+        let newEntryCount = entries.count, newMeasurementCount = measurements.count
+        entries = Array((oldEntries + entries).suffix(Self.entryLimit))
+        measurements = Array((oldMeasurements + measurements).suffix(Self.measurementLimit))
+        restoredEntryCount = max(0, entries.count - newEntryCount)
+        restoredMeasurementCount = max(0, measurements.count - newMeasurementCount)
+        linesInFile = lines
+        os.info("spike log: read \(lines) lines from the file once it became readable; restored \(self.restoredEntryCount) entries and \(self.restoredMeasurementCount) measurements")
     }
 
     /// Rewrites the file from memory, dropping lines that fell off the in-memory limits.

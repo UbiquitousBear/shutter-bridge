@@ -9,7 +9,7 @@
 // 2. Scanning alone cannot see a camera that another app holds. Also call
 //    CBCentralManager.retrieveConnectedPeripherals(withServices:) — documented to include peripherals other
 //    apps connected — for every service UUID seen so far plus the chosen proximity UUID, log what it returns,
-//    and include it in the snapshot; record log.flag("ble.connected.<state>.seen", …).
+//    and include it in the snapshot; record log.flag("ble.connected.<state>.<pairing>.seen", …) for the camera.
 // 3. ProximityWatcher: besides the filtered background scan, call
 //    registerForConnectionEvents(options: [.serviceUUIDs: [uuid]]) and log every
 //    centralManager(_:connectionEventDidOccur:for:) (peerConnected / peerDisconnected) with the app state, post
@@ -77,6 +77,9 @@ final class AdvertisementScanner: NSObject {
         var lastSeen: Date
         var lastInstant: ContinuousClock.Instant
         var gapsMs: [Double] = []
+        /// Callbacks under 20 ms after the previous one (a scan response or repeat in the same advertising event):
+        /// not counted as gaps, since advertising events are at least 20 ms apart.
+        var shortGapsMerged = 0
         var serviceUUIDs: Set<String> = []
         var overflowUUIDs: Set<String> = []
         var solicitedUUIDs: Set<String> = []
@@ -136,6 +139,7 @@ final class AdvertisementScanner: NSObject {
         let rssiAverage: Double?
         let medianIntervalMs: Double?
         let intervalSamples: Int
+        let shortGapsMerged: Int
         let serviceUUIDs: [String]
         let overflowServiceUUIDs: [String]
         let solicitedServiceUUIDs: [String]
@@ -153,6 +157,8 @@ final class AdvertisementScanner: NSObject {
         let identifier: String
         let name: String
         let state: String
+        /// Marked by hand, or a name with ILCE/Sony (company ID alone would also match Sony headphones).
+        let isCamera: Bool
         var id: String { identifier }
     }
 
@@ -306,8 +312,10 @@ final class AdvertisementScanner: NSObject {
 
     // MARK: - Snapshot (day 6 fixture + measurements)
 
-    /// Writes ble/advert-<state>.json and ble/advert-<state>-<pairing>.json and records ble.advert.<state>.seen,
-    /// .rssi [dBm] and .interval [ms] for the camera, plus ble.connected.<state>.seen (requirement 2).
+    /// Writes ble/advert-<state>.json and ble/advert-<state>-<pairing>.json and records
+    /// ble.advert.<state>.<pairing>.seen, .rssi [dBm] and .interval [ms] for the camera, plus
+    /// ble.connected.<state>.<pairing>.seen (requirement 2): the pairing is in the name so one context's
+    /// snapshot doesn't overwrite another's in the measurements table.
     func saveSnapshot(power: PowerState, pairing: PairingContext, proximityUUID: String?) {
         guard let started = scanStartedAt else {
             log?.warn("Save snapshot: no scan has run yet. Tap Scan, wait 30 s or more, then save.")
@@ -337,7 +345,8 @@ final class AdvertisementScanner: NSObject {
             connectedQueryServiceUUIDs: query,
             connectedPeripherals: connectedNow,
             note: "Camera-like = company ID 0x012D, a name containing ILCE/Sony, or marked by hand. Intervals are the "
-                + "median gap between scan callbacks; iOS can miss packets, so treat them as an upper bound.")
+                + "median gap between advertising events (callbacks under 20 ms apart, such as scan responses, are "
+                + "merged); iOS can miss events, so treat them as an upper bound.")
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -350,7 +359,7 @@ final class AdvertisementScanner: NSObject {
             log?.error("Save snapshot: could not encode the snapshot: \(error)")
         }
 
-        let base = "ble.advert.\(power.rawValue)"
+        let base = "ble.advert.\(power.rawValue).\(pairing.rawValue)"
         let pairingText = "pairing: \(pairing.label)"
         if let camera = primaryCamera(cameras) {
             // Sony's company ID alone also matches Sony headphones and speakers: the reason shows which rule chose it.
@@ -364,7 +373,7 @@ final class AdvertisementScanner: NSObject {
             }
             if let interval = camera.medianIntervalMs {
                 log?.measure("\(base).interval", interval, "ms",
-                             context: "\(camera.name): median of \(camera.gapsMs.count) gaps between callbacks, foreground scan with duplicates (upper bound); \(pairingText)")
+                             context: "\(camera.name): median of \(camera.gapsMs.count) gaps between advertising events (\(camera.shortGapsMerged) callbacks under 20 ms merged), foreground scan with duplicates (upper bound); \(pairingText)")
             } else {
                 log?.warn("\(camera.name): only one advertisement, no interval yet; scan longer")
             }
@@ -373,13 +382,20 @@ final class AdvertisementScanner: NSObject {
             log?.warn("No camera-like peripheral seen. If the camera shows up under Scan (everything) with another name, mark it as the camera and save again.")
         }
         // An empty query means Bluetooth wasn't ready and nothing was asked: record no flag rather than a false "no".
+        let connectedName = "ble.connected.\(power.rawValue).\(pairing.rawValue).seen"
         guard !query.isEmpty else {
-            log?.warn("ble.connected.\(power.rawValue).seen not recorded: retrieveConnectedPeripherals didn't run (Bluetooth not powered on)")
+            log?.warn("\(connectedName) not recorded: retrieveConnectedPeripherals didn't run (Bluetooth not powered on)")
             return
         }
-        let connectedNames = connectedNow.map(\.name).joined(separator: ", ")
-        log?.flag("ble.connected.\(power.rawValue).seen", !connectedNow.isEmpty,
-                  context: "retrieveConnectedPeripherals over \(query.count) service UUIDs → \(connectedNow.isEmpty ? "none" : connectedNames); \(pairingText)")
+        // Only the camera counts: the query also matches wearables and headphones that share a service UUID.
+        let held = connectedNow.filter(\.isCamera)
+        let others = connectedNow.filter { !$0.isCamera }
+        func names(_ records: [ConnectedRecord]) -> String { records.isEmpty ? "none" : records.map(\.name).joined(separator: ", ") }
+        log?.flag(connectedName, !held.isEmpty,
+                  context: "retrieveConnectedPeripherals over \(query.count) service UUIDs → camera: \(names(held)); other connected: \(names(others)); \(pairingText)")
+        if held.isEmpty, !others.isEmpty {
+            log?.warn("\(others.count) connected peripherals, none recognised as the camera (\(names(others))). If one is the camera, mark it as the camera and save again.")
+        }
     }
 
     // MARK: - Connected peripherals (requirement 2)
@@ -410,14 +426,17 @@ final class AdvertisementScanner: NSObject {
         var records: [ConnectedRecord] = []
         for p in found {
             peripherals[p.identifier] = p
-            records.append(ConnectedRecord(identifier: p.identifier.uuidString, name: p.name ?? "(no name)", state: Self.describe(p.state)))
+            let isCamera = markedCameras.contains(p.identifier) || Self.nameLooksLikeCamera(p.name)
+                || stats[p.identifier].map { $0.nameLooksLikeCamera || Self.nameLooksLikeCamera($0.localName) } == true
+            records.append(ConnectedRecord(identifier: p.identifier.uuidString, name: p.name ?? "(no name)",
+                                           state: Self.describe(p.state), isCamera: isCamera))
         }
         connected = records
         if records.isEmpty {
             log?.note("Check connected: no peripheral connected to the system with any of \(query.count) service UUIDs")
         } else {
             for r in records {
-                log?.note("Check connected: \(r.name) [\(r.identifier.prefix(8))] is connected to the system (\(r.state)); another app may hold it")
+                log?.note("Check connected: \(r.name) [\(r.identifier.prefix(8))] is connected to the system (\(r.state)); another app may hold it\(r.isCamera ? " (the camera)" : " (not recognised as the camera)")")
             }
         }
         return (query, records)
@@ -530,6 +549,7 @@ final class AdvertisementScanner: NSObject {
             rssiAverage: s.rssiAverage,
             medianIntervalMs: s.medianIntervalMs,
             intervalSamples: s.gapsMs.count,
+            shortGapsMerged: s.shortGapsMerged,
             serviceUUIDs: s.serviceUUIDs.sorted(),
             overflowServiceUUIDs: s.overflowUUIDs.sorted(),
             solicitedServiceUUIDs: s.solicitedUUIDs.sorted(),
@@ -628,12 +648,17 @@ extension AdvertisementScanner: @preconcurrency CBCentralManagerDelegate {
         var s = stats[id] ?? Stats(id: id, name: peripheral.name ?? localName ?? "(no name)", localName: localName,
                                    companyID: company, nameLooksLikeCamera: looksLikeCamera,
                                    firstSeen: now, lastSeen: now, lastInstant: instant)
-        if s.count > 0, s.gapsMs.count < 5000 {
-            s.gapsMs.append((instant - s.lastInstant).inSeconds * 1000)
+        // Advertising events are at least 20 ms apart; a callback sooner than that is the scan response (or a
+        // repeat) of the same event, so it adds no gap and the timing stays on the event's first packet.
+        let gapMs = (instant - s.lastInstant).inSeconds * 1000
+        if s.count > 0, gapMs < 20 {
+            s.shortGapsMerged += 1
+        } else {
+            if s.count > 0, s.gapsMs.count < 5000 { s.gapsMs.append(gapMs) }
+            s.lastInstant = instant
         }
         s.count += 1
         s.lastSeen = now
-        s.lastInstant = instant
         if let name = peripheral.name ?? localName { s.name = name }
         if let localName { s.localName = localName }
         if let company { s.companyID = company }

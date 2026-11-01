@@ -33,10 +33,11 @@ enum MeasurementsTable {
         case latest(String)
         /// Fixed text, e.g. "n/a (one transaction per PTP/IP session)".
         case text(String)
-        /// The BLE summary: "on yes · asleep no · off — · UUID …" from ble.advert.<state>.seen, plus, when they
-        /// were recorded, whether another app (Creators' App) held the camera in each power state
-        /// (ble.connected.<state>.seen) and the connection-event latency — the owner's camera is paired with
-        /// Creators' App, so advertising alone may not answer the proximity go/no-go.
+        /// The BLE summary, one group per pairing context with samples: "connected: on no · asleep — · off — ·
+        /// connected via another app: on yes; unpaired: on yes · …" from ble.advert.<state>.<pairing>.seen and
+        /// ble.connected.<state>.<pairing>.seen (whether another app, Creators' App, held the camera), then the
+        /// connection-event latency and the UUID — the owner's camera is paired with Creators' App, so advertising
+        /// alone may not answer the proximity go/no-go, and one context must not hide another.
         case bleSummary
         case empty
     }
@@ -81,8 +82,10 @@ enum MeasurementsTable {
             usb: .bleSummary, ap: .empty, lan: .empty),
     ]
 
-    /// The power states of the BLE row, in column order; the flags are `ble.advert.<state>.seen`.
+    /// The power states of the BLE row, in column order; the flags are `ble.advert.<state>.<pairing>.seen`.
     static let blePowerStates = ["on", "asleep", "off"]
+    /// The pairing contexts of the BLE row (AdvertisementScanner.PairingContext), the owner's real setup first.
+    static let blePairings = ["connected", "unlinked", "unpaired"]
 
     static let absent = "—"
 
@@ -159,16 +162,24 @@ enum MeasurementsTable {
         case .text(let text):
             return text
         case .bleSummary:
-            let states = blePowerStates.map { state -> String in
-                guard let s = latest["ble.advert.\(state).seen"] else { return "\(state) \(absent)" }
-                return "\(state) \(s.value != 0 ? "yes" : "no")"
+            func group(_ pairing: String?) -> String {
+                let suffix = pairing.map { ".\($0)" } ?? ""
+                var parts = blePowerStates.map { state -> String in
+                    guard let s = latest["ble.advert.\(state)\(suffix).seen"] else { return "\(state) \(absent)" }
+                    return "\(state) \(s.value != 0 ? "yes" : "no")"
+                }
+                let held = blePowerStates.compactMap { state -> String? in
+                    guard let s = latest["ble.connected.\(state)\(suffix).seen"] else { return nil }
+                    return "\(state) \(s.value != 0 ? "yes" : "no")"
+                }
+                if !held.isEmpty { parts.append("connected via another app: " + held.joined(separator: ", ")) }
+                let text = parts.joined(separator: " · ")
+                return pairing.map { "\($0): \(text)" } ?? text
             }
-            var parts = states
-            let held = blePowerStates.compactMap { state -> String? in
-                guard let s = latest["ble.connected.\(state).seen"] else { return nil }
-                return "\(state) \(s.value != 0 ? "yes" : "no")"
+            let recorded = blePairings.filter { pairing in
+                blePowerStates.contains { latest["ble.advert.\($0).\(pairing).seen"] != nil || latest["ble.connected.\($0).\(pairing).seen"] != nil }
             }
-            if !held.isEmpty { parts.append("connected via another app: " + held.joined(separator: ", ")) }
+            var parts = [recorded.isEmpty ? group(nil) : recorded.map { group($0) }.joined(separator: "; ")]
             if let c = latest["ble.proximity.connectionEvent.latency"] {
                 parts.append("connection event after \(format(c.value, unit: c.unit))")
             }
@@ -219,8 +230,8 @@ extension MeasurementsTable {
             Sample(name: "usb.getPartialObject.supported", value: 1, unit: "bool", at: t0),
             Sample(name: "ptpip.ap.getPartialObject.supported", value: 0, unit: "bool", at: t0),
             Sample(name: "ptpip.ap.getObject.throughput", value: 9.123, unit: "MB/s", context: "a|b\nc", at: t0),
-            Sample(name: "ble.advert.on.seen", value: 1, unit: "bool", at: t0),
-            Sample(name: "ble.advert.off.seen", value: 0, unit: "bool", at: t0),
+            Sample(name: "ble.advert.on.unpaired.seen", value: 1, unit: "bool", at: t0),
+            Sample(name: "ble.advert.off.unpaired.seen", value: 0, unit: "bool", at: t0),
         ]
         let md = markdown(samples: samples, serviceUUID: "8000FF00-FF00-FFFF-FFFF-FFFFFFFFFFFF", device: nil, generatedAt: t0)
         let lines = md.components(separatedBy: "\n")
@@ -232,18 +243,21 @@ extension MeasurementsTable {
         expect(lines.contains("| `GetPartialObject` supported | yes | no | — |"), "booleans read yes/no")
         expect(lines.contains("| ARW throughput, two in flight | — | \(onePTPIPTransaction) | \(onePTPIPTransaction) |"), "fixed text cells")
         expect(lines.contains("| ARW throughput, single file | — | 9.12 MB/s | — |"), "MB/s with 2 decimals")
-        expect(lines.contains("| BLE: advertises when on / asleep / off; service UUID | on yes · asleep — · off no · UUID 8000FF00-FF00-FFFF-FFFF-FFFFFFFFFFFF |  |  |"), "BLE summary cell")
+        expect(lines.contains("| BLE: advertises when on / asleep / off; service UUID | unpaired: on yes · asleep — · off no · UUID 8000FF00-FF00-FFFF-FFFF-FFFFFFFFFFFF |  |  |"), "BLE summary cell")
         expect(lines.contains("| `usb.catalog.complete` | 1.84 | s | 2 | 200 files |"), "all-measurements row with count and latest context")
         expect(lines.contains("| `ptpip.ap.getObject.throughput` | 9.12 | MB/s | 1 | a\\|b c |"), "context escaped")
         expect(md.contains("- Device context not recorded"), "device placeholder")
 
         let paired = markdown(samples: [
-            Sample(name: "ble.advert.on.seen", value: 0, unit: "bool", at: t0),
-            Sample(name: "ble.connected.on.seen", value: 1, unit: "bool", at: t0),
-            Sample(name: "ble.connected.off.seen", value: 0, unit: "bool", at: t0),
+            Sample(name: "ble.advert.on.connected.seen", value: 0, unit: "bool", at: t0),
+            Sample(name: "ble.connected.on.connected.seen", value: 1, unit: "bool", at: t0),
+            Sample(name: "ble.connected.off.connected.seen", value: 0, unit: "bool", at: t0),
+            // Saved later, as the runbook's order does: must not hide the connected context.
+            Sample(name: "ble.advert.on.unpaired.seen", value: 1, unit: "bool", at: t0.addingTimeInterval(60)),
+            Sample(name: "ble.connected.on.unpaired.seen", value: 0, unit: "bool", at: t0.addingTimeInterval(60)),
             Sample(name: "ble.proximity.connectionEvent.latency", value: 12.5, unit: "s", at: t0),
         ], serviceUUID: nil, device: nil, generatedAt: t0)
-        expect(paired.contains("| BLE: advertises when on / asleep / off; service UUID | on no · asleep — · off — · connected via another app: on yes, off no · connection event after 12.50 s · UUID — |  |  |"), "BLE cell for a camera held by Creators' App")
+        expect(paired.contains("| BLE: advertises when on / asleep / off; service UUID | connected: on no · asleep — · off — · connected via another app: on yes, off no; unpaired: on yes · asleep — · off — · connected via another app: on no · connection event after 12.50 s · UUID — |  |  |"), "BLE cell for a camera held by Creators' App, per pairing context")
 
         let empty = markdown(samples: [], serviceUUID: nil, device: nil, generatedAt: t0)
         expect(empty.contains("| BLE: advertises when on / asleep / off; service UUID | on — · asleep — · off — · UUID — |  |  |"), "empty BLE cell")

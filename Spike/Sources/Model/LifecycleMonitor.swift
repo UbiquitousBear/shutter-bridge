@@ -18,6 +18,10 @@ final class LifecycleMonitor {
     var log: SpikeLog?
 
     private var observers: [NSObjectProtocol] = []
+    /// Whether a transfer was making progress when the app left the foreground (see `activeWindow`).
+    private var transferWasActive = false
+    /// Progress this recent when the app is backgrounded means a transfer was running.
+    private static let activeWindow: TimeInterval = 60
 
     init() {
         let nc = NotificationCenter.default
@@ -51,8 +55,12 @@ final class LifecycleMonitor {
     }
 
     private func enteredBackground() {
-        backgroundedAt = Date()
-        log?.note("app entered background")
+        let now = Date()
+        backgroundedAt = now
+        // A transfer counts as running if it reported progress in the last minute (Wi-Fi reports once per file):
+        // only then does "no progress while away" mean the session died, rather than that nothing was running.
+        transferWasActive = lastProgressAt.map { now.timeIntervalSince($0) < Self.activeWindow } ?? false
+        log?.note("app entered background" + (transferWasActive ? " during a transfer" : ""))
     }
 
     private func locked() {
@@ -72,10 +80,13 @@ final class LifecycleMonitor {
         if let last = lastProgressAt, last > since {
             log?.measure("\(lastProgressLink).lifecycle.progressAfterBackground", last.timeIntervalSince(since), "s",
                          context: String(format: "away %.0f s; last: %@", away, lastProgressNote))
-        } else if lastProgressAt != nil {
+        } else if transferWasActive {
             log?.measure("\(lastProgressLink).lifecycle.progressAfterBackground", 0, "s",
                          context: String(format: "no progress while away (%.0f s)", away))
+        } else if lastProgressAt != nil {
+            log?.note("no transfer running when the app left; nothing recorded")
         }
         backgroundedAt = nil
+        transferWasActive = false
     }
 }
