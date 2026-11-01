@@ -8,8 +8,8 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 
 | Item | Value |
 | --- | --- |
-| iPhone model and iOS build (from the Log tab's Device section) | _to fill_ |
-| Spike app build | _to fill_ |
+| iPhone model and iOS build (from the Log tab's Device section) | `iPhone18,4`, iOS 27.2 (24B119) |
+| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf |
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | _to fill_ |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
@@ -200,7 +200,7 @@ Proximity test:
 | `GetPartialObject` variant that works (0x101B, 0x95C1 or neither) |  |  |
 | `ObjectAdded` over USB: which code, delivered through `ptpEventHandler` or the delegate |  |  |
 | Session survival on phone lock and app switch (seconds) |  |  |
-| `BGContinuedProcessingTask`: start latency, how long it ran, whether the system expired it, the system progress UI |  |  |
+| `BGContinuedProcessingTask`: start latency, how long it ran, whether the system expired it, the system progress UI | **Camera-free timer test, 2 minutes, 1 Nov, Low Power Mode on:** the task started 0.03 s after the request, ran 136.25 s through a phone lock and finished; the system did not expire it. It finished while the app was still in the background, 9 s before the app returned to the foreground. While the task ran, the app logged lock and unlock events from the background; with no task (the earlier plain-background run) the suspended app logged none. So the process really kept running. In the background the half-second sleeps took about 0.57 s each on average (240 steps in 136 s instead of 120 s). Progress UI: not yet recorded. Still to run: 10 minutes, with Low Power Mode off, and around a real USB download (day 5). | Log, 1 Nov 15:08:05–15:10:30: `bgcontinued.startLatency` 0.03 s; `bgcontinued.ran` 136.25 s, finished=true expired=false; app in the background 142.4 s, locked 134.6 s |
 | `requestDownload` completion string: file name or path |  |  |
 | `deviceDidBecomeReady(withCompleteContentCatalog:)` on a reopen of the same device |  |  |
 | `ICCameraDevice.batteryLevel` compared with PTP BatteryLevel (0x5001) |  |  |
