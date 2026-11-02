@@ -233,6 +233,7 @@ The plan's paths use the α7 IV-generation names. Record what the α7C II actual
 | `Network → Wi-Fi → Wi-Fi Frequency Band` | Forcing 5 GHz |  |
 | `Network → Cnct./PC Remote → Smartphone Connect` | QR code, SSID and password |  |
 | `Network → Cnct./PC Remote → PC Remote Function` | PC Remote over Wi-Fi |  |
+| (not in the plan) *Still Img. Save Dest.* | Where a picture taken in PC Remote goes | Not under *PC Remote Function*: it is under **Remote Shoot Setting**, set to **Dest. + Camera** (Shamil, 2 Nov). Yet no new file reached the card during the 22:09 shutter test (the 22:10 listing's newest was from 16:10), so the shutter may not have fired: to confirm. |
 | … *PC Remote Cnct Method* = *Wi-Fi Direct* | Day-6 mode |  |
 | … *PC Remote Cnct Method* = *Wi-Fi Access Point* | Day-6 mode |  |
 | … *Pairing* | PC Remote pairing |  |
