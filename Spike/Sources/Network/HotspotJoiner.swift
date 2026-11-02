@@ -6,7 +6,12 @@ import NetworkExtension
 /// the gateway is the camera (Sony uses 192.168.122.1). Needs the Hotspot Configuration entitlement
 /// (Spike.entitlements has it).
 ///
-/// The passphrase is never logged; log lines show "••••".
+/// The passphrase is never logged; log lines show "••••". The BSSID (a MAC address) never is either: only whether
+/// it is present and MAC-shaped.
+///
+/// Build 10, Bluetooth handover (`redacted`): the SSID and passphrase were read from the camera over Bluetooth, and
+/// the repository is public, so on that path the SSID, the BSSID and any error text that might quote them never
+/// reach the log either: the SSID shows only as its length and whether it starts with "DIRECT-".
 @MainActor
 enum HotspotJoiner {
     struct Outcome: Sendable {
@@ -19,8 +24,17 @@ enum HotspotJoiner {
 
     /// Applies the configuration and waits up to 20 s for the new Wi-Fi path. Records `ptpip.ap.join` for a real
     /// join; `alreadyAssociated` counts as success but is not timed (forget the network in Settings to time it).
-    static func join(ssid rawSSID: String, passphrase: String, log: SpikeLog) async -> Outcome? {
+    ///
+    /// `redacted`: the Bluetooth handover path (see the type's comment). `ptpip.ap.join` then carries the context
+    /// "Bluetooth handover" and no SSID.
+    static func join(ssid rawSSID: String, passphrase: String, log: SpikeLog, redacted: Bool = false) async -> Outcome? {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+        // How the log names the network: the SSID itself on the typed or scanned path, never on the handover path.
+        let network = redacted ? "the camera's network (\(ssidSummary(ssid)))" : "\"\(ssid)\""
+        // Error texts on the handover path, in case NetworkExtension quotes the SSID or passphrase in one.
+        let clean: (String) -> String = { text in
+            redacted ? HotspotJoiner.scrub(text, ssid: ssid, passphrase: passphrase) : text
+        }
         guard !ssid.isEmpty else {
             log.warn("Join: enter or scan an SSID first")
             return nil
@@ -37,7 +51,7 @@ enum HotspotJoiner {
         let before = await PathMonitor.waitForWiFi(timeout: 0.5) { _ in true }
         let gatewayBefore: String? = (before?.isSatisfied ?? false) ? before?.firstIPv4Gateway : nil
 
-        log.note("Join: applying NEHotspotConfiguration for \"\(ssid)\" (passphrase \(passphrase.isEmpty ? "none" : "••••")); confirm the system prompt. Gateway before: \(gatewayBefore ?? "none")")
+        log.note("Join: applying NEHotspotConfiguration for \(network)\(redacted ? " from the Bluetooth handover" : "") (passphrase \(passphrase.isEmpty ? "none" : "••••")); confirm the system prompt. Gateway before: \(gatewayBefore ?? "none")")
         let clock = ContinuousClock()
         let started = clock.now
         var alreadyAssociated = false
@@ -48,7 +62,7 @@ enum HotspotJoiner {
             if ns.domain == NEHotspotConfigurationErrorDomain, ns.code == NEHotspotConfigurationError.alreadyAssociated.rawValue {
                 alreadyAssociated = true
             } else {
-                log.error(String(format: "Join failed after %.1f s: %@", (clock.now - started).inSeconds, describe(ns)))
+                log.error(String(format: "Join failed after %.1f s: %@", (clock.now - started).inSeconds, clean(describe(ns))))
                 return nil
             }
         }
@@ -63,7 +77,13 @@ enum HotspotJoiner {
         let total = (clock.now - started).inSeconds
 
         if let current = await NEHotspotNetwork.fetchCurrent() {
-            log.note("Join: current Wi-Fi is \"\(current.ssid)\" (BSSID \(current.bssid))")
+            if redacted {
+                // Only yes/no answers about the joined network: its SSID and BSSID stay out of the log.
+                log.note("Join: current Wi-Fi SSID is the handover's: \(current.ssid == ssid ? "yes" : "no"); BSSID \(current.bssid.isEmpty ? "absent" : "present, MAC-shaped \(isMACShaped(current.bssid) ? "yes" : "no")")")
+            } else {
+                // The BSSID is the access point's MAC address (the camera's, on its own network): never logged.
+                log.note("Join: current Wi-Fi is \"\(current.ssid)\" (BSSID \(current.bssid.isEmpty ? "absent" : "present, MAC-shaped \(isMACShaped(current.bssid) ? "yes" : "no")"))")
+            }
         } else {
             log.note("Join: NEHotspotNetwork.fetchCurrent() returned nil (needs the Access Wi-Fi Information entitlement); SSID not confirmed")
         }
@@ -74,14 +94,38 @@ enum HotspotJoiner {
         }
         let gateway = snapshot.firstIPv4Gateway
         if alreadyAssociated {
-            log.note("Join: already on \"\(ssid)\"; gateway \(gateway ?? "?"). Not timed: forget the network in Settings → Wi-Fi to time a fresh join.")
+            log.note("Join: already on \(network); gateway \(gateway ?? "?"). Not timed: forget the network in Settings → Wi-Fi to time a fresh join.")
         } else {
             log.measure("ptpip.ap.join", total, "s",
-                        context: String(format: "\"%@\"; apply returned after %.1f s (includes the user's tap on the prompt); Wi-Fi path with gateway %@ after %.1f s",
-                                        ssid, applied, gateway ?? "?", total))
+                        context: String(format: "%@; apply returned after %.1f s (includes the user's tap on the prompt); Wi-Fi path with gateway %@ after %.1f s",
+                                        redacted ? "Bluetooth handover" : "\"\(ssid)\"", applied, gateway ?? "?", total))
         }
-        log.note("Join: path now \(snapshot.summary). The first connection to the camera should show the Local Network prompt if it hasn't appeared yet.")
+        // The path summary lists IPv6 gateways too, and a link-local one can be built from the camera's MAC.
+        let pathText = redacted ? "on Wi-Fi with IPv4 gateway \(gateway ?? "?") (full path left out on the handover path)" : snapshot.summary
+        log.note("Join: path now \(pathText). The first connection to the camera should show the Local Network prompt if it hasn't appeared yet.")
         return Outcome(alreadyAssociated: alreadyAssociated, seconds: alreadyAssociated ? nil : total, gateway: gateway)
+    }
+
+    /// An SSID as the handover path logs it: "12 characters, DIRECT- prefix yes", never the name itself.
+    nonisolated static func ssidSummary(_ ssid: String) -> String {
+        "\(ssid.count) characters, DIRECT- prefix \(ssid.hasPrefix("DIRECT-") ? "yes" : "no")"
+    }
+
+    /// Six groups of one or two hex digits separated by ":" or "-" (iOS may drop leading zeros).
+    nonisolated static func isMACShaped(_ text: String) -> Bool {
+        let groups = text.split(separator: ":", omittingEmptySubsequences: false)
+        let parts = groups.count == 6 ? groups : text.split(separator: "-", omittingEmptySubsequences: false)
+        return parts.count == 6 && parts.allSatisfy { part in
+            (1...2).contains(part.count) && part.allSatisfy { $0.isHexDigit }
+        }
+    }
+
+    /// `text` with any occurrence of the SSID or passphrase replaced, for error texts on the handover path.
+    private nonisolated static func scrub(_ text: String, ssid: String, passphrase: String) -> String {
+        var out = text
+        if !passphrase.isEmpty { out = out.replacingOccurrences(of: passphrase, with: "(passphrase)") }
+        if !ssid.isEmpty { out = out.replacingOccurrences(of: ssid, with: "(SSID)") }
+        return out
     }
 
     /// Removes the configuration this app added (so the next join is a fresh one).

@@ -19,6 +19,8 @@ struct SpikeApp: App {
     @State private var wireless: WirelessLab
     @State private var guided: GuidedRunner
     @State private var scanner: AdvertisementScanner
+    /// Build 10: the Bluetooth Wi-Fi handover lab, shared by the Bluetooth tab and the Guided tab's runner.
+    @State private var handover: SonyWiFiHandover
 
     init() {
         // Must be registered before the app finishes launching (day 5 test).
@@ -31,6 +33,12 @@ struct SpikeApp: App {
         let wireless = WirelessLab(log: log, continued: continued, lifecycle: lifecycle)
         let scanner = AdvertisementScanner()
         scanner.log = log
+        let handover = SonyWiFiHandover(log: log)
+        // Weak references: the scanner's camera identifiers are its first route to the camera, and the Wi-Fi tab's
+        // typed SSID and passphrase are what the camera's are compared with (yes/no only).
+        handover.scanner = scanner
+        handover.wireless = wireless
+        _handover = State(initialValue: handover)
         _scanner = State(initialValue: scanner)
         _log = State(initialValue: log)
         _browser = State(initialValue: browser)
@@ -40,7 +48,7 @@ struct SpikeApp: App {
         _wireless = State(initialValue: wireless)
         _guided = State(initialValue: GuidedRunner(log: log, browser: browser, usb: usb, wireless: wireless,
                                                    scanner: scanner, continued: continued, lifecycle: lifecycle,
-                                                   proximity: ProximityWatcher.shared))
+                                                   proximity: ProximityWatcher.shared, handover: handover))
     }
 
     var body: some Scene {
@@ -56,6 +64,7 @@ struct SpikeApp: App {
                 .environment(wireless)
                 .environment(guided)
                 .environment(scanner)
+                .environment(handover)
                 .task {
                     browser.log = log
                     continued.log = log
