@@ -213,6 +213,24 @@ public enum PTPCommand {
         PTPContainer(type: .command, code: PTPOperationCode.getPartialObject64.rawValue, transactionID: tx,
                      parameters: [handle.rawValue, UInt32(offset & 0xFFFF_FFFF), UInt32(offset >> 32), length])
     }
+
+    /// GetPartialObject (0x101B) with four parameters: handle, offset low, offset high, length. The layout
+    /// mvpzac/Imagedge uses on a ZV-E10. `unverified` on the α7C II, where the three-parameter form answered
+    /// InvalidObjectHandle (0x2009).
+    public static func getPartialObjectSony(_ handle: PTPObjectHandle, offset: UInt64, length: UInt32, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.getPartialObject.rawValue, transactionID: tx,
+                     parameters: [handle.rawValue, UInt32(offset & 0xFFFF_FFFF), UInt32(offset >> 32), length])
+    }
+
+    /// Sony's "SDIO_GetPartialLargeObject": five parameters, handle, offset low, offset high, length low, length
+    /// high (length widened to u64). `code` is meant to be 0x9211 (libgphoto2's name for it) or 0x9219 (what
+    /// mvpzac/Imagedge calls it) but any code builds. The layout is a guess from mvpzac/Imagedge's description
+    /// (ZV-E10), `unverified` on the α7C II: probe it.
+    public static func sonyGetPartialLargeObject(code: UInt16, _ handle: PTPObjectHandle, offset: UInt64, length: UInt64, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: code, transactionID: tx,
+                     parameters: [handle.rawValue, UInt32(offset & 0xFFFF_FFFF), UInt32(offset >> 32),
+                                  UInt32(length & 0xFFFF_FFFF), UInt32(length >> 32)])
+    }
 }
 
 /// Monotonic transaction IDs for one session. PTP requires them to start at 1 after OpenSession
