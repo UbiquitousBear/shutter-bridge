@@ -91,10 +91,17 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 
 **One trap:** the session lists no device properties, and the camera never answers GetDevicePropValue. On build 9 the app's BatteryLevel (0x5001) read waited 30 s for a reply, the idle timeout ended the connection, and the first download never started. Build 9.1 reads only what DeviceInfo lists; production must do the same.
 
+**After a drop and under lock** (guided runs, 2 Nov 22:24–22:28, build 0.1 (9.1)):
+- **Reconnecting works and finds the same files.** After Wi-Fi was switched off and on, the app reopened the contents-transfer session in about 2.5 s, and the card listed again with the same handles: DSC02046.ARW was 0x400010A3 in every session. So a saved import can find its file again without a full relist.
+- **Byte-range reads don't work yet.** Standard GetPartialObject (0x101B, three parameters) answered **InvalidObjectHandle (0x2009)** for a handle that GetObject accepted, both before and after the drop. So the resume test never started. Imagedge sends 0x101B with four parameters (handle, offset low, offset high, max bytes); that is still to try. If it fails too, an interrupted file restarts from zero, about 3 s for a 50 MB ARW at 15 MB/s. That doesn't block 1.0.
+- **Locked without a continued task, the transfer stops and the session is lost.** Nothing downloaded in 123 s locked, and on return the connection had timed out. Over USB the session survived 227 s.
+- **Locked inside a continued task, the transfer runs at full speed.** 20 ARW (954 MB) downloaded in 62.1 s (15.4 MB/s) entirely while locked, and the task finished without expiring. As over USB, every Wi-Fi import must run inside `BGContinuedProcessingTask`.
+- **The reference download is repeatable.** DSC02046.ARW gave the same SHA-256 (763d068d7de5…) in two sessions 14 minutes apart.
+
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
 **Still to run:**
-- resume after a Wi-Fi drop and behaviour under lock in this mode (needed for 1.0: wireless is in);
+- byte-range reads in this mode: standard GetPartialObject is refused (below); Sony's four-parameter layout is still to try;
 - *Smartphone Connect* (no QR code on 2 Nov; possibly because PC Remote Function was on, or Creators' App held the link);
 - *PC Remote* over an access point (the home LAN);
 - *Send to Smartphone*, the fallback.
@@ -174,6 +181,7 @@ Measurements: `ble.advert.<on/asleep/off>.<pairing>.seen`, `ble.connected.<state
 **What the design has to allow for:**
 - **The trigger is coming into range, not switching on.** The camera advertises the same data while switched off, so a scan can't tell that it was switched on. The reminder fires when the phone and the camera come within range of each other, for example on getting home, whether the camera is on or off.
 - **iOS mostly reports the camera once per scan while it stays in range.** Within one scan it was reported again around the first power-off (11:52:47 and, locked, 11:53:01), then not at all during 92 s and 130 s in the background. The spike restarts the scan 60 s after a discovery so the camera is reported afresh, but on a timer, which doesn't run while the app is suspended: in this run every restart happened when the app came back to the front. Production has to restart the scan from a wake (a discovery, a connection event, a background refresh) instead of a timer, without letting a camera that sits in range wake the app over and over.
+- **Hold the reminder while the app is connected or importing.** During the locked Wi-Fi import (2 Nov 22:28) the continued task kept the app running, the scan restarted, and the camera being imported from triggered a reminder.
 - **Ask for notification permission when the person switches the reminder on.** The run's first reminder failed (UNErrorDomain 2003, permission not yet asked); permission was granted a second later and every later reminder was accepted.
 
 **The same-room "No" is the procedure, not the platform.** The guided run restarts the scan when *Start* is tapped, with the app still in front. The camera was in range, so it was found 0.04 s later and the reminder showed as a banner in the app before the phone was locked. iOS didn't report the camera again while it stayed in range, so nothing arrived while locked. Earlier in the same run, iOS had delivered a same-room discovery with the phone locked (11:53:01, RSSI -46, 4.8 s after the app went to the background); the 60 s debounce held that reminder back because one had shown 27 s earlier.
@@ -202,7 +210,7 @@ Guided run *Bluetooth: proximity reminder*, 2 Nov 11:52–12:01, build 0.1 (6.1)
 | --- | --- | --- |
 | Which USB connection mode gives `ImageCaptureCore` a session: *Still Img Transfer (MTP)* alone, or also *Select on Connect*? | With the camera asking on connection (*Select USB Connect Mode*), choosing **Image Transfer (MTP)** or **Image Transfer (MSC)** gives a session that lists the card. *Remote Shoot (PC Remote)* enumerates; a session there is untried. *Live Stream* doesn't enumerate. | 1 Nov, Wired tab and log |
 | Does the camera emit `ObjectAdded` over USB while in MTP mode, or only in PC Remote mode? | **MTP: not advertised.** DeviceInfo lists three events only: StoreAdded, StoreRemoved and DevicePropChanged; neither ObjectAdded 0x4002 nor Sony's 0xC201. PC Remote mode is still to check (day 4's 60 s watch, in that mode). | GetDeviceInfo, 1 Nov 19:25, MTP |
-| Is the PTP/IP initiator GUID remembered across camera power cycles, or does every connection need re-pairing on the camera? |  |  |
+| Is the PTP/IP initiator GUID remembered across camera power cycles, or does every connection need re-pairing on the camera? | **No pairing is needed in *PC Remote* on the camera's own network.** A brand-new GUID connected with no prompt. After a power cycle, the same GUID reconnected too; Shamil saw the camera ask something (to describe), but the handshake didn't wait for it (Init_Command_Ack in 6 ms). The camera's connection number follows the GUID: #2048075972 in every session with the old GUID, #3502824974 with the new one. Anyone who has joined the camera's Wi-Fi can connect, so its password is the only gate. | Guided run *Wi-Fi: GUID after a power cycle*, 2 Nov 22:29–22:30 |
 | Real throughput on the base-model (USB 2) iPhone with a UHS-II card in the camera |  |  |
 
 ## α7C II menu wording
@@ -243,10 +251,10 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 | ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s | 15.50 MB/s (20 ARW, 954 MB, one at a time; 12–17 MB/s per file) |  |
 | ARW throughput, two in flight | MTP 39.05 MB/s; MSC 41.73 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
-| `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` |  |  |
-| Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match |  |  |
+| `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` | listed, but 0x101B with three parameters answers InvalidObjectHandle in a contents-transfer session; Sony's four-parameter layout is still to try |  |
+| Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match | reconnect yes (about 2.5 s after Wi-Fi came back, same handles); byte-range resume not yet (GetPartialObject refused); restarting the file works |  |
 | `ObjectAdded` event received |  | no, twice, in 20 s shutter tests on a plain *PC Remote* session after the init sequence: only 0xC223 (parameters 1 and 5, in pairs) and 0xC203; no new file reached the card (the newest stayed at 16:10 on 2 Nov) |  |
-| Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. |  |  |
+| Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. | plain download: no progress in 123 s locked, session lost; in a continued task: 20 ARW at 15.4 MB/s, all while locked (57.4 s of progress) |  |
 | Camera battery used per 1 GB |  |  |  |
 | BLE: advertises when on / asleep / off; service UUID | on yes · asleep yes · off yes (Creators' App quit); UUID 1800 (Generic Access, not Sony-specific) |  |  |
 
@@ -330,8 +338,8 @@ One row per camera mode. Note in the last column when the Mac (`gphoto2`, `nmap`
 | Question | Finding | Evidence |
 | --- | --- | --- |
 | What the camera shows on the first connection from the iPhone | Not recorded. In *PC Remote* the Init_Command_Ack came 6 ms after the request, so the camera probably didn't ask. To confirm with Shamil. | Wi-Fi run, 2 Nov 12:14:04 |
-| GUID persistence after a power cycle (no prompt / prompt once / prompt every time) |  |  |
-| What the camera shows for a new GUID |  |  |
+| GUID persistence after a power cycle (no prompt / prompt once / prompt every time) | The same GUID reconnects after a power cycle. Shamil: the camera asked something (what is to describe), but the handshake didn't wait for an answer (Init_Command_Ack 6 ms). After the restart, the camera's Wi-Fi had to be switched on again on the camera, and the phone had moved to the home Wi-Fi, so it was rejoined in Settings. | 2 Nov 22:29:57 |
+| What the camera shows for a new GUID | Nothing: "No, it connected" (Init_Command_Ack 5 ms, Init_Event_Ack 74 ms). | 2 Nov 22:30:07 |
 | Operations listed in DeviceInfo over PTP/IP, compared with USB | **PC Remote, camera's own network:** vendor extension Sony v100 "Sony PTP Extensions" (USB MTP: none), functional mode 0. **81 operations** (USB MTP: 24): the PTP basics with GetPartialObject 0x101B and GetThumb, 0x100D, Sony 0x9201–0x9254, and MTP 0x9801–0x9803 and 0x9805 GetObjectPropList. The Sony operations include SDIO_Connect 0x9201, SDIO_GetExtDeviceInfo 0x9202, SDIO_GetPartialLargeObject 0x9211 and SDIO_SetContentsTransferMode 0x9212. No GetPartialObject64 (0x95C1). **48 events**, including StoreAdded, StoreRemoved, **Sony ObjectAdded 0xC201** and ObjectRemoved 0xC202 (USB MTP: 3). **0 device properties** (USB MTP: 5). Image formats: Association, EXIF/JPEG, Sony ARW, 0x300B, MP4, Sony HEIF. Firmware string **2.01**; Setup records 2.0 from USB on 1 Nov. Fixtures on the phone: `ptpip/deviceinfo.bin` (475 B, serial zeroed), `ptpip/FIRMWARE`. | Wi-Fi run, 2 Nov 12:14:04 |
 | Sony SDIO connect: response codes and whether the operation list changes | **All OK, and nothing changes.** Imagedge's order: GetDeviceInfo; GetStorageIDs (StoreNotAvailable); SDIO_Connect 1 and 2 (OK, 8 zero bytes each); SDIO_GetExtDeviceInfo 0x12C (OK, 970 bytes: version 0x12C, 421 codes then 59); SDIO_Connect 3 (OK); GetExtDeviceInfo again (the same 970 bytes). DeviceInfo before and after: 81 operations, 48 events, 0 properties, functional mode 0. With the sequence, the plain session stayed up past 30 s (13:48:18 to 13:48:57, then closed on purpose). Without it, on build 8, the connection was gone within 37 s. | Wi-Fi run, 2 Nov 13:48:18 (build 0.1 (7.1)) |
 | Camera's IP address on its own access point | **192.168.122.1** (the PTP/IP port and the SSDP announcements both came from it) | Wi-Fi run, 2 Nov 12:13 |
