@@ -387,6 +387,23 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 - The rest of the manufacturer data isn't recorded here, because it may identify the camera.
 - Build 10 tests the handover.
 
+**Wi-Fi handover over Bluetooth, first run** (guided run *Bluetooth: Wi-Fi handover*, 3 Nov 00:04–00:09, build 0.1 (11.1)). Setup: camera on after a restart with its Wi-Fi off; PC Remote Function on; Creators' App quit; Bluetooth Rmt Ctrl on.
+- **Connecting needs no pairing prompt.** A 10 s scan found the camera; it connected in 0.45 s and listed all five services in 1.05 s. 8000CC00 has about 80 characteristics, including CC06, CC07, CC08, CC09, CC0A, CC0B and CC0C as the notes describe. No ATT error appeared, and iOS showed no pairing request. (Creators' App's bond with the camera was already on the phone.)
+- **The camera hands over its Wi-Fi details to our app.**
+  - CC0A read "2.01" (firmware) and CC0B "ILCE-7CM2" (model).
+  - CC06 is 24 bytes: a 3-byte header, then a 21-character network name beginning DIRECT-.
+  - CC07 is 11 bytes: the 3-byte header, then an 8-character printable password.
+  - CC0C (BSSID) is present and MAC-shaped.
+  - Values are not recorded. Whether they are the network PC Remote uses is still to compare.
+- **Switching the Wi-Fi on didn't work in this setup.**
+  - Writing 0x01 to CC08 was acknowledged in 58 ms.
+  - CC09 changed in one byte at +0.15 s and changed back at +2.34 s. CC09's layout doesn't match any of the guessed tag layouts.
+  - Nothing changed on the camera, and no network appeared.
+  - The likeliest cause is that **PC Remote Function was on**: the handover belongs to the smartphone connection, and Smartphone Connect showed no QR code in the same state on 2 Nov. That is to test with PC Remote Function off.
+- **The join failed because there was no network.** iOS asked to join (`ble.handover.joinPrompt` yes) and apply returned after 7.5 s, but no Wi-Fi path appeared and 192.168.122.1:15740 didn't answer within 60 s.
+- **Creators' App said "not connected" afterwards** (`ble.handover.creatorsAppStillWorks` no). The run wrote nothing to the pairing service (EE01), only CC08. PC Remote Function being on may also explain this. To check with it off before blaming the run.
+- **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
+
 Proximity test:
 
 | Scenario | Detected after (`ble.proximity.latency`) | Reminder posted after (`ble.proximity.detectToNotify`) | Connection event after (`ble.proximity.connectionEvent.latency`) | Notes |
