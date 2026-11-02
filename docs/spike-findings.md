@@ -9,7 +9,7 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 | Item | Value |
 | --- | --- |
 | iPhone model and iOS build (from the Log tab's Device section) | `iPhone18,4`, iOS 27.2 (24B119) |
-| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). From 2 Nov 13:47: 0.1 (7.1), from `main` at d6d33a7 (spike build 9: Sony contents transfer over Wi-Fi). TestFlight's build number is the workflow run, not the spike build. |
+| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). From 2 Nov 13:47: 0.1 (7.1), from `main` at d6d33a7 (spike build 9: Sony contents transfer over Wi-Fi). From 2 Nov 22:08: 0.1 (9.1), run 9, from `main` at 8e010ff (spike build 9.1: no battery read where the camera won't answer). TestFlight's build number is the workflow run, not the spike build. |
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | Sony Corporation ILCE-7CM2 (α7C II), firmware 2.0 (GetDeviceInfo over USB, 1 Nov); over PTP/IP on 2 Nov DeviceInfo says 2.01. The serial number is in DeviceInfo and in `usb/deviceinfo.bin`; it is deliberately not written here. |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
@@ -70,7 +70,7 @@ Go if a camera mode lists on-card objects over PTP/IP and sustains ≥ 8 MB/s on
 
 Measurements: `ptpip.ap.enumerate`, `ptpip.ap.objects`, `ptpip.ap.getObject.throughput`, and the LAN equivalents. See also the day-6 mode matrix below.
 
-**Finding:** **Browsing passes; the speed half is still to measure.**
+**Finding:** **Go.** On the camera's own network, *PC Remote* lists the whole card faster than USB and downloads ARW at **15.5 MB/s**, almost twice the 8 MB/s criterion.
 
 *PC Remote* on the camera's own network lists the whole card once the session is opened Sony's way, as open-source ZV-E10 code (mvpzac/Imagedge) does it:
 1. SDIO_OpenSession (0x9210) [1, 1] instead of OpenSession;
@@ -79,21 +79,22 @@ Measurements: `ptpip.ap.enumerate`, `ptpip.ap.objects`, `ptpip.ap.getObject.thro
 
 The camera then announced its card with StoreAdded 0x00010001.
 
-**The figures beat USB and the plan's targets:**
-- **Listing:** 391 files (231 ARW, 160 JPG, 6 folders) in **4.74 s**. Over USB the same card takes 65 s in MTP and 7.2 s in MSC; the plan's target is 200 files in 5 s or less.
-- **Ready time:** the card was ready to list **2.6 s** after the switch.
-- **Thumbnails:** 50 at **38.7 ms** each on average (slowest 103 ms). Over USB they take 145–188 ms; the target is 50 ms or less.
+**The figures** (two runs on 2 Nov; the card grew from 391 to 419 files in between):
+- **Listing:** 391 files in **4.74 s**, then 419 files (259 ARW, 160 JPG, 7 folders) in **4.95 s**. Over USB the 391-file card takes 65 s in MTP and 7.2 s in MSC; the plan's target is 200 files in 5 s or less.
+- **Ready time:** the card was ready to list **2.6 s** after the switch, both times.
+- **Thumbnails:** 50 at **38.7 ms** and **35.4 ms** each on average (slowest about 100 ms). Over USB they take 145–188 ms; the target is 50 ms or less.
+- **Downloads:** 20 ARW (954 MB) at **15.5 MB/s**, from the first request to the last response. Per file it rose from 12.2 MB/s (the first) to 15–17 MB/s; every file has a SHA-256. That is about 40 % of USB 2 (38–40 MB/s): 1 GB takes about 65 s over the camera's Wi-Fi against 26 s on the cable. Memory peaked at 65.5 MB (baseline 57 MB).
 
 The camera reports the storage as "Storage Media 1", read-only without deletion (access capability 1), with its capacity shown as 0.
 
 **What doesn't work:** a plain OpenSession, with or without the init sequence, still gets StoreNotAvailable (0x2013) from GetStorageIDs.
 
-**Not measured yet: download speed** (the go criterion is at least 8 MB/s on the camera's network). The 20-ARW download never started. The app first read BatteryLevel (0x5001). This session lists no device properties and the camera never answered, so after 30 s the idle timeout ended the connection. Build 9.1 skips that read.
+**One trap:** the session lists no device properties, and the camera never answers GetDevicePropValue. On build 9 the app's BatteryLevel (0x5001) read waited 30 s for a reply, the idle timeout ended the connection, and the first download never started. Build 9.1 reads only what DeviceInfo lists; production must do the same.
 
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
 **Still to run:**
-- GetObject throughput in the whole-card session (*GetObject 20 newest ARW in a continued task* on build 9, or the plain one on build 9.1);
+- resume after a Wi-Fi drop and behaviour under lock in this mode (needed for 1.0: wireless is in);
 - *Smartphone Connect* (no QR code on 2 Nov; possibly because PC Remote Function was on, or Creators' App held the link);
 - *PC Remote* over an access point (the home LAN);
 - *Send to Smartphone*, the fallback.
@@ -104,6 +105,12 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 - `ptpip.ap.enumerate` 4.74 s, `ptpip.ap.objects` 391; `ptpip.ap.thumb.avg` 38.74 ms (50 thumbnails, 3,905 KB, 0 failed).
 - "battery read failed: command channel: nothing received for 30 s", then "GetObject 20 newest ARW failed".
 - Earlier the same day (12:08, build 0.1 (6.1)), a plain session got "GetStorageIDs answered StoreNotAvailable (0x2013)".
+
+Guided run *Wi-Fi: one camera mode* › *PC Remote (camera's network)*, 2 Nov 22:08–22:11, build 0.1 (9.1):
+- `ptpip.ap.contentsTransfer.wholeCard.ready` 2.55 s (426 handles); `ptpip.ap.enumerate` 4.95 s, `ptpip.ap.objects` 419 (ARW 259, JPG 160).
+- `ptpip.ap.thumb.avg` 35.35 ms (50, slowest 98 ms, 0 failed).
+- "BatteryLevel (0x5001) isn't in this session's DeviceInfo, so the battery isn't read".
+- `ptpip.ap.getObject.throughput` 15.50 MB/s (20 ARW, 954.3 MB, 61.6 s); `ptpip.ap.getObject.file` 12.20 MB/s for the first, 14–17 MB/s for the rest; `ptpip.ap.download.memory.peak` 65.47 MB.
 
 ### SSDP discovery
 
@@ -142,7 +149,7 @@ Measurements: `usb.event.objectAdded`, `ptpip.ap.event.objectAdded`, `ptpip.lan.
 
 **Finding:** **Not over USB in *Image Transfer (MTP)* mode; possible over Wi-Fi.**
 - **USB, MTP:** the mode advertises no ObjectAdded event and disables the shutter.
-- **Wi-Fi, *PC Remote*:** DeviceInfo lists Sony's ObjectAdded (0xC201) and ObjectRemoved (0xC202). In a 20 s shutter test on a plain session after the init sequence, none arrived: only 0xC223 [1] once and about 50 0xC203 (2 Nov 13:48). Whether the shutter fired and saved to the card, and whether ObjectAdded needs a remote capture, is still to establish.
+- **Wi-Fi, *PC Remote*:** DeviceInfo lists Sony's ObjectAdded (0xC201) and ObjectRemoved (0xC202). In two 20 s shutter tests on a plain session after the init sequence (2 Nov 13:48 and 22:09), none arrived: only 0xC223, with parameters 1 and 5 in pairs (plausibly the shutter's state), and 0xC203. No new file reached the card in the second test (the newest stayed at 16:10). So the camera may not have stored the frames: in PC Remote it saves according to *Still Img. Save Dest.* (to confirm).
 - **Still to try:** *Remote Shoot (PC Remote)* over USB, and the shutter test over Wi-Fi.
 
 **Evidence:** GetDeviceInfo in MTP mode, 1 Nov 22:59:37: events StoreAdded, StoreRemoved and DevicePropChanged only; "ObjectAdded 0x4002 no · Sony ObjectAdded 0xC201 no". Shamil, 1 Nov: the shutter is disabled in MTP and MSC.
@@ -231,14 +238,14 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 
 | Measurement | USB-C (USB 2 iPhone) | Wi-Fi, camera AP | Wi-Fi, UniFi LAN |
 | --- | --- | --- | --- |
-| Time to enumerate 200 files | 391 files: MTP 64.96 s (ImageCaptureCore), 65.98 s (PTP GetObjectInfo), 152.08 s (MTP GetObjectPropList per object); MSC 7.17 s (12.23 s on the first MSC run) | 391 files in 4.74 s (PC Remote, Sony contents transfer) |  |
-| Thumbnail fetch, average per item | MTP 144.8 and 148.1 ms (ImageCaptureCore, two sessions), 143.3 ms (PTP GetThumb); MSC 187.6 ms | 38.74 ms (50 newest, slowest 103 ms) |  |
-| ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s |  |  |
+| Time to enumerate 200 files | 391 files: MTP 64.96 s (ImageCaptureCore), 65.98 s (PTP GetObjectInfo), 152.08 s (MTP GetObjectPropList per object); MSC 7.17 s (12.23 s on the first MSC run) | 391 files in 4.74 s; 419 files in 4.95 s (PC Remote, Sony contents transfer) |  |
+| Thumbnail fetch, average per item | MTP 144.8 and 148.1 ms (ImageCaptureCore, two sessions), 143.3 ms (PTP GetThumb); MSC 187.6 ms | 38.74 ms and 35.35 ms (50 newest, slowest about 100 ms) |  |
+| ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s | 15.50 MB/s (20 ARW, 954 MB, one at a time; 12–17 MB/s per file) |  |
 | ARW throughput, two in flight | MTP 39.05 MB/s; MSC 41.73 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
 | `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` |  |  |
 | Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match |  |  |
-| `ObjectAdded` event received |  | no, in 20 s on a plain *PC Remote* session after the init sequence (one 0xC223 and about 50 0xC203 events); whether the shutter fired and saved to the card is to confirm |  |
+| `ObjectAdded` event received |  | no, twice, in 20 s shutter tests on a plain *PC Remote* session after the init sequence: only 0xC223 (parameters 1 and 5, in pairs) and 0xC203; no new file reached the card (the newest stayed at 16:10 on 2 Nov) |  |
 | Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. |  |  |
 | Camera battery used per 1 GB |  |  |  |
 | BLE: advertises when on / asleep / off; service UUID | on yes · asleep yes · off yes (Creators' App quit); UUID 1800 (Generic Access, not Sony-specific) |  |  |
