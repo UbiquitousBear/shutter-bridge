@@ -1469,6 +1469,14 @@ final class WirelessLab {
 
     private func readBattery(_ c: PTPIPClient) async -> Int? {
         guard !batteryUnsupported else { return nil }
+        // Only ask when DeviceInfo lists BatteryLevel. A Sony PC Remote or contents-transfer session lists no device
+        // properties and never answers GetDevicePropValue: on 2 Nov the camera stayed silent for 30 s, the idle
+        // timeout ended the connection, and the 20-ARW download never started. (Battery per GB is out of 1.0.)
+        guard deviceInfo?.devicePropertiesSupported.contains(0x5001) == true else {
+            batteryUnsupported = true
+            log.note("BatteryLevel (0x5001) isn't in this session's DeviceInfo, so the battery isn't read (the camera wouldn't answer)")
+            return nil
+        }
         do {
             let raw = try await c.getDevicePropValue(0x5001)
             guard let first = raw.first else {
