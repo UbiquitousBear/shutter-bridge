@@ -42,12 +42,14 @@ if [ -n "$proplists" ]; then
     exit 1
 fi
 
-# The camera's serial number never reaches this public repository (owner's decision, 1 Nov 2026): refuse a staged
-# deviceinfo.bin or ssdp-description.xml that still contains one. scripts/redact-fixtures.py zeroes it.
+# The camera's serial number never reaches this public repository (owner's decision, 1 Nov 2026), and neither does
+# its hardware ID (2 Nov 2026: the MAC-like 12 hex digits in the SSDP description's UDN and USN values): refuse a
+# staged deviceinfo.bin or ssdp-description.xml that still contains either. scripts/redact-fixtures.py --check
+# makes the call and scripts/redact-fixtures.py zeroes them.
 staged="$(git diff --cached --name-only --diff-filter=ACMR -- '*deviceinfo.bin' '*ssdp-description.xml')"
 if [ -n "$staged" ]; then
     if ! command -v python3 >/dev/null 2>&1; then
-        echo "pre-commit: python3 is needed to check fixtures for the camera's serial number." >&2
+        echo "pre-commit: python3 is needed to check fixtures for the camera's serial number and hardware ID." >&2
         exit 1
     fi
     tmp="$(mktemp -d)"
@@ -60,7 +62,7 @@ if [ -n "$staged" ]; then
         fi
     done
     if [ -e "$tmp/.failed" ]; then
-        echo "pre-commit: refusing to commit a fixture with the camera's serial number (see above)." >&2
+        echo "pre-commit: refusing to commit a fixture with the camera's serial number or hardware ID (see above)." >&2
         exit 1
     fi
 fi

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PTPKit
 
 /// Week 2 (days 6–9): PTP/IP over Wi-Fi. Every button is one runbook step; each logs what it saw and records the
@@ -41,6 +42,7 @@ private struct WirelessPanel: View {
             statusSection
             probeSection
             handshakeSection
+            sonySection
             downloadSection
             resumeSection
         }
@@ -144,7 +146,7 @@ private struct WirelessPanel: View {
         Section {
             Button("Connect + OpenSession + GetDeviceInfo") { lab.connect(target) }
             Button("Reconnect (same GUID)") { lab.reconnect(target) }
-            Button("Sony SDIO connect (PC Remote modes)") { lab.sonySDIO() }
+            Button("Sony SDIO init sequence") { lab.sonySDIO() }
                 .disabled(!lab.isConnected)
             Button("Disconnect", role: .destructive) { lab.disconnect() }
                 .disabled(!lab.isConnected)
@@ -154,6 +156,35 @@ private struct WirelessPanel: View {
             Text("Power-cycle test: switch the camera off and on, rejoin its Wi-Fi, tap Reconnect and note what the camera shows. Then New GUID, Connect, and note it again.")
         }
         .disabled(cameraLocked)
+    }
+
+    /// Build 9: Sony's private PC Remote init sequence after Connect, the keep-alive, and the two contents-transfer
+    /// sessions, after Imagedge (field-tested on a ZV-E10; unverified on the α7C II).
+    private var sonySection: some View {
+        Section {
+            Toggle("SDIO straight after Connect", isOn: $lab.sdioAfterConnect)
+            Self.caption("After OpenSession and GetDeviceInfo, Connect and Reconnect send the Sony init sequence (GetStorageIDs, SDIO_Connect 1, 2, 3, SDIO_GetExtDeviceInfo) when the camera lists SDIO_Connect 0x9201.")
+            Toggle("Keep-alive every 10 s (\(lab.keepAlives) sent)", isOn: $lab.keepAlive)
+            Self.caption("Sends GetDeviceInfo after every 10 s with nothing else running, while a session is open and the app is in the foreground.")
+            Button("Contents transfer: whole card") { lab.connectContentsTransfer(target, mode: .wholeCard) }
+                .disabled(cameraLocked)
+            Self.caption("Reconnects with SDIO_OpenSession 0x9210 [1, 1] instead of OpenSession, the init sequence, 0x9212 [2,0,0] then [2,1,0], and waits up to 120 s for the card to list.")
+            Button("Contents transfer: photos sent from the camera") { lab.connectContentsTransfer(target, mode: .selectedOnCamera) }
+                .disabled(cameraLocked)
+            Self.caption("Reconnects with OpenSession, the init sequence and 0x9212 [1,0,0]; once it says connected, send photos from the camera, and it waits up to 90 s for them to list.")
+            Button("Selected set in this session") { lab.selectedSetInSession() }
+                .disabled(cameraLocked || !lab.isConnected)
+            Self.caption("The same on the session already open, without reconnecting: the init sequence if it hasn't run, 0x9212 [1,0,0], then up to 90 s for the photos sent to list.")
+        } header: {
+            Text("Sony (build 9)")
+        } footer: {
+            Text("PC Remote mode. The session stays open afterwards, so List card, Thumbnails, GetObject and Shutter test work on it, and Reconnect and Resume read reopen the same kind of session until the next Connect.")
+        }
+    }
+
+    /// Verbatim: the square brackets and digits are what is sent, not Markdown.
+    private static func caption(_ text: String) -> some View {
+        Text(verbatim: text).font(.caption).foregroundStyle(.secondary)
     }
 
     private var downloadSection: some View {
@@ -248,6 +279,41 @@ struct WiFiTarget: Sendable {
     var netLabel: String { net == "lan" ? "Home LAN" : "Camera AP" }
 }
 
+/// Build 9: Sony's two contents-transfer sessions, as Imagedge opens them (field-tested on a ZV-E10 by
+/// github.com/mvpzac/Imagedge; `unverified` on the α7C II).
+enum SonyContentsMode: String, CaseIterable, Sendable {
+    /// SDIO_OpenSession (0x9210) with functionMode 1, ContentsTransfer: the whole card.
+    case wholeCard
+    /// Standard OpenSession (functionMode 0, RemoteControl): the photos the user sends from the camera, listed under
+    /// a virtual storage (0xF10001 on the ZV-E10).
+    case selectedOnCamera
+
+    var label: String {
+        switch self {
+        case .wholeCard: return "whole card"
+        case .selectedOnCamera: return "photos sent from the camera"
+        }
+    }
+
+    /// SDIO_SetContentsTransferMode (0x9212) calls in order, each with the pause Imagedge makes after it. Other
+    /// parameters for the selected set ({1}, {0,0,0}) answered 0x201D on the ZV-E10.
+    var transferModeSteps: [(p1: UInt32, p2: UInt32, p3: UInt32, pauseMilliseconds: Int)] {
+        switch self {
+        case .wholeCard: return [(2, 0, 0, 200), (2, 1, 0, 1500)]
+        case .selectedOnCamera: return [(1, 0, 0, 0)]
+        }
+    }
+
+    /// How long to keep polling for a non-empty handle list: a big card takes a while to index, and the tester sends
+    /// photos from the camera only once the session is open.
+    var pollLimit: Double {
+        switch self {
+        case .wholeCard: return 120
+        case .selectedOnCamera: return 90
+        }
+    }
+}
+
 /// One object on the card with its ObjectInfo, as listed in this session.
 struct CardObject: Identifiable, Sendable {
     let handle: PTPObjectHandle
@@ -294,6 +360,8 @@ final class WirelessLab {
     private(set) var client: PTPIPClient?
     /// "ap" or "lan" for the open session: every session measurement goes in that column.
     private(set) var sessionNet: String?
+    /// The target of the latest session, so an action on a dropped connection can reconnect to it.
+    @ObservationIgnored private var sessionTarget: WiFiTarget?
     private(set) var deviceInfo: PTPDeviceInfo?
     private(set) var connectionState = "not connected"
     /// The card, newest first by capture date.
@@ -318,6 +386,33 @@ final class WirelessLab {
     var joinSSID = ""
     /// Never logged or persisted.
     var joinPassphrase = ""
+    /// Build 9: run the Sony init sequence straight after Connect / Reconnect / Resume read when DeviceInfo lists
+    /// SDIO_Connect (0x9201). In PC Remote the camera drops the session about 30 s after OpenSession without it.
+    var sdioAfterConnect: Bool {
+        get { sdioAfterConnectSetting }
+        set {
+            sdioAfterConnectSetting = newValue
+            UserDefaults.standard.set(newValue, forKey: "ptpip.sdioAfterConnect")
+        }
+    }
+    /// Build 9: GetDeviceInfo every 10 s while a session is open, idle and in the foreground (the camera drops an
+    /// idle session otherwise, per Imagedge).
+    var keepAlive: Bool {
+        get { keepAliveSetting }
+        set {
+            keepAliveSetting = newValue
+            UserDefaults.standard.set(newValue, forKey: "ptpip.keepAlive")
+            if newValue { startKeepAlive() } else { stopKeepAlive() }
+        }
+    }
+    /// Observed storage behind the two toggles (computed wrappers persist them).
+    private var sdioAfterConnectSetting = UserDefaults.standard.object(forKey: "ptpip.sdioAfterConnect") as? Bool ?? true
+    private var keepAliveSetting = UserDefaults.standard.object(forKey: "ptpip.keepAlive") as? Bool ?? true
+    /// Keep-alives answered OK this session.
+    private(set) var keepAlives = 0
+    /// Build 9: the contents-transfer mode of the latest session, nil after a plain Connect. Reconnect and Resume read
+    /// reopen that kind of session, since in PC Remote a plain one can't see the card (GetStorageIDs answers 0x2013).
+    private(set) var contentsMode: SonyContentsMode?
 
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
     @ObservationIgnored private var savedEventFixtures: Set<String> = []
@@ -325,6 +420,35 @@ final class WirelessLab {
     @ObservationIgnored private var batteryUnsupported = false
     /// Measurement prefixes ("ptpip.ap", "ptpip.lan") whose getPartialObject.supported has been recorded.
     @ObservationIgnored private var partialSupportFlagged: Set<String> = []
+    @ObservationIgnored private var keepAliveTask: Task<Void, Never>?
+    /// True while a keep-alive (or the back-from-background check) has a transaction on the socket; a camera
+    /// operation waits for it before starting, so the two never overlap.
+    @ObservationIgnored private var keepAliveInFlight = false
+    /// Set when the app leaves the foreground with a session open; read on the way back.
+    @ObservationIgnored private var backgroundSnapshot: BackgroundSnapshot?
+    @ObservationIgnored private var appObservers: [NSObjectProtocol] = []
+    /// True once the Sony init sequence has run to the end on the current client.
+    @ObservationIgnored private var initSequenceDone = false
+
+    /// What kind of session is open, for the context of measurements that depend on it.
+    private var sessionKind: String {
+        if let contentsMode { return "contents transfer (\(contentsMode.label))" }
+        return initSequenceDone ? "OpenSession + Sony init sequence" : "OpenSession"
+    }
+
+    private struct BackgroundSnapshot {
+        let at: Date
+        let keepAlive: Bool
+        let net: String
+        let client: PTPIPClient
+    }
+
+    private struct ContentsPoll {
+        /// Seconds from the start of the operation to the first non-empty handle list; nil if none came.
+        var ready: Double?
+        var storages = "none"
+        var summary = ""
+    }
 
     private struct BatteryWindow {
         let prefix: String
@@ -355,6 +479,7 @@ final class WirelessLab {
         self.path = PathMonitor(log: log)
         self.bonjour = BonjourProbe(log: log)
         refreshResumeSummary()
+        observeApp()
     }
 
     var isConnected: Bool { client != nil && sessionNet != nil }
@@ -380,6 +505,8 @@ final class WirelessLab {
         progress = nil
         if let transferLink { lifecycle.transferStarted(link: transferLink) }
         Task { @MainActor in
+            // A keep-alive may have a transaction on the socket: one at a time (the client refuses a second).
+            while self.keepAliveInFlight { try? await Task.sleep(for: .milliseconds(20)) }
             do {
                 try await work()
             } catch {
@@ -393,13 +520,24 @@ final class WirelessLab {
         }
     }
 
-    /// Runs `work` with the open session's client and its net ("ap" / "lan").
+    /// Runs `work` with the open session's client and its net ("ap" / "lan"). If the connection has dropped since
+    /// (the camera closed it, or iOS did while the app was in the background), it reconnects first, the same way
+    /// Reconnect does, so a tap on a dead connection doesn't just fail.
     private func runSession(_ label: String, transfer: Bool = false, _ work: @escaping @MainActor (PTPIPClient, String) async throws -> Void) {
-        guard let c = client, let net = sessionNet else {
+        guard client != nil, let net = sessionNet else {
             log.warn("\(label): not connected; tap Connect first")
             return
         }
-        runCamera(label, transferLink: transfer ? "ptpip.\(net)" : nil) { try await work(c, net) }
+        runCamera(label, transferLink: transfer ? "ptpip.\(net)" : nil) {
+            guard var c = self.client else { throw WiFiLabError.message("not connected; tap Connect first") }
+            if let failure = await c.linkFailure {
+                guard let t = self.sessionTarget else { throw failure }
+                self.log.warn("\(label): the connection had dropped (\(failure)); reconnecting first")
+                c = try await self.reopen(t)
+            }
+            guard let current = self.sessionNet else { throw WiFiLabError.message("not connected; tap Connect first") }
+            try await work(c, current)
+        }
     }
 
     private func failed(_ label: String, _ error: Error) async {
@@ -457,14 +595,33 @@ final class WirelessLab {
     // MARK: Day 7 · Handshake
 
     func connect(_ t: WiFiTarget) {
-        runCamera("Connect") { try await self.open(t, closingPrevious: true) }
+        runCamera("Connect") { try await self.open(t, closingPrevious: true, sdio: self.sdioAfterConnect) }
     }
 
     func reconnect(_ t: WiFiTarget) {
         runCamera("Reconnect") {
             self.log.note("Reconnect with the same GUID \(t.guid.uuidString): note what the camera shows (no prompt / prompt once / prompt every time)")
-            try await self.open(t, closingPrevious: false)
+            try await self.reopen(t)
         }
+    }
+
+    /// Reconnect and Resume read: the same kind of session as the latest one, a plain one (with the init sequence when
+    /// `sdioAfterConnect` is on) or Sony's contents transfer, followed by a short wait for the card to list again.
+    @discardableResult
+    private func reopen(_ t: WiFiTarget) async throws -> PTPIPClient {
+        guard let mode = contentsMode else {
+            return try await open(t, closingPrevious: false, sdio: sdioAfterConnect).0
+        }
+        log.note("The latest session was Sony's contents transfer (\(mode.label)), so the same kind of session is reopened (Connect opens a plain one)")
+        let (c, _) = try await openContents(t, mode: mode, closingPrevious: false)
+        let clock = ContinuousClock()
+        let poll = try await pollForHandles(c, mode: mode, clock: clock, started: clock.now, limit: 30)
+        if let ready = poll.ready {
+            log.note(String(format: "Contents transfer (%@) reopened: a handle listed after %.1f s", mode.label, ready))
+        } else {
+            log.warn("Contents transfer (\(mode.label)) reopened, but no storage listed a handle within 30 s (\(poll.summary))")
+        }
+        return c
     }
 
     func disconnect() {
@@ -475,6 +632,7 @@ final class WirelessLab {
     }
 
     private func closeClient(closingSession: Bool) async {
+        stopKeepAlive()
         eventsTask?.cancel()
         eventsTask = nil
         if let c = client { await c.disconnect(closingSession: closingSession) }
@@ -483,9 +641,37 @@ final class WirelessLab {
         connectionState = "not connected"
     }
 
-    /// Handshake + OpenSession + GetDeviceInfo. Used by Connect, Reconnect and Resume read.
+    /// Handshake + OpenSession + GetDeviceInfo, then, with `sdio` on and SDIO_Connect (0x9201) in DeviceInfo, the
+    /// Sony init sequence. Used by Connect, Reconnect and Resume read.
     @discardableResult
-    private func open(_ t: WiFiTarget, closingPrevious: Bool) async throws -> (PTPIPClient, PTPDeviceInfo) {
+    private func open(_ t: WiFiTarget, closingPrevious: Bool, sdio: Bool = false) async throws -> (PTPIPClient, PTPDeviceInfo) {
+        contentsMode = nil
+        do {
+            let c = try await connectFresh(t, closingPrevious: closingPrevious)
+            let alreadyOpen = try await c.openSession()
+            log.note(alreadyOpen ? "OpenSession: SessionAlreadyOpen (treated as success)" : "OpenSession: OK")
+            var info = try await sessionDeviceInfo(c, t)
+            if sdio {
+                if info.supports(.sonySDIOConnect) {
+                    log.note("SDIO straight after Connect: DeviceInfo lists SDIO_Connect (0x9201), so the Sony init sequence runs now (a PC Remote camera drops the session about 30 s after OpenSession without it)")
+                    try await sonyInitSequence(c)
+                    info = deviceInfo ?? info
+                } else {
+                    log.note("SDIO straight after Connect: DeviceInfo doesn't list SDIO_Connect (0x9201); init sequence not sent")
+                }
+            }
+            startKeepAlive()
+            return (c, info)
+        } catch {
+            await closeClient(closingSession: false)
+            connectionState = "not connected (last attempt failed)"
+            throw error
+        }
+    }
+
+    /// Closes any previous client (with CloseSession when `closingPrevious`), resets the per-session state and makes
+    /// a new client the lab's. Shared by `open` and Contents transfer.
+    private func newClient(_ t: WiFiTarget, closingPrevious: Bool) async throws -> PTPIPClient {
         if client != nil { await closeClient(closingSession: closingPrevious) }
         guard !t.host.isEmpty else { throw WiFiLabError.message("enter the camera IP first") }
         objects = []
@@ -493,32 +679,64 @@ final class WirelessLab {
         eventCount = 0
         batteryWindow = nil
         batteryLine = nil
+        keepAlives = 0
+        initSequenceDone = false
         // Per session: BatteryLevel support depends on the camera mode, and day 6–8 switch modes between connects.
         batteryUnsupported = false
         let c = PTPIPClient(host: t.host, guid: t.guid, log: PTPIPClient.logger(log))
         client = c
         sessionNet = t.net
+        sessionTarget = t
         connectionState = "connecting to \(t.host) (\(t.netLabel))…"
         listen(to: c, prefix: t.prefix)
         log.note("PTP/IP: connecting to \(t.host):15740 on \(t.netLabel) as \"\(c.friendlyName)\", GUID \(t.guid.uuidString)")
-        do {
-            let hs = try await c.connect()
-            log.measure("\(t.prefix).handshake", hs.total, "s", context: hs.breakdown)
-            log.note("Init_Command_Ack: responder \"\(hs.responderName)\", GUID \(hs.responderGUID.uuidString), connection #\(hs.connectionNumber), protocol 0x\(String(hs.protocolVersion, radix: 16)); Init_Event_Ack received")
-            let alreadyOpen = try await c.openSession()
-            log.note(alreadyOpen ? "OpenSession: SessionAlreadyOpen (treated as success)" : "OpenSession: OK")
-            let (info, raw) = try await c.getDeviceInfo()
-            deviceInfo = info
-            logDeviceInfo(info, raw: raw)
-            FixtureStore.saveDeviceInfo(raw, link: .ptpip, log: log)
-            FixtureStore.recordFirmware(model: info.model, version: info.deviceVersion, link: .ptpip, log: log)
-            connectionState = "connected · \(info.model) \(info.deviceVersion) · \(t.netLabel)"
-            return (c, info)
-        } catch {
-            await closeClient(closingSession: false)
-            connectionState = "not connected (last attempt failed)"
-            throw error
+        return c
+    }
+
+    /// `newClient`, then the handshake. When an earlier client was closed first, it waits 500 ms for the camera to
+    /// release the old connection and retries a failed handshake once, after 1 s, on a fresh client: Imagedge found
+    /// the camera may briefly refuse a new connection straight after the old session closes (`unverified` on the
+    /// α7C II). The caller closes the client if this throws.
+    private func connectFresh(_ t: WiFiTarget, closingPrevious: Bool) async throws -> PTPIPClient {
+        let hadPrevious = client != nil
+        var c = try await newClient(t, closingPrevious: closingPrevious)
+        guard hadPrevious else {
+            try await handshake(c, t)
+            return c
         }
+        try await Task.sleep(for: .milliseconds(500))
+        do {
+            try await handshake(c, t)
+        } catch {
+            log.warn("PTP/IP: handshake straight after closing the previous connection failed: \(error); retrying once in 1 s on a fresh connection")
+            await closeClient(closingSession: false)
+            try await Task.sleep(for: .seconds(1))
+            c = try await newClient(t, closingPrevious: false)
+            try await handshake(c, t)
+            log.note("PTP/IP: handshake retry OK")
+        }
+        return c
+    }
+
+    /// The two-channel handshake, measured. The responder GUID ends in the camera's hardware ID, so the log shows
+    /// its first four groups and a keyed tag of the whole (stable per install, so reconnects can be compared).
+    private func handshake(_ c: PTPIPClient, _ t: WiFiTarget) async throws {
+        let hs = try await c.connect()
+        log.measure("\(t.prefix).handshake", hs.total, "s", context: hs.breakdown)
+        let guidBytes = withUnsafeBytes(of: hs.responderGUID.uuid) { Data($0) }
+        let guidText = "\(hs.responderGUID.uuidString.prefix(24))… (hardware ID redacted, \(CameraSerialTag.tag(bytes: guidBytes)))"
+        log.note("Init_Command_Ack: responder \"\(hs.responderName)\", GUID \(guidText), connection #\(hs.connectionNumber), protocol 0x\(String(hs.protocolVersion, radix: 16)); Init_Event_Ack received")
+    }
+
+    /// GetDeviceInfo for a new session: logged, saved as a fixture (serial zeroed), and the lab marked connected.
+    private func sessionDeviceInfo(_ c: PTPIPClient, _ t: WiFiTarget) async throws -> PTPDeviceInfo {
+        let (info, raw) = try await c.getDeviceInfo()
+        deviceInfo = info
+        logDeviceInfo(info, raw: raw)
+        FixtureStore.saveDeviceInfo(raw, link: .ptpip, log: log)
+        FixtureStore.recordFirmware(model: info.model, version: info.deviceVersion, link: .ptpip, log: log)
+        connectionState = "connected · \(info.model) \(info.deviceVersion) · \(t.netLabel)"
+        return info
     }
 
     private func logDeviceInfo(_ di: PTPDeviceInfo, raw: Data) {
@@ -558,7 +776,7 @@ final class WirelessLab {
         if e.code.signalsNewObject {
             objectAddedCount += 1
             if objectAddedCount == 1 {
-                log.flag("\(prefix).event.objectAdded", true, context: "\(e.code) on the \(item.channel) channel, params [\(params)]")
+                log.flag("\(prefix).event.objectAdded", true, context: "\(e.code) on the \(item.channel) channel, params [\(params)]; session: \(sessionKind)")
             }
             if !savedEventFixtures.contains("objectadded") {
                 savedEventFixtures.insert("objectadded")
@@ -574,37 +792,119 @@ final class WirelessLab {
     }
 
     func sonySDIO() {
-        runSession("Sony SDIO connect") { c, _ in
-            self.log.note("Sony SDIO (experimental, PC Remote modes): SDIO_Connect 1, 2, SDIO_GetExtDeviceInfo, SDIO_Connect 3, in libgphoto2's order")
-            try await self.sdioStep("SDIO_Connect(1)") { try await c.sonySDIOConnect(phase: 1) }
-            try await self.sdioStep("SDIO_Connect(2)") { try await c.sonySDIOConnect(phase: 2) }
-            var ext = try await self.sdioStep("SDIO_GetExtDeviceInfo(0x12C)") { try await c.sonySDIOGetExtDeviceInfo(version: 0x12C) }
-            if ext == nil {
-                ext = try await self.sdioStep("SDIO_GetExtDeviceInfo(0xC8)") { try await c.sonySDIOGetExtDeviceInfo(version: 0xC8) }
-            }
-            if let ext {
-                FixtureStore.save(ext, link: .ptpip, name: "sdio-extdeviceinfo.bin", log: self.log)
-                self.logExtDeviceInfo(ext)
-            }
-            try await self.sdioStep("SDIO_Connect(3)") { try await c.sonySDIOConnect(phase: 3) }
-            let before = self.deviceInfo?.operationsSupported.count ?? 0
-            let (info, raw) = try await c.getDeviceInfo()
-            self.deviceInfo = info
-            self.log.note("GetDeviceInfo after SDIO: \(info.operationsSupported.count) operations (before: \(before)), \(info.devicePropertiesSupported.count) properties, \(raw.count) bytes")
+        runSession("Sony SDIO init sequence") { c, _ in
+            try await self.sonyInitSequence(c)
         }
     }
 
-    /// One SDIO step. A non-OK response is logged and returns nil; a link failure throws.
-    @discardableResult
-    private func sdioStep(_ label: String, _ body: () async throws -> Data) async throws -> Data? {
-        do {
-            let data = try await body()
-            log.note("\(label): OK, \(data.count) bytes \(data.hexDump())")
-            return data
-        } catch PTPIPClient.ClientError.response(_, let code) {
-            log.warn("\(label): \(code)")
-            return nil
+    /// Sony's private init sequence for PC Remote modes, in Imagedge's order (alpha-fairy's init_table; Imagedge
+    /// field-tested it on a ZV-E10, `unverified` on the α7C II): GetDeviceInfo, GetStorageIDs, SDIO_Connect 1 and 2,
+    /// SDIO_GetExtDeviceInfo, SDIO_Connect 3, SDIO_GetExtDeviceInfo again, then GetDeviceInfo to compare with the
+    /// first. On 2 Nov, without it, the camera dropped both connections about 30 s after OpenSession. Every step
+    /// logs its response code; a non-OK response is logged and the sequence goes on; a link failure throws.
+    private func sonyInitSequence(_ c: PTPIPClient) async throws {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var failures: [String] = []
+        log.note("Sony init sequence (Imagedge's order; unverified on the α7C II): GetDeviceInfo, GetStorageIDs, SDIO_Connect 1, 2, SDIO_GetExtDeviceInfo(0x12C), SDIO_Connect 3, SDIO_GetExtDeviceInfo(0x12C), GetDeviceInfo")
+        let first: (info: PTPDeviceInfo, raw: Data)? = try await initStep(c, "GetDeviceInfo", failures: &failures, {
+            try await c.getDeviceInfo()
+        }, summary: { "\($0.raw.count) bytes; \(WirelessLab.counts($0.info))" })
+        let before = first?.info ?? deviceInfo
+        try await initStep(c, "GetStorageIDs", failures: &failures, {
+            try await c.getStorageIDs().ids
+        }, summary: { "storage IDs \(WirelessLab.storageList($0))" })
+        try await initStep(c, "SDIO_Connect(1)", failures: &failures, {
+            try await c.sonySDIOConnect(phase: 1)
+        }, summary: { WirelessLab.dataSummary($0) })
+        try await initStep(c, "SDIO_Connect(2)", failures: &failures, {
+            try await c.sonySDIOConnect(phase: 2)
+        }, summary: { WirelessLab.dataSummary($0) })
+        var ext: Data? = try await initStep(c, "SDIO_GetExtDeviceInfo(0x12C)", failures: &failures, {
+            try await c.sonySDIOGetExtDeviceInfo(version: 0x12C)
+        }, summary: { WirelessLab.dataSummary($0) })
+        if ext == nil {
+            ext = try await initStep(c, "SDIO_GetExtDeviceInfo(0xC8)", failures: &failures, {
+                try await c.sonySDIOGetExtDeviceInfo(version: 0xC8)
+            }, summary: { WirelessLab.dataSummary($0) })
         }
+        if let ext {
+            FixtureStore.save(ext, link: .ptpip, name: "sdio-extdeviceinfo.bin", log: log)
+            logExtDeviceInfo(ext)
+        }
+        try await initStep(c, "SDIO_Connect(3)", failures: &failures, {
+            try await c.sonySDIOConnect(phase: 3)
+        }, summary: { WirelessLab.dataSummary($0) })
+        let ext2: Data? = try await initStep(c, "SDIO_GetExtDeviceInfo(0x12C) again", failures: &failures, {
+            try await c.sonySDIOGetExtDeviceInfo(version: 0x12C)
+        }, summary: { WirelessLab.dataSummary($0) })
+        if let ext2 {
+            if let ext, ext == ext2 {
+                log.note("SDIO_GetExtDeviceInfo after SDIO_Connect(3): the same \(ext2.count) bytes as before it")
+            } else {
+                log.note("SDIO_GetExtDeviceInfo after SDIO_Connect(3) differs from the first (\(ext2.count) bytes):")
+                logExtDeviceInfo(ext2)
+                if ext == nil { FixtureStore.save(ext2, link: .ptpip, name: "sdio-extdeviceinfo.bin", log: log) }
+            }
+        }
+        let last: (info: PTPDeviceInfo, raw: Data)? = try await initStep(c, "GetDeviceInfo (after)", failures: &failures, {
+            try await c.getDeviceInfo()
+        }, summary: { "\($0.raw.count) bytes; \(WirelessLab.counts($0.info))" })
+        if let after = last?.info { deviceInfo = after }
+
+        var compare = "DeviceInfo before: \(before.map { WirelessLab.counts($0) } ?? "none"); after: \(last.map { WirelessLab.counts($0.info) } ?? "none")"
+        if let before, let after = last?.info {
+            let added = Set(after.operationsSupported).subtracting(before.operationsSupported).sorted()
+            let removed = Set(before.operationsSupported).subtracting(after.operationsSupported).sorted()
+            if !added.isEmpty { compare += "; operations added: " + added.map { String(format: "0x%04X", $0) }.joined(separator: " ") }
+            if !removed.isEmpty { compare += "; operations gone: " + removed.map { String(format: "0x%04X", $0) }.joined(separator: " ") }
+        }
+        let outcome = failures.isEmpty ? "every step OK" : "\(failures.count) step(s) not OK (\(failures.joined(separator: ", ")))"
+        log.note(String(format: "Sony init sequence done in %.2f s: ", (clock.now - started).inSeconds) + "\(outcome). \(compare)")
+        if client === c { initSequenceDone = true }
+    }
+
+    /// One step of the Sony init sequence. OK: logs `summary` and returns the value. A non-OK response (or a dataset
+    /// that didn't decode, the link still healthy) is logged, added to `failures`, and returns nil. A link failure
+    /// throws.
+    @discardableResult
+    private func initStep<T>(_ c: PTPIPClient, _ label: String, failures: inout [String],
+                             _ body: () async throws -> T, summary: (T) -> String) async throws -> T? {
+        do {
+            let value = try await body()
+            log.note("Sony init · \(label): OK, \(summary(value))")
+            return value
+        } catch PTPIPClient.ClientError.response(_, let code) {
+            failures.append("\(label) \(WirelessLab.codeText(code))")
+            log.warn("Sony init · \(label): \(WirelessLab.codeText(code)); continuing")
+            return nil
+        } catch {
+            let linkGone = (error as? PTPIPClient.ClientError)?.isLinkFailure ?? false
+            if !linkGone, await c.linkFailure == nil {
+                failures.append("\(label) failed")
+                log.warn("Sony init · \(label): \(error); continuing")
+                return nil
+            }
+            log.error("Sony init · \(label): \(error); sequence stopped")
+            throw error
+        }
+    }
+
+    nonisolated static func codeText(_ code: PTPResponseCode) -> String {
+        "\(code) (" + String(format: "0x%04X", code.rawValue) + ")"
+    }
+
+    nonisolated static func counts(_ di: PTPDeviceInfo) -> String {
+        String(format: "%ld operations, %ld events, %ld properties, functional mode 0x%04X",
+               di.operationsSupported.count, di.eventsSupported.count, di.devicePropertiesSupported.count, di.functionalMode)
+    }
+
+    nonisolated static func storageList(_ ids: [PTPStorageID]) -> String {
+        ids.isEmpty ? "none" : ids.map { String(format: "0x%08X", $0.rawValue) }.joined(separator: ", ")
+    }
+
+    nonisolated static func dataSummary(_ data: Data) -> String {
+        "\(data.count) bytes \(data.hexDump())"
     }
 
     private func logExtDeviceInfo(_ data: Data) {
@@ -617,6 +917,297 @@ final class WirelessLab {
         let second = (try? r.u16Array()) ?? []
         let firstText = first.prefix(60).map { String(format: "%04X", $0) }.joined(separator: " ")
         log.note("SDIO_GetExtDeviceInfo: version 0x\(String(version, radix: 16)), \(first.count) codes [\(firstText)\(first.count > 60 ? " …" : "")], then \(second.count) codes")
+    }
+
+    // MARK: Build 9 · Sony contents transfer
+
+    /// A new session the way Imagedge opens one for `mode` (see SonyContentsMode), then polls until a storage lists
+    /// at least one handle. Records `ptpip.<net>.contentsTransfer.<mode>.ready` (s from the tap to the first
+    /// non-empty handle list) and the flag `….lists`. Leaves the session open for List card and the downloads.
+    func connectContentsTransfer(_ t: WiFiTarget, mode: SonyContentsMode) {
+        runCamera("Contents transfer: \(mode.label)") {
+            let clock = ContinuousClock()
+            let started = clock.now
+            self.log.note("Contents transfer (\(mode.label); Imagedge's sequence, field-tested on a ZV-E10, unverified on the α7C II): " +
+                          (mode == .wholeCard
+                            ? "SDIO_OpenSession 0x9210 [1, 1] in place of OpenSession, the init sequence, 0x9212 [2,0,0], 200 ms, [2,1,0], 1500 ms, then GetStorageIDs and GetObjectHandles until the card lists (up to 120 s)"
+                            : "OpenSession, the init sequence, 0x9212 [1,0,0], then GetStorageIDs and GetObjectHandles until the photos sent from the camera list (up to \(Int(mode.pollLimit)) s)"))
+            let (c, codes) = try await self.openContents(t, mode: mode, closingPrevious: true)
+            try await self.pollAndRecord(c, mode: mode, prefix: t.prefix, codes: codes, clock: clock, started: started)
+        }
+    }
+
+    /// Build 9: Sony's selected-set mode on the session already open, as Imagedge does it in one session: the init
+    /// sequence if this session hasn't had it (and DeviceInfo lists SDIO_Connect), 0x9212 [1,0,0], then a poll for
+    /// the photos the camera sends. Records the same measurements as Contents transfer: photos sent from the camera.
+    func selectedSetInSession() {
+        runSession("Selected set in this session") { c, net in
+            let mode = SonyContentsMode.selectedOnCamera
+            let clock = ContinuousClock()
+            let started = clock.now
+            self.log.note("Selected set in this session (Imagedge's order, unverified on the α7C II): the init sequence if not yet run, 0x9212 [1,0,0], then GetStorageIDs and GetObjectHandles until the photos sent from the camera list (up to \(Int(mode.pollLimit)) s)")
+            var codes: [String] = []
+            if self.initSequenceDone {
+                codes.append("init sequence already run")
+            } else if self.deviceInfo?.supports(.sonySDIOConnect) == true {
+                try await self.sonyInitSequence(c)
+                codes.append("init sequence run")
+            } else {
+                codes.append("init sequence not sent (no 0x9201)")
+                self.log.note("Selected set in this session: DeviceInfo doesn't list SDIO_Connect (0x9201); init sequence not sent")
+            }
+            codes += try await self.setTransferMode(c, mode: mode)
+            self.contentsMode = mode
+            if !self.connectionState.contains("contents transfer") {
+                self.connectionState += " · contents transfer (\(mode.label))"
+            }
+            try await self.pollAndRecord(c, mode: mode, prefix: "ptpip.\(net)", codes: codes, clock: clock, started: started)
+        }
+    }
+
+    /// The session set-up for `mode`, as Imagedge opens one: SDIO_OpenSession 0x9210 [1, 1] (falling back to
+    /// OpenSession) or OpenSession, GetDeviceInfo, the init sequence and the 0x9212 steps. Marks the lab connected in
+    /// that mode and starts the keep-alive. Returns the client and each step's result for the measurement context.
+    private func openContents(_ t: WiFiTarget, mode: SonyContentsMode, closingPrevious: Bool) async throws -> (PTPIPClient, [String]) {
+        var codes: [String] = []
+        do {
+            let c = try await connectFresh(t, closingPrevious: closingPrevious)
+            switch mode {
+            case .wholeCard:
+                do {
+                    try await c.sonySDIOOpenSession(functionMode: 1)
+                    codes.append("0x9210 OK")
+                    log.note("SDIO_OpenSession (0x9210) [1, 1], ContentsTransfer: OK")
+                } catch PTPIPClient.ClientError.response(_, let code) {
+                    codes.append("0x9210 \(WirelessLab.codeText(code))")
+                    log.warn("SDIO_OpenSession (0x9210) [1, 1]: \(WirelessLab.codeText(code)); falling back to the standard OpenSession (0x1002)")
+                    let alreadyOpen = try await c.openSession()
+                    codes.append("fallback OpenSession \(alreadyOpen ? "SessionAlreadyOpen" : "OK")")
+                    log.note(alreadyOpen ? "fallback OpenSession: SessionAlreadyOpen (treated as success)" : "fallback OpenSession: OK")
+                }
+            case .selectedOnCamera:
+                let alreadyOpen = try await c.openSession()
+                codes.append("OpenSession \(alreadyOpen ? "SessionAlreadyOpen" : "OK")")
+                log.note(alreadyOpen ? "OpenSession: SessionAlreadyOpen (treated as success)" : "OpenSession: OK")
+            }
+            let info = try await sessionDeviceInfo(c, t)
+            try await sonyInitSequence(c)
+            codes += try await setTransferMode(c, mode: mode)
+            contentsMode = mode
+            connectionState = "connected · \(info.model) \(info.deviceVersion) · \(t.netLabel) · contents transfer (\(mode.label))"
+            // Runs from here on, but skips while an operation is busy (polling included).
+            startKeepAlive()
+            return (c, codes)
+        } catch {
+            await closeClient(closingSession: false)
+            connectionState = "not connected (last attempt failed)"
+            throw error
+        }
+    }
+
+    /// SDIO_SetContentsTransferMode (0x9212) for `mode`, with the pause Imagedge makes after each call. A non-OK
+    /// response is logged and the steps go on; a link failure throws. Returns each call's result.
+    private func setTransferMode(_ c: PTPIPClient, mode: SonyContentsMode) async throws -> [String] {
+        var codes: [String] = []
+        for step in mode.transferModeSteps {
+            let label = "0x9212 [\(step.p1),\(step.p2),\(step.p3)]"
+            do {
+                try await c.sonySetContentsTransferMode(step.p1, step.p2, step.p3)
+                codes.append("\(label) OK")
+                log.note("SDIO_SetContentsTransferMode \(label): OK")
+            } catch PTPIPClient.ClientError.response(_, let code) {
+                codes.append("\(label) \(WirelessLab.codeText(code))")
+                log.warn("SDIO_SetContentsTransferMode \(label): \(WirelessLab.codeText(code)); continuing")
+            }
+            if step.pauseMilliseconds > 0 { try await Task.sleep(for: .milliseconds(step.pauseMilliseconds)) }
+        }
+        return codes
+    }
+
+    /// Polls for handles (`pollForHandles`) and records `<prefix>.contentsTransfer.<mode>.ready` and `….lists`.
+    private func pollAndRecord(_ c: PTPIPClient, mode: SonyContentsMode, prefix: String, codes: [String],
+                               clock: ContinuousClock, started: ContinuousClock.Instant) async throws {
+        let name = "\(prefix).contentsTransfer.\(mode.rawValue)"
+        let poll: ContentsPoll
+        do {
+            poll = try await pollForHandles(c, mode: mode, clock: clock, started: started)
+        } catch {
+            if let failure = await c.linkFailure {
+                log.flag("\(name).lists", false,
+                         context: String(format: "link lost %.0f s in: %@; %@", (clock.now - started).inSeconds, "\(failure)", codes.joined(separator: ", ")))
+            }
+            throw error
+        }
+        let context = "storage IDs \(poll.storages); \(codes.joined(separator: ", ")); \(poll.summary)"
+        if let ready = poll.ready {
+            log.measure("\(name).ready", ready, "s", context: context)
+        } else {
+            log.warn("Contents transfer (\(mode.label)): no storage listed a handle within \(Int(mode.pollLimit)) s; the session stays open")
+        }
+        log.flag("\(name).lists", poll.ready != nil, context: context)
+    }
+
+    /// GetStorageIDs, then GetObjectHandles(storage, all formats, parent 0) for every storage with a logical store,
+    /// until one lists a handle: after 2, 3 and 5 s, then every 5 s, up to `limit` s (`mode.pollLimit` by default).
+    /// The first replies are often empty while the camera indexes the card (Imagedge). Non-OK responses are logged
+    /// per attempt; a link failure throws.
+    private func pollForHandles(_ c: PTPIPClient, mode: SonyContentsMode, clock: ContinuousClock,
+                                started: ContinuousClock.Instant, limit: Double? = nil) async throws -> ContentsPoll {
+        let limit = limit ?? mode.pollLimit
+        var result = ContentsPoll()
+        let pollStarted = clock.now
+        let waits: [Double] = [2, 3, 5]
+        var attempt = 0
+        while true {
+            attempt += 1
+            var parts: [String] = []
+            var most = 0
+            do {
+                let (ids, _) = try await c.getStorageIDs()
+                result.storages = WirelessLab.storageList(ids)
+                if ids.isEmpty { parts.append("no storage IDs") }
+                for id in ids {
+                    let idText = String(format: "0x%08X", id.rawValue)
+                    guard id.hasLogicalStore else { parts.append("\(idText) no logical store"); continue }
+                    do {
+                        let (handles, _) = try await c.getObjectHandles(storage: id)
+                        parts.append("\(idText) \(handles.count) handle(s)")
+                        most = max(most, handles.count)
+                    } catch PTPIPClient.ClientError.response(_, let code) {
+                        parts.append("\(idText) GetObjectHandles \(WirelessLab.codeText(code))")
+                    }
+                }
+            } catch PTPIPClient.ClientError.response(_, let code) {
+                parts.append("GetStorageIDs \(WirelessLab.codeText(code))")
+            }
+            let elapsed = (clock.now - started).inSeconds
+            log.note(String(format: "contents transfer poll %ld at %.1f s: ", attempt, elapsed) + parts.joined(separator: "; "))
+            result.summary = "\(attempt) poll(s); last: \(parts.joined(separator: "; "))"
+            if most > 0 {
+                result.ready = elapsed
+                return result
+            }
+            let wait = attempt <= waits.count ? waits[attempt - 1] : 5
+            let polled = (clock.now - pollStarted).inSeconds
+            if polled + wait > limit { return result }
+            activity = String(format: "Contents transfer: waiting for a listing (%.0f of %.0f s)", polled, limit)
+            progress = min(polled / limit, 1)
+            try await Task.sleep(for: .seconds(wait))
+        }
+    }
+
+    // MARK: Build 9 · Keep-alive and background
+
+    /// (Re)starts the keep-alive loop for the current client: GetDeviceInfo every 10 s while the session is open,
+    /// nothing else is running and the app is in the foreground. Ends when the client changes or the link fails.
+    private func startKeepAlive() {
+        stopKeepAlive()
+        guard keepAlive, let c = client, sessionNet != nil else { return }
+        keepAliveTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled, let lab = self, lab.keepAlive, lab.client === c else { return }
+                // Checked right before sending, with no suspension in between: never two transactions at once.
+                guard !lab.busy, !lab.probing, !lab.continued.isRunning, !lab.keepAliveInFlight,
+                      lab.lifecycle.isInForeground else { continue }
+                if !(await lab.sendKeepAlive(c)) { return }
+            }
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+    }
+
+    /// One keep-alive. Logs the first OK and any failure, not every success. Returns false once the link is gone.
+    private func sendKeepAlive(_ c: PTPIPClient) async -> Bool {
+        keepAliveInFlight = true
+        defer { keepAliveInFlight = false }
+        do {
+            // The default 30 s timeout: a timeout poisons the channel, and the camera may be slow to answer while it
+            // rebuilds its content set or writes to the card (Imagedge).
+            _ = try await c.getDeviceInfo()
+            keepAlives += 1
+            if keepAlives == 1 {
+                log.note("keep-alive: first GetDeviceInfo after 10 s idle answered OK (later ones are counted on the Wi-Fi tab, not logged)")
+            }
+            return true
+        } catch PTPIPClient.ClientError.busy(_, _) {
+            return true
+        } catch {
+            log.warn("keep-alive GetDeviceInfo failed after \(keepAlives) OK: \(error)")
+            if let failure = await c.linkFailure {
+                if client === c { connectionState = "connection lost (\(failure)); tap Reconnect" }
+                return false
+            }
+            return true
+        }
+    }
+
+    private func observeApp() {
+        let nc = NotificationCenter.default
+        appObservers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appEnteredBackground() }
+        })
+        appObservers.append(nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appEnteringForeground() }
+        })
+    }
+
+    private func appEnteredBackground() {
+        guard let c = client, let net = sessionNet else {
+            backgroundSnapshot = nil
+            return
+        }
+        backgroundSnapshot = BackgroundSnapshot(at: Date(), keepAlive: keepAlive, net: net, client: c)
+        log.note("Wi-Fi session open as the app leaves the foreground (keep-alive \(keepAlive ? "on, paused while away" : "off"))")
+    }
+
+    private func appEnteringForeground() {
+        guard let snapshot = backgroundSnapshot else { return }
+        backgroundSnapshot = nil
+        let away = Date().timeIntervalSince(snapshot.at)
+        Task { @MainActor in await self.checkSessionAfterBackground(snapshot, away: away) }
+    }
+
+    /// Back in the foreground with a session that was open: is it still usable? Records the flag
+    /// `ptpip.<net>.session.survivesBackground`. Doesn't reconnect.
+    private func checkSessionAfterBackground(_ snapshot: BackgroundSnapshot, away: Double) async {
+        let name = "ptpip.\(snapshot.net).session.survivesBackground"
+        let context = String(format: "away %.0f s; keep-alive %@", away, snapshot.keepAlive ? "on" : "off")
+        let c = snapshot.client
+        guard client === c else {
+            log.note("back in the foreground: the session was replaced while away; \(name) not recorded")
+            return
+        }
+        if let failure = await c.linkFailure {
+            log.flag(name, false, context: "\(context); \(failure)")
+            if client === c { connectionState = "connection lost (\(failure)); tap Reconnect" }
+            return
+        }
+        if !(await c.isConnected) {
+            log.flag(name, false, context: "\(context); not connected")
+            return
+        }
+        // Checked right before sending, with no suspension in between.
+        // The link state alone proves nothing here: a dead connection still looks healthy until a receive fails, and
+        // its timer doesn't run while the phone sleeps. Without a transaction of our own, no answer is recorded.
+        if busy || continued.isRunning || keepAliveInFlight {
+            log.note("back in the foreground: \(name) not recorded (\(context)); an operation was running, so no GetDeviceInfo was sent; see that operation's outcome and lifecycle.progressAfterBackground")
+            return
+        }
+        keepAliveInFlight = true
+        defer { keepAliveInFlight = false }
+        do {
+            _ = try await c.getDeviceInfo(idleTimeout: 10)
+            log.flag(name, true, context: "\(context); GetDeviceInfo OK on return")
+        } catch {
+            log.flag(name, false, context: "\(context); \(error)")
+            if let failure = await c.linkFailure, client === c {
+                connectionState = "connection lost (\(failure)); tap Reconnect"
+            }
+        }
     }
 
     // MARK: Day 8 · Enumerate and download
@@ -636,16 +1227,25 @@ final class WirelessLab {
             var storageNotes: [String] = []
             for id in ids {
                 let idText = String(format: "0x%08X", id.rawValue)
+                // Sony's contents-transfer storages (0x00010001 for the card, virtual 0x00F10001 for photos sent from
+                // the camera) have a non-zero low half, so they pass this filter.
                 guard id.hasLogicalStore else {
                     storageNotes.append("\(idText): no logical store (empty slot?)")
                     continue
                 }
-                let (si, siRaw) = try await c.getStorageInfo(id)
-                if !fixtures.contains(where: { $0.0 == "storageinfo.bin" }) { fixtures.append(("storageinfo.bin", siRaw)) }
-                storageNotes.append(String(format: "%@ \"%@\" label \"%@\", %.1f GB free of %.1f GB, type %ld fs %ld access %ld",
-                                           idText, si.storageDescription, si.volumeLabel,
-                                           Double(si.freeSpaceInBytes) / 1e9, Double(si.maxCapacity) / 1e9,
-                                           Int(si.storageType), Int(si.filesystemType), Int(si.accessCapability)))
+                do {
+                    let (si, siRaw) = try await c.getStorageInfo(id)
+                    if !fixtures.contains(where: { $0.0 == "storageinfo.bin" }) { fixtures.append(("storageinfo.bin", siRaw)) }
+                    storageNotes.append(String(format: "%@ \"%@\" label \"%@\", %.1f GB free of %.1f GB, type %ld fs %ld access %ld",
+                                               idText, si.storageDescription, si.volumeLabel,
+                                               Double(si.freeSpaceInBytes) / 1e9, Double(si.maxCapacity) / 1e9,
+                                               Int(si.storageType), Int(si.filesystemType), Int(si.accessCapability)))
+                } catch let error as PTPIPClient.ClientError where !error.isLinkFailure {
+                    // A virtual storage may not answer GetStorageInfo (or answer it oddly): note it and list its
+                    // handles anyway. A dead link still ends the listing.
+                    storageNotes.append("\(idText): GetStorageInfo failed (\(error)); handles listed anyway")
+                    self.log.warn("GetStorageInfo \(idText): \(error); listing its handles anyway")
+                }
                 let (handles, handlesRaw) = try await c.getObjectHandles(storage: id)
                 if !fixtures.contains(where: { $0.0 == "objecthandles.bin" }) { fixtures.append(("objecthandles.bin", handlesRaw)) }
                 for (i, handle) in handles.enumerated() {
@@ -771,6 +1371,7 @@ final class WirelessLab {
             lifecycle.transferEnded()
             lifecycle.operationEnded()
         }
+        while keepAliveInFlight { try? await Task.sleep(for: .milliseconds(20)) }
         var done = 0
         var bytes: UInt64 = 0
         let clock = ContinuousClock()
@@ -910,13 +1511,21 @@ final class WirelessLab {
             self.log.note("Shutter test: press the shutter now; waiting \(Int(seconds)) s for ObjectAdded (0x4002) or Sony ObjectAdded (0xC201)")
             let clock = ContinuousClock()
             let started = clock.now
+            var lastTransaction = started
             while (clock.now - started).inSeconds < seconds, self.objectAddedCount == before {
                 self.progress = (clock.now - started).inSeconds / seconds
+                if (clock.now - lastTransaction).inSeconds >= 10 {
+                    // The keep-alive skips busy operations, and the camera drops a session idle for about 30 s. This
+                    // also reads any event queued on the command channel.
+                    _ = try await c.getDeviceInfo()
+                    lastTransaction = clock.now
+                }
                 try await Task.sleep(for: .milliseconds(250))
             }
             if self.objectAddedCount == before {
                 // Events sent on the command channel are only read during a transaction: run one to drain it.
-                _ = try await c.getStorageIDs()
+                // GetDeviceInfo, since GetStorageIDs answers 0x2013 on a PC Remote session.
+                _ = try await c.getDeviceInfo()
                 try await Task.sleep(for: .milliseconds(500))
             }
             if self.objectAddedCount > before {
@@ -927,7 +1536,7 @@ final class WirelessLab {
                 self.log.note("Shutter test: no new ObjectAdded within \(Int(seconds)) s, but one arrived earlier on \(net); not recording a no")
             } else {
                 self.log.flag("ptpip.\(net).event.objectAdded", false,
-                              context: "none within \(Int(seconds)) s of the shutter test; \(self.eventCount) other event(s) this session")
+                              context: "none within \(Int(seconds)) s of the shutter test; \(self.eventCount) other event(s) this session; session: \(self.sessionKind)")
             }
         }
     }
@@ -1001,8 +1610,9 @@ final class WirelessLab {
         runCamera("Resume read", transferLink: "ptpip.\(saved.net)") {
             if saved.net != t.net { self.log.warn("the saved read started on \(saved.net); it stays in the ptpip.\(saved.net) column") }
             let target = WiFiTarget(net: saved.net, host: t.host, guid: t.guid)
-            self.log.note("Resume read: \(saved.summary). Reconnecting (handshake + OpenSession)…")
-            let (c, _) = try await self.open(target, closingPrevious: false)
+            let how = self.contentsMode.map { "Sony contents transfer, " + $0.label } ?? "handshake + OpenSession"
+            self.log.note("Resume read: \(saved.summary). Reconnecting (\(how))…")
+            let c = try await self.reopen(target)
             let serial = self.cameraSerial
             if serial != saved.identity.cameraSerial {
                 self.log.warn("the camera's serial differs from the saved read's")

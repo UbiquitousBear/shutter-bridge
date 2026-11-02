@@ -150,6 +150,20 @@ public enum PTPCommand {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOGetExtDeviceInfo.rawValue, transactionID: tx, parameters: [version, 1])
     }
 
+    /// Sony SDIO_OpenSession (0x9210), sent instead of OpenSession (0x1002). `functionMode` 1 = contents transfer
+    /// (whole card), 0 = remote control. No data phase. `unverified` on the α7C II; source: mvpzac/Imagedge
+    /// (field-tested on a ZV-E10).
+    public static func sonySDIOOpenSession(sessionID: UInt32 = 1, functionMode: UInt32, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.sonySDIOOpenSession.rawValue, transactionID: tx, parameters: [sessionID, functionMode])
+    }
+
+    /// Sony SDIO_SetContentsTransferMode (0x9212), three parameters, no data phase. Known sets: `[2, 0, 0]` then
+    /// `[2, 1, 0]` (with a 200 ms pause between) for the whole card; `[1, 0, 0]` for the set of photos selected on
+    /// the camera. `unverified` on the α7C II; source: mvpzac/Imagedge (ZV-E10).
+    public static func sonySetContentsTransferMode(_ p1: UInt32, _ p2: UInt32, _ p3: UInt32, tx: UInt32) -> PTPContainer {
+        PTPContainer(type: .command, code: PTPOperationCode.sonySDIOSetContentsTransferMode.rawValue, transactionID: tx, parameters: [p1, p2, p3])
+    }
+
     /// MTP GetObjectPropList (0x9805): five parameters in MTP's order, ObjectHandle, ObjectFormatCode,
     /// ObjectPropCode, ObjectPropGroupCode, Depth. The data phase is an `MTPObjectPropList`.
     ///

@@ -93,23 +93,82 @@ enum FixtureStore {
     }
 
     /// Saves a UPnP device description as `ptpip/ssdp-description.xml` with the text of every serialNumber element
-    /// zeroed, as scripts/redact-fixtures.py does before a commit. Refuses (and logs why) if the zeroed bytes still
-    /// parse to a serialNumber that isn't all zeros (CDATA, an entity: forms the zeroing pattern can't reach).
+    /// zeroed, as scripts/redact-fixtures.py does before a commit, and the camera's hardware ID (the UDN's last
+    /// group, which also appears in other fields) zeroed everywhere in it. Refuses (and logs why) if the zeroed bytes
+    /// still parse to a serialNumber that isn't all zeros (CDATA, an entity: forms the zeroing pattern can't reach).
     @discardableResult
     static func saveSSDPDescription(_ data: Data, log: SpikeLog?) -> URL? {
         let name = "ssdp-description.xml"
-        guard let zeroed = zeroingSSDPSerial(in: data) else {
+        guard let serialZeroed = zeroingSSDPSerial(in: data) else {
             log?.warn("fixture not saved: ptpip/\(name): could not zero the serialNumber in it")
             return nil
         }
+        guard let hardwareZeroed = zeroingSSDPHardwareID(in: serialZeroed.data) else {
+            log?.warn("fixture not saved: ptpip/\(name): could not zero the camera's hardware ID (the UDN's last group) in it")
+            return nil
+        }
+        let zeroed = (data: hardwareZeroed.data, characters: serialZeroed.characters)
         // Every serialNumber element, CDATA included, not just the first one the summary shows.
         if let parsed = SSDPDeviceDescription.parse(zeroed.data),
            parsed.allSerialNumbers.contains(where: { value in value.contains { $0 != "0" && !$0.isWhitespace } }) {
             log?.warn("fixture not saved: ptpip/\(name): after zeroing, the XML parser still reads a serialNumber that isn't all zeros (CDATA or an entity?)")
             return nil
         }
+        // The same check for the hardware ID, on the UDN the parser reads (the root device's): a UDN in CDATA or
+        // written with an entity escapes the zeroing pattern. Never logs the value.
+        if let parsed = SSDPDeviceDescription.parse(zeroed.data), hasNonZeroHardwareID(udn: parsed.udn) {
+            log?.warn("fixture not saved: ptpip/\(name): after zeroing, the XML parser still reads a UDN whose last group isn't all zeros (CDATA or an entity?)")
+            return nil
+        }
+        // The ID itself is never logged, only how often it was replaced.
+        let hardwareDetail = hardwareZeroed.occurrences > 0
+            ? "hardware ID zeroed (\(hardwareZeroed.occurrences) occurrence(s))"
+            : "no non-zero hardware ID in a UDN"
         return save(zeroed.data, link: .ptpip, name: name, log: log,
-                    detail: zeroed.characters > 0 ? "serial zeroed" : "no serialNumber in it")
+                    detail: (zeroed.characters > 0 ? "serial zeroed" : "no serialNumber in it") + ", " + hardwareDetail)
+    }
+
+    /// True when `udn`'s last group (after the last "-") is 12 hex digits, not all of them zero: a hardware ID.
+    nonisolated static func hasNonZeroHardwareID(udn: String) -> Bool {
+        guard let last = udn.split(separator: "-").last, last.count == 12, last.allSatisfy({ $0.isHexDigit }) else {
+            return false
+        }
+        return last.contains { $0 != "0" }
+    }
+
+    /// A UDN element as DeviceDescriptionParser sees one (any namespace prefix, attributes or case), whose value is
+    /// `uuid:` and a UUID. Group 1 is the UUID's last group, 12 hex digits: the camera's hardware ID (a MAC-like
+    /// number; the PTP/IP responder GUID in Init_Command_Ack ends in the same digits).
+    nonisolated private static let ssdpUDNPattern =
+        #"<(?:[\w.-]+:)?UDN\b[^>]*>\s*uuid:[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-([0-9A-F]{12})"#
+
+    /// `data` with every occurrence, in any case, of each UDN's hardware ID (see `ssdpUDNPattern`) replaced by
+    /// "000000000000", wherever it appears (the UDN, USN-like fields, a presentation URL), every other byte
+    /// unchanged, and how many occurrences were replaced; nil if that can't be done byte for byte. An ID that is all
+    /// zeros already is left alone. ISO Latin-1 keeps the edit byte for byte, as in `zeroingSSDPSerial`.
+    nonisolated static func zeroingSSDPHardwareID(in data: Data) -> (data: Data, occurrences: Int)? {
+        guard let text = String(data: data, encoding: .isoLatin1),
+              let pattern = try? NSRegularExpression(pattern: ssdpUDNPattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let ns = NSMutableString(string: text)
+        let zeros = "000000000000"
+        var ids: Set<String> = []
+        for match in pattern.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let range = match.range(at: 1)
+            guard range.location != NSNotFound, range.length == 12 else { continue }
+            let id = ns.substring(with: range).lowercased()
+            if id != zeros { ids.insert(id) }
+        }
+        var replaced = 0
+        for id in ids {
+            // Hex digits only, so a literal, case-insensitive search needs no escaping.
+            replaced += ns.replaceOccurrences(of: id, with: zeros, options: [.caseInsensitive, .literal],
+                                              range: NSRange(location: 0, length: ns.length))
+        }
+        guard replaced > 0 else { return (data, 0) }
+        guard let out = (ns as String).data(using: .isoLatin1), out.count == data.count else { return nil }
+        return (out, replaced)
     }
 
     /// A serialNumber element as DeviceDescriptionParser sees one (it matches local names): any namespace prefix,

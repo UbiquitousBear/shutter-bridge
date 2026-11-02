@@ -17,7 +17,8 @@ import UIKit
 /// - on each wake: log the app state and time, debounce (1 minute by default here, 30 minutes in the proposal),
 ///   post "Camera nearby · spike test" with Import now / Not now / Snooze today, and log what the user chose.
 ///
-/// Measurements: `ble.proximity.latency` (s, "Camera switched on now" → first discovery),
+/// Measurements: `ble.proximity.latency` (s, "Camera switched on now" → first discovery, or from the moment the app
+/// left the screen when the guided run armed the scan with `armOnNextBackground()`),
 /// `ble.proximity.connectionEvent.latency` (s, same mark → first peerConnected) and
 /// `ble.proximity.detectToNotify` (s, discovery callback → notification accepted by the notification centre).
 @Observable
@@ -38,6 +39,8 @@ final class ProximityWatcher: NSObject {
         static let enabled = "ble.proximity.enabled"
         static let debounce = "ble.proximity.debounceSeconds"
         static let switchedOnAt = "ble.proximity.switchedOnAt"
+        /// What `switchedOnAt` marks, for the latency measurements' context (it survives a Bluetooth relaunch).
+        static let latencyFrom = "ble.proximity.latencyFrom"
         static let discoveryLatencyPending = "ble.proximity.discoveryLatencyPending"
         static let connectionLatencyPending = "ble.proximity.connectionLatencyPending"
         static let lastNotifiedAt = "ble.proximity.lastNotifiedAt"
@@ -68,6 +71,9 @@ final class ProximityWatcher: NSObject {
     /// Scan services iOS handed back in willRestoreState, until the first powered-on update decides whether to
     /// keep that scan.
     @ObservationIgnored private var restoredScanServices: [String] = []
+    /// armOnNextBackground() was called: the next didEnterBackground starts the scan and the latency clock.
+    @ObservationIgnored private var armOnBackgroundPending = false
+    @ObservationIgnored private var backgroundObserver: NSObjectProtocol?
     private let clock = ContinuousClock()
 
     private var defaults: UserDefaults { .standard }
@@ -83,6 +89,10 @@ final class ProximityWatcher: NSObject {
         lastNotifiedAt = Self.storedDate(d, Keys.lastNotifiedAt)
         snoozedUntil = Self.storedDate(d, Keys.snoozedUntil)
         super.init()
+        backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                                    object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appDidEnterBackground() }
+        }
     }
 
     // MARK: - Launch
@@ -131,6 +141,10 @@ final class ProximityWatcher: NSObject {
             Task { await requestNotificationAuthorization() }
             if central == nil { makeCentral() } else { startScan(reason: "watcher switched on") }
         } else {
+            if armOnBackgroundPending {
+                armOnBackgroundPending = false
+                log?.note("proximity: the scan armed for when the app leaves the screen is cancelled (watcher switched off)")
+            }
             rearmTask?.cancel()
             central?.stopScan()
             // Releasing the manager ends its scan and connection-event registration, so iOS has nothing to
@@ -158,24 +172,80 @@ final class ProximityWatcher: NSObject {
     /// the next peerConnected records `ble.proximity.connectionEvent.latency`. Re-arms the scan and the debounce
     /// so this test gets a fresh discovery and a reminder.
     func markCameraSwitchedOn() {
+        armOnBackgroundPending = false
         let now = Date()
-        switchedOnAt = now
-        discoveryLatencyPending = true
-        connectionLatencyPending = true
-        lastNotifiedAt = nil
-        defaults.set(now.timeIntervalSince1970, forKey: Keys.switchedOnAt)
-        defaults.set(true, forKey: Keys.discoveryLatencyPending)
-        defaults.set(true, forKey: Keys.connectionLatencyPending)
-        defaults.removeObject(forKey: Keys.lastNotifiedAt)
+        armLatencyClock(at: now, from: "camera switched on")
         log?.note("proximity: camera switched on at \(Self.time(now)). Lock the phone now; the next discovery records ble.proximity.latency.")
-        if let snoozedUntil, snoozedUntil > now {
-            log?.warn("proximity: reminders are snoozed until \(Self.time(snoozedUntil)); tap Clear snooze or no reminder will be posted")
-        }
+        warnIfSnoozed(now)
         if enabled {
             startScan(reason: "camera switched on (re-armed so the camera is reported afresh)")
         } else {
             log?.warn("proximity watcher is off: switch on Watch in background first, or nothing will be detected")
         }
+    }
+
+    /// For the guided run: the scan stops now and starts again only when the app leaves the screen (the tester
+    /// locks the phone), so a camera already in range, on or off, is discovered with the phone locked. The latency
+    /// is then measured from the moment the app left the screen, not from the camera being switched on.
+    func armOnNextBackground() {
+        guard enabled else {
+            log?.warn("proximity watcher is off: switch on Watch in background first, or nothing will be detected")
+            return
+        }
+        armOnBackgroundPending = true
+        // Nothing found in the foreground may count: stop the scan and drop any latency left pending by an older test.
+        rearmTask?.cancel()
+        central?.stopScan()
+        isScanning = false
+        discoveryLatencyPending = false
+        connectionLatencyPending = false
+        defaults.set(false, forKey: Keys.discoveryLatencyPending)
+        defaults.set(false, forKey: Keys.connectionLatencyPending)
+        log?.note("proximity: will start the scan when the app leaves the screen")
+    }
+
+    /// Undoes `armOnNextBackground` when the app never left the screen (the wait timed out or the run was
+    /// cancelled): the scan starts again now, so a later, unrelated background entry doesn't start a latency clock.
+    func disarmBackgroundScan() {
+        guard armOnBackgroundPending else { return }
+        armOnBackgroundPending = false
+        log?.note("proximity: the scan armed for the next background entry was cancelled (the app didn't leave the screen)")
+        if enabled { startScan(reason: "arm cancelled") }
+    }
+
+    private func appDidEnterBackground() {
+        guard armOnBackgroundPending else { return }
+        armOnBackgroundPending = false
+        guard enabled else { return }
+        let now = Date()
+        armLatencyClock(at: now, from: "app left the screen (scan started then)")
+        log?.note("proximity: app left the screen at \(Self.time(now)); scan starting now. ble.proximity.latency is measured from this moment, not from the camera being switched on.")
+        warnIfSnoozed(now)
+        startScan(reason: "armed when the app left the screen")
+    }
+
+    /// Timestamps the start of a latency test, sets both latency measurements pending and clears the debounce.
+    private func armLatencyClock(at now: Date, from start: String) {
+        switchedOnAt = now
+        discoveryLatencyPending = true
+        connectionLatencyPending = true
+        lastNotifiedAt = nil
+        defaults.set(now.timeIntervalSince1970, forKey: Keys.switchedOnAt)
+        defaults.set(start, forKey: Keys.latencyFrom)
+        defaults.set(true, forKey: Keys.discoveryLatencyPending)
+        defaults.set(true, forKey: Keys.connectionLatencyPending)
+        defaults.removeObject(forKey: Keys.lastNotifiedAt)
+    }
+
+    private func warnIfSnoozed(_ now: Date) {
+        if let snoozedUntil, snoozedUntil > now {
+            log?.warn("proximity: reminders are snoozed until \(Self.time(snoozedUntil)); tap Clear snooze or no reminder will be posted")
+        }
+    }
+
+    /// What the latency clock started from, for the measurements' context.
+    private var latencyFrom: String {
+        defaults.string(forKey: Keys.latencyFrom) ?? "camera switched on"
     }
 
     func rearmNow() {
@@ -524,7 +594,7 @@ extension ProximityWatcher: @preconcurrency CBCentralManagerDelegate {
             discoveryLatencyPending = false
             defaults.set(false, forKey: Keys.discoveryLatencyPending)
             log?.measure("ble.proximity.latency", now.timeIntervalSince(on), "s",
-                         context: "camera switched on → background-scan discovery; app \(state); \(name), RSSI \(RSSI)")
+                         context: "\(latencyFrom) → background-scan discovery; app \(state); \(name), RSSI \(RSSI)")
         }
         considerNotifying(source: "advertisement", name: name, detected: detected, appState: state)
         scheduleRearm()
@@ -548,7 +618,7 @@ extension ProximityWatcher: @preconcurrency CBCentralManagerDelegate {
             connectionLatencyPending = false
             defaults.set(false, forKey: Keys.connectionLatencyPending)
             log?.measure("ble.proximity.connectionEvent.latency", now.timeIntervalSince(on), "s",
-                         context: "camera switched on → peerConnected; app \(state); \(name)")
+                         context: "\(latencyFrom) → peerConnected; app \(state); \(name)")
         }
         considerNotifying(source: "connection event", name: name, detected: detected, appState: state)
     }
