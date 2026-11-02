@@ -402,6 +402,20 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
   - The likeliest cause is that **PC Remote Function was on**: the handover belongs to the smartphone connection, and Smartphone Connect showed no QR code in the same state on 2 Nov. That is to test with PC Remote Function off.
 - **The join failed because there was no network.** iOS asked to join (`ble.handover.joinPrompt` yes) and apply returned after 7.5 s, but no Wi-Fi path appeared and 192.168.122.1:15740 didn't answer within 60 s.
 - **Creators' App said "not connected" afterwards** (`ble.handover.creatorsAppStillWorks` no). The run wrote nothing to the pairing service (EE01), only CC08. PC Remote Function being on may also explain this. To check with it off before blaming the run.
+**Second run** (3 Nov 00:20–00:22, build 0.1 (11.1)): the same Wi-Fi-on step, and the camera's PC Remote Function off as far as the setup goes (to confirm).
+- **Creators' App connected afterwards** (`ble.handover.creatorsAppStillWorks` yes). The first run's "not connected" was PC Remote Function being on, not damage from the run.
+- **Bluetooth reconnected** by the identifier saved in the first run, in 0.38 s.
+- **The camera starts its Wi-Fi when asked, then gives up.**
+  - CC08 = 0x01 was acknowledged again in 58 ms.
+  - The same one byte of CC09 went 0 → 1 → 0 in both runs, at +0.15 s and +2.4 s. The notes' CC09 layout gives the Wi-Fi status values as 0 Terminated, 1 Launching, 2 Launched and 3 Terminating, so this reads as *launching*, then *terminated*. (The spike's CC09 parser guessed the tag layout wrong, so it didn't label the byte.)
+  - Something else has to be in place before the camera brings its Wi-Fi up for a phone. It could be a camera setting (*Smartphone Connect*?) or Sony's app-level registration on EE01, which the spike deliberately doesn't write.
+- **The network details depend on the camera's setup.** With PC Remote off, reading CC06 failed with the camera's own ATT error **0x9D**. With PC Remote on (first run) it gave the name and password. So the camera hands over whichever Wi-Fi network is configured, and nothing when none is.
+- **What 1.0 can rely on today:**
+  1. The person switches the camera's Wi-Fi on in its menu (PC Remote, Wi-Fi Direct).
+  2. The app reads the network name and password over Bluetooth: no typing, QR code or Settings.
+  3. The app joins with one iOS prompt.
+- **Starting the camera's Wi-Fi from the phone** is still open. It needs the missing precondition found first.
+
 - **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
 
 Proximity test:
