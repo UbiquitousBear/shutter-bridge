@@ -46,7 +46,7 @@ Go if `GetPartialObject` works through `requestSendPTPCommand`. Otherwise resume
 
 Measurements: `usb.getPartialObject.supported`, `usb.getPartialObject.sha256Match`, `usb.getPartialObject.throughput`, `usb.resume.verified`. Fixture: `Fixtures/a7c2/usb/getpartialobject-<filename>.sha256`.
 
-**Finding:** **Go: verified with a cable pull.**
+**Finding:** **Go: verified with a cable pull.** The same holds over Wi-Fi with Sony's 0x9211 (see *Wireless browsing in 1.0*).
 - **The cable pull:** the newest ARW (DSC02018.ARW, 40.3 MB) was read with GetPartialObject in 1 MiB chunks, and the cable was pulled at 47 % (offset 18,874,368). The read failed at once with two empty pass-through values, ImageCaptureCore reported the removal 30 ms later, and the offset was saved.
 - **The resume:** after a replug the app opened a new session. Once the 64.9 s catalogue was complete, it found the object again in one GetObjectInfo call (the handle, 0x00300123, is the same across a replug) and continued from the saved offset. The finished file matched a `requestReadData` copy by SHA-256.
 - **Earlier the same night:** GetPartialObject 0x101B read the whole file at **37.29 MB/s**, 10.8 % below `requestDownload` of the same file, within the plan's 15 %. That reassembly matched both `requestReadData` (41.12 MB/s) and `requestDownload` (41.81 MB/s) by SHA-256.
@@ -93,15 +93,19 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 
 **After a drop and under lock** (guided runs, 2 Nov 22:24–22:28, build 0.1 (9.1)):
 - **Reconnecting works and finds the same files.** After Wi-Fi was switched off and on, the app reopened the contents-transfer session in about 2.5 s, and the card listed again with the same handles: DSC02046.ARW was 0x400010A3 in every session. So a saved import can find its file again without a full relist.
-- **Byte-range reads don't work yet.** Standard GetPartialObject (0x101B, three parameters) answered **InvalidObjectHandle (0x2009)** for a handle that GetObject accepted, both before and after the drop. So the resume test never started. Imagedge sends 0x101B with four parameters (handle, offset low, offset high, max bytes); that is still to try. If it fails too, an interrupted file restarts from zero, about 3 s for a 50 MB ARW at 15 MB/s. That doesn't block 1.0.
+- **Byte-range resume works, with Sony's own command.** Only Sony's SDIO_GetPartialLargeObject (**0x9211**) reads part of a file in this session. Its parameters are handle, offset low, offset high, length low, length high (a 64-bit offset and length).
+  - Standard GetPartialObject (0x101B, three or four parameters) and 0x9219 answer InvalidObjectHandle.
+  - A 1 MiB read at the start and one in the middle both matched a full download byte for byte.
+  - Resume test (23:10): a read in 4 MiB chunks was cut at 54 % by switching Wi-Fi off. The app reconnected (the same handle, 0x40001103), resumed at the saved offset and finished. The SHA-256 matches the GetObject reference.
+  - Chunked reads ran at 12.9 MB/s before the drop and 7.3 MB/s for the six chunks after it.
 - **Locked without a continued task, the transfer stops and the session is lost.** Nothing downloaded in 123 s locked, and on return the connection had timed out. Over USB the session survived 227 s.
 - **Locked inside a continued task, the transfer runs at full speed.** 20 ARW (954 MB) downloaded in 62.1 s (15.4 MB/s) entirely while locked, and the task finished without expiring. As over USB, every Wi-Fi import must run inside `BGContinuedProcessingTask`.
 - **The reference download is repeatable.** DSC02046.ARW gave the same SHA-256 (763d068d7de5…) in two sessions 14 minutes apart.
+- **Evidence for the resume:** guided run *Wi-Fi: resume after Wi-Fi off*, 2 Nov 23:10, build 0.1 (10.1). `ptpip.ap.partial.sonyLarge9211` yes; `ptpip.ap.partial.standard32`, `.sony64` and `.sonyLarge9219` no; `ptpip.ap.resume.verified` yes (DSC02052.ARW, SHA-256 13605b153d9a…).
 
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
 **Still to run:**
-- byte-range reads in this mode: standard GetPartialObject is refused (below); Sony's four-parameter layout is still to try;
 - *Smartphone Connect* (no QR code on 2 Nov; possibly because PC Remote Function was on, or Creators' App held the link);
 - *PC Remote* over an access point (the home LAN);
 - *Send to Smartphone*, the fallback.
@@ -256,8 +260,8 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 | ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s | 15.50 MB/s (20 ARW, 954 MB, one at a time; 12–17 MB/s per file) |  |
 | ARW throughput, two in flight | MTP 39.05 MB/s; MSC 41.73 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
-| `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` | listed, but 0x101B with three parameters answers InvalidObjectHandle in a contents-transfer session; Sony's four-parameter layout is still to try |  |
-| Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match | reconnect yes (about 2.5 s after Wi-Fi came back, same handles); byte-range resume not yet (GetPartialObject refused); restarting the file works |  |
+| `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` | **yes, through Sony's 0x9211** (SDIO_GetPartialLargeObject: 64-bit offset and length), 12.9 MB/s in 4 MiB chunks; the standard 0x101B (three or four parameters) and 0x9219 answer InvalidObjectHandle in a contents-transfer session |  |
+| Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match | **yes:** Wi-Fi switched off at 54 %, reconnected (same handle), resumed with 0x9211, SHA-256 match (2 Nov 23:10) |  |
 | `ObjectAdded` event received |  | **yes:** Sony ObjectAdded 0xC201 [0xFFFFC001] within a second of a full shutter press, on a plain *PC Remote* session after the init sequence (22:50). The earlier tests (13:48, 22:09) were half-presses. |  |
 | Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. | plain download: no progress in 123 s locked, session lost; in a continued task: 20 ARW at 15.4 MB/s, all while locked (57.4 s of progress) |  |
 | Camera battery used per 1 GB |  |  |  |
