@@ -310,6 +310,19 @@ final class AdvertisementScanner: NSObject {
         return all.sorted()
     }
 
+    /// Service UUIDs a camera-like peripheral advertises (main or overflow area): the only ones a background scan
+    /// can filter on, so the only choices for the proximity filter. Services found by a GATT listing are left out:
+    /// the camera's Sony services (8000FF00 and the rest) only show up after connecting, so a filter on one of them
+    /// never wakes the app (2 Nov, the filter had been set to 8000FF00 from the list).
+    var advertisedServiceUUIDs: [String] {
+        var all = Set<String>()
+        for row in rows where row.isCamera {
+            all.formUnion(row.serviceUUIDs)
+            all.formUnion(row.overflowUUIDs)
+        }
+        return all.sorted()
+    }
+
     // MARK: - Snapshot (day 6 fixture + measurements)
 
     /// Writes ble/advert-<state>.json and ble/advert-<state>-<pairing>.json and records

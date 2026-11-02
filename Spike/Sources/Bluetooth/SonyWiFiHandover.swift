@@ -12,7 +12,8 @@
 //   CC0A  firmware, CC0B model name: read                  logged (unless they look like a serial or a MAC)
 //
 // Never written: EE01 (pairing / power off), FF01 (remote), anything in DD or BB, any CC characteristic but CC08.
-// Subscribing to CC09 notifications (a descriptor write iOS makes for setNotifyValue) is the only other change.
+// The only other change: when CC09 can't be read, switchWiFiOn subscribes to its notifications (a descriptor write
+// iOS makes for setNotifyValue), and Disconnect turns them off again.
 // The camera is bonded to Creators' App on the same iPhone; iOS shares that bond with this app, so an encrypted
 // read should work without a prompt. If iOS shows a pairing request instead, lastPairingHint says so.
 
@@ -130,6 +131,8 @@ final class SonyWiFiHandover: NSObject {
     @ObservationIgnored private var scanFound: CBPeripheral?
     @ObservationIgnored private var cc09Latest: Data?
     @ObservationIgnored private var cc09Updates = 0
+    /// Counts Disconnect taps, so a wait can tell a Disconnect from the camera dropping the link.
+    @ObservationIgnored private var disconnectRequests = 0
     @ObservationIgnored private var waiters: [String: Waiter] = [:]
     private let clock = ContinuousClock()
 
@@ -160,6 +163,8 @@ final class SonyWiFiHandover: NSObject {
     }
 
     private func doConnect(timeout: Double) async throws -> String {
+        // Each Connect starts without the hint of an earlier session.
+        lastPairingHint = nil
         if let p = peripheral, p.state == .connected {
             let name = p.name ?? "(no name)"
             status = "connected to \(name)"
@@ -213,6 +218,8 @@ final class SonyWiFiHandover: NSObject {
         }
         central.stopScan()
         guard let found = scanFound else { throw HandoverError.notFound("the scan ended without a camera") }
+        // Not kept past this attempt: the peripheral's characteristics cache the last values read (the credentials).
+        scanFound = nil
         if let name = try await attemptConnect(found, route: "scan (0x012D, ILCE)", timeout: timeout, started: started) {
             return name
         }
@@ -370,9 +377,12 @@ final class SonyWiFiHandover: NSObject {
 
     // MARK: - Switch Wi-Fi on (the one write)
 
-    /// Subscribes to CC09 if it notifies, writes 0x01 to CC08 with response, then waits up to `timeout` for a CC09
-    /// status of 2 (or any change if CC09 can't be parsed). Records ble.handover.wifiOn and, when on,
-    /// ble.handover.wifiOn.latency. Call only after the tester has confirmed.
+    /// Writes 0x01 to CC08 with response, then waits up to `timeout` for CC09 to report status 2, polling CC09 once
+    /// a second when it is readable. Only when CC09 can't be read does it subscribe to CC09's notifications (a
+    /// descriptor write; Disconnect turns them off). Records what CC09 reported as ble.handover.wifiOn.reported (the
+    /// guided run records what the camera shows as ble.handover.wifiOn), ble.handover.wifiOn.latency for status 2,
+    /// ble.handover.cc09.firstChange for the first change of any kind, and ble.handover.linkDroppedAfterWrite. A link
+    /// drop after the write is an outcome (returns false), not an error. Call only after the tester has confirmed.
     func switchWiFiOn(timeout: Double = 30) async throws -> Bool {
         try await run("Switch Wi-Fi on") {
             try await self.doSwitchWiFiOn(timeout: timeout)
@@ -383,7 +393,7 @@ final class SonyWiFiHandover: NSObject {
         let p = try connectedPeripheral()
         if !discovered { _ = try await doDiscover() }
         guard let cc08 = cc["CC08"] else {
-            log.flag("ble.handover.wifiOn", false, context: "no CC08 characteristic in 8000CC00; nothing written")
+            log.flag("ble.handover.wifiOn.reported", false, context: "no CC08 characteristic in 8000CC00; nothing written")
             throw HandoverError.missing("CC08")
         }
         let cc09 = cc["CC09"]
@@ -402,20 +412,29 @@ final class SonyWiFiHandover: NSObject {
             }
         }
         var notifying = false
-        if let cc09, cc09.properties.contains(.notify) || cc09.properties.contains(.indicate) {
+        // Subscribing writes CC09's descriptor on the camera, so it happens only when CC09 can't be polled.
+        if let cc09, !pollCC09, cc09.properties.contains(.notify) || cc09.properties.contains(.indicate) {
             status = "subscribing to CC09"
+            cc09Latest = nil
             do {
                 _ = try await wait("notify:\(cc09.uuid.uuidString)", timeout: 10, what: "CC09 subscription") {
                     p.setNotifyValue(true, for: cc09)
                 }
                 notifying = cc09.isNotifying
-                log.note("Wi-Fi handover: subscribed to CC09 (isNotifying \(cc09.isNotifying ? "yes" : "no"))")
+                log.note("Wi-Fi handover: CC09 isn't readable, so subscribed to its notifications (isNotifying \(cc09.isNotifying ? "yes" : "no")); Disconnect turns them off")
             } catch let e as HandoverError where !e.isTimeout {
                 throw e
             } catch {
                 noteIfPairing(error, during: "CC09 subscription")
                 log.warn("Wi-Fi handover: CC09 subscription failed: \(Self.errorName(error))")
             }
+        }
+        // CC09 not readable: the value the camera sent on subscribing (if any) is the baseline.
+        if baseline == nil, notifying, let value = cc09Latest {
+            baseline = value
+            let parsed = Self.describeStatus(value)
+            lastStatus = parsed.status
+            log.note("Wi-Fi handover: CC09 before the write (notification): \(parsed.text)")
         }
         if !notifying && !pollCC09 {
             log.warn("Wi-Fi handover: CC09 can't be read or subscribed to: the camera's Wi-Fi state can't be seen over Bluetooth after the write; check the camera's screen")
@@ -428,19 +447,24 @@ final class SonyWiFiHandover: NSObject {
         status = "writing 0x01 to CC08"
         log.warn("Wi-Fi handover: writing 0x01 to CC08 with response (\(props)), confirmed by the tester")
         let updatesBeforeWrite = cc09Updates
+        let requestsBeforeWrite = disconnectRequests
         let writeStart = clock.now
         do {
             _ = try await wait("write:\(cc08.uuid.uuidString)", timeout: 15, what: "CC08 write") {
                 p.writeValue(Data([0x01]), for: cc08, type: .withResponse)
             }
         } catch let e as HandoverError where !e.isTimeout {
-            log.flag("ble.handover.wifiOn", false, context: "CC08 write: \(e)")
+            if case .disconnected(let reason) = e {
+                return linkDropped(writeStart, during: "the CC08 write's acknowledgement", reason: reason, changes: "none")
+            }
+            // Disconnect tapped or Bluetooth off: no answer about the camera's Wi-Fi, so nothing is recorded.
+            log.warn("Wi-Fi handover: the CC08 write stopped (\(e)); ble.handover.wifiOn.reported not recorded")
             throw e
         } catch {
             noteIfPairing(error, during: "CC08 write")
             let reason = Self.errorName(error)
             log.error("Wi-Fi handover: CC08 write failed: \(reason)")
-            log.flag("ble.handover.wifiOn", false, context: "CC08 ← 0x01 failed: \(reason)")
+            log.flag("ble.handover.wifiOn.reported", false, context: "CC08 ← 0x01 failed: \(reason)")
             status = "CC08 write failed: \(reason)"
             return false
         }
@@ -449,33 +473,37 @@ final class SonyWiFiHandover: NSObject {
 
         guard let status09 = cc09, notifying || pollCC09 else {
             status = "CC08 written; no CC09 to confirm (check the camera)"
-            log.warn("Wi-Fi handover: ble.handover.wifiOn not recorded: no CC09 status to confirm it; check the camera's screen")
+            log.warn("Wi-Fi handover: ble.handover.wifiOn.reported not recorded: no CC09 status to confirm it; check the camera's screen")
             return false
         }
 
         var last = baseline
         var history: [String] = []
         var on = false
+        var changed = false
         var seenUpdates = updatesBeforeWrite
         var nextPoll = clock.now
         let alreadyOn = lastStatus == 2
         let deadline = writeStart + .seconds(timeout)
         status = "waiting for the camera's Wi-Fi (up to \(Int(timeout)) s)"
 
-        /// True when `value` means the Wi-Fi is on: status 2, or any change when the value can't be parsed.
+        /// True only when `value` carries status 2. Any change is logged, and the first is timed on its own.
         func consider(_ value: Data, via source: String) -> Bool {
             guard value != last else { return false }
             let elapsed = (clock.now - writeStart).inSeconds
             let parsed = Self.describeStatus(value)
             last = value
-            let summary: String = parsed.status.map { "status \($0)" } ?? "changed (unparsed)"
+            let summary: String = parsed.status.map { "status \($0)" } ?? "changed, no status tag"
             history.append(String(format: "+%.2f s %@", elapsed, summary))
             log.note(String(format: "Wi-Fi handover: +%.2f s since the write, CC09 (%@): %@", elapsed, source, parsed.text))
-            if let s = parsed.status {
-                lastStatus = s
-                return s == 2
+            if !changed {
+                changed = true
+                log.measure("ble.handover.cc09.firstChange", elapsed, "s",
+                            context: "first change of CC09 after CC08 ← 0x01 (\(source)): \(summary)")
             }
-            return true
+            guard let s = parsed.status else { return false }
+            lastStatus = s
+            return s == 2
         }
 
         if alreadyOn {
@@ -484,6 +512,7 @@ final class SonyWiFiHandover: NSObject {
         do {
             waiting: while !alreadyOn && clock.now < deadline {
                 guard peripheral === p, p.state == .connected else {
+                    if disconnectRequests != requestsBeforeWrite { throw HandoverError.cancelled("Disconnect") }
                     throw HandoverError.disconnected("the link dropped while waiting for the Wi-Fi status")
                 }
                 if cc09Updates != seenUpdates {
@@ -504,32 +533,34 @@ final class SonyWiFiHandover: NSObject {
                 }
                 try? await Task.sleep(for: .milliseconds(250))
             }
+        } catch HandoverError.disconnected(let reason) {
+            return linkDropped(writeStart, during: "the wait for CC09", reason: reason,
+                               changes: history.isEmpty ? "none" : history.joined(separator: ", "))
         } catch {
+            // Disconnect tapped (or the guided run's time limit): no answer about the camera's Wi-Fi, nothing recorded.
             let elapsed = (clock.now - writeStart).inSeconds
-            let changes = history.isEmpty ? "none" : history.joined(separator: ", ")
-            log.flag("ble.handover.wifiOn", false,
-                     context: String(format: "stopped %.1f s after CC08 ← 0x01 (%@); changes: %@", elapsed, "\(error)", changes))
+            log.warn(String(format: "Wi-Fi handover: the wait stopped %.1f s after CC08 ← 0x01 (%@); ble.handover.wifiOn.reported not recorded; changes: %@",
+                            elapsed, "\(error)", history.isEmpty ? "none" : history.joined(separator: ", ")))
             throw error
         }
 
         let elapsed = (clock.now - writeStart).inSeconds
         let changes = history.isEmpty ? "none" : history.joined(separator: ", ")
+        log.flag("ble.handover.linkDroppedAfterWrite", false, context: String(format: "link still up %.1f s after CC08 ← 0x01", elapsed))
         if alreadyOn {
-            log.flag("ble.handover.wifiOn", true,
+            log.flag("ble.handover.wifiOn.reported", true,
                      context: String(format: "CC09 already reported status 2 before CC08 ← 0x01 (ack %.0f ms); no latency recorded", ackSeconds * 1000))
             status = "camera Wi-Fi already on"
             return true
         }
         if on {
-            let reported: String = lastStatus.map { "status \($0)" } ?? "changed (unparsed)"
             log.measure("ble.handover.wifiOn.latency", elapsed, "s",
-                        context: String(format: "CC08 ← 0x01 (ack %.0f ms) → CC09 %@; changes: %@", ackSeconds * 1000,
-                                        reported, changes))
-            log.flag("ble.handover.wifiOn", true, context: "camera reported Wi-Fi on after the CC08 write; changes: \(changes)")
+                        context: String(format: "CC08 ← 0x01 (ack %.0f ms) → CC09 status 2; changes: %@", ackSeconds * 1000, changes))
+            log.flag("ble.handover.wifiOn.reported", true, context: "CC09 reported status 2 after the CC08 write; changes: \(changes)")
             status = String(format: "camera Wi-Fi on after %.1f s", elapsed)
         } else {
             let lastText: String = lastStatus.map { String($0) } ?? "unknown"
-            log.flag("ble.handover.wifiOn", false,
+            log.flag("ble.handover.wifiOn.reported", false,
                      context: String(format: "no CC09 status 2 within %.0f s of CC08 ← 0x01 (last status %@); changes: %@",
                                      elapsed, lastText, changes))
             status = "no Wi-Fi-on status after \(Int(elapsed)) s (check the camera)"
@@ -537,10 +568,25 @@ final class SonyWiFiHandover: NSObject {
         return on
     }
 
+    /// The link dropped after CC08 ← 0x01. That is an outcome (the camera may drop Bluetooth when its Wi-Fi comes
+    /// on), not a failure: records ble.handover.linkDroppedAfterWrite, leaves ble.handover.wifiOn.reported
+    /// unrecorded, and returns false so the guided run still asks what the camera shows.
+    private func linkDropped(_ writeStart: ContinuousClock.Instant, during what: String, reason: String,
+                             changes: String) -> Bool {
+        let elapsed = (clock.now - writeStart).inSeconds
+        log.warn(String(format: "Wi-Fi handover: the Bluetooth link dropped %.1f s after CC08 ← 0x01, during %@ (%@); ble.handover.wifiOn.reported not recorded; check the camera's screen", elapsed, what, reason))
+        log.flag("ble.handover.linkDroppedAfterWrite", true,
+                 context: String(format: "%.1f s after CC08 ← 0x01, during %@ (%@); CC09 changes: %@", elapsed, what, reason, changes))
+        status = String(format: "link dropped %.1f s after the write (check the camera)", elapsed)
+        return false
+    }
+
     // MARK: - Credentials
 
     /// Reads CC06 (SSID), CC07 (password) and CC0C (BSSID, if present). Logs and returns only what
-    /// `HandoverCredentials.description` shows, plus yes/no comparisons with the Wi-Fi tab's fields.
+    /// `HandoverCredentials.description` shows, yes/no comparisons with the Wi-Fi tab's fields and the values' layout
+    /// as lengths and yes/no (`credentialLayout`). ble.handover.credentials is yes only for a usable pair: an SSID and
+    /// an 8–63 printable ASCII passphrase.
     func readCredentials() async throws -> HandoverCredentials {
         try await run("Read Wi-Fi details") {
             try await self.doReadCredentials()
@@ -552,8 +598,9 @@ final class SonyWiFiHandover: NSObject {
         if !discovered { _ = try await doDiscover() }
         status = "reading Wi-Fi details"
         do {
-            let ssid = try await readText("CC06", label: "SSID")
-            let passphrase = try await readText("CC07", label: "password")
+            let (ssid, ssidLayout) = try await readText("CC06", label: "SSID")
+            let (passphrase, passphraseLayout) = try await readText("CC07", label: "password")
+            log.note("Wi-Fi handover: layout (3-byte header unverified): CC06 \(ssidLayout); CC07 \(passphraseLayout)")
             var bssidPresent = false
             var bssidShaped = false
             if let c = cc["CC0C"] {
@@ -573,7 +620,9 @@ final class SonyWiFiHandover: NSObject {
             }
             if bssidPresent { comparisons.append("BSSID present, MAC-shaped \(bssidShaped ? "yes" : "no")") }
             log.note("Wi-Fi handover: Wi-Fi details read: \(credentials.description)\(comparisons.isEmpty ? "" : "; " + comparisons.joined(separator: "; "))")
-            log.flag("ble.handover.credentials", true, context: credentials.description)
+            let usable = !ssid.isEmpty && HandoverCredentials.isValidPassphrase(passphrase)
+            log.flag("ble.handover.credentials", usable,
+                     context: credentials.description + (usable ? "" : "; not usable: an empty SSID or a passphrase that isn't 8–63 printable ASCII (see the layout line)"))
             status = "Wi-Fi details read: \(credentials.description)"
             return credentials
         } catch {
@@ -582,26 +631,55 @@ final class SonyWiFiHandover: NSObject {
         }
     }
 
-    /// CC06 or CC07 as text: the first 3 bytes stripped, trailing NULs dropped, UTF-8 (ASCII expected). Never logs
-    /// the value or the bytes.
-    private func readText(_ code: String, label: String) async throws -> String {
+    /// CC06 or CC07 as text: the first 3 bytes stripped, trailing NULs dropped, UTF-8 (ASCII expected), with its
+    /// `credentialLayout`. Never logs the value or the bytes.
+    private func readText(_ code: String, label: String) async throws -> (text: String, layout: String) {
         guard let c = cc[code] else { throw HandoverError.missing(code) }
         let data: Data
         switch try await read(c, code: code) {
         case .value(let d): data = d
         case .failed(let reason): throw HandoverError.readFailed("\(code) (\(label))", reason)
         }
+        let layout = Self.credentialLayout(data, password: code == "CC07")
         if data.count <= 3 {
             log.warn("Wi-Fi handover: \(code) (\(label)) is \(data.count) B, not more than the 3-byte header")
-            return ""
+            return ("", layout)
         }
         var payload = Array(data.dropFirst(3))
         while payload.last == 0 { payload.removeLast() }
         guard let text = String(bytes: payload, encoding: .utf8) else {
             log.warn("Wi-Fi handover: \(code) (\(label)) isn't UTF-8 after the 3-byte header (\(data.count) B in all)")
-            return ""
+            return ("", layout)
         }
-        return text
+        return (text, layout)
+    }
+
+    /// A CC06 or CC07 value's layout as lengths and yes/no only, never its bytes, so one run can tell a wrong header
+    /// guess from a wrong network: the byte count, then for the SSID the byte offset where "DIRECT-" starts (or
+    /// none), for the password whether it is 8–63 printable ASCII after the 3-byte header and as a whole.
+    nonisolated static func credentialLayout(_ data: Data, password: Bool) -> String {
+        func trimmed(_ bytes: [UInt8]) -> [UInt8] {
+            var out = bytes
+            while out.last == 0 { out.removeLast() }
+            return out
+        }
+        let whole = trimmed(Array(data))
+        if password {
+            func valid(_ bytes: [UInt8]) -> String {
+                (8 ... 63).contains(bytes.count) && bytes.allSatisfy { (0x20 ... 0x7E).contains($0) } ? "yes" : "no"
+            }
+            let afterHeader: [UInt8] = data.count > 3 ? trimmed(Array(data.dropFirst(3))) : []
+            return "\(data.count) B; 8–63 printable ASCII after the 3-byte header \(valid(afterHeader)), as a whole \(valid(whole))"
+        }
+        let marker = Array("DIRECT-".utf8)
+        var offset: Int?
+        if whole.count >= marker.count {
+            for i in 0 ... whole.count - marker.count where Array(whole[i ..< i + marker.count]) == marker {
+                offset = i
+                break
+            }
+        }
+        return "\(data.count) B; DIRECT- at byte \(offset.map { String($0) } ?? "none")"
     }
 
     // MARK: - Disconnect
@@ -609,8 +687,14 @@ final class SonyWiFiHandover: NSObject {
     /// Drops this app's connection (if Creators' App holds one too, iOS keeps the link for it) and ends any
     /// operation that is waiting.
     func disconnect() {
+        disconnectRequests += 1
         central?.stopScan()
         if let p = peripheral, p.state != .disconnected {
+            // Undo switchWiFiOn's CC09 subscription, if it made one (the link may close before the camera sees it).
+            if p.state == .connected, let c = cc["CC09"], c.isNotifying {
+                p.setNotifyValue(false, for: c)
+                log.note("Wi-Fi handover: CC09 notifications turned off")
+            }
             central?.cancelPeripheralConnection(p)
             log.note("Wi-Fi handover: disconnecting from \(p.name ?? "(no name)")")
         } else {
@@ -618,6 +702,7 @@ final class SonyWiFiHandover: NSObject {
         }
         failAll(HandoverError.cancelled("Disconnect"))
         peripheral = nil
+        scanFound = nil
         connectedName = nil
         cc = [:]
         discovered = false
@@ -807,8 +892,8 @@ final class SonyWiFiHandover: NSObject {
         return "\(ns.domain) \(ns.code)"
     }
 
-    /// A firmware or model value for the log: printable text unless it looks like a serial number or a MAC address,
-    /// a short binary value as hex, anything else as a length only.
+    /// A firmware or model value for the log: printable text unless it looks like a serial number, a MAC address or
+    /// the network name, a short binary value as hex, anything else as a length only.
     nonisolated static func describeInfo(_ data: Data) -> String {
         var bytes = Array(data)
         while bytes.last == 0 { bytes.removeLast() }
@@ -819,6 +904,11 @@ final class SonyWiFiHandover: NSObject {
         func show(_ text: String, prefix: String) -> String {
             if looksLikeHardwareID(text) {
                 return "\(prefix)\(text.count) chars that look like a serial number or MAC address (not logged)"
+            }
+            // The CC map is unverified: if this is the network name ("DIRECT-xxXX:ILCE-7CM2"), only its length.
+            let upper = text.uppercased()
+            if upper.contains("DIRECT-") || upper.contains(":ILCE") {
+                return "\(prefix)\(text.count) chars that look like the network name (not logged)"
             }
             return "\(prefix)\"\(text)\" (\(data.count) B)"
         }
@@ -884,8 +974,9 @@ final class SonyWiFiHandover: NSObject {
         return nil
     }
 
-    /// CC09 for the log: parsed tags with values of up to 4 bytes (longer values by length only, in case one is a
-    /// MAC or a name), and the Wi-Fi status from tag 0x0001. Raw bytes are never logged beyond the first 3.
+    /// CC09 for the log: the layout, every tag with its length, the value of tag 0x0001 only (1 or 2 bytes; the other
+    /// tags are unknown and could hold a serial or part of an address), and the Wi-Fi status from tag 0x0001. Raw
+    /// bytes are never logged beyond the first 3.
     nonisolated static func describeStatus(_ data: Data) -> (status: Int?, text: String) {
         guard let parsed = parseTLV(data) else {
             return (nil, "\(data.count) B, not a tag/length/value list (starts \(Data(data.prefix(3)).hexDump()))")
@@ -897,7 +988,9 @@ final class SonyWiFiHandover: NSObject {
                 // One byte expected; for a longer value the first byte is taken (unverified).
                 status = Int(item.value[0])
             }
-            guard item.value.count <= 4 else { return "\(tag): \(item.value.count) B (not shown)" }
+            guard item.tag == 0x0001, (1 ... 2).contains(item.value.count) else {
+                return "\(tag): \(item.value.count) B"
+            }
             let value = item.value.reduce(0) { $0 << 8 | Int($1) }
             return "\(tag) = \(value)\(item.value.count == 1 ? "" : " (\(item.value.count) B)")"
         }
@@ -962,6 +1055,7 @@ extension SonyWiFiHandover: @preconcurrency CBCentralManagerDelegate {
         if let error { noteIfPairing(error, during: "the connection") }
         failAll(HandoverError.disconnected(reason))
         self.peripheral = nil
+        scanFound = nil
         connectedName = nil
         cc = [:]
         discovered = false

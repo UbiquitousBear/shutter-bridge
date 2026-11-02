@@ -18,7 +18,7 @@ final class PathMonitor {
         self.log = log
     }
 
-    /// Starts logging every path change (status, interfaces, isExpensive, isConstrained, gateways).
+    /// Starts logging every path change (status, interfaces, isExpensive, isConstrained, IPv4 gateways).
     func start() {
         guard monitor == nil else { return }
         let m = NWPathMonitor()
@@ -106,7 +106,13 @@ struct PathSnapshot: Equatable, Sendable {
     var usesCellular: Bool
     var isExpensive: Bool
     var isConstrained: Bool
-    var gateways: [String]
+    var ipv4Gateways: [String]
+    /// IPv6 gateways are counted, never listed: a link-local one can be built from the router's MAC address (EUI-64),
+    /// and on the camera's own network the router is the camera.
+    var ipv6Gateways: Int
+    var ipv6LinkLocal: Bool
+    /// Gateways that are neither (none expected), counted.
+    var otherGateways: Int
     var firstIPv4Gateway: String?
     var unsatisfiedReason: String?
     var linkQuality: String
@@ -124,7 +130,14 @@ struct PathSnapshot: Equatable, Sendable {
         usesCellular = path.usesInterfaceType(.cellular)
         isExpensive = path.isExpensive
         isConstrained = path.isConstrained
-        gateways = path.gateways.map(NetFormat.endpoint)
+        ipv4Gateways = path.gateways.compactMap(NetFormat.ipv4Host)
+        let ipv6 = path.gateways.compactMap { gateway -> IPv6Address? in
+            guard case .hostPort(let host, _) = gateway, case .ipv6(let address) = host else { return nil }
+            return address
+        }
+        ipv6Gateways = ipv6.count
+        ipv6LinkLocal = ipv6.contains { $0.isLinkLocal }
+        otherGateways = path.gateways.count - ipv4Gateways.count - ipv6.count
         firstIPv4Gateway = path.gateways.lazy.compactMap(NetFormat.ipv4Host).first
         if path.status == .satisfied {
             unsatisfiedReason = nil
@@ -142,7 +155,10 @@ struct PathSnapshot: Equatable, Sendable {
         parts.append("interfaces [\(interfaces.joined(separator: ", "))]")
         parts.append("uses Wi-Fi \(usesWiFi ? "yes" : "no"), cellular \(usesCellular ? "yes" : "no")")
         parts.append("expensive \(isExpensive ? "yes" : "no"), constrained \(isConstrained ? "yes" : "no")")
-        parts.append("gateways [\(gateways.joined(separator: ", "))]")
+        var gatewayText = "IPv4 gateways [\(ipv4Gateways.joined(separator: ", "))]"
+        if ipv6Gateways > 0 { gatewayText += ", \(ipv6Gateways) IPv6 (link-local \(ipv6LinkLocal ? "yes" : "no"); not listed)" }
+        if otherGateways > 0 { gatewayText += ", \(otherGateways) other (not listed)" }
+        parts.append(gatewayText)
         parts.append("link quality \(linkQuality)")
         return parts.joined(separator: " · ")
     }

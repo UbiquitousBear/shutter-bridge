@@ -155,9 +155,10 @@ struct BluetoothView: View {
         }
     }
 
-    /// Advertised, overflow and GATT-listed service UUIDs of a row, without duplicates.
+    /// Advertised and overflow service UUIDs of a row, without duplicates. GATT-listed ones are left out: a
+    /// background scan can't filter on a service the camera only shows after connecting.
     private func filterOptions(_ row: AdvertisementScanner.Row) -> [String] {
-        Array(Set(row.serviceUUIDs + row.overflowUUIDs + (row.gattServices ?? []))).sorted()
+        Array(Set(row.serviceUUIDs + row.overflowUUIDs)).sorted()
     }
 
     private func statsLine(_ row: AdvertisementScanner.Row) -> String {
@@ -175,7 +176,7 @@ struct BluetoothView: View {
     // MARK: - Day 6 · Proximity filter
 
     private var filterChoices: [String] {
-        var choices = scanner.candidateServiceUUIDs
+        var choices = scanner.advertisedServiceUUIDs
         if !serviceUUID.isEmpty, !choices.contains(serviceUUID) { choices.append(serviceUUID) }
         return choices
     }
@@ -310,7 +311,7 @@ struct BluetoothView: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only Bluetooth write the spike makes. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
+                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only Bluetooth write the spike makes, except that if the camera's Wi-Fi status can't be read, the app subscribes to its status notifications and turns them off on Disconnect. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
                 }
             Button("Read Wi-Fi details") {
                 Task {

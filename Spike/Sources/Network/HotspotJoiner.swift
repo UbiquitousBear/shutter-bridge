@@ -6,7 +6,8 @@ import NetworkExtension
 /// the gateway is the camera (Sony uses 192.168.122.1). Needs the Hotspot Configuration entitlement
 /// (Spike.entitlements has it).
 ///
-/// The passphrase is never logged; log lines show "••••".
+/// The passphrase is never logged; log lines show "••••". The BSSID (a MAC address) never is either: only whether
+/// it is present and MAC-shaped.
 ///
 /// Build 10, Bluetooth handover (`redacted`): the SSID and passphrase were read from the camera over Bluetooth, and
 /// the repository is public, so on that path the SSID, the BSSID and any error text that might quote them never
@@ -80,7 +81,8 @@ enum HotspotJoiner {
                 // Only yes/no answers about the joined network: its SSID and BSSID stay out of the log.
                 log.note("Join: current Wi-Fi SSID is the handover's: \(current.ssid == ssid ? "yes" : "no"); BSSID \(current.bssid.isEmpty ? "absent" : "present, MAC-shaped \(isMACShaped(current.bssid) ? "yes" : "no")")")
             } else {
-                log.note("Join: current Wi-Fi is \"\(current.ssid)\" (BSSID \(current.bssid))")
+                // The BSSID is the access point's MAC address (the camera's, on its own network): never logged.
+                log.note("Join: current Wi-Fi is \"\(current.ssid)\" (BSSID \(current.bssid.isEmpty ? "absent" : "present, MAC-shaped \(isMACShaped(current.bssid) ? "yes" : "no")"))")
             }
         } else {
             log.note("Join: NEHotspotNetwork.fetchCurrent() returned nil (needs the Access Wi-Fi Information entitlement); SSID not confirmed")
