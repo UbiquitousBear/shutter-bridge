@@ -55,6 +55,9 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     public static let sonySDIOGetPartialLargeObject = PTPOperationCode(rawValue: 0x9211)
     /// Switches the camera into its contents-transfer (card browsing) mode. Parameters undocumented.
     public static let sonySDIOSetContentsTransferMode = PTPOperationCode(rawValue: 0x9212)
+    /// Listed in the α7C II's DeviceInfo but unnamed in libgphoto2. mvpzac/Imagedge calls it Sony's
+    /// "SDIO_GetPartialLargeObject" (the same name libgphoto2 gives 0x9211). `unverified`: probe it in the spike.
+    public static let sonySDIO0x9219 = PTPOperationCode(rawValue: 0x9219)
 
     public var description: String {
         switch self {
@@ -82,6 +85,7 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
         case .sonySDIOOpenSession: "Sony SDIO_OpenSession"
         case .sonySDIOGetPartialLargeObject: "Sony SDIO_GetPartialLargeObject"
         case .sonySDIOSetContentsTransferMode: "Sony SDIO_SetContentsTransferMode"
+        case .sonySDIO0x9219: "Sony 0x9219 (unverified)"
         default: String(format: "Op(0x%04X)", rawValue)
         }
     }

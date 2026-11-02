@@ -17,7 +17,7 @@ struct WiFiResumeRecord: Codable, Equatable, Sendable {
     var partPath: String
     /// SHA-256 of the same object fetched whole with GetObject ("Reference hash"), if one was taken.
     var referenceSHA256: String?
-    /// PTPPartialRead.Variant raw value: "standard32" or "extended64".
+    /// PTPPartialRead.Variant raw value: "standard32", "extended64", or a Sony layout from build 9.2 ("sony64", "sonyLarge9211", "sonyLarge9219").
     var variant: String
     var chunkSize: UInt32
     /// "ap" or "lan": the measurement column this read belongs to.

@@ -21,6 +21,30 @@ public enum PTPPartialRead {
         case standard32
         /// GetPartialObject64 0x95C1: u64 offset (low, high), u32 length.
         case extended64
+        /// 0x101B with four parameters: handle, offset low, offset high, length. Source: mvpzac/Imagedge, field-tested
+        /// on a ZV-E10. `unverified` on the α7C II (the three-parameter form answered InvalidObjectHandle there).
+        case sony64
+        /// 0x9211 (libgphoto2's SDIO_GetPartialLargeObject): handle, offset low, offset high, length low, length high.
+        /// The layout is a guess from mvpzac/Imagedge's description of the large-object command. `unverified`.
+        case sonyLarge9211
+        /// 0x9219 (what mvpzac/Imagedge calls SDIO_GetPartialLargeObject; unnamed in libgphoto2): the same
+        /// five-parameter layout as `sonyLarge9211`. `unverified`.
+        case sonyLarge9219
+    }
+
+    /// The variants to try, in order, when the standard form fails. Check `operationCode(for:)` against the
+    /// DeviceInfo's operations before sending each one. All `unverified` on the α7C II except `standard32`'s
+    /// failure, which is known.
+    public static let probeOrder: [Variant] = [.standard32, .sony64, .sonyLarge9211, .sonyLarge9219]
+
+    /// The operation code a variant sends, for checking `PTPDeviceInfo.supports(_:)`.
+    public static func operationCode(for variant: Variant) -> PTPOperationCode {
+        switch variant {
+        case .standard32, .sony64: .getPartialObject
+        case .extended64: .getPartialObject64
+        case .sonyLarge9211: .sonySDIOGetPartialLargeObject
+        case .sonyLarge9219: .sonySDIO0x9219
+        }
     }
 
     public enum PlanError: Error, Equatable, Sendable {
@@ -69,6 +93,11 @@ public enum PTPPartialRead {
             return PTPCommand.getPartialObject(handle, offset: UInt32(chunk.offset), length: chunk.length, tx: tx)
         case .extended64:
             return PTPCommand.getPartialObject64(handle, offset: chunk.offset, length: chunk.length, tx: tx)
+        case .sony64:
+            return PTPCommand.getPartialObjectSony(handle, offset: chunk.offset, length: chunk.length, tx: tx)
+        case .sonyLarge9211, .sonyLarge9219:
+            return PTPCommand.sonyGetPartialLargeObject(code: operationCode(for: variant).rawValue, handle, offset: chunk.offset,
+                                                        length: UInt64(chunk.length), tx: tx)
         }
     }
 

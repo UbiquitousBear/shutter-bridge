@@ -574,12 +574,17 @@ actor PTPIPClient {
         return FileDownload(bytes: bytes, sha256: Self.hex(hasher.finalize()), seconds: seconds, announcedLength: announced)
     }
 
-    /// One chunk of a byte-range read (GetPartialObject 0x101B or GetPartialObject64 0x95C1).
-    func getPartialObject(_ handle: PTPObjectHandle, chunk: PTPPartialRead.Chunk, variant: PTPPartialRead.Variant) async throws -> Data {
+    /// One chunk of a byte-range read, in any of PTPPartialRead's layouts: GetPartialObject 0x101B with three or
+    /// four parameters, GetPartialObject64 0x95C1, or Sony's SDIO_GetPartialLargeObject guesses on 0x9211 and
+    /// 0x9219 (`unverified`). PTPPartialRead.command builds each; the data phase is the same GetObject-style IN data
+    /// for all of them. `idleTimeout` is shorter for the partial read probe, where a layout the camera doesn't
+    /// understand may get no answer at all (the timeout then poisons the client, as any link failure does).
+    func getPartialObject(_ handle: PTPObjectHandle, chunk: PTPPartialRead.Chunk, variant: PTPPartialRead.Variant,
+                          idleTimeout: Double = PTPIPClient.idleTimeout) async throws -> Data {
         // Build the command before taking the transaction ID so a planning error doesn't skip an ID.
         let cmd = try PTPPartialRead.command(handle, chunk: chunk, variant: variant, tx: tx.peek)
         _ = tx.take()
-        return try await collect(cmd, limit: Int(chunk.length) + 1024 * 1024)
+        return try await collect(cmd, limit: Int(chunk.length) + 1024 * 1024, idleTimeout: idleTimeout)
     }
 
     /// GetDevicePropValue: the raw value bytes (BatteryLevel 0x5001 is one UINT8).
@@ -620,6 +625,11 @@ actor PTPIPClient {
 
     static func hex(_ digest: SHA256.Digest) -> String {
         digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// SHA-256 of bytes in memory, as lowercase hex.
+    static func sha256(of data: Data) -> String {
+        hex(SHA256.hash(data: data))
     }
 
     /// SHA-256 of a file, read in 4 MiB pieces.
