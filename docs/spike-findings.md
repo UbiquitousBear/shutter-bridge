@@ -376,6 +376,13 @@ By pairing context (the setup with Creators' App paired on the same iPhone):
 
 Proximity filter UUID chosen: **1800** (Generic Access), the only service UUID the camera advertises, the same with Creators' App quit and connected. It isn't Sony-specific, so the app confirms the camera after a wake by its peripheral identifier or Sony's company ID.
 
+GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); a short connection with no reads or writes): **8000FF00**, **8000CC00**, **8000DD00**, **8000EE00** and **8000BB00**, each `-xx00-FFFF-FFFF-FFFFFFFFFFFF`.
+- Reverse-engineered notes on Sony's apps (unverified on the α7C II) call 8000CC00 *Camera Control*. They say it carries the **Wi-Fi handover**: write 0x01 to CC08 to start the camera's Wi-Fi, then read the network name (CC06) and password (CC07).
+- 8000FF00 is the remote-shutter service, 8000DD00 location and time, and 8000EE00 Sony's own pairing. 8000BB00 isn't in any source found.
+- The advertisement's tag 0x21 read **0xF0**. In the same notes' layout that means the camera is on, and Wi-Fi handover is supported and enabled. Whether the layout holds on this body is unverified.
+- The rest of the manufacturer data isn't recorded here, because it may identify the camera.
+- Build 10 tests the handover.
+
 Proximity test:
 
 | Scenario | Detected after (`ble.proximity.latency`) | Reminder posted after (`ble.proximity.detectToNotify`) | Connection event after (`ble.proximity.connectionEvent.latency`) | Notes |
