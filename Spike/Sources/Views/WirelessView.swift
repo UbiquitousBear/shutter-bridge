@@ -211,6 +211,10 @@ private struct WirelessPanel: View {
     private var resumeSection: some View {
         Section {
             Group {
+                Button("Partial read probe (newest ARW)") { lab.probePartialReads() }
+                    .disabled(cameraLocked || !lab.isConnected)
+                Text(verbatim: "Byte-range reads on \(target.netLabel): \(lab.partialProbeLabel(net: target.net))")
+                    .font(.caption)
                 Button("Reference hash (GetObject newest ARW)") { lab.referenceHash() }
                     .disabled(cameraLocked || !lab.isConnected)
                 // Verbatim: a "%" in a LocalizedStringKey literal can be read as a format specifier.
@@ -251,7 +255,7 @@ private struct WirelessPanel: View {
         } header: {
             Text("Day 9 · Resume, discovery, join")
         } footer: {
-            Text(verbatim: "Resume: Reference hash, then Start resumable read; turn Wi-Fi off when it pauses at 50 %; turn Wi-Fi on, rejoin the camera, tap Resume read. SSDP and Bonjour are under Day 6 · Probe.")
+            Text(verbatim: "Resume: Partial read probe once per network (it tries each byte-range layout the camera lists against a GetObject of the same file, and Start resumable read then uses the one that works), Reference hash, then Start resumable read; turn Wi-Fi off when it pauses at 50 %; turn Wi-Fi on, rejoin the camera, tap Resume read. SSDP and Bonjour are under Day 6 · Probe.")
         }
     }
 
@@ -277,6 +281,45 @@ struct WiFiTarget: Sendable {
 
     var prefix: String { "ptpip.\(net)" }
     var netLabel: String { net == "lan" ? "Home LAN" : "Camera AP" }
+}
+
+/// What *Partial read probe* found on a network, kept in UserDefaults under "ptpip.partialVariant.<net>" (a
+/// PTPPartialRead.Variant raw value, or "none"). Start resumable read uses the remembered variant; the guided resume
+/// run probes first when nothing is remembered.
+enum PartialReadProbe: Equatable, Sendable {
+    /// No probe has finished on this network.
+    case notProbed
+    /// The probe ran and no layout returned the right bytes: an interrupted file restarts from zero.
+    case noneWorks
+    /// The first layout in PTPPartialRead.probeOrder whose two chunks matched the GetObject reference.
+    case works(PTPPartialRead.Variant)
+
+    /// Each probe request asks for 1 MiB.
+    static let chunkLength: UInt32 = 1024 * 1024
+    /// A layout the camera doesn't understand may get no answer; 15 s rather than the client's 30 s.
+    static let idleTimeout: Double = 15
+    private static let noneValue = "none"
+
+    static func key(net: String) -> String { "ptpip.partialVariant.\(net)" }
+
+    static func remembered(net: String) -> PartialReadProbe {
+        guard let raw = UserDefaults.standard.string(forKey: key(net: net)) else { return .notProbed }
+        if raw == noneValue { return .noneWorks }
+        if let variant = PTPPartialRead.Variant(rawValue: raw) { return .works(variant) }
+        return .notProbed
+    }
+
+    static func remember(_ variant: PTPPartialRead.Variant?, net: String) {
+        UserDefaults.standard.set(variant?.rawValue ?? noneValue, forKey: key(net: net))
+    }
+
+    var label: String {
+        switch self {
+        case .notProbed: return "not probed yet"
+        case .noneWorks: return "none works (an interrupted file restarts)"
+        case .works(let variant): return "\(variant.rawValue) works"
+        }
+    }
 }
 
 /// Build 9: Sony's two contents-transfer sessions, as Imagedge opens them (field-tested on a ZV-E10 by
@@ -420,6 +463,11 @@ final class WirelessLab {
     @ObservationIgnored private var batteryUnsupported = false
     /// Measurement prefixes ("ptpip.ap", "ptpip.lan") whose getPartialObject.supported has been recorded.
     @ObservationIgnored private var partialSupportFlagged: Set<String> = []
+    /// Bumped when the partial read probe remembers a result, so the Wi-Fi tab's line about it redraws.
+    private(set) var partialProbeRuns = 0
+    /// The latest whole-file GetObject kept on disk (Reference hash or the partial read probe), so the probe can
+    /// reuse it in the same session. Discarded with its file when a new client connects or a new copy starts.
+    @ObservationIgnored private var referenceCopy: ReferenceCopy?
     @ObservationIgnored private var keepAliveTask: Task<Void, Never>?
     /// True while a keep-alive (or the back-from-background check) has a transaction on the socket; a camera
     /// operation waits for it before starting, so the two never overlap.
@@ -462,6 +510,43 @@ final class WirelessLab {
         let info: PTPObjectInfo
         let scanned: Int
         let seconds: Double
+    }
+
+    private struct ReferenceCopy {
+        /// The session it was downloaded on: handles are only valid within one.
+        let client: PTPIPClient
+        let handle: PTPObjectHandle
+        let size: UInt64
+        let url: URL
+        let sha256: String
+    }
+
+    /// One layout's answers in the partial read probe.
+    private struct ProbeOutcome {
+        let variant: PTPPartialRead.Variant
+        let operation: String
+        /// "OK", a response code, "no answer (…)" or "failed (…)" for the first chunk.
+        var first: String
+        var firstBytes: Int?
+        var firstMatches = false
+        /// nil while the middle chunk hasn't been asked for with this layout.
+        var middle: String?
+        var middleBytes: Int?
+        var middleMatches: Bool?
+
+        var works: Bool { firstMatches && middleMatches == true }
+
+        var summary: String {
+            var text = "\(variant.rawValue) (\(operation)): [0, 1 MiB) \(first)"
+            if let firstBytes { text += ", \(firstBytes) bytes, \(firstMatches ? "matches" : "does NOT match")" }
+            if let middle {
+                text += "; middle \(middle)"
+                if let middleBytes { text += ", \(middleBytes) bytes, \(middleMatches == true ? "matches" : "does NOT match")" }
+            } else if firstMatches {
+                text += "; middle not asked for"
+            }
+            return text
+        }
     }
 
     private struct BatchResult {
@@ -682,6 +767,8 @@ final class WirelessLab {
     private func newClient(_ t: WiFiTarget, closingPrevious: Bool) async throws -> PTPIPClient {
         if client != nil { await closeClient(closingSession: closingPrevious) }
         guard !t.host.isEmpty else { throw WiFiLabError.message("enter the camera IP first") }
+        // Its handle belongs to the old session.
+        discardReferenceCopy()
         objects = []
         objectAddedCount = 0
         eventCount = 0
@@ -761,7 +848,7 @@ final class WirelessLab {
         log.note("events (\(events.count)): \(events.joined(separator: ", "))")
         let formats = di.imageFormats.map { PTPObjectFormat(rawValue: $0).description }
         log.note("device properties: \(di.devicePropertiesSupported.count); image formats: \(formats.joined(separator: ", "))")
-        log.note("supports GetPartialObject 0x101B \(yn(di.supports(.getPartialObject))), GetPartialObject64 0x95C1 \(yn(di.supports(.getPartialObject64))), GetThumb \(yn(di.supports(.getThumb))), Sony SDIO_Connect \(yn(di.supports(.sonySDIOConnect))), SDIO_GetExtDeviceInfo \(yn(di.supports(.sonySDIOGetExtDeviceInfo))), SDIO_GetPartialLargeObject \(yn(di.supports(.sonySDIOGetPartialLargeObject))), SDIO_SetContentsTransferMode \(yn(di.supports(.sonySDIOSetContentsTransferMode))); emits ObjectAdded \(yn(di.emits(.objectAdded))), Sony ObjectAdded \(yn(di.emits(.sonyObjectAdded)))")
+        log.note("supports GetPartialObject 0x101B \(yn(di.supports(.getPartialObject))), GetPartialObject64 0x95C1 \(yn(di.supports(.getPartialObject64))), GetThumb \(yn(di.supports(.getThumb))), Sony SDIO_Connect \(yn(di.supports(.sonySDIOConnect))), SDIO_GetExtDeviceInfo \(yn(di.supports(.sonySDIOGetExtDeviceInfo))), SDIO_GetPartialLargeObject 0x9211 \(yn(di.supports(.sonySDIOGetPartialLargeObject))), 0x9219 \(yn(di.supports(.sonySDIO0x9219))), SDIO_SetContentsTransferMode \(yn(di.supports(.sonySDIOSetContentsTransferMode))); emits ObjectAdded \(yn(di.emits(.objectAdded))), Sony ObjectAdded \(yn(di.emits(.sonyObjectAdded)))")
     }
 
     /// Logs every event; flags ObjectAdded and saves the first Event packet of each kind as a fixture.
@@ -1571,15 +1658,8 @@ final class WirelessLab {
     func referenceHash() {
         runSession("Reference hash", needsListing: true) { c, _ in
             guard let o = self.newest(ext: "ARW", count: 1).first else { throw WiFiLabError.message("no ARW listed; tap List card first") }
-            let url = try self.downloadURL(for: o)
-            defer { try? FileManager.default.removeItem(at: url) }
             self.log.note("Reference hash: GetObject \(o.info.filename) (\(o.info.objectCompressedSize) bytes)…")
-            let r = try await c.getObject(o.handle, to: url)
-            let expected = UInt64(o.info.objectCompressedSize)
-            // A truncated or padded reference would later make resume.verified a false "no".
-            guard r.bytes == expected, r.announcedLength.map({ $0 == r.bytes }) ?? true else {
-                throw WiFiLabError.message("GetObject returned \(r.bytes) bytes (Start_Data announced \(r.announcedLength.map { String($0) } ?? "unknown"), ObjectInfo says \(expected)); reference not saved, tap Reference hash again")
-            }
+            let r = try await self.downloadReference(c, object: o)
             let identity = o.info.identity(cameraSerial: self.cameraSerial)
             if !WiFiResumeStore.saveReference(WiFiReferenceHash(identity: identity, sha256: r.sha256, bytes: r.bytes, savedAt: Date())) {
                 self.log.error("could not save the reference hash")
@@ -1591,6 +1671,217 @@ final class WirelessLab {
         }
     }
 
+    /// GetObject of `o` into a kept temporary file (replacing the previous copy), which the partial read probe can
+    /// reuse in the same session. Throws, and keeps nothing, if the size is off: a truncated or padded reference
+    /// would later make resume.verified or a probe match a false "no".
+    private func downloadReference(_ c: PTPIPClient, object o: CardObject) async throws -> PTPIPClient.FileDownload {
+        discardReferenceCopy()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ptpip-reference", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = o.info.filename.isEmpty ? "object-\(o.handle.rawValue)" : WiFiResumeStore.safeComponent(o.info.filename)
+        let url = dir.appendingPathComponent(name, isDirectory: false)
+        let r: PTPIPClient.FileDownload
+        do {
+            r = try await c.getObject(o.handle, to: url)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+        let expected = UInt64(o.info.objectCompressedSize)
+        guard r.bytes == expected, r.announcedLength.map({ $0 == r.bytes }) ?? true else {
+            try? FileManager.default.removeItem(at: url)
+            throw WiFiLabError.message("GetObject returned \(r.bytes) bytes (Start_Data announced \(r.announcedLength.map { String($0) } ?? "unknown"), ObjectInfo says \(expected)); reference not kept, try again")
+        }
+        referenceCopy = ReferenceCopy(client: c, handle: o.handle, size: r.bytes, url: url, sha256: r.sha256)
+        return r
+    }
+
+    private func discardReferenceCopy() {
+        if let copy = referenceCopy { try? FileManager.default.removeItem(at: copy.url) }
+        referenceCopy = nil
+    }
+
+    /// The Wi-Fi tab's line about the remembered probe result for `net`.
+    func partialProbeLabel(net: String) -> String {
+        _ = partialProbeRuns
+        return PartialReadProbe.remembered(net: net).label
+    }
+
+    // MARK: Day 9 · Partial read probe
+
+    /// Which byte-range layout does the camera answer correctly? On 2 Nov (build 9.1, whole-card contents transfer)
+    /// GetObject worked on the newest ARW but GetPartialObject 0x101B with three parameters answered
+    /// InvalidObjectHandle. This takes a GetObject reference of the newest ARW, then asks for [0, 1 MiB) with each
+    /// layout in PTPPartialRead.probeOrder whose operation DeviceInfo lists (15 s idle timeout; no answer means a
+    /// reconnect and the next layout), compares each answer's SHA-256 with the reference's, then reads one middle
+    /// chunk with the first layout that matched (the next one if that fails) so a layout that ignores the offset
+    /// can't pass. Records `ptpip.<net>.partial.<variant>` per layout sent and `ptpip.<net>.getPartialObject.supported`,
+    /// and remembers the working layout for the net (PartialReadProbe).
+    func probePartialReads() {
+        runSession("Partial read probe", needsListing: true) { c, net in
+            try await self.runPartialProbe(c, net: net)
+        }
+    }
+
+    private func runPartialProbe(_ start: PTPIPClient, net: String) async throws {
+        let prefix = "ptpip.\(net)"
+        guard let o = newest(ext: "ARW", count: 1).first else { throw WiFiLabError.message("no ARW listed; tap List card first") }
+        guard o.info.objectCompressedSize > 0, o.info.objectCompressedSize != UInt32.max else {
+            throw WiFiLabError.message("\(o.info.filename): size unknown in ObjectInfo")
+        }
+        let size = UInt64(o.info.objectCompressedSize)
+        let serial = cameraSerial
+        let identity = o.info.identity(cameraSerial: serial)
+        let name = o.info.filename
+        var c = start
+        var handle = o.handle
+        let probeLength = UInt64(PartialReadProbe.chunkLength)
+        let firstChunk = PTPPartialRead.Chunk(offset: 0, length: UInt32(min(probeLength, size)))
+        // Half way, rounded down to 4 KiB.
+        let middleOffset = (size / 2) & ~UInt64(4095)
+        let middleChunk = PTPPartialRead.Chunk(offset: middleOffset, length: UInt32(min(probeLength, size - middleOffset)))
+        let orderText = PTPPartialRead.probeOrder.map { $0.rawValue }.joined(separator: ", ")
+        log.note("Partial read probe: \(name), \(size) bytes, handle \(handle), on \(sessionKind); chunks \(firstChunk) and \(middleChunk); layouts in order: \(orderText)")
+
+        // The reference: this session's Reference hash download when it is the same object, else a GetObject now.
+        activity = "Partial read probe: GetObject reference"
+        let referenceURL: URL
+        if let copy = referenceCopy, copy.client === c, copy.handle.rawValue == o.handle.rawValue, copy.size == size,
+           WiFiPartFile.size(copy.url) == size {
+            referenceURL = copy.url
+            log.note("Partial read probe: reusing this session's GetObject of \(name) as the reference (SHA-256 \(String(copy.sha256.prefix(16)))…)")
+        } else {
+            let r = try await downloadReference(c, object: o)
+            guard let copy = referenceCopy else { throw WiFiLabError.message("the reference download wasn't kept") }
+            referenceURL = copy.url
+            log.note(String(format: "Partial read probe: reference GetObject of %@, %llu bytes in %.2f s (%.1f MB/s), SHA-256 %@…",
+                            name, r.bytes, r.seconds, r.seconds > 0 ? Double(r.bytes) / r.seconds / 1e6 : 0, String(r.sha256.prefix(16))))
+            if !WiFiResumeStore.saveReference(WiFiReferenceHash(identity: identity, sha256: r.sha256, bytes: r.bytes, savedAt: Date())) {
+                log.error("could not save the reference hash")
+            }
+        }
+        // Read into memory now: a reconnect below discards the kept copy with the old session.
+        let referenceFirst = try Self.readBytes(referenceURL, offset: firstChunk.offset, count: Int(firstChunk.length))
+        let referenceMiddle = try Self.readBytes(referenceURL, offset: middleChunk.offset, count: Int(middleChunk.length))
+        log.note("Partial read probe: reference SHA-256 of \(firstChunk) \(String(PTPIPClient.sha256(of: referenceFirst).prefix(16)))…, of \(middleChunk) \(String(PTPIPClient.sha256(of: referenceMiddle).prefix(16)))…")
+
+        var outcomes: [ProbeOutcome] = []
+        let order = PTPPartialRead.probeOrder
+        for (i, variant) in order.enumerated() {
+            let op = PTPPartialRead.operationCode(for: variant)
+            let opText = String(format: "0x%04X ", op.rawValue) + op.description
+            guard deviceInfo?.supports(op) == true else {
+                log.note("Partial read probe · \(variant.rawValue): DeviceInfo doesn't list \(opText); not sent")
+                continue
+            }
+            activity = "Partial read probe: \(variant.rawValue) (\(i + 1) of \(order.count))"
+            progress = Double(i) / Double(order.count)
+            let answer = try await probeRequest(&c, handle: &handle, chunk: firstChunk, variant: variant, opText: opText,
+                                                identity: identity, serial: serial, net: net)
+            var outcome = ProbeOutcome(variant: variant, operation: opText, first: answer.result)
+            if let data = answer.data {
+                outcome.firstBytes = data.count
+                outcome.firstMatches = Self.matches(data, reference: referenceFirst)
+            }
+            log.note("Partial read probe · \(outcome.summary)")
+            outcomes.append(outcome)
+        }
+
+        // The middle chunk, with the first layout whose first chunk matched (then the next, if that one fails).
+        var working: PTPPartialRead.Variant?
+        for i in outcomes.indices where outcomes[i].firstMatches {
+            let variant = outcomes[i].variant
+            activity = "Partial read probe: middle chunk with \(variant.rawValue)"
+            let answer = try await probeRequest(&c, handle: &handle, chunk: middleChunk, variant: variant, opText: outcomes[i].operation,
+                                                identity: identity, serial: serial, net: net)
+            outcomes[i].middle = answer.result
+            outcomes[i].middleBytes = answer.data?.count
+            outcomes[i].middleMatches = answer.data.map { Self.matches($0, reference: referenceMiddle) } ?? false
+            log.note("Partial read probe · \(outcomes[i].summary)")
+            if outcomes[i].works {
+                working = variant
+                break
+            }
+        }
+
+        for outcome in outcomes {
+            // Yes: the bytes matched the reference (both chunks, or the first where the middle wasn't asked for).
+            let yes = outcome.firstMatches && outcome.middleMatches != false
+            log.flag("\(prefix).partial.\(outcome.variant.rawValue)", yes, context: "\(outcome.summary); \(name), \(sessionKind)")
+        }
+        let listed = outcomes.isEmpty ? "DeviceInfo lists none of the layouts' operations" : "\(outcomes.count) layout(s) sent"
+        partialSupportFlagged.insert(prefix)
+        log.flag("\(prefix).getPartialObject.supported", working != nil,
+                 context: (working.map { "\($0.rawValue) (\(PTPPartialRead.operationCode(for: $0)))" } ?? "none") + "; \(listed); partial read probe on \(name), \(sessionKind)")
+        PartialReadProbe.remember(working, net: net)
+        partialProbeRuns += 1
+        let lines = outcomes.map { x -> String in
+            let first = x.firstBytes.map { "\(x.first) \($0) B \(x.firstMatches ? "match" : "no match")" } ?? x.first
+            let middle = x.middle.map { m in x.middleBytes.map { "\(m) \($0) B \(x.middleMatches == true ? "match" : "no match")" } ?? m }
+            return "\(x.variant.rawValue) \(first)" + (middle.map { ", middle \($0)" } ?? "")
+        }
+        log.note("Partial read probe on \(net): " + (lines.isEmpty ? "nothing sent" : lines.joined(separator: "; ")) +
+                 "; working: \(working?.rawValue ?? "none") (remembered as \(PartialReadProbe.key(net: net)))")
+    }
+
+    /// One probe request with the probe's idle timeout. A response code is an answer; a link failure (no answer
+    /// within the timeout, or a reply that poisoned the channel) is logged, the session is reopened the way
+    /// runSession reopens it, the object is found again by identity (`c` and `handle` updated), and the probe goes on.
+    private func probeRequest(_ c: inout PTPIPClient, handle: inout PTPObjectHandle, chunk: PTPPartialRead.Chunk,
+                              variant: PTPPartialRead.Variant, opText: String, identity: PTPObjectIdentity,
+                              serial: String, net: String) async throws -> (result: String, data: Data?) {
+        let clock = ContinuousClock()
+        let started = clock.now
+        do {
+            let data = try await c.getPartialObject(handle, chunk: chunk, variant: variant, idleTimeout: PartialReadProbe.idleTimeout)
+            log.note(String(format: "Partial read probe · %@ %@: OK, %ld bytes in %.2f s", variant.rawValue, chunk.description,
+                            data.count, (clock.now - started).inSeconds))
+            return ("OK", data)
+        } catch PTPIPClient.ClientError.response(_, let code) {
+            log.note(String(format: "Partial read probe · %@ %@: %@ after %.2f s", variant.rawValue, chunk.description,
+                            WirelessLab.codeText(code), (clock.now - started).inSeconds))
+            return (WirelessLab.codeText(code), nil)
+        } catch {
+            guard let failure = await c.linkFailure else {
+                // Not on the wire (the command can't be built for this chunk): no reconnect needed.
+                log.warn("Partial read probe · \(variant.rawValue) \(chunk): \(error)")
+                return ("failed (\(error))", nil)
+            }
+            log.warn(String(format: "Partial read probe · %@ (%@) %@: no usable answer after %.1f s (%@); reconnecting, then the next layout",
+                            variant.rawValue, opText, chunk.description, (clock.now - started).inSeconds, "\(failure)"))
+            guard let t = sessionTarget else { throw failure }
+            let fresh = try await reopen(t)
+            guard let found = try await findObject(fresh, identity: identity, serial: serial) else {
+                throw WiFiLabError.message("\(identity.filename) not found on the card after reconnecting; probe stopped")
+            }
+            if found.handle.rawValue != handle.rawValue {
+                log.warn("Partial read probe: \(identity.filename) is handle \(found.handle) on the new session (was \(handle)); listing the card again so the other buttons use the new handles")
+                try await listObjects(fresh, net: net)
+            }
+            c = fresh
+            handle = found.handle
+            return ("no answer (\(failure))", nil)
+        }
+    }
+
+    /// True when `data` is non-empty, no longer than the reference, and its SHA-256 equals that of the reference's
+    /// first `data.count` bytes (a short read with the right bytes counts).
+    private static func matches(_ data: Data, reference: Data) -> Bool {
+        guard !data.isEmpty, data.count <= reference.count else { return false }
+        return PTPIPClient.sha256(of: data) == PTPIPClient.sha256(of: reference.prefix(data.count))
+    }
+
+    private static func readBytes(_ url: URL, offset: UInt64, count: Int) throws -> Data {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        try file.seek(toOffset: offset)
+        let data = try file.read(upToCount: count) ?? Data()
+        guard data.count == count else {
+            throw WiFiLabError.message("the reference file has \(data.count) bytes at \(offset), expected \(count)")
+        }
+        return data
+    }
+
     func startResumableRead(pauseAtHalf: Bool) {
         runSession("Resumable read", transfer: true, needsListing: true) { c, net in
             guard let o = self.newest(ext: "ARW", count: 1).first, let di = self.deviceInfo else {
@@ -1600,15 +1891,27 @@ final class WirelessLab {
             guard identity.size > 0, o.info.objectCompressedSize != UInt32.max else {
                 throw WiFiLabError.message("\(o.info.filename): size unknown in ObjectInfo")
             }
+            // The layout the partial read probe found working on this net, if it ran; else DeviceInfo's choice.
+            let variant: PTPPartialRead.Variant
+            switch PartialReadProbe.remembered(net: net) {
+            case .noneWorks:
+                self.log.warn("Resumable read: the partial read probe found no byte-range read that returns the right bytes on \(net) (\(PartialReadProbe.key(net: net)) = none), so byte-range reads don't work in this session: a drop means restarting \(identity.filename) from zero. Not started; tap Partial read probe to check again.")
+                return
+            case .works(let remembered):
+                variant = remembered
+                self.log.note("Resumable read: \(remembered.rawValue) (\(PTPPartialRead.operationCode(for: remembered))), the layout the partial read probe found working on \(net)")
+            case .notProbed:
+                let listed = PTPPartialRead.variant(objectSize: identity.size, device: di)
+                if listed == nil {
+                    self.log.warn("DeviceInfo lists neither GetPartialObject (0x101B) nor GetPartialObject64 (0x95C1); trying 0x101B anyway")
+                }
+                variant = listed ?? .standard32
+                self.log.note("Resumable read: no partial read probe on \(net) yet, so \(variant.rawValue) from DeviceInfo (on 2 Nov the camera answered 0x101B with three parameters InvalidObjectHandle; Partial read probe tries the other layouts)")
+            }
             let reference = WiFiResumeStore.loadReference().flatMap { $0.identity == identity && $0.bytes == identity.size ? $0.sha256 : nil }
             if reference == nil {
                 self.log.warn("no reference hash for \(identity.filename): tap Reference hash first, or the resumed file can't be verified")
             }
-            let listed = PTPPartialRead.variant(objectSize: identity.size, device: di)
-            if listed == nil {
-                self.log.warn("DeviceInfo lists neither GetPartialObject (0x101B) nor GetPartialObject64 (0x95C1); trying 0x101B anyway")
-            }
-            let variant = listed ?? .standard32
             let relative = WiFiResumeStore.partRelativePath(serial: identity.cameraSerial, filename: identity.filename)
             // Only one record is kept: an earlier read of another file would otherwise leave its .part in Caches.
             if let previous = WiFiResumeStore.load(), previous.partPath != relative {
@@ -1636,7 +1939,8 @@ final class WirelessLab {
             if saved.net != t.net { self.log.warn("the saved read started on \(saved.net); it stays in the ptpip.\(saved.net) column") }
             let target = WiFiTarget(net: saved.net, host: t.host, guid: t.guid)
             let how = self.contentsMode.map { "Sony contents transfer, " + $0.label } ?? "handshake + OpenSession"
-            self.log.note("Resume read: \(saved.summary). Reconnecting (\(how))…")
+            // The variant comes from the record, so the resume reads with the layout the read started with.
+            self.log.note("Resume read: \(saved.summary), \(saved.variant). Reconnecting (\(how))…")
             let c = try await self.reopen(target)
             let serial = self.cameraSerial
             if serial != saved.identity.cameraSerial {

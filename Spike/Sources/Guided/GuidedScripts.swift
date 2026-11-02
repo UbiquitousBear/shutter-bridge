@@ -5,6 +5,16 @@ import ImageCaptureCore
 // functions as the Wired, Wi-Fi and Bluetooth tabs' buttons, so it logs and measures exactly what they do; the
 // alerts only replace "now do this on the camera" in the runbook.
 
+/// The camera-port wait after a restart (GuidedRunner.waitForCameraPort): written by its polling task, read by the
+/// waiting alert's condition, both on the main actor.
+@MainActor
+private final class PortWait {
+    var attempts = 0
+    var lastError = "none"
+    /// Seconds from the start of the wait to the first TCP connect that succeeded; nil until then.
+    var answeredAfter: Double?
+}
+
 /// One decimal by default, as in the log lines elsewhere.
 private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
 
@@ -41,7 +51,7 @@ extension GuidedScript {
         GuidedScript(id: "wifi.guid", group: "Wi-Fi (session S2)", title: "Wi-Fi: GUID after a power cycle",
                      summary: "Reconnect with the same GUID, then a new one; note the camera's prompts (5 min).") { r in try await r.wifiGUID() },
         GuidedScript(id: "wifi.resume", group: "Wi-Fi (session S2)", title: "Wi-Fi: resume after Wi-Fi off",
-                     summary: "Reference hash, read paused at 50 %, Wi-Fi off and on, resume and verify (5 min).") { r in try await r.wifiResume() },
+                     summary: "Partial read probe if not yet run on this network, reference hash, read paused at 50 %, Wi-Fi off and on, resume and verify (5–8 min).") { r in try await r.wifiResume() },
         GuidedScript(id: "wifi.lock", group: "Wi-Fi (session S2)", title: "Wi-Fi: lock during a transfer",
                      summary: "20 ARW with the phone locked, then the same inside a continued task (8 min).") { r in try await r.wifiLock() },
         GuidedScript(id: "wifi.send", group: "Wi-Fi (session S2)", title: "Wi-Fi: Send to Smartphone",
@@ -621,10 +631,13 @@ extension GuidedRunner {
         try await section("GUID after a power cycle", "Is this phone remembered after the camera restarts, and is a new phone asked to confirm? About 5 minutes.") {
             try await ask("Restart the camera", "Switch the camera off and on, put it back in the same Wi-Fi mode, and wait for its Wi-Fi screen. If the phone doesn't rejoin the camera's network by itself, rejoin it in Settings.",
                           buttons: ["Done"])
+            try await waitForCameraPort()
             try await wifi("Reconnect (same GUID)", "Reconnecting as the same phone.", timeout: 120) { wireless.reconnect(wifiTarget()) }
-            let same = try await ask("Did the camera ask?", "Did the camera ask you to confirm the connection this time?",
-                                     buttons: ["No, it connected", "Yes, it asked", "It failed"])
-            log.note("◆ Same GUID after a power cycle: \(same)")
+            let reconnected = wireless.isConnected && wireless.connectionState.hasPrefix("connected")
+            if !reconnected { log.warn("  guided: the reconnect after the power cycle didn't connect: \(wireless.connectionState)") }
+            let same = try await ask("Did the camera ask?", "Did the camera ask you to allow the connection (and did you have to press anything)?",
+                                     buttons: ["Yes, I had to allow it", "It showed something, nothing to press", "No, it connected"])
+            log.note("◆ Same GUID after a power cycle: \(same)" + (reconnected ? "" : " (the reconnect failed: \(wireless.connectionState))"))
             UserDefaults.standard.set(UUID().uuidString, forKey: "ptpip.guid")
             log.note("PTP/IP: new GUID for the re-pair test (guided run)")
             try await wifi("Connect (new GUID)", "Connecting as a new phone: accept on the camera if it asks.", timeout: 120) { wireless.connect(wifiTarget()) }
@@ -634,11 +647,73 @@ extension GuidedRunner {
         }
     }
 
+    /// After a camera restart: waits (up to 300 s) until the camera's PTP/IP port answers at the stored camera IP,
+    /// trying a 2 s TCP connect every 2 s, while an alert asks the tester to switch the camera's Wi-Fi back on and,
+    /// if needed, rejoin its network. Logs how long the camera took to answer and after how many tries.
+    private func waitForCameraPort() async throws {
+        let host = wifiTarget().host
+        let state = PortWait()
+        let clock = ContinuousClock()
+        let started = clock.now
+        step("Waiting for the camera at \(host):15740")
+        // Quiet: a refused or timed-out connect every 2 s for up to 5 minutes would bury the log.
+        let quiet: PTPIPClient.Logger = { _, _ in }
+        let poller = Task { @MainActor in
+            while !Task.isCancelled {
+                let attemptStarted = clock.now
+                state.attempts += 1
+                do {
+                    _ = try await PTPIPClient.probePort(host: host, timeout: 2, log: quiet)
+                    state.answeredAfter = (clock.now - started).inSeconds
+                    return
+                } catch {
+                    state.lastError = "\(error)"
+                }
+                let wait = 2 - (clock.now - attemptStarted).inSeconds
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            }
+        }
+        defer { poller.cancel() }
+        let back = try await waitUntil("Switch the camera's Wi-Fi on",
+                                       "After a restart the camera's Wi-Fi is off: switch it back on in PC Remote. If the phone moved to your home Wi-Fi, join the camera's network again in Settings › Wi-Fi.",
+                                       timeout: 300) { state.answeredAfter != nil }
+        if back, let after = state.answeredAfter {
+            log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the restart was confirmed (\(state.attempts) TCP connect(s), 2 s timeout each)")
+            return
+        }
+        log.warn("  guided: nothing answered at \(host):15740 within 300 s (\(state.attempts) TCP connect(s); last: \(state.lastError))")
+        let choice = try await ask("The camera didn't answer", "Nothing answered at \(host) on port 15740 for 5 minutes. Check that the camera's Wi-Fi is on in PC Remote and that the phone is on the camera's network, then try the reconnect anyway, or stop this section.",
+                                   buttons: ["Reconnect anyway", "Stop"])
+        if choice != "Reconnect anyway" { throw GuidedStop("the camera didn't answer at \(host):15740 after the restart") }
+    }
+
     func wifiResume() async throws {
         try await section("Resume after Wi-Fi off", "A reference download, then a read that pauses at 50 % for you to turn Wi-Fi off and on, then the resume. About 5 minutes.") {
             guard wireless.isConnected else { throw GuidedStop("connect first (Wi-Fi: one camera mode)") }
             if wireless.objects.isEmpty {
                 try await wifi("List card", "The resume needs the card listed.", timeout: 900) { wireless.listCard() }
+            }
+            // Which byte-range layout works on this network, unless a probe has already said: on 2 Nov the camera
+            // answered the standard GetPartialObject InvalidObjectHandle in the whole-card contents transfer.
+            let net = wireless.sessionNet ?? wifiTarget().net
+            if PartialReadProbe.remembered(net: net) == .notProbed {
+                try await wifi("Partial read probe",
+                               "GetObject of the newest ARW as a reference, then a 1 MiB byte-range read with each layout the camera lists. A layout the camera doesn't understand may get no answer: the app then waits 15 s, reconnects and tries the next.",
+                               timeout: 240) { wireless.probePartialReads() }
+            }
+            let probe = PartialReadProbe.remembered(net: net)
+            log.note("  guided: byte-range reads on \(net): \(probe.label)")
+            switch probe {
+            case .notProbed:
+                throw GuidedStop("the partial read probe didn't finish (see the log); run Partial read probe on the Wi-Fi tab")
+            case .noneWorks:
+                try await ask("Skip the Wi-Fi-off part",
+                              "The camera refuses byte-range reads in this mode, so a file interrupted by a drop has to restart from the beginning: there is nothing to resume. Don't turn Wi-Fi off; this section ends here.",
+                              buttons: ["OK"])
+                log.note("◆ Resume after Wi-Fi off: not run, no byte-range read works on \(net) in this mode")
+                return
+            case .works:
+                break
             }
             try await wifi("Reference hash", "GetObject of the newest ARW, for the SHA-256 to compare with.", timeout: 300) { wireless.referenceHash() }
             step("Resumable read, paused at 50 %")
