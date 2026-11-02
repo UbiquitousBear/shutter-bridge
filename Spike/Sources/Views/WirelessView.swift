@@ -433,6 +433,9 @@ final class WirelessLab {
     private(set) var qrScans = 0
     /// The gateway the latest join reported, nil while joining or if it failed (joinedGateway keeps older joins').
     private(set) var lastJoinGateway: String?
+    /// Whether the latest join found the phone already on that network (apply answered alreadyAssociated, so iOS
+    /// showed no prompt); nil while joining or if it failed.
+    private(set) var lastJoinAlreadyAssociated: Bool?
     var joinSSID = ""
     /// Never logged or persisted.
     var joinPassphrase = ""
@@ -2235,6 +2238,7 @@ final class WirelessLab {
         guard !joining else { return }
         joining = true
         lastJoinGateway = nil
+        lastJoinAlreadyAssociated = nil
         let ssid = joinSSID
         let passphrase = joinPassphrase
         Task { @MainActor in
@@ -2244,6 +2248,29 @@ final class WirelessLab {
                 self.lastJoinGateway = gateway
                 self.log.note("Join: gateway \(gateway); tap \"Use gateway as camera IP\" if the camera is the access point")
             }
+            self.lastJoinAlreadyAssociated = outcome?.alreadyAssociated
+            self.joining = false
+        }
+    }
+
+    /// Build 10, Bluetooth handover: joins the network whose name and password the camera gave over Bluetooth, the
+    /// same way as Join camera Wi-Fi (NEHotspotConfiguration, joinOnce false, timed as `ptpip.ap.join` with the
+    /// context "Bluetooth handover"), but the SSID and passphrase stay in this call: never in joinSSID or
+    /// joinPassphrase, UserDefaults or the log (HotspotJoiner's redacted path logs the SSID as its length and
+    /// whether it starts with "DIRECT-", and the joined network's SSID and BSSID as yes/no answers only).
+    func joinHandover(ssid: String, passphrase: String) {
+        guard !joining else { return }
+        joining = true
+        lastJoinGateway = nil
+        lastJoinAlreadyAssociated = nil
+        Task { @MainActor in
+            let outcome = await HotspotJoiner.join(ssid: ssid, passphrase: passphrase, log: self.log, redacted: true)
+            if let gateway = outcome?.gateway {
+                self.joinedGateway = gateway
+                self.lastJoinGateway = gateway
+                self.log.note("Join (Bluetooth handover): gateway \(gateway)")
+            }
+            self.lastJoinAlreadyAssociated = outcome?.alreadyAssociated
             self.joining = false
         }
     }

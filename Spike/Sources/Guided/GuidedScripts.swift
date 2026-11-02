@@ -15,6 +15,13 @@ private final class PortWait {
     var answeredAfter: Double?
 }
 
+/// The result of a Bluetooth handover call run under a waiting alert (GuidedRunner.bluetooth): set by its task,
+/// read by the alert's condition, both on the main actor.
+@MainActor
+private final class HandoverCall<T> {
+    var result: Result<T, Error>?
+}
+
 /// One decimal by default, as in the log lines elsewhere.
 private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
 
@@ -61,6 +68,8 @@ extension GuidedScript {
                      summary: "30 s scans with the camera on, asleep and off; snapshots; pick the filter UUID (15 min).") { r in try await r.bleAdverts() },
         GuidedScript(id: "ble.proximity", group: "Bluetooth (session S3)", title: "Bluetooth: proximity reminder",
                      summary: "Background watch; the scan starts once the phone is locked, camera nearby on or off; same room and next room (10 min).") { r in try await r.bleProximity() },
+        GuidedScript(id: "ble.handover", group: "Bluetooth (session S3)", title: "Bluetooth: Wi-Fi handover",
+                     summary: "Switch the camera's Wi-Fi on over Bluetooth, read its network details (never logged), join, import one file (about 15 min).") { r in try await r.bleHandover() },
     ]
 }
 
@@ -652,10 +661,26 @@ extension GuidedRunner {
     /// if needed, rejoin its network. Logs how long the camera took to answer and after how many tries.
     private func waitForCameraPort() async throws {
         let host = wifiTarget().host
+        step("Waiting for the camera at \(host):15740")
+        let state = try await pollCameraPort(host: host, title: "Switch the camera's Wi-Fi on",
+                                             message: "After a restart the camera's Wi-Fi is off: switch it back on in PC Remote. If the phone moved to your home Wi-Fi, join the camera's network again in Settings › Wi-Fi.",
+                                             timeout: 300)
+        if let after = state.answeredAfter {
+            log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the restart was confirmed (\(state.attempts) TCP connect(s), 2 s timeout each)")
+            return
+        }
+        log.warn("  guided: nothing answered at \(host):15740 within 300 s (\(state.attempts) TCP connect(s); last: \(state.lastError))")
+        let choice = try await ask("The camera didn't answer", "Nothing answered at \(host) on port 15740 for 5 minutes. Check that the camera's Wi-Fi is on in PC Remote and that the phone is on the camera's network, then try the reconnect anyway, or stop this section.",
+                                   buttons: ["Reconnect anyway", "Stop"])
+        if choice != "Reconnect anyway" { throw GuidedStop("the camera didn't answer at \(host):15740 after the restart") }
+    }
+
+    /// Tries a 2 s TCP connect to `host`:15740 every 2 s under a waiting alert (`title`, `message`) until one
+    /// succeeds or `timeout` seconds pass. Logs nothing itself; the result says how long and how many tries.
+    private func pollCameraPort(host: String, title: String, message: String, timeout: Double) async throws -> PortWait {
         let state = PortWait()
         let clock = ContinuousClock()
         let started = clock.now
-        step("Waiting for the camera at \(host):15740")
         // Quiet: a refused or timed-out connect every 2 s for up to 5 minutes would bury the log.
         let quiet: PTPIPClient.Logger = { _, _ in }
         let poller = Task { @MainActor in
@@ -674,17 +699,8 @@ extension GuidedRunner {
             }
         }
         defer { poller.cancel() }
-        let back = try await waitUntil("Switch the camera's Wi-Fi on",
-                                       "After a restart the camera's Wi-Fi is off: switch it back on in PC Remote. If the phone moved to your home Wi-Fi, join the camera's network again in Settings › Wi-Fi.",
-                                       timeout: 300) { state.answeredAfter != nil }
-        if back, let after = state.answeredAfter {
-            log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the restart was confirmed (\(state.attempts) TCP connect(s), 2 s timeout each)")
-            return
-        }
-        log.warn("  guided: nothing answered at \(host):15740 within 300 s (\(state.attempts) TCP connect(s); last: \(state.lastError))")
-        let choice = try await ask("The camera didn't answer", "Nothing answered at \(host) on port 15740 for 5 minutes. Check that the camera's Wi-Fi is on in PC Remote and that the phone is on the camera's network, then try the reconnect anyway, or stop this section.",
-                                   buttons: ["Reconnect anyway", "Stop"])
-        if choice != "Reconnect anyway" { throw GuidedStop("the camera didn't answer at \(host):15740 after the restart") }
+        try await waitUntil(title, message, timeout: timeout) { state.answeredAfter != nil }
+        return state
     }
 
     func wifiResume() async throws {
@@ -913,6 +929,217 @@ extension GuidedRunner {
                 log.flag("ble.proximity.reminder.\(room == "same room" ? "sameRoom" : "nextRoom")", seen == "Yes",
                          context: "scan started after the lock, \(room)")
             }
+        }
+    }
+
+    // MARK: - Bluetooth: Wi-Fi handover
+
+    /// Runs one SonyWiFiHandover call under a waiting alert and returns its result. A throw, or no answer within
+    /// `timeout`, stops the section (and disconnects Bluetooth on a timeout); "Cancel run" disconnects too.
+    /// `detail` false leaves the error's text out of the stop reason (the credentials read).
+    private func bluetooth<T>(_ title: String, _ message: String, timeout: Double, detail: Bool = true,
+                              _ work: @escaping @MainActor () async throws -> T) async throws -> T {
+        step(title)
+        let call = HandoverCall<T>()
+        let task = Task { @MainActor in
+            do {
+                call.result = .success(try await work())
+            } catch {
+                call.result = .failure(error)
+            }
+        }
+        let finished: Bool
+        do {
+            finished = try await waitUntil(title, message, timeout: timeout) { call.result != nil }
+        } catch {
+            task.cancel()
+            handover.disconnect()
+            throw error
+        }
+        guard finished, let result = call.result else {
+            task.cancel()
+            handover.disconnect()
+            throw GuidedStop("\(title): no answer within \(Int(timeout)) s (Bluetooth: \(handover.status))")
+        }
+        switch result {
+        case .success(let value):
+            return value
+        case .failure(let error):
+            throw GuidedStop(detail ? "\(title) failed: \(error)" : "\(title) failed (\(type(of: error)); details left out of the log)")
+        }
+    }
+
+    /// Bluetooth: Wi-Fi handover. Can the app switch the camera's Wi-Fi on over Bluetooth (the one write, CC08 = 01,
+    /// only after you confirm it), read its network name and password, join that network and import a file, with
+    /// Creators' App still working afterwards? The name and password stay in memory for the two joins and are then
+    /// dropped: the log gets lengths, yes/no answers and the handover's redacted description only.
+    func bleHandover() async throws {
+        let ready = try await ask("Camera as after a restart",
+                                  "Set the camera as it is after a restart: switched on, Wi-Fi Direct and PC Remote over Wi-Fi OFF (to see whether Bluetooth switches the Wi-Fi on), Bluetooth on. Quit Creators' App (swipe it away). Then tap Ready.",
+                                  buttons: ["Ready", "Skip"])
+        guard ready == "Ready" else {
+            log.note("◆ Bluetooth: Wi-Fi handover: skipped")
+            return
+        }
+        let remote = try await ask("Bluetooth Rmt Ctrl", "On the camera (Network › Bluetooth): is Bluetooth Rmt Ctrl on?",
+                                   buttons: ["On", "Off", "Not sure"])
+        log.note("◆ Wi-Fi handover: camera Wi-Fi off at the start, Creators' App quit, Bluetooth Rmt Ctrl \(remote)")
+
+        var disconnected = false
+        defer { if !disconnected { handover.disconnect() } }
+        // The network name and password: held only from the read to the end of the joins.
+        var credentials: HandoverCredentials?
+
+        try await section("Switch the camera's Wi-Fi on over Bluetooth",
+                          "Connect, list the camera's services, harmless reads (model, firmware, status), then the one write, CC08 = 01, which you confirm first; then the network details are read. Nothing about the network is shown or logged except lengths and yes/no answers.") {
+            // b. Connect and discover.
+            let connected = try await bluetooth("Connecting over Bluetooth", "Finding the camera and connecting (up to 30 s). Allow Bluetooth if iOS asks.",
+                                                timeout: 45) { try await self.handover.connect(timeout: 30) }
+            log.note("  guided: Bluetooth connected: \(connected)")
+            let inventory = try await bluetooth("Listing services", "Discovering the camera's services and characteristics.",
+                                                timeout: 45) { try await self.handover.discover() }
+            let found = inventory.found.sorted { $0.key < $1.key }
+                .map { "\($0.key) \($0.value ? "yes" : "no")" }.joined(separator: ", ")
+            log.note("  guided: Bluetooth inventory: services \(inventory.services); characteristics \(inventory.characteristics); 8000CC00 \(inventory.hasCameraControl ? "present" : "absent"); found: \(found.isEmpty ? "none" : found)")
+            guard inventory.hasCameraControl else { throw GuidedStop("no 8000CC00 service") }
+
+            // c. Harmless reads, and whether they brought up a pairing request.
+            let status = try await bluetooth("Harmless reads", "Reading the model name, firmware and Wi-Fi status. Nothing is written.",
+                                             timeout: 45) { try await self.handover.safeReads() }
+            log.note("  guided: harmless reads done; status value \(status.map { String($0) } ?? "not reported") (Bluetooth: \(handover.status))")
+            if let hint = handover.lastPairingHint {
+                let paired = try await ask("Did iOS show a Bluetooth pairing request?", hint, buttons: ["Yes", "No"])
+                log.flag("ble.handover.pairingPrompt", paired == "Yes", context: "during the harmless reads; \(hint)")
+            }
+
+            // d. The one write, only after the tester confirms it.
+            let write = try await ask("Switch the camera's Wi-Fi on?",
+                                      "Write 01 to CC08 to switch the camera's Wi-Fi on? This is the only write; nothing else on the camera is changed.",
+                                      buttons: ["Write", "Skip"])
+            if write == "Write" {
+                let clock = ContinuousClock()
+                let started = clock.now
+                let on = try await bluetooth("Switching the camera's Wi-Fi on", "Writing 01 to CC08, then waiting up to 30 s for the camera to report its Wi-Fi on.",
+                                             timeout: 45) { try await self.handover.switchWiFiOn(timeout: 30) }
+                let seconds = (clock.now - started).inSeconds
+                log.note("  guided: CC08 = 01 written; the camera reported its Wi-Fi \(on ? "on" : "not on") after \(fmt(seconds)) s (Bluetooth: \(handover.status))")
+                let shows = try await ask("On the camera", "What does the camera show now?",
+                                          buttons: ["Wi-Fi came on", "Nothing changed", "Something else"])
+                log.flag("ble.handover.wifiOn", shows == "Wi-Fi came on",
+                         context: "after CC08 = 01; switchWiFiOn returned \(on ? "on" : "not on") after \(fmt(seconds)) s; camera shows: \(shows)")
+            } else {
+                log.note("◆ Wi-Fi handover: CC08 not written (skipped); reading the network details as the camera is")
+            }
+
+            // e. The network details: compared in memory with the Wi-Fi tab's fields, never logged.
+            let read = try await bluetooth("Reading the network details", "Reading the camera's network name and password over Bluetooth. They are never shown or logged.",
+                                           timeout: 45, detail: false) { try await self.handover.readCredentials() }
+            log.note("  guided: network details read: \(read.description)")
+            let ssidOK = !read.ssid.isEmpty
+            let passphraseShape = (8...63).contains(read.passphrase.count)
+                && read.passphrase.unicodeScalars.allSatisfy { (0x20...0x7E).contains($0.value) }
+            log.note("  guided: SSID \(HotspotJoiner.ssidSummary(read.ssid)); password \(read.passphrase.count) characters, 8–63 printable ASCII \(passphraseShape ? "yes" : "no"); BSSID \(read.bssidPresent ? "present" : "absent")")
+            let typedSSID = wireless.joinSSID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if typedSSID.isEmpty {
+                log.note("  guided: no SSID in the Wi-Fi tab, so no SSID comparison")
+            } else {
+                let same = read.ssid == typedSSID
+                log.note("  guided: SSID equals the Wi-Fi tab's: \(same ? "yes" : "no")")
+                log.flag("ble.handover.ssidMatchesTyped", same, context: "compared in memory with the Wi-Fi tab's SSID (typed or scanned); neither logged")
+            }
+            if wireless.joinPassphrase.isEmpty {
+                log.note("  guided: no passphrase in the Wi-Fi tab, so no password comparison")
+            } else {
+                let same = read.passphrase == wireless.joinPassphrase
+                log.note("  guided: password equals the Wi-Fi tab's passphrase: \(same ? "yes" : "no")")
+                log.flag("ble.handover.passwordMatchesTyped", same, context: "compared in memory with the Wi-Fi tab's passphrase (typed or scanned); neither logged")
+            }
+            guard ssidOK else { throw GuidedStop("the camera gave no network name over Bluetooth (was its Wi-Fi on?)") }
+            credentials = read
+        }
+
+        if credentials == nil {
+            log.note("◆ Wi-Fi handover: no network details from Bluetooth, so no join or import")
+        } else {
+            try await section("Join the camera's network and import",
+                              "Join with the details from Bluetooth, wait for the camera at 192.168.122.1, connect for the whole card, list it, download the newest ARW, then join a second time.") {
+                guard let details = credentials else { throw GuidedStop("no network details from Bluetooth") }
+                // f. Join and find the camera.
+                UserDefaults.standard.set("ap", forKey: "ptpip.net")
+                try await wifi("Join the camera's network", "Accept the system prompt if iOS asks.", timeout: 90) {
+                    wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase)
+                }
+                let firstAlready = wireless.lastJoinAlreadyAssociated
+                let prompted = try await ask("Did iOS ask to join?", "Did a system prompt ask to join the camera's network?", buttons: ["Yes", "No"])
+                log.flag("ble.handover.joinPrompt", prompted == "Yes",
+                         context: "first NEHotspotConfiguration join with the details from Bluetooth; " + joinOutcome(firstAlready))
+                let host = "192.168.122.1"
+                if let gateway = wireless.lastJoinGateway, gateway != host {
+                    log.warn("  guided: the join reported gateway \(gateway), not \(host); waiting at \(host) anyway")
+                }
+                step("Waiting for the camera at \(host):15740")
+                let port = try await pollCameraPort(host: host, title: "Waiting for the camera",
+                                                    message: "Waiting for the camera to answer at \(host):15740 on its own network (up to 60 s).",
+                                                    timeout: 60)
+                guard let after = port.answeredAfter else {
+                    log.warn("  guided: nothing answered at \(host):15740 within 60 s of the join (\(port.attempts) TCP connect(s); last: \(port.lastError))")
+                    throw GuidedStop("the camera didn't answer at \(host):15740 after the join")
+                }
+                UserDefaults.standard.set(host, forKey: "ptpip.host")
+                log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the join (\(port.attempts) TCP connect(s)); camera IP set to \(host)")
+
+                // g. Import one file over a whole-card contents-transfer session.
+                let t = wifiTarget()
+                try await wifi("Contents transfer: whole card",
+                               "SDIO_OpenSession, Sony's init sequence and the transfer mode, then waiting while the camera indexes the card (up to about 2 minutes). Accept on the camera if it asks.",
+                               timeout: 180) {
+                    wireless.connectContentsTransfer(t, mode: .wholeCard)
+                }
+                try await listAfterContentsTransfer("whole card, after the Bluetooth handover")
+                guard wireless.objects.contains(where: { $0.info.filename.uppercased().hasSuffix(".ARW") }) else {
+                    log.flag("ble.handover.import", false, context: "\(wireless.objects.count) objects listed, no ARW")
+                    throw GuidedStop("no ARW listed on the card")
+                }
+                let hashStarted = Date()
+                try await wifi("GetObject newest ARW", "Downloading the newest ARW and its SHA-256.", timeout: 300) { wireless.referenceHash() }
+                let imported = log.entries.contains { $0.at >= hashStarted && $0.text.hasPrefix("Reference SHA-256 of ") }
+                log.flag("ble.handover.import", imported,
+                         context: imported ? "GetObject of the newest ARW over the network joined from Bluetooth; \(wireless.objects.count) objects listed"
+                                           : "GetObject of the newest ARW failed (see the log)")
+
+                // h. Join again with the same details.
+                try await wifi("Join again", "The same join a second time. Accept the system prompt if iOS asks.", timeout: 90) {
+                    wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase)
+                }
+                let secondAlready = wireless.lastJoinAlreadyAssociated
+                let again = try await ask("Did iOS ask again?", "Did a system prompt ask to join the camera's network this time?", buttons: ["Yes", "No"])
+                log.flag("ble.handover.joinPromptAgain", again == "Yes",
+                         context: "second join with the same details, while on the camera's network; " + joinOutcome(secondAlready))
+            }
+        }
+        // Done with the joins: drop the network name and password.
+        credentials = nil
+
+        // i. Bluetooth off, and is Creators' App unharmed? Always offered, whatever happened above.
+        if wireless.isConnected {
+            try await wifi("Disconnect PTP/IP", "Closing the Wi-Fi session, so Creators' App can connect.", timeout: 30) { wireless.disconnect() }
+        }
+        step("Disconnect Bluetooth")
+        handover.disconnect()
+        disconnected = true
+        log.note("  guided: Bluetooth disconnected (\(handover.status))")
+        let works = try await ask("Creators' App", "Open Creators' App and check that it still connects to the camera as before. Then come back here. Does it?",
+                                  buttons: ["Yes", "No"])
+        log.flag("ble.handover.creatorsAppStillWorks", works == "Yes",
+                 context: "after the handover run; Bluetooth Rmt Ctrl \(remote)")
+    }
+
+    /// How a join answered, for a join-prompt flag's context.
+    private func joinOutcome(_ alreadyAssociated: Bool?) -> String {
+        switch alreadyAssociated {
+        case .some(true): return "apply answered already associated (no prompt expected)"
+        case .some(false): return "apply joined"
+        case .none: return "the join failed (see the log)"
         }
     }
 }
