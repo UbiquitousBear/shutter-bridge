@@ -83,7 +83,7 @@ The camera then announced its card with StoreAdded 0x00010001.
 - **Listing:** 391 files in **4.74 s**, then 419 files (259 ARW, 160 JPG, 7 folders) in **4.95 s**. Over USB the 391-file card takes 65 s in MTP and 7.2 s in MSC; the plan's target is 200 files in 5 s or less.
 - **Ready time:** the card was ready to list **2.6 s** after the switch, both times.
 - **Thumbnails:** 50 at **38.7 ms** and **35.4 ms** each on average (slowest about 100 ms). Over USB they take 145–188 ms; the target is 50 ms or less.
-- **Downloads:** 20 ARW (954 MB) at **15.5 MB/s**, from the first request to the last response. Per file it rose from 12.2 MB/s (the first) to 15–17 MB/s; every file has a SHA-256. That is about 40 % of USB 2 (38–40 MB/s): 1 GB takes about 65 s over the camera's Wi-Fi against 26 s on the cable. Memory peaked at 65.5 MB (baseline 57 MB).
+- **Downloads:** 20 ARW (954 MB) at **15.5 MB/s**, from the first request to the last response. A second run (22:51, 944 MB) gave **11.7 MB/s**, with files at 6–8 MB/s while the link quality dipped. The camera's network gives 11.7–15.5 MB/s, above the criterion both times. Per file it rose from 12.2 MB/s (the first) to 15–17 MB/s; every file has a SHA-256. That is about 40 % of USB 2 (38–40 MB/s): 1 GB takes about 65 s over the camera's Wi-Fi against 26 s on the cable. Memory peaked at 65.5 MB (baseline 57 MB).
 
 The camera reports the storage as "Storage Media 1", read-only without deletion (access capability 1), with its capacity shown as 0.
 
@@ -154,12 +154,16 @@ Go if `ObjectAdded` arrives on at least one link. Otherwise remove it from the p
 
 Measurements: `usb.event.objectAdded`, `ptpip.ap.event.objectAdded`, `ptpip.lan.event.objectAdded`. Fixtures: `event-objectadded.bin` in `usb/` and `ptpip/`.
 
-**Finding:** **Not over USB in *Image Transfer (MTP)* mode; possible over Wi-Fi.**
-- **USB, MTP:** the mode advertises no ObjectAdded event and disables the shutter.
-- **Wi-Fi, *PC Remote*:** DeviceInfo lists Sony's ObjectAdded (0xC201) and ObjectRemoved (0xC202). In two 20 s shutter tests on a plain session after the init sequence (2 Nov 13:48 and 22:09), none arrived: only 0xC223, with parameters 1 and 5 in pairs (plausibly the shutter's state), and 0xC203. No new file reached the card in the second test (the newest stayed at 16:10). So the camera may not have stored the frames: in PC Remote it saves according to *Still Img. Save Dest.* (to confirm).
-- **Still to try:** *Remote Shoot (PC Remote)* over USB, and the shutter test over Wi-Fi.
+**Finding:** **Go, over Wi-Fi in *PC Remote*.** Pressing the camera's shutter sent Sony's ObjectAdded (0xC201) with handle **0xFFFFC001** about 0.4 s after the capture. The frame was also saved to the card (*Still Img. Save Dest.*: *Dest. + Camera*).
+- **USB, MTP:** no. The mode advertises no ObjectAdded event and disables the shutter.
+- **Wi-Fi, *PC Remote*, plain session after the init sequence:** yes.
+  - 0xC223 reports the shutter's state: 5 when half-pressed, 7 at the capture, then 1.
+  - A real shot went 5 → 7 → 1 → 0xC206, then 0xC201 [0xFFFFC001] (22:50:52). A second shot 1.5 s later sent another.
+  - The two earlier "no" results (13:48 and 22:09) showed only 5 and 1, which fits a half-press without a capture. No new file reached the card in those tests.
+- **What 0xFFFFC001 is:** the camera's buffer slot for the shot. Fetching the frame from it (GetObjectInfo/GetObject on 0xFFFFC001), or finding it on the card by name, is still to try. It isn't needed for 1.0.
+- **Still to try:** *Remote Shoot (PC Remote)* over USB.
 
-**Evidence:** GetDeviceInfo in MTP mode, 1 Nov 22:59:37: events StoreAdded, StoreRemoved and DevicePropChanged only; "ObjectAdded 0x4002 no · Sony ObjectAdded 0xC201 no". Shamil, 1 Nov: the shutter is disabled in MTP and MSC.
+**Evidence:** GetDeviceInfo in MTP mode, 1 Nov 22:59:37: events StoreAdded, StoreRemoved and DevicePropChanged only; "ObjectAdded 0x4002 no · Sony ObjectAdded 0xC201 no". Shamil, 1 Nov: the shutter is disabled in MTP and MSC. Wi-Fi: guided run *Wi-Fi: one camera mode* › *PC Remote (camera's network)*, 2 Nov 22:50, build 0.1 (9.1): "Sony ObjectAdded (0xC201) … params [0xFFFFC001]", `ptpip.ap.event.objectAdded` yes. The next listing's newest file was DSC02052.ARW, captured 22:50:49 by the camera's clock. Shamil: one full press took a photo.
 
 ### Proximity reminder in 1.0
 
@@ -209,7 +213,7 @@ Guided run *Bluetooth: proximity reminder*, 2 Nov 11:52–12:01, build 0.1 (6.1)
 | Question | Answer | Evidence |
 | --- | --- | --- |
 | Which USB connection mode gives `ImageCaptureCore` a session: *Still Img Transfer (MTP)* alone, or also *Select on Connect*? | With the camera asking on connection (*Select USB Connect Mode*), choosing **Image Transfer (MTP)** or **Image Transfer (MSC)** gives a session that lists the card. *Remote Shoot (PC Remote)* enumerates; a session there is untried. *Live Stream* doesn't enumerate. | 1 Nov, Wired tab and log |
-| Does the camera emit `ObjectAdded` over USB while in MTP mode, or only in PC Remote mode? | **MTP: not advertised.** DeviceInfo lists three events only: StoreAdded, StoreRemoved and DevicePropChanged; neither ObjectAdded 0x4002 nor Sony's 0xC201. PC Remote mode is still to check (day 4's 60 s watch, in that mode). | GetDeviceInfo, 1 Nov 19:25, MTP |
+| Does the camera emit `ObjectAdded` over USB while in MTP mode, or only in PC Remote mode? | **MTP: not advertised.** DeviceInfo lists three events only: StoreAdded, StoreRemoved and DevicePropChanged; neither ObjectAdded 0x4002 nor Sony's 0xC201. PC Remote mode is still to check (day 4's 60 s watch, in that mode). Over Wi-Fi in PC Remote it does: Sony ObjectAdded 0xC201 [0xFFFFC001] (2 Nov 22:50). | GetDeviceInfo, 1 Nov 19:25, MTP |
 | Is the PTP/IP initiator GUID remembered across camera power cycles, or does every connection need re-pairing on the camera? | **No pairing is needed in *PC Remote* on the camera's own network.** A brand-new GUID connected with no prompt. After a power cycle, the same GUID reconnected with no prompt either. Shamil, 2 Nov: nothing to press, apart from switching the camera's Wi-Fi Direct back on. The camera's connection number follows the GUID: #2048075972 in every session with the old GUID, #3502824974 with the new one. Anyone who has joined the camera's Wi-Fi can connect, so its password is the only gate. | Guided run *Wi-Fi: GUID after a power cycle*, 2 Nov 22:29–22:30 |
 | Real throughput on the base-model (USB 2) iPhone with a UHS-II card in the camera |  |  |
 
@@ -233,7 +237,7 @@ The plan's paths use the α7 IV-generation names. Record what the α7C II actual
 | `Network → Wi-Fi → Wi-Fi Frequency Band` | Forcing 5 GHz |  |
 | `Network → Cnct./PC Remote → Smartphone Connect` | QR code, SSID and password |  |
 | `Network → Cnct./PC Remote → PC Remote Function` | PC Remote over Wi-Fi |  |
-| (not in the plan) *Still Img. Save Dest.* | Where a picture taken in PC Remote goes | Not under *PC Remote Function*: it is under **Remote Shoot Setting**, set to **Dest. + Camera** (Shamil, 2 Nov). Yet no new file reached the card during the 22:09 shutter test (the 22:10 listing's newest was from 16:10), so the shutter may not have fired: to confirm. |
+| (not in the plan) *Still Img. Save Dest.* | Where a picture taken in PC Remote goes | Not under *PC Remote Function*: it is under **Remote Shoot Setting**, set to **Dest. + Camera** (Shamil, 2 Nov). With a full press at 22:50, the frame reached the card and ObjectAdded arrived. The 22:09 test left nothing on the card because it was a half-press. |
 | … *PC Remote Cnct Method* = *Wi-Fi Direct* | Day-6 mode |  |
 | … *PC Remote Cnct Method* = *Wi-Fi Access Point* | Day-6 mode |  |
 | … *Pairing* | PC Remote pairing |  |
@@ -254,7 +258,7 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
 | `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` | listed, but 0x101B with three parameters answers InvalidObjectHandle in a contents-transfer session; Sony's four-parameter layout is still to try |  |
 | Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match | reconnect yes (about 2.5 s after Wi-Fi came back, same handles); byte-range resume not yet (GetPartialObject refused); restarting the file works |  |
-| `ObjectAdded` event received |  | no, twice, in 20 s shutter tests on a plain *PC Remote* session after the init sequence: only 0xC223 (parameters 1 and 5, in pairs) and 0xC203; no new file reached the card (the newest stayed at 16:10 on 2 Nov) |  |
+| `ObjectAdded` event received |  | **yes:** Sony ObjectAdded 0xC201 [0xFFFFC001] within a second of a full shutter press, on a plain *PC Remote* session after the init sequence (22:50). The earlier tests (13:48, 22:09) were half-presses. |  |
 | Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. | plain download: no progress in 123 s locked, session lost; in a continued task: 20 ARW at 15.4 MB/s, all while locked (57.4 s of progress) |  |
 | Camera battery used per 1 GB |  |  |  |
 | BLE: advertises when on / asleep / off; service UUID | on yes · asleep yes · off yes (Creators' App quit); UUID 1800 (Generic Access, not Sony-specific) |  |  |
