@@ -100,22 +100,40 @@ Go if the camera advertises a stable service UUID, at least while on, that iOS b
 
 Measurements: `ble.advert.<on/asleep/off>.<pairing>.seen`, `ble.connected.<state>.<pairing>.seen`, `ble.proximity.latency`, `ble.proximity.detectToNotify`, `ble.proximity.connectionEvent.latency`. Fixtures: `Fixtures/a7c2/ble/advert-*.json`.
 
-**Finding:** **The advertising half passes; whether background scanning works with it is still to test.**
+**Finding:** **Go: both halves pass.** The camera advertises a stable service UUID in every power state, and a background scan filtered on it woke the locked phone and posted the reminder.
 - **It advertises in every power state:** with Creators' App quit, the camera advertised on, asleep and switched off.
 - **The same service UUID every time:** 1800, with Sony's company ID (0x012D) in the manufacturer data.
 - **It keeps advertising when switched off**, as the proposal hoped. The reminder can therefore fire whenever the camera comes within range, which is what the proposal describes.
 - **The power state can't be read from the advertisement:** the manufacturer data is identical on, asleep and off, so the reminder can say "nearby" but not "switched on".
+- **The background scan works with the phone locked:** with the camera in the next room (RSSI -83 dBm), iOS reported it **11.76 s** after the scan was started, the reminder was accepted **0.02 s** later, and tapping it opened the app on the Wired tab.
 
 **The catch: 1800 is not a Sony service.** It is Bluetooth's standard *Generic Access* service, so a background scan filtered on it can also wake the app for other devices that advertise it. After a wake, the app has to confirm the camera:
 - by the peripheral identifier stored when the camera was linked (the same identifier in every scan, 683987C3…, as iOS assigns it to this app); or
 - by Sony's company ID together with the name.
 
-**Still to run:** the proximity test. Does iOS deliver background discoveries with a 1800 filter, with the phone locked, in the same room and the next room?
+**What the design has to allow for:**
+- **The trigger is coming into range, not switching on.** The camera advertises the same data while switched off, so a scan can't tell that it was switched on. The reminder fires when the phone and the camera come within range of each other, for example on getting home, whether the camera is on or off.
+- **iOS mostly reports the camera once per scan while it stays in range.** Within one scan it was reported again around the first power-off (11:52:47 and, locked, 11:53:01), then not at all during 92 s and 130 s in the background. The spike restarts the scan 60 s after a discovery so the camera is reported afresh, but on a timer, which doesn't run while the app is suspended: in this run every restart happened when the app came back to the front. Production has to restart the scan from a wake (a discovery, a connection event, a background refresh) instead of a timer, without letting a camera that sits in range wake the app over and over.
+- **Ask for notification permission when the person switches the reminder on.** The run's first reminder failed (UNErrorDomain 2003, permission not yet asked); permission was granted a second later and every later reminder was accepted.
+
+**The same-room "No" is the procedure, not the platform.** The guided run restarts the scan when *Start* is tapped, with the app still in front. The camera was in range, so it was found 0.04 s later and the reminder showed as a banner in the app before the phone was locked. iOS didn't report the camera again while it stayed in range, so nothing arrived while locked. Earlier in the same run, iOS had delivered a same-room discovery with the phone locked (11:53:01, RSSI -46, 4.8 s after the app went to the background); the 60 s debounce held that reminder back because one had shown 27 s earlier.
+
+**Still to run:**
+- a real arrival: the camera coming into range after being away long enough for iOS to report it afresh, with the phone locked (for example, the camera left in the car and brought in);
+- the same-room case with the scan started after the lock, which needs the guided run to wait for the background before restarting the scan;
+- the *Creators' App connected*, *Creators' App quit* and *Kill app to test relaunch* rows. No connection event (`ble.proximity.connectionEvent.latency`) arrived in this run.
 
 **Evidence:** Guided run *Bluetooth: what the camera advertises*, 2 Nov 01:38–01:48, build 0.1 (6.1):
 - `ble.advert.on.unlinked.seen`, `ble.advert.asleep.unlinked.seen` and `ble.advert.off.unlinked.seen` yes. Each scan logged "services 1800 · company 0x012D".
 - `ble.advert.on.connected.seen` yes.
 - Proximity filter set to 1800.
+
+Guided run *Bluetooth: proximity reminder*, 2 Nov 11:52–12:01, build 0.1 (6.1), 60 s debounce:
+- Next room: *Start* 12:00:47.95, phone locked 12:00:48.92, discovered 12:00:59.71 in the background, locked (`ble.proximity.latency` 11.76 s, RSSI -83); `ble.proximity.detectToNotify` 0.02 s; the reminder was opened 6.8 s later and *Import now* opened the Wired tab; `ble.proximity.reminder.nextRoom` yes.
+- Same room: *Start* 11:56:17.17, discovered 11:56:17.22 with the app active (`ble.proximity.latency` 0.04 s); reminder shown in the app (`ble.proximity.detectToNotify` 0.03 s); no discovery while locked or in the background from 11:56:24 to 11:57:56; `ble.proximity.reminder.sameRoom` no.
+- Locked same-room discovery: 11:53:01.77, app in the background, RSSI -46, debounced (last reminder 27 s earlier).
+- First reminder 11:52:35: not scheduled, UNErrorDomain 2003, `UNAuthorizationStatus=NotDetermined`; permission granted 11:52:36.
+- Every discovery was the same peripheral identifier, 683987C3…
 
 ## Open questions from the proposal
 
@@ -287,11 +305,11 @@ Proximity test:
 
 | Scenario | Detected after (`ble.proximity.latency`) | Reminder posted after (`ble.proximity.detectToNotify`) | Connection event after (`ble.proximity.connectionEvent.latency`) | Notes |
 | --- | --- | --- | --- | --- |
-| Phone locked, same room |  |  |  |  |
-| Phone locked, next room |  |  |  |  |
-| Creators' App connected |  |  |  |  |
-| Creators' App quit |  |  |  |  |
-| After *Kill app to test relaunch* |  |  |  |  |
+| Phone locked, same room | 0.04 s, but with the app still in front (the scan restarted on *Start*, before the lock) | 0.03 s, shown as a banner in the app | none | `ble.proximity.reminder.sameRoom` no: no discovery while locked, because iOS doesn't report a camera again while it stays in range. A procedure artefact; see the finding |
+| Phone locked, next room | **11.76 s**, in the background, locked, RSSI -83 | **0.02 s** | none | `ble.proximity.reminder.nextRoom` yes; reminder opened 6.8 s later, *Import now* opened the Wired tab |
+| Creators' App connected | not run |  |  |  |
+| Creators' App quit | not run |  |  |  |
+| After *Kill app to test relaunch* | not run |  |  |  |
 
 ## ImageCaptureCore facts
 
