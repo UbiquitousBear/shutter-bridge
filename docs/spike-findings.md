@@ -70,14 +70,18 @@ Go if a camera mode lists on-card objects over PTP/IP and sustains ≥ 8 MB/s on
 
 Measurements: `ptpip.ap.enumerate`, `ptpip.ap.objects`, `ptpip.ap.getObject.throughput`, and the LAN equivalents. See also the day-6 mode matrix below.
 
-**Finding:** **Open. *Smartphone Connect* connects but doesn't expose the card.** The phone joins the camera's network, the PTP/IP handshake and OpenSession succeed in 0.02 s, and DeviceInfo lists GetObjectHandles, GetObject, GetPartialObject and GetThumb. But GetStorageIDs answers **StoreNotAvailable (0x2013)**, so nothing can be listed. The camera's UPnP description names its default function *RemoteShooting*, which fits a mode meant for remote shooting.
+**Finding:** **Open. *PC Remote* on the camera's own network connects but doesn't expose the card to standard PTP.** The phone joins the camera's network, the PTP/IP handshake and OpenSession succeed in 0.02 s, and DeviceInfo lists GetObjectHandles, GetObject, GetPartialObject and GetThumb. But GetStorageIDs answers **StoreNotAvailable (0x2013)**, so nothing can be listed. The camera's UPnP description names its default function *RemoteShooting*. Open-source code for a ZV-E10 (mvpzac/Imagedge, not verified on the α7C II) reports the same 0x2013 in PC Remote. It lists the card after opening the session with Sony's SDIO_OpenSession (0x9210) in a contents-transfer function mode, then SDIO_SetContentsTransferMode (0x9212). Build 8 can send neither.
+
+(The run was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
 **Still to run:**
-- the Sony SDIO handshake in *Smartphone Connect*, then *List card* again;
-- *PC Remote* over Wi-Fi Direct and over an access point;
+- the Sony SDIO handshake in *PC Remote*, then *List card* again;
+- SDIO_OpenSession and SDIO_SetContentsTransferMode (needs build 9);
+- *Smartphone Connect* (no QR code on 2 Nov; possibly because PC Remote Function was on, or Creators' App held the link);
+- *PC Remote* over an access point (the home LAN);
 - *Send to Smartphone*, the fallback.
 
-**Evidence:** Guided run *Wi-Fi: one camera mode*, *Smartphone Connect*, camera access point, 2 Nov 12:08–12:14, build 0.1 (6.1): "List card failed: GetStorageIDs answered StoreNotAvailable (0x2013)". The run skips the SDIO step in this mode.
+**Evidence:** Guided run *Wi-Fi: one camera mode*, labelled *Smartphone Connect* but with the camera in *PC Remote* (camera's own network, so the Wi-Fi Direct method; to confirm), 2 Nov 12:08–12:14, build 0.1 (6.1): "List card failed: GetStorageIDs answered StoreNotAvailable (0x2013)". The run skipped the SDIO step because of the label.
 
 ### SSDP discovery
 
@@ -85,7 +89,7 @@ Go if the entitlement is granted and the camera announces. Otherwise typed IP an
 
 Measurements: `ptpip.<net>.discovery.ssdp` (unicast or multicast, named in its context), `ptpip.<net>.discovery.bonjour`. Fixtures: `Fixtures/a7c2/ptpip/ssdp-description.xml`; what the Mac's SSDP capture showed is written here (the pcaps stay on the Mac, out of the repo).
 
-**Finding:** **The camera announces itself, and the phone heard it without the multicast entitlement.** On the camera's own access point in *Smartphone Connect*:
+**Finding:** **The camera announces itself, and the phone heard it without the multicast entitlement.** On the camera's own network in *PC Remote*:
 - **It sends SSDP announcements** (NOTIFY for `upnp:rootdevice`, `urn:schemas-upnp-org:device:Basic:1` and `urn:schemas-sony-com:service:DigitalImaging:1`) to the multicast group.
 - **The spike received them anyway:** it has no `com.apple.developer.networking.multicast`, yet its `NWConnectionGroup` became ready and received them 0.73 s after joining.
 - **Our own multicast M-SEARCH never went out:** both sends were still pending when the group closed 5 s later. The camera didn't answer a unicast M-SEARCH, and advertised no `_ptp._tcp` over Bonjour.
@@ -116,7 +120,7 @@ Measurements: `usb.event.objectAdded`, `ptpip.ap.event.objectAdded`, `ptpip.lan.
 
 **Finding:** **Not over USB in *Image Transfer (MTP)* mode; possible over Wi-Fi.**
 - **USB, MTP:** the mode advertises no ObjectAdded event and disables the shutter.
-- **Wi-Fi, *Smartphone Connect*:** DeviceInfo lists Sony's ObjectAdded (0xC201) and ObjectRemoved (0xC202). Whether the event arrives when the shutter is pressed is still to test.
+- **Wi-Fi, *PC Remote*:** DeviceInfo lists Sony's ObjectAdded (0xC201) and ObjectRemoved (0xC202). Whether the event arrives when the shutter is pressed is still to test.
 - **Still to try:** *Remote Shoot (PC Remote)* over USB, and the shutter test over Wi-Fi.
 
 **Evidence:** GetDeviceInfo in MTP mode, 1 Nov 22:59:37: events StoreAdded, StoreRemoved and DevicePropChanged only; "ObjectAdded 0x4002 no · Sony ObjectAdded 0xC201 no". Shamil, 1 Nov: the shutter is disabled in MTP and MSC.
@@ -161,7 +165,7 @@ Guided run *Bluetooth: proximity reminder*, 2 Nov 11:52–12:01, build 0.1 (6.1)
 - Locked same-room discovery: 11:53:01.77, app in the background, RSSI -46, debounced (last reminder 27 s earlier).
 - First reminder 11:52:35: not scheduled, UNErrorDomain 2003, `UNAuthorizationStatus=NotDetermined`; permission granted 11:52:36.
 - Every discovery was the same peripheral identifier, 683987C3…
-- During the Wi-Fi run (12:10:38, app in the background), iOS reported the camera again while it was being set to *Smartphone Connect*, and the reminder was posted. This fits iOS reporting a peripheral afresh when its state changes.
+- During the Wi-Fi run (12:10:38, app in the background), iOS reported the camera again while its Wi-Fi was being set up, and the reminder was posted. This fits iOS reporting a peripheral afresh when its state changes.
 
 ## Open questions from the proposal
 
@@ -288,24 +292,25 @@ One row per camera mode. Note in the last column when the Mac (`gphoto2`, `nmap`
 
 | Camera mode | SSDP | Port 15740 open | Handshake accepted | Card listed | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Smartphone Connect | **announces:** NOTIFY to the multicast group, received in 0.73 s without the entitlement; no answer to a unicast M-SEARCH; our multicast M-SEARCH never sent | **yes**, 1.53 s, including allowing the Local Network prompt | **yes**, 0.02 s; Init_Command_Ack after 6 ms, so probably no prompt on the camera | **no:** GetStorageIDs → StoreNotAvailable (0x2013), without the SDIO handshake | iPhone only, no Mac probes. Bonjour `_ptp._tcp`: none. SDIO then *List card* still to try. 2 Nov 12:13 |
-| PC Remote over Wi-Fi Direct |  |  |  |  |  |
+| Smartphone Connect | not run: the camera showed no QR code on 2 Nov |  |  |  |  |
+| PC Remote over Wi-Fi Direct (camera's own network; method to confirm) | **announces:** NOTIFY to the multicast group, received in 0.73 s without the entitlement; no answer to a unicast M-SEARCH; our multicast M-SEARCH never sent | **yes**, 1.53 s, including allowing the Local Network prompt | **yes**, 0.02 s; Init_Command_Ack after 6 ms, so probably no prompt on the camera | **no:** GetStorageIDs → StoreNotAvailable (0x2013), without the SDIO handshake | iPhone only, no Mac probes. Bonjour `_ptp._tcp`: none. Labelled *Smartphone Connect* in the app; the camera was in PC Remote. SDIO, then SDIO_OpenSession and SetContentsTransferMode (build 9), still to try. 2 Nov 12:13 |
 | PC Remote over Access Point |  |  |  |  |  |
 
 ## PTP/IP and join facts
 
 | Question | Finding | Evidence |
 | --- | --- | --- |
-| What the camera shows on the first connection from the iPhone | Not recorded. In *Smartphone Connect* the Init_Command_Ack came 6 ms after the request, so the camera probably didn't ask. To confirm with Shamil. | Wi-Fi run, 2 Nov 12:14:04 |
+| What the camera shows on the first connection from the iPhone | Not recorded. In *PC Remote* the Init_Command_Ack came 6 ms after the request, so the camera probably didn't ask. To confirm with Shamil. | Wi-Fi run, 2 Nov 12:14:04 |
 | GUID persistence after a power cycle (no prompt / prompt once / prompt every time) |  |  |
 | What the camera shows for a new GUID |  |  |
-| Operations listed in DeviceInfo over PTP/IP, compared with USB | **Smartphone Connect:** vendor extension Sony v100 "Sony PTP Extensions" (USB MTP: none), functional mode 0. **81 operations** (USB MTP: 24): the PTP basics with GetPartialObject 0x101B and GetThumb, 0x100D, Sony 0x9201–0x9254, and MTP 0x9801–0x9803 and 0x9805 GetObjectPropList. The Sony operations include SDIO_Connect 0x9201, SDIO_GetExtDeviceInfo 0x9202, SDIO_GetPartialLargeObject 0x9211 and SDIO_SetContentsTransferMode 0x9212. No GetPartialObject64 (0x95C1). **48 events**, including StoreAdded, StoreRemoved, **Sony ObjectAdded 0xC201** and ObjectRemoved 0xC202 (USB MTP: 3). **0 device properties** (USB MTP: 5). Image formats: Association, EXIF/JPEG, Sony ARW, 0x300B, MP4, Sony HEIF. Firmware string **2.01**; Setup records 2.0 from USB on 1 Nov. Fixtures on the phone: `ptpip/deviceinfo.bin` (475 B, serial zeroed), `ptpip/FIRMWARE`. | Wi-Fi run, 2 Nov 12:14:04 |
+| Operations listed in DeviceInfo over PTP/IP, compared with USB | **PC Remote, camera's own network:** vendor extension Sony v100 "Sony PTP Extensions" (USB MTP: none), functional mode 0. **81 operations** (USB MTP: 24): the PTP basics with GetPartialObject 0x101B and GetThumb, 0x100D, Sony 0x9201–0x9254, and MTP 0x9801–0x9803 and 0x9805 GetObjectPropList. The Sony operations include SDIO_Connect 0x9201, SDIO_GetExtDeviceInfo 0x9202, SDIO_GetPartialLargeObject 0x9211 and SDIO_SetContentsTransferMode 0x9212. No GetPartialObject64 (0x95C1). **48 events**, including StoreAdded, StoreRemoved, **Sony ObjectAdded 0xC201** and ObjectRemoved 0xC202 (USB MTP: 3). **0 device properties** (USB MTP: 5). Image formats: Association, EXIF/JPEG, Sony ARW, 0x300B, MP4, Sony HEIF. Firmware string **2.01**; Setup records 2.0 from USB on 1 Nov. Fixtures on the phone: `ptpip/deviceinfo.bin` (475 B, serial zeroed), `ptpip/FIRMWARE`. | Wi-Fi run, 2 Nov 12:14:04 |
 | Sony SDIO connect: response codes and whether the operation list changes |  |  |
 | Camera's IP address on its own access point | **192.168.122.1** (the PTP/IP port and the SSDP announcements both came from it) | Wi-Fi run, 2 Nov 12:13 |
 | Phone's internet while joined to the camera's access point (`NWPath`) | **Kept, over mobile data.** Joined to the camera, the path showed Wi-Fi present but not used, cellular in use, and the carrier's gateway. Traffic to 192.168.122.1 still went over Wi-Fi. Before the join, the path was home Wi-Fi with gateway 192.168.1.1. | Wi-Fi run, 2 Nov 12:08:57 and 12:13:28 |
 | QR code format and the fields it holds (names only, never values) |  |  |
 | Join flow: system sheets and prompts seen, and `ptpip.ap.join` | Not measured yet. On 2 Nov the phone joined outside the app's scanner (how is to confirm), so `ptpip.ap.join` wasn't recorded and the guided step stopped at "no SSID to join". | Wi-Fi run, 2 Nov 12:13:33 |
 | When the Local Network prompt appeared | **At the first connection to the camera** (the TCP 15740 probe). Until it was allowed, the connection waited with "Network is down" (POSIX 50); the probe succeeded 1.53 s after it started. | Wi-Fi run, 2 Nov 12:13:41 |
+| An idle session with the app in the background (not in the plan) | **Lost.** The app went to the background 6 s after the run's last command and came back 26 s later. Both channels then failed with "Software caused connection abort" (POSIX 53). Seven seconds later the phone left the camera's network for the home Wi-Fi. Two causes are possible and the run can't tell them apart: iOS closing a suspended app's sockets, or the camera dropping an idle session (the ZV-E10 code above reports about 30 s and sends GetDeviceInfo every 10 s to prevent it). Either way, 1.0 needs a keep-alive and an automatic reconnect on return to the front. | Wi-Fi log, 2 Nov 12:14:05–12:14:49 |
 
 ## BLE advertisement
 
