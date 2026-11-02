@@ -70,6 +70,8 @@ final class GuidedRunner {
     @ObservationIgnored let continued: ContinuedTask
     @ObservationIgnored let lifecycle: LifecycleMonitor
     @ObservationIgnored let proximity: ProximityWatcher
+    /// Build 10: switches the camera's Wi-Fi on over Bluetooth and reads its network name and password.
+    @ObservationIgnored let handover: SonyWiFiHandover
     @ObservationIgnored private var continuation: CheckedContinuation<String, Never>?
     @ObservationIgnored private var cancelled = false
     @ObservationIgnored private var startedAt = Date()
@@ -78,7 +80,8 @@ final class GuidedRunner {
     @ObservationIgnored private var closedAt = Date.distantPast
 
     init(log: SpikeLog, browser: DeviceBrowser, usb: USBLab, wireless: WirelessLab, scanner: AdvertisementScanner,
-         continued: ContinuedTask, lifecycle: LifecycleMonitor, proximity: ProximityWatcher) {
+         continued: ContinuedTask, lifecycle: LifecycleMonitor, proximity: ProximityWatcher,
+         handover: SonyWiFiHandover) {
         self.log = log
         self.browser = browser
         self.usb = usb
@@ -87,6 +90,7 @@ final class GuidedRunner {
         self.continued = continued
         self.lifecycle = lifecycle
         self.proximity = proximity
+        self.handover = handover
     }
 
     var isRunning: Bool { runningTitle != nil }

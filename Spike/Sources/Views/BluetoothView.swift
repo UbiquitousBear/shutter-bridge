@@ -8,12 +8,17 @@ struct BluetoothView: View {
     @Environment(ProximityWatcher.self) private var watcher
     /// Created by the app and shared with the Guided tab's runner.
     @Environment(AdvertisementScanner.self) private var scanner
+    /// Build 10: created by the app and shared with the Guided tab's runner.
+    @Environment(SonyWiFiHandover.self) private var handover
     @AppStorage(ProximityWatcher.Keys.serviceUUID) private var serviceUUID = ""
     @AppStorage("ble.snapshot.power") private var powerRaw = AdvertisementScanner.PowerState.on.rawValue
     @AppStorage("ble.snapshot.pairing") private var pairingRaw = AdvertisementScanner.PairingContext.connected.rawValue
     @State private var typedUUID = ""
     @State private var confirmKill = false
     @State private var gattCandidate: UUID?
+    @State private var confirmWiFiOn = false
+    /// The redacted description of the last Wi-Fi details read (lengths and yes/no only); the values aren't kept.
+    @State private var handoverDetails: String?
 
     private var power: AdvertisementScanner.PowerState { AdvertisementScanner.PowerState(rawValue: powerRaw) ?? .on }
     private var pairing: AdvertisementScanner.PairingContext {
@@ -28,6 +33,7 @@ struct BluetoothView: View {
                 filterSection
                 proximitySection
                 gattSection
+                handoverSection
             }
             .navigationTitle("Bluetooth")
             .confirmationDialog("Open a GATT connection to this peripheral?", isPresented: gattDialogShown, titleVisibility: .visible) {
@@ -267,6 +273,62 @@ struct BluetoothView: View {
         Section("Experimental · GATT") {
             LabeledContent("Status", value: scanner.gattStatus)
             Text("Only if the camera advertises no service UUID while paired: a row's … menu → List services opens a GATT connection to the camera, lists its service UUIDs (no characteristic reads or writes) and disconnects. Creators' App may notice the connection.")
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    // MARK: - Experimental · Wi-Fi handover (build 10)
+
+    /// Every action logs what it measured; failures are logged by SonyWiFiHandover itself, so the buttons drop them.
+    private var handoverSection: some View {
+        Section("Experimental · Wi-Fi handover (build 10)") {
+            LabeledContent("Status") {
+                Text(handover.status).font(.caption)
+            }
+            if let hint = handover.lastPairingHint {
+                Text(hint).font(.caption).foregroundStyle(.orange)
+            }
+            Button("Connect + discover") {
+                Task {
+                    do {
+                        _ = try await handover.connect()
+                        _ = try await handover.discover()
+                    } catch {}
+                }
+            }
+            .disabled(handover.busy)
+            Button("Safe reads") {
+                Task { _ = try? await handover.safeReads() }
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Switch camera Wi-Fi on…") { confirmWiFiOn = true }
+                .disabled(handover.busy || !handover.isConnected)
+                .confirmationDialog("Switch the camera's Wi-Fi on?", isPresented: $confirmWiFiOn, titleVisibility: .visible) {
+                    Button("Write 0x01 to CC08") {
+                        Task { _ = try? await handover.switchWiFiOn() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only Bluetooth write the spike makes. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
+                }
+            Button("Read Wi-Fi details") {
+                Task {
+                    if let credentials = try? await handover.readCredentials() {
+                        handoverDetails = credentials.description
+                    }
+                }
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            if let handoverDetails {
+                Text(handoverDetails).font(.caption)
+            }
+            Button("Disconnect", role: .destructive) {
+                handover.disconnect()
+                handoverDetails = nil
+            }
+            .disabled(!handover.isConnected && !handover.busy)
+            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, and on request switches the camera's Wi-Fi on and reads the network name and password. The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
                 .font(.footnote)
                 .foregroundStyle(.orange)
         }
