@@ -9,7 +9,7 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 | Item | Value |
 | --- | --- |
 | iPhone model and iOS build (from the Log tab's Device section) | `iPhone18,4`, iOS 27.2 (24B119) |
-| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). TestFlight's build number is the workflow run, not the spike build. |
+| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). TestFlight's build number is the workflow run, not the spike build. |
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | Sony Corporation ILCE-7CM2 (α7C II), firmware 2.0 (GetDeviceInfo over USB, 1 Nov). The serial number is in DeviceInfo and in `usb/deviceinfo.bin`; it is deliberately not written here. |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
@@ -100,9 +100,22 @@ Go if the camera advertises a stable service UUID, at least while on, that iOS b
 
 Measurements: `ble.advert.<on/asleep/off>.<pairing>.seen`, `ble.connected.<state>.<pairing>.seen`, `ble.proximity.latency`, `ble.proximity.detectToNotify`, `ble.proximity.connectionEvent.latency`. Fixtures: `Fixtures/a7c2/ble/advert-*.json`.
 
-**Finding:** _to fill_
+**Finding:** **The advertising half passes; whether background scanning works with it is still to test.**
+- **It advertises in every power state:** with Creators' App quit, the camera advertised on, asleep and switched off.
+- **The same service UUID every time:** 1800, with Sony's company ID (0x012D) in the manufacturer data.
+- **It keeps advertising when switched off**, as the proposal hoped. The reminder can therefore fire whenever the camera comes within range, which is what the proposal describes.
+- **The power state can't be read from the advertisement:** the manufacturer data is identical on, asleep and off, so the reminder can say "nearby" but not "switched on".
 
-**Evidence:** _to fill_
+**The catch: 1800 is not a Sony service.** It is Bluetooth's standard *Generic Access* service, so a background scan filtered on it can also wake the app for other devices that advertise it. After a wake, the app has to confirm the camera:
+- by the peripheral identifier stored when the camera was linked (the same identifier in every scan, 683987C3…, as iOS assigns it to this app); or
+- by Sony's company ID together with the name.
+
+**Still to run:** the proximity test. Does iOS deliver background discoveries with a 1800 filter, with the phone locked, in the same room and the next room?
+
+**Evidence:** Guided run *Bluetooth: what the camera advertises*, 2 Nov 01:38–01:48, build 0.1 (6.1):
+- `ble.advert.on.unlinked.seen`, `ble.advert.asleep.unlinked.seen` and `ble.advert.off.unlinked.seen` yes. Each scan logged "services 1800 · company 0x012D".
+- `ble.advert.on.connected.seen` yes.
+- Proximity filter set to 1800.
 
 ## Open questions from the proposal
 
@@ -156,7 +169,7 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 | `ObjectAdded` event received |  |  |  |
 | Session survives phone lock (seconds) | not measured yet (the 0.00 s in the 23:41 export is a false reading: no transfer was running) |  |  |
 | Camera battery used per 1 GB |  |  |  |
-| BLE: advertises when on / asleep / off; service UUID |  |  |  |
+| BLE: advertises when on / asleep / off; service UUID | on yes · asleep yes · off yes (Creators' App quit); UUID 1800 (Generic Access, not Sony-specific) |  |  |
 
 All measurements, MTP, from *Copy measurements table* (1 Nov 2026 19:43; the log had been cleared after the thumbnail runs, whose figures are in the table above):
 
@@ -254,19 +267,21 @@ With Bluetooth Function on and Remote Power ON/OFF on. Interval is the median ga
 
 | Camera power | Advertises | Service UUIDs | Manufacturer data | Interval | Seen from the next room |
 | --- | --- | --- | --- | --- | --- |
-| On |  |  |  |  |  |
-| Asleep |  |  |  |  |  |
-| Off |  |  |  |  |  |
+| On | yes: 23 in 30 s with Creators' App quit, 1,083 with it connected | 1800 | company 0x012D, 20 bytes after it. Bytes 6–8 and 12–13 (counting from 0 after the company ID) change while Creators' App is connected. | about 1,024 ms with the app quit; about 43 ms with it connected | not run |
+| Asleep | yes: 26 in 30 s | 1800 | the same as *On* with the app quit | about 2,037 ms | not run |
+| Off | yes: 34 in 30 s | 1800 | the same as *On* with the app quit | about 1,529 ms | not run |
+
+Settings as they were on the camera (Bluetooth Function on). Whether *Remote Power ON/OFF* was on is not recorded. RSSI was about -83 dBm with the app quit and -62 dBm in the connected run; the phone's distance is not recorded. Guided run, 2 Nov 01:38–01:44.
 
 By pairing context (the setup with Creators' App paired on the same iPhone):
 
 | Pairing context | Advertises (on / asleep / off) | Connected to the system (`ble.connected.<state>.<pairing>.seen`) | Connection event received | Notes |
 | --- | --- | --- | --- | --- |
-| Creators' App connected |  |  |  |  |
-| Creators' App quit, link down |  |  |  |  |
-| Not paired |  |  |  |  |
+| Creators' App connected | on: yes (fast, about every 43 ms); asleep and off not run | yes (`ble.connected.on.connected.seen`): the system lists the camera as connected (another app holds it) | — | still advertises while connected |
+| Creators' App quit, link down | yes / yes / yes | no / no / no | — | the state our users will usually be in |
+| Not paired | skipped (needs pairing again) | | | |
 
-Proximity filter UUID chosen: _to fill_
+Proximity filter UUID chosen: **1800** (Generic Access), the only service UUID the camera advertises, the same with Creators' App quit and connected. It isn't Sony-specific, so the app confirms the camera after a wake by its peripheral identifier or Sony's company ID.
 
 Proximity test:
 
