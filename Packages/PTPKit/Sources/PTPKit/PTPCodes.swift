@@ -47,6 +47,10 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     public static let sonySDIOConnect = PTPOperationCode(rawValue: 0x9201)
     /// Param 1 = protocol version (0xC8 = 2.00, 0x12C = 3.00), param 2 = 1. Data phase lists vendor codes.
     public static let sonySDIOGetExtDeviceInfo = PTPOperationCode(rawValue: 0x9202)
+    /// Sony's replacement for OpenSession (0x1002) in a contents-transfer session. Parameters: session ID, function
+    /// mode (1 = contents transfer, 0 = remote control). Sending both this and OpenSession answers 0x201E.
+    /// `unverified` on the α7C II (source: mvpzac/Imagedge on a ZV-E10).
+    public static let sonySDIOOpenSession = PTPOperationCode(rawValue: 0x9210)
     /// Sony's own 64-bit partial read. Parameter layout undocumented; probe it in the spike.
     public static let sonySDIOGetPartialLargeObject = PTPOperationCode(rawValue: 0x9211)
     /// Switches the camera into its contents-transfer (card browsing) mode. Parameters undocumented.
@@ -75,6 +79,7 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
         case .getObjectPropList: "GetObjectPropList (MTP)"
         case .sonySDIOConnect: "Sony SDIO_Connect"
         case .sonySDIOGetExtDeviceInfo: "Sony SDIO_GetExtDeviceInfo"
+        case .sonySDIOOpenSession: "Sony SDIO_OpenSession"
         case .sonySDIOGetPartialLargeObject: "Sony SDIO_GetPartialLargeObject"
         case .sonySDIOSetContentsTransferMode: "Sony SDIO_SetContentsTransferMode"
         default: String(format: "Op(0x%04X)", rawValue)

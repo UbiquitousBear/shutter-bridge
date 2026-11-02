@@ -82,6 +82,42 @@ struct PTPContainerTests {
         #expect(PTPResponseCode.objectWriteProtected.description == "ObjectWriteProtected")
     }
 
+    @Test("Sony SDIO_OpenSession carries session ID and function mode, with no data phase")
+    func sonySDIOOpenSession() throws {
+        let c = PTPCommand.sonySDIOOpenSession(functionMode: 1, tx: 1)
+        #expect(c.operationCode == .sonySDIOOpenSession)
+        #expect(c.code == 0x9210)
+        #expect(c.transactionID == 1)
+        #expect(c.parameters == [1, 1], "session ID defaults to 1")
+        #expect(PTPOperationCode.sonySDIOOpenSession.description == "Sony SDIO_OpenSession")
+        #expect(PTPCommand.sonySDIOOpenSession(sessionID: 7, functionMode: 0, tx: 2).parameters == [7, 0])
+
+        let bytes = c.encode()
+        #expect(Array(bytes) == [20, 0, 0, 0, 1, 0, 0x10, 0x92, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0])
+
+        let (dataPhase, decoded) = try PTPIP.decodeCmdRequest(PTPIP.cmdRequest(c))
+        #expect(dataPhase == PTPIP.DataPhase.none.rawValue)
+        #expect(decoded == c)
+    }
+
+    @Test("Sony SDIO_SetContentsTransferMode carries its three parameters, with no data phase")
+    func sonySetContentsTransferMode() throws {
+        let c = PTPCommand.sonySetContentsTransferMode(2, 1, 0, tx: 9)
+        #expect(c.operationCode == .sonySDIOSetContentsTransferMode)
+        #expect(c.code == 0x9212)
+        #expect(c.transactionID == 9)
+        #expect(c.parameters == [2, 1, 0])
+        #expect(PTPCommand.sonySetContentsTransferMode(2, 0, 0, tx: 8).parameters == [2, 0, 0])
+        #expect(PTPCommand.sonySetContentsTransferMode(1, 0, 0, tx: 10).parameters == [1, 0, 0])
+
+        let bytes = c.encode()
+        #expect(Array(bytes) == [24, 0, 0, 0, 1, 0, 0x12, 0x92, 9, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+
+        let (dataPhase, decoded) = try PTPIP.decodeCmdRequest(PTPIP.cmdRequest(c))
+        #expect(dataPhase == PTPIP.DataPhase.none.rawValue)
+        #expect(decoded == c)
+    }
+
     @Test("Both the standard and Sony ObjectAdded signal a new object")
     func newObjectEvents() {
         #expect(PTPEventCode.objectAdded.signalsNewObject)

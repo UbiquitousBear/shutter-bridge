@@ -513,8 +513,10 @@ actor PTPIPClient {
         sessionOpen = false
     }
 
-    func getDeviceInfo() async throws -> (info: PTPDeviceInfo, raw: Data) {
-        let raw = try await collect(PTPCommand.getDeviceInfo(tx: tx.take()))
+    /// `idleTimeout` is shorter for the keep-alive and the back-from-background check, which must not hold the
+    /// session for 30 s if the camera has gone.
+    func getDeviceInfo(idleTimeout: Double = PTPIPClient.idleTimeout) async throws -> (info: PTPDeviceInfo, raw: Data) {
+        let raw = try await collect(PTPCommand.getDeviceInfo(tx: tx.take()), idleTimeout: idleTimeout)
         let info = try decoded("DeviceInfo", raw) { try PTPDeviceInfo.decode($0) }
         deviceInfo = info
         return (info, raw)
@@ -595,6 +597,23 @@ actor PTPIPClient {
     /// PTPKit's builder. The data phase lists Sony's vendor operation/property codes. `unverified`.
     func sonySDIOGetExtDeviceInfo(version: UInt32 = 0x12C) async throws -> Data {
         try await collect(PTPCommand.sonySDIOGetExtDeviceInfo(version: version, tx: tx.take()), limit: 1024 * 1024)
+    }
+
+    /// Experimental, PC Remote modes: Sony SDIO_OpenSession (0x9210) with [sessionID 1, functionMode] in place of
+    /// OpenSession (0x1002); sending both answers SessionAlreadyOpen (0x201E). functionMode 1 is ContentsTransfer
+    /// (the whole card), 0 RemoteControl. Numbered from the running counter (1 on a fresh connection), as Imagedge
+    /// numbers it, and the counter keeps running afterwards. Marks the session open on OK; any other response
+    /// throws `.response`. `unverified` on the α7C II (Imagedge field-tested it on a ZV-E10).
+    func sonySDIOOpenSession(functionMode: UInt32) async throws {
+        try await perform(PTPCommand.sonySDIOOpenSession(sessionID: 1, functionMode: functionMode, tx: tx.take()))
+        sessionOpen = true
+    }
+
+    /// Experimental: Sony SDIO_SetContentsTransferMode (0x9212) with three parameters (Imagedge: [2,0,0] then
+    /// [2,1,0] for the whole card, [1,0,0] for photos sent from the camera). Any data phase is discarded.
+    /// `unverified` on the α7C II.
+    func sonySetContentsTransferMode(_ p1: UInt32, _ p2: UInt32, _ p3: UInt32) async throws {
+        try await perform(PTPCommand.sonySetContentsTransferMode(p1, p2, p3, tx: tx.take()))
     }
 
     // MARK: Helpers

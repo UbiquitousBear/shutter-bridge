@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
-"""Zero the camera's serial number in captured fixtures, keeping every other byte.
+"""Zero the camera's serial number and hardware ID in captured fixtures, keeping every other byte.
 
-The repository is public, so the owner decided (1 Nov 2026) that a serial number never reaches it: each of its
-characters becomes "0", and the length and every other byte stay as captured, so the PTPKit tests still parse
-the real layout. Two kinds of file carry it:
+The repository is public, so the owner decided (1 Nov 2026) that a serial number never reaches it; from 2 Nov 2026
+the camera's hardware ID gets the same treatment, by the same reasoning: each character becomes "0", and the length and every other
+byte stay as captured, so the PTPKit tests still parse the real layout. Two kinds of file carry them:
 
 - `deviceinfo.bin` (GetDeviceInfo's data phase, USB or PTP/IP; also the copies `make fixtures` puts in the PTPKit
   test bundle as `a7c2-<link>-deviceinfo.bin`): the SerialNumber string, the last field PTP defines.
 - `ssdp-description.xml` (the UPnP device description): the text of each serialNumber element, with or without a
   namespace prefix, attributes or spaces in the tag, closed or not (whitespace is kept). If an XML parser still
   finds a serialNumber that isn't all zeros afterwards (CDATA, an entity), the file is reported and not written.
+  The same file carries the hardware ID: 12 hex digits that look like the camera's MAC address, the last group of
+  the UDN (`uuid:00000000-0005-0010-8000-<12 hex digits>`), repeated in the USN values and possibly elsewhere. Every
+  occurrence of those digits, in either letter case, anywhere in the file becomes `000000000000`. An XML parser must
+  find no UDN with a non-zero ID afterwards either, or the file is reported and not written. The PTP/IP responder
+  GUID (Init_Command_Ack) ends in the same 6 bytes, but the spike saves no handshake packet, and none of the other
+  PTP/IP fixtures (datasets, whole Event packets) carries a GUID, so no binary fixture is touched for it. If one is
+  ever saved, add its kind here first. `sdio-extdeviceinfo.bin` is Sony's private dataset and its layout is
+  unverified, so it is left as captured; check it by eye before committing it.
 
 Packet captures are not redacted here: a pcap of the PTP/IP handshake also names the Mac, so pcaps stay out of the
 repository altogether (`.gitignore` under `Fixtures/`, and the pre-commit hook refuses any staged `.pcap`).
 
 Usage:
-    scripts/redact-fixtures.py            zero the serial in every such file under Fixtures/ and the test bundle
+    scripts/redact-fixtures.py            zero the serial and the hardware ID in every such file under Fixtures/
+                                          and the test bundle
     scripts/redact-fixtures.py FILE...    the same, for these files only
     scripts/redact-fixtures.py --check [FILE...]
-                                          change nothing; exit 1 if a file still has a serial, or can't be read
+                                          change nothing; exit 1 if a file still has a serial or a hardware ID,
+                                          or can't be read
                                           (the pre-commit hook runs this on staged fixtures)
 A file's kind is taken from its name, so a staged copy in a temporary folder must keep the original basename.
 """
@@ -35,6 +45,10 @@ DEFAULT_GLOBS = [
     "Packages/PTPKit/Tests/PTPKitTests/Fixtures/*deviceinfo.bin",
 ]
 ZERO_UNIT = b"\x30\x00"  # "0" in UTF-16LE
+# What a redactor can find, as the first item of each (kind, count) it returns.
+SERIAL = "serial number"
+HARDWARE_ID = "hardware ID"
+HARDWARE_ZEROS = b"000000000000"
 
 
 class Unreadable(Exception):
@@ -87,10 +101,10 @@ def redact_deviceinfo(data):
     start, end = deviceinfo_serial_span(data)
     serial = data[start:end]
     if all(serial[i:i + 2] == ZERO_UNIT for i in range(0, len(serial), 2)):
-        return data, 0
+        return data, []
     redacted = bytearray(data)
     redacted[start:end] = ZERO_UNIT * ((end - start) // 2)
-    return bytes(redacted), (end - start) // 2
+    return bytes(redacted), [(SERIAL, (end - start) // 2)]
 
 
 # A <serialNumber> element as DeviceDescriptionParser in the spike sees one: any namespace prefix, attributes or
@@ -118,6 +132,42 @@ def _xml_serials(data):
             if isinstance(e.tag, str) and e.tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower() == "serialnumber"]
 
 
+# A UDN element as DeviceDescriptionParser in the spike sees one (any namespace prefix, attributes or spaces in the
+# tag, any case) whose value is `uuid:` and a UUID. Group 1 is the UUID's last group, 12 hex digits: the camera's
+# hardware ID. Same pattern as FixtureStore.ssdpUDNPattern in the spike.
+UDN_ELEMENT = re.compile(
+    rb"<(?:[\w.-]+:)?UDN\b[^>]*>\s*uuid:[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-([0-9A-F]{12})",
+    re.IGNORECASE)
+UDN_VALUE = re.compile(r"uuid:[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-([0-9A-F]{12})", re.IGNORECASE)
+
+
+def _xml_udn_ids(data):
+    """The last group of every UDN element's UUID, by an XML parser, or None if the file doesn't parse."""
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return None
+    ids = []
+    for e in root.iter():
+        if isinstance(e.tag, str) and e.tag.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower() == "udn":
+            match = UDN_VALUE.search("".join(e.itertext()).strip())
+            if match:
+                ids.append(match.group(1))
+    return ids
+
+
+def _zero_hardware_id(data):
+    """`data` with every occurrence, in any case, of each UDN's non-zero hardware ID replaced by twelve "0"s, and
+    how many occurrences were replaced. The IDs come from the UDN elements; the replacement is everywhere."""
+    ids = {m.group(1).lower() for m in UDN_ELEMENT.finditer(data)} - {HARDWARE_ZEROS}
+    replaced = 0
+    for found in ids:
+        # Hex digits only, so the literal needs no more than re.escape.
+        data, count = re.subn(re.escape(found), HARDWARE_ZEROS, data, flags=re.IGNORECASE)
+        replaced += count
+    return data, replaced
+
+
 def redact_ssdp(data):
     changed = 0
 
@@ -136,16 +186,28 @@ def redact_ssdp(data):
         if any(ch not in "0 \t\r\n" for ch in text):
             raise Unreadable("an XML parser still finds a serialNumber that isn't all zeros after zeroing "
                              "(CDATA or an entity?); don't commit this file")
-    return redacted, changed
+    redacted, hardware = _zero_hardware_id(redacted)
+    # Same again for the hardware ID: an XML parser must read nothing but zeros in every UDN's last group.
+    for found in _xml_udn_ids(redacted) or []:
+        if found.strip("0"):
+            raise Unreadable("an XML parser still finds a UDN with a hardware ID that isn't all zeros after zeroing "
+                             "(CDATA or an entity?); don't commit this file")
+    return redacted, [(kind_, count) for kind_, count in ((SERIAL, changed), (HARDWARE_ID, hardware)) if count]
 
 
 def kind(path):
     name = path.name
-    if name.endswith("deviceinfo.bin"):
+    # GetDeviceInfo only: `deviceinfo.bin` and the test-bundle copy `a7c2-<link>-deviceinfo.bin`. Sony's
+    # `sdio-extdeviceinfo.bin` (and `a7c2-ptpip-sdio-extdeviceinfo.bin`) has another layout and is left as captured.
+    if name == "deviceinfo.bin" or name.endswith("-deviceinfo.bin"):
         return redact_deviceinfo
     if name == "ssdp-description.xml":
         return redact_ssdp
     return None
+
+
+def describe(what, count):
+    return f"{count} characters" if what == SERIAL else f"{count} occurrence{'' if count == 1 else 's'}"
 
 
 def main(argv):
@@ -162,20 +224,22 @@ def main(argv):
             continue
         try:
             data = path.read_bytes()
-            redacted, units = redact(data)
+            redacted, findings = redact(data)
         except (OSError, Unreadable) as error:
-            print(f"redact-fixtures: {path}: can't check the serial number: {error}", file=sys.stderr)
+            print(f"redact-fixtures: {path}: can't check the serial number or hardware ID: {error}", file=sys.stderr)
             problems += 1
             continue
-        if not units:
+        if not findings:
             continue
         if check:
-            print(f"redact-fixtures: {path} still contains a serial number ({units} characters); "
-                  f"run scripts/redact-fixtures.py (or make fixtures) and stage the file again", file=sys.stderr)
+            for what, count in findings:
+                print(f"redact-fixtures: {path} still contains a {what} ({describe(what, count)}); "
+                      f"run scripts/redact-fixtures.py (or make fixtures) and stage the file again", file=sys.stderr)
             problems += 1
         else:
             path.write_bytes(redacted)
-            print(f"redact-fixtures: {path}: serial number zeroed ({units} characters)")
+            for what, count in findings:
+                print(f"redact-fixtures: {path}: {what} zeroed ({describe(what, count)})")
     return 1 if problems else 0
 
 

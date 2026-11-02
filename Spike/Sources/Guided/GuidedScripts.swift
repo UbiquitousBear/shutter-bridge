@@ -37,7 +37,7 @@ extension GuidedScript {
                      summary: "Cold listing now, a burst of about 300 frames, cold listing again; projects 2,000 and 5,000 files (20–30 min).") { r in try await r.scaling() },
 
         GuidedScript(id: "wifi.mode", group: "Wi-Fi (session S2)", title: "Wi-Fi: one camera mode",
-                     summary: "Join, probes, connect, list, thumbnails, 20 ARW, shutter (15 min). Run once per mode.") { r in try await r.wifiModePass() },
+                     summary: "Join, probes, connect, list (Sony contents transfer if nothing lists), thumbnails, 20 ARW, shutter (15 min). Run once per mode.") { r in try await r.wifiModePass() },
         GuidedScript(id: "wifi.guid", group: "Wi-Fi (session S2)", title: "Wi-Fi: GUID after a power cycle",
                      summary: "Reconnect with the same GUID, then a new one; note the camera's prompts (5 min).") { r in try await r.wifiGUID() },
         GuidedScript(id: "wifi.resume", group: "Wi-Fi (session S2)", title: "Wi-Fi: resume after Wi-Fi off",
@@ -50,7 +50,7 @@ extension GuidedScript {
         GuidedScript(id: "ble.adverts", group: "Bluetooth (session S3)", title: "Bluetooth: what the camera advertises",
                      summary: "30 s scans with the camera on, asleep and off; snapshots; pick the filter UUID (15 min).") { r in try await r.bleAdverts() },
         GuidedScript(id: "ble.proximity", group: "Bluetooth (session S3)", title: "Bluetooth: proximity reminder",
-                     summary: "Background watch, camera switched on with the phone locked; same room and next room (15 min).") { r in try await r.bleProximity() },
+                     summary: "Background watch; the scan starts once the phone is locked, camera nearby on or off; same room and next room (10 min).") { r in try await r.bleProximity() },
     ]
 }
 
@@ -445,9 +445,16 @@ extension GuidedRunner {
     }
 
     /// Network, join and camera IP: on the camera's access point the QR code and join, on the home LAN the IP.
-    func wifiJoin() async throws {
-        let net = try await ask("Which network?", "The camera's own Wi-Fi (access point), or your home network (LAN)?",
+    /// `homeLAN` answers "Which network?" for the caller when the camera mode already says which (nil asks).
+    func wifiJoin(homeLAN: Bool? = nil) async throws {
+        let net: String
+        if let homeLAN {
+            net = homeLAN ? "Home LAN" : "Camera access point"
+            log.note("  guided: network \(net) (from the camera mode)")
+        } else {
+            net = try await ask("Which network?", "The camera's own Wi-Fi (access point), or your home network (LAN)?",
                                 buttons: ["Camera access point", "Home LAN"])
+        }
         UserDefaults.standard.set(net == "Home LAN" ? "lan" : "ap", forKey: "ptpip.net")
         wireless.path.start()
         if net == "Home LAN" {
@@ -458,12 +465,20 @@ extension GuidedRunner {
             return
         }
         let scans = wireless.qrScans
-        let scanned = try await waitInTabs("Scan the camera's QR code",
-                                           "Put the camera on its Wi-Fi screen. Open the Wi-Fi tab and tap Scan camera QR code (or type the SSID and password there and tap Done here). This step ends by itself once a code is read.",
+        // The SSID from an earlier scan stays in memory for the whole launch: only a new scan (or a newly typed
+        // SSID) means the app should join; Done with nothing new means the tester joined in Settings.
+        let ssidBefore = wireless.joinSSID
+        let scanned = try await waitInTabs("Join the camera's network",
+                                           "On the camera, open the screen with its QR code (Smartphone Connect) or its network name and password (PC Remote over Wi-Fi Direct). Scan the code on the Wi-Fi tab, or join the camera's network in Settings › Wi-Fi, then tap Done here.",
                                            timeout: 900) {
             self.wireless.qrScans > scans
         }
         if scanned == "Skip" { return }
+        if scanned == "Done" && (wireless.joinSSID.isEmpty || wireless.joinSSID == ssidBefore) {
+            // Joined in Settings (PC Remote shows no QR code): look for the camera on the network the phone is on.
+            try await findCameraJoinedOutsideApp()
+            return
+        }
         if wireless.joinSSID.isEmpty { throw GuidedStop("no SSID to join") }
         try await wifi("Join camera Wi-Fi", "Accept the system prompt to join the camera's network.", timeout: 90) { wireless.join() }
         // Only this join's own gateway: a failed join leaves the home network's, which isn't the camera.
@@ -477,15 +492,53 @@ extension GuidedRunner {
         }
     }
 
+    /// The tester joined the camera's network in Settings: a TCP connect to the PTP/IP port at the stored camera IP
+    /// (then 192.168.122.1, the camera's usual address) says whether the phone is on it. One retry after asking.
+    private func findCameraJoinedOutsideApp() async throws {
+        let stored = (UserDefaults.standard.string(forKey: "ptpip.host") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let usual = "192.168.122.1"
+        let hosts = stored.isEmpty || stored == usual ? [usual] : [stored, usual]
+        for attempt in 1...2 {
+            for host in hosts {
+                step("TCP \(host):15740 (network joined outside the app)")
+                do {
+                    let seconds = try await PTPIPClient.probePort(host: host, timeout: 5, log: PTPIPClient.logger(log))
+                    UserDefaults.standard.set(host, forKey: "ptpip.host")
+                    log.note("  guided: joined outside the app: \(host):15740 answered in \(fmt(seconds, 2)) s; camera IP set to \(host)")
+                    return
+                } catch {
+                    log.warn("  guided: TCP \(host):15740 failed: \(error)")
+                }
+            }
+            if attempt == 2 { break }
+            let retry = try await ask("Not on the camera's network?",
+                                      "Nothing answered at \(hosts.joined(separator: " or ")) on port 15740. In Settings › Wi-Fi, join the camera's network (the name and password on the camera's screen), wait for the tick, then come back and tap Try again.",
+                                      buttons: ["Try again", "Skip this section"])
+            if retry != "Try again" { break }
+        }
+        throw GuidedStop("not on the camera's network")
+    }
+
     // MARK: - Wi-Fi sections
 
     func wifiModePass() async throws {
         let mode = try await ask("Camera mode", "Which Wi-Fi mode is the camera in? Set it on the camera now (Network menu).",
-                                 buttons: ["Smartphone Connect", "PC Remote (access point)", "PC Remote (Wi-Fi Direct)"])
+                                 buttons: ["Smartphone Connect", "PC Remote (camera's network)", "PC Remote (home Wi-Fi)"])
         step("Wi-Fi mode: \(mode)")
         log.note("◆ Wi-Fi mode under test: \(mode)")
+        // PC Remote drops the session unless Sony's init sequence follows OpenSession within 30 s, so connect runs it
+        // itself rather than leaving it to a later step.
+        let pcRemote = mode.hasPrefix("PC Remote")
+        let previousSDIO = wireless.sdioAfterConnect
+        wireless.sdioAfterConnect = pcRemote
+        defer { wireless.sdioAfterConnect = previousSDIO }
+        log.note("  guided: Sony init sequence after connect \(pcRemote ? "on" : "off") for this run")
         try await section("Join and find the camera", "The network, then the camera's IP.") {
-            try await wifiJoin()
+            switch mode {
+            case "PC Remote (home Wi-Fi)": try await wifiJoin(homeLAN: true)
+            case "PC Remote (camera's network)": try await wifiJoin(homeLAN: false)
+            default: try await wifiJoin()
+            }
         }
         try await section("Day 6 probes", "TCP 15740, Bonjour, SSDP unicast and multicast (about 20 s).") {
             let t = wifiTarget()
@@ -496,24 +549,72 @@ extension GuidedRunner {
                 wireless.ssdpMulticast(t)
             }
         }
-        try await section("Session and transfers", "Connect, list the card, 50 thumbnails, 20 newest ARW, then the shutter (about 10 min).") {
+        try await section("Session and transfers", "Connect, list the card, the shutter on that session, Sony contents transfer if nothing listed, then 50 thumbnails and 20 newest ARW (about 10 min).") {
             let t = wifiTarget()
-            try await wifi("Connect + OpenSession + GetDeviceInfo", "The camera may ask you to confirm the connection: accept it on the camera.", timeout: 120) {
+            try await wifi("Connect + OpenSession + GetDeviceInfo",
+                           "The camera may ask you to confirm the connection: accept it on the camera." + (pcRemote ? " Sony's init sequence follows straight away." : ""),
+                           timeout: 120) {
                 wireless.connect(t)
             }
-            guard wireless.isConnected, wireless.connectionState.hasPrefix("connected") else {
-                throw GuidedStop("not connected: \(wireless.connectionState)")
+            if wireless.isConnected, wireless.connectionState.hasPrefix("connected") {
+                try await wifi("List card", "GetObjectHandles, then GetObjectInfo for every object.", timeout: 900) { wireless.listCard() }
+                // The shutter test belongs on this plain (RemoteControl) session: ObjectAdded is a question about the
+                // camera mode, not about a contents-transfer session.
+                if wireless.isConnected, wireless.connectionState.hasPrefix("connected") {
+                    try await ask("Press the shutter", "Tap Start, then press the shutter twice in the next 20 s.", buttons: ["Start"])
+                    try await wifi("Shutter test (20 s)", "Press the shutter twice now.", timeout: 60) { wireless.shutterTest() }
+                } else {
+                    log.warn("  guided: not connected after List card, so no shutter test: \(wireless.connectionState)")
+                }
+            } else {
+                // Sony's contents transfer opens a connection of its own (SDIO_OpenSession), so PC Remote goes on.
+                guard pcRemote else { throw GuidedStop("not connected: \(wireless.connectionState)") }
+                log.warn("  guided: plain connect failed (\(wireless.connectionState)), so no plain List card or shutter test; trying Sony's contents transfer anyway")
             }
-            if mode != "Smartphone Connect" {
-                try await wifi("Sony SDIO connect", "The Sony handshake that PC Remote modes may need before listing.", timeout: 60) { wireless.sonySDIO() }
+            if wireless.objects.isEmpty {
+                log.note("  guided: the plain session listed nothing; trying Sony's contents transfer")
+                try await section("Sony contents transfer: whole card",
+                                  "Nothing listed. The app reconnects in Sony's contents-transfer mode for the whole card (SDIO_OpenSession) and lists again. The camera may take up to 2 minutes to index the card.") {
+                    try await wifi("Contents transfer: whole card",
+                                   "SDIO_OpenSession, Sony's init sequence and the transfer mode, then waiting while the camera indexes the card (up to about 2 minutes).",
+                                   timeout: 180) {
+                        wireless.connectContentsTransfer(t, mode: .wholeCard)
+                    }
+                    try await listAfterContentsTransfer("whole card")
+                }
             }
-            try await wifi("List card", "GetObjectHandles, then GetObjectInfo for every object.", timeout: 900) { wireless.listCard() }
-            if wireless.objects.isEmpty { throw GuidedStop("the card listed no objects in this mode") }
-            try await wifi("Thumbnails for 50 newest", "GetThumb for the 50 newest.", timeout: 300) { wireless.thumbnails() }
-            try await wifi("GetObject 20 newest ARW", "Downloading 20 ARW, with the battery read before and after.", timeout: 1200) { wireless.downloadARW() }
-            try await ask("Press the shutter", "Tap Start, then press the shutter twice in the next 20 s.", buttons: ["Start"])
-            try await wifi("Shutter test (20 s)", "Press the shutter twice now.", timeout: 60) { wireless.shutterTest() }
+            if wireless.objects.isEmpty {
+                try await section("Sony contents transfer: photos sent from the camera",
+                                  "Still nothing listed. The app reconnects in Sony's contents-transfer mode for photos the camera sends; you send them once it is connected.") {
+                    try await ask("Photos sent from the camera", "Tap Start. Once the app says it is connected, choose a couple of photos on the camera and send them to the phone, if the camera offers it in this mode. The app waits up to 90 s for them to list.",
+                                  buttons: ["Start"])
+                    try await wifi("Contents transfer: photos sent from the camera",
+                                   "Reconnecting in Sony's contents-transfer mode. Once it says connected, choose a couple of photos on the camera and send them; the app waits up to 90 s for them to list.",
+                                   timeout: 180) {
+                        wireless.connectContentsTransfer(t, mode: .selectedOnCamera)
+                    }
+                    let sent = try await ask("Did the camera send?", "Did the camera offer to send photos in this mode, and did you send some?",
+                                             buttons: ["Sent", "Not offered"])
+                    log.note("◆ Photos sent from the camera: \(sent == "Sent" ? "chosen and sent" : "not offered in this mode")")
+                    try await listAfterContentsTransfer("photos sent from the camera")
+                }
+            }
+            if wireless.objects.isEmpty {
+                log.warn("  guided: nothing listed in \(mode), so no thumbnails or downloads")
+            } else {
+                try await wifi("Thumbnails for 50 newest", "GetThumb for the 50 newest.", timeout: 300) { wireless.thumbnails() }
+                try await wifi("GetObject 20 newest ARW", "Downloading 20 ARW, with the battery read before and after.", timeout: 1200) { wireless.downloadARW() }
+            }
         }
+    }
+
+    /// After a contents-transfer connect: lists the card if the session is up; stops the section if it isn't.
+    private func listAfterContentsTransfer(_ what: String) async throws {
+        guard wireless.isConnected, wireless.connectionState.hasPrefix("connected") else {
+            throw GuidedStop("not connected after the contents transfer (\(what)): \(wireless.connectionState)")
+        }
+        try await wifi("List card", "GetStorageIDs, GetObjectHandles, then GetObjectInfo for every object.", timeout: 900) { wireless.listCard() }
+        log.note("  guided: contents transfer (\(what)): \(wireless.objects.count) objects listed")
     }
 
     func wifiGUID() async throws {
@@ -605,15 +706,38 @@ extension GuidedRunner {
                 throw GuidedStop("the app couldn't open a PTP/IP session while the camera was sending")
             }
             log.flag("\(t.prefix).sendToSmartphone.connects", true, context: "Send to Smartphone: a PTP/IP session opened")
-            let listStarted = Date()
+            var listStarted = Date()
             try await wifi("List card", "Listing what the camera offers.", timeout: 600) { wireless.listCard() }
-            guard log.measurements.contains(where: { $0.at >= listStarted && $0.name == "\(t.prefix).objects" }) else {
+            var listed = log.measurements.contains(where: { $0.at >= listStarted && $0.name == "\(t.prefix).objects" })
+            if wireless.objects.isEmpty {
+                log.note("  guided: Send to Smartphone: the plain session listed nothing; trying Sony's selected-set mode on the same session")
+                // The camera is sending into this session, so it stays open: no reconnect.
+                try await wifi("Selected set in this session", "Sony's init sequence if needed, 0x9212 [1,0,0], then waiting up to 90 s for the photos the camera sends.",
+                               timeout: 180) {
+                    wireless.selectedSetInSession()
+                }
+                if wireless.isConnected, wireless.connectionState.hasPrefix("connected") {
+                    listStarted = Date()
+                    try await wifi("List card", "Listing what the camera offers in contents-transfer mode.", timeout: 600) { wireless.listCard() }
+                    listed = listed || log.measurements.contains(where: { $0.at >= listStarted && $0.name == "\(t.prefix).objects" })
+                } else {
+                    log.warn("  guided: Send to Smartphone: not connected after the selected-set mode: \(wireless.connectionState)")
+                }
+            }
+            guard listed else {
                 throw GuidedStop("the listing failed (see the log), so it says nothing about what Send to Smartphone offers")
             }
             let names = wireless.objects.map { $0.info.filename }
             log.note("◆ Send to Smartphone: listed \(names.count) objects (\(chosen) chosen on the camera): \(names.prefix(10).joined(separator: ", "))")
             if !names.isEmpty {
                 try await wifi("Thumbnails", "GetThumb for what was listed.", timeout: 300) { wireless.thumbnails() }
+                if names.contains(where: { $0.uppercased().hasSuffix(".ARW") }) {
+                    try await wifi("GetObject newest ARW", "Downloading the ARW listed (up to 20), for the fallback path's throughput.", timeout: 1200) {
+                        wireless.downloadARW()
+                    }
+                } else {
+                    log.note("  guided: Send to Smartphone: no ARW listed, so no download throughput")
+                }
             }
             let same = try await ask("The chosen photos?", "Listed \(names.count): \(names.prefix(8).joined(separator: ", "))\(names.count > 8 ? ", …" : ""). Are these the photos you chose on the camera (a RAW+JPEG pair counts as one)?",
                                      buttons: ["Yes, just those", "More than those", "Not those"])
@@ -675,7 +799,7 @@ extension GuidedRunner {
     }
 
     func bleProximity() async throws {
-        try await section("Proximity reminder", "Background watch on, phone locked, camera switched on; same room, then next room. About 15 minutes.") {
+        try await section("Proximity reminder", "Background watch on; the scan starts once the phone is locked, with the camera already nearby, on or off. Same room, then next room. About 10 minutes.") {
             guard proximity.storedServiceUUID != nil else { throw GuidedStop("no filter UUID yet: run Bluetooth: what the camera advertises") }
             if !proximity.enabled {
                 proximity.setEnabled(true)
@@ -684,18 +808,25 @@ extension GuidedRunner {
                 }
             }
             for room in ["same room", "next room"] {
-                try await ask("Camera off for a minute", "Switch the camera off and wait about a minute. \(room == "next room" ? "Then take the phone into the next room." : "")",
-                              buttons: ["Done"])
-                try await ask("Switch on with the phone locked", "Tap Start, lock the phone straight away and switch the camera on. Wait up to 2 minutes for a reminder, then unlock.",
+                try await ask("Camera in the \(room)",
+                              "Put the camera in the \(room), on or off (it advertises either way). Then tap Start and lock the phone. The scan starts when the app leaves the screen. Wait up to 2 minutes for a reminder, then unlock.",
                               buttons: ["Start"])
                 let returns = lifecycle.foregroundReturns
-                proximity.markCameraSwitchedOn()
-                try await waitUntil("Lock the phone now", "Lock the phone and switch the camera on. Unlock after the reminder, or after 2 minutes.",
-                                    timeout: 600) { self.lifecycle.foregroundReturns > returns }
+                proximity.armOnNextBackground()
+                let left: Bool
+                do {
+                    left = try await waitUntil("Lock the phone now", "Lock the phone. The scan starts when the app leaves the screen. Unlock after the reminder, or after 2 minutes.",
+                                               timeout: 600) { self.lifecycle.foregroundReturns > returns }
+                } catch {
+                    proximity.disarmBackgroundScan()
+                    throw error
+                }
+                // Never left the screen: don't leave the scan armed for some later, unrelated background entry.
+                if !left { proximity.disarmBackgroundScan() }
                 let seen = try await ask("Reminder?", "Did a reminder arrive while the phone was locked (\(room))?",
                                          buttons: ["Yes", "No"])
                 log.flag("ble.proximity.reminder.\(room == "same room" ? "sameRoom" : "nextRoom")", seen == "Yes",
-                         context: "camera switched on with the phone locked, \(room)")
+                         context: "scan started after the lock, \(room)")
             }
         }
     }

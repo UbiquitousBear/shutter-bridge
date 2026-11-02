@@ -290,12 +290,14 @@ struct SSDPReply: Identifiable, Equatable, Sendable {
 
     var dedupeKey: String { "\(from)|\(usn ?? "")|\(searchTarget ?? "")" }
 
+    /// For the log and the Wi-Fi tab: the camera's hardware ID (the last group of the uuid in USN, and in ST when
+    /// the search target is the UDN) is masked, so a copied log can be pasted without it.
     var headline: String {
-        [statusLine,
-         "ST \(searchTarget ?? "-")",
-         "USN \(usn ?? "-")",
-         "SERVER \(server ?? "-")",
-         "LOCATION \(location ?? "-")"].joined(separator: " | ")
+        HardwareIDMask.masking([statusLine,
+                                "ST \(searchTarget ?? "-")",
+                                "USN \(usn ?? "-")",
+                                "SERVER \(server ?? "-")",
+                                "LOCATION \(location ?? "-")"].joined(separator: " | "))
     }
 
     static func parse(_ text: String, from: String) -> SSDPReply? {
@@ -326,6 +328,9 @@ struct SSDPDeviceDescription: Sendable {
     /// FixtureStore's check that a zeroed description holds no serial.
     var allSerialNumbers: [String] = []
     var udn = ""
+    /// Every UDN element's value (the root device's and any embedded device's), for FixtureStore's check that a
+    /// zeroed description holds no hardware ID.
+    var allUDNs: [String] = []
     var serviceTypes: [String] = []
     /// Vendor elements (X_…), e.g. Sony's X_ScalarWebAPI_* entries, as "name=value".
     var vendorFields: [String] = []
@@ -338,7 +343,8 @@ struct SSDPDeviceDescription: Sendable {
                      "UDN \(udn.isEmpty ? "-" : udn)", "deviceType \(deviceType)",
                      "services [\(serviceTypes.joined(separator: ", "))]"]
         if !vendorFields.isEmpty { parts.append("vendor [\(vendorFields.joined(separator: "; "))]") }
-        return parts.joined(separator: " · ")
+        // The UDN's last group is the camera's hardware ID: masked, as in the SSDP reply lines.
+        return HardwareIDMask.masking(parts.joined(separator: " · "))
     }
 
     static func parse(_ data: Data) -> SSDPDeviceDescription? {
@@ -374,6 +380,7 @@ private final class DeviceDescriptionParser: NSObject, XMLParserDelegate {
         text = ""
         let local = elementName.split(separator: ":").last.map(String.init) ?? elementName
         if local.caseInsensitiveCompare("serialNumber") == .orderedSame { result.allSerialNumbers.append(value) }
+        if local.caseInsensitiveCompare("UDN") == .orderedSame { result.allUDNs.append(value) }
         switch local {
         case "deviceType": if result.deviceType.isEmpty { result.deviceType = value }
         case "friendlyName": if result.friendlyName.isEmpty { result.friendlyName = value }
@@ -388,5 +395,18 @@ private final class DeviceDescriptionParser: NSObject, XMLParserDelegate {
                 result.vendorFields.append("\(local)=\(value.prefix(120))")
             }
         }
+    }
+}
+
+/// Masks the last group of every UUID in a string (`…-XXXXXXXXXXXX` → `…-<hardware ID>`). On the α7C II that group
+/// is the camera's MAC-like hardware ID in SSDP USN, ST and UDN values; the repository is public, so log lines meant
+/// to be pasted don't carry it.
+enum HardwareIDMask {
+    private static let uuidTailPattern = #"([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-)[0-9A-Fa-f]{12}"#
+
+    static func masking(_ text: String) -> String {
+        guard let uuidTail = try? NSRegularExpression(pattern: uuidTailPattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        return uuidTail.stringByReplacingMatches(in: text, range: range, withTemplate: "$1<hardware ID>")
     }
 }
