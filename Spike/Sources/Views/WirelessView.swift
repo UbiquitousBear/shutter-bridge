@@ -523,7 +523,8 @@ final class WirelessLab {
     /// Runs `work` with the open session's client and its net ("ap" / "lan"). If the connection has dropped since
     /// (the camera closed it, or iOS did while the app was in the background), it reconnects first, the same way
     /// Reconnect does, so a tap on a dead connection doesn't just fail.
-    private func runSession(_ label: String, transfer: Bool = false, _ work: @escaping @MainActor (PTPIPClient, String) async throws -> Void) {
+    private func runSession(_ label: String, transfer: Bool = false, needsListing: Bool = false,
+                            _ work: @escaping @MainActor (PTPIPClient, String) async throws -> Void) {
         guard client != nil, let net = sessionNet else {
             log.warn("\(label): not connected; tap Connect first")
             return
@@ -533,7 +534,14 @@ final class WirelessLab {
             if let failure = await c.linkFailure {
                 guard let t = self.sessionTarget else { throw failure }
                 self.log.warn("\(label): the connection had dropped (\(failure)); reconnecting first")
+                // A new session starts with an empty listing (and may number the objects differently), so an action
+                // that works on the listing lists the card again first.
+                let hadListing = !self.objects.isEmpty
                 c = try await self.reopen(t)
+                if needsListing && hadListing {
+                    self.log.note("\(label): listing the card again on the new session")
+                    try await self.listObjects(c, net: t.net)
+                }
             }
             guard let current = self.sessionNet else { throw WiFiLabError.message("not connected; tap Connect first") }
             try await work(c, current)
@@ -1213,7 +1221,12 @@ final class WirelessLab {
     // MARK: Day 8 · Enumerate and download
 
     func listCard() {
-        runSession("List card") { c, net in
+        runSession("List card") { c, net in try await self.listObjects(c, net: net) }
+    }
+
+    /// List card's work: every storage's handles and ObjectInfo, into `objects`. Also used to list again after an
+    /// action reconnected a dropped session (a new session may number the objects differently).
+    private func listObjects(_ c: PTPIPClient, net: String) async throws {
             let prefix = "ptpip.\(net)"
             let clock = ContinuousClock()
             let started = clock.now
@@ -1276,11 +1289,10 @@ final class WirelessLab {
                 self.log.note("newest: \(newest.info.filename) \(newest.info.captureDateRaw) \(newest.info.objectCompressedSize) bytes, format \(newest.info.objectFormat), handle \(newest.handle)")
             }
             for (name, data) in fixtures { FixtureStore.save(data, link: .ptpip, name: name, log: self.log) }
-        }
     }
 
     func thumbnails() {
-        runSession("Thumbnails for 50 newest") { c, net in
+        runSession("Thumbnails for 50 newest", needsListing: true) { c, net in
             let items = Array(self.objects.prefix(50))
             guard !items.isEmpty else { throw WiFiLabError.message("nothing listed; tap List card first") }
             let clock = ContinuousClock()
@@ -1308,7 +1320,7 @@ final class WirelessLab {
     }
 
     func downloadARW() {
-        runSession("GetObject 20 newest ARW", transfer: true) { c, net in
+        runSession("GetObject 20 newest ARW", transfer: true, needsListing: true) { c, net in
             let prefix = "ptpip.\(net)"
             let items = self.newest(ext: "ARW", count: 20)
             guard !items.isEmpty else { throw WiFiLabError.message("no ARW listed; tap List card first") }
@@ -1327,7 +1339,7 @@ final class WirelessLab {
     }
 
     func downloadMP4() {
-        runSession("GetObject 3 newest MP4", transfer: true) { c, net in
+        runSession("GetObject 3 newest MP4", transfer: true, needsListing: true) { c, net in
             let prefix = "ptpip.\(net)"
             let items = self.newest(ext: "MP4", count: 3)
             guard !items.isEmpty else { throw WiFiLabError.message("no MP4 listed; tap List card first") }
@@ -1516,8 +1528,11 @@ final class WirelessLab {
                 self.progress = (clock.now - started).inSeconds / seconds
                 if (clock.now - lastTransaction).inSeconds >= 10 {
                     // The keep-alive skips busy operations, and the camera drops a session idle for about 30 s. This
-                    // also reads any event queued on the command channel.
-                    _ = try await c.getDeviceInfo()
+                    // also reads any event queued on the command channel. A non-OK reply (DeviceBusy while the
+                    // camera writes the frame) is noted, not fatal: the test still records yes or no.
+                    do { _ = try await c.getDeviceInfo() } catch PTPIPClient.ClientError.response(_, let code) {
+                        self.log.note("Shutter test: GetDeviceInfo \(WirelessLab.codeText(code))")
+                    }
                     lastTransaction = clock.now
                 }
                 try await Task.sleep(for: .milliseconds(250))
@@ -1525,7 +1540,9 @@ final class WirelessLab {
             if self.objectAddedCount == before {
                 // Events sent on the command channel are only read during a transaction: run one to drain it.
                 // GetDeviceInfo, since GetStorageIDs answers 0x2013 on a PC Remote session.
-                _ = try await c.getDeviceInfo()
+                do { _ = try await c.getDeviceInfo() } catch PTPIPClient.ClientError.response(_, let code) {
+                    self.log.note("Shutter test: GetDeviceInfo \(WirelessLab.codeText(code))")
+                }
                 try await Task.sleep(for: .milliseconds(500))
             }
             if self.objectAddedCount > before {
@@ -1544,7 +1561,7 @@ final class WirelessLab {
     // MARK: Day 9 · Resume
 
     func referenceHash() {
-        runSession("Reference hash") { c, _ in
+        runSession("Reference hash", needsListing: true) { c, _ in
             guard let o = self.newest(ext: "ARW", count: 1).first else { throw WiFiLabError.message("no ARW listed; tap List card first") }
             let url = try self.downloadURL(for: o)
             defer { try? FileManager.default.removeItem(at: url) }
@@ -1567,7 +1584,7 @@ final class WirelessLab {
     }
 
     func startResumableRead(pauseAtHalf: Bool) {
-        runSession("Resumable read", transfer: true) { c, net in
+        runSession("Resumable read", transfer: true, needsListing: true) { c, net in
             guard let o = self.newest(ext: "ARW", count: 1).first, let di = self.deviceInfo else {
                 throw WiFiLabError.message("no ARW listed; tap List card first")
             }

@@ -62,7 +62,8 @@ struct CameraQRCode: Equatable, Sendable, CustomStringConvertible {
         if let security { parts.append("security \(security)") }
         if isHidden { parts.append("hidden network") }
         if let model { parts.append("model \(model)") }
-        if let macAddress { parts.append("MAC \(macAddress)") }
+        // The MAC is the camera's hardware ID (the repository is public and logs get pasted): presence only.
+        if macAddress != nil { parts.append("MAC present (redacted)") }
         parts.append("keys [\(keysPresent.joined(separator: ", "))]")
         return parts.joined(separator: " · ")
     }

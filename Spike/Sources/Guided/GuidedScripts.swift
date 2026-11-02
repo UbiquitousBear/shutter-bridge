@@ -465,20 +465,21 @@ extension GuidedRunner {
             return
         }
         let scans = wireless.qrScans
+        // The SSID from an earlier scan stays in memory for the whole launch: only a new scan (or a newly typed
+        // SSID) means the app should join; Done with nothing new means the tester joined in Settings.
+        let ssidBefore = wireless.joinSSID
         let scanned = try await waitInTabs("Join the camera's network",
                                            "On the camera, open the screen with its QR code (Smartphone Connect) or its network name and password (PC Remote over Wi-Fi Direct). Scan the code on the Wi-Fi tab, or join the camera's network in Settings › Wi-Fi, then tap Done here.",
                                            timeout: 900) {
             self.wireless.qrScans > scans
         }
         if scanned == "Skip" { return }
-        if wireless.joinSSID.isEmpty {
+        if scanned == "Done" && (wireless.joinSSID.isEmpty || wireless.joinSSID == ssidBefore) {
             // Joined in Settings (PC Remote shows no QR code): look for the camera on the network the phone is on.
-            if scanned == "Done" {
-                try await findCameraJoinedOutsideApp()
-                return
-            }
-            throw GuidedStop("no SSID to join")
+            try await findCameraJoinedOutsideApp()
+            return
         }
+        if wireless.joinSSID.isEmpty { throw GuidedStop("no SSID to join") }
         try await wifi("Join camera Wi-Fi", "Accept the system prompt to join the camera's network.", timeout: 90) { wireless.join() }
         // Only this join's own gateway: a failed join leaves the home network's, which isn't the camera.
         if let gateway = wireless.lastJoinGateway {

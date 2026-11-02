@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Zero the camera's serial number and hardware ID in captured fixtures, keeping every other byte.
 
-The repository is public, so the owner decided (1 Nov 2026) that a serial number never reaches it, and (2 Nov 2026)
-that the camera's hardware ID gets the same treatment: each character becomes "0", and the length and every other
+The repository is public, so the owner decided (1 Nov 2026) that a serial number never reaches it; from 2 Nov 2026
+the camera's hardware ID gets the same treatment, by the same reasoning: each character becomes "0", and the length and every other
 byte stay as captured, so the PTPKit tests still parse the real layout. Two kinds of file carry them:
 
 - `deviceinfo.bin` (GetDeviceInfo's data phase, USB or PTP/IP; also the copies `make fixtures` puts in the PTPKit
@@ -197,7 +197,9 @@ def redact_ssdp(data):
 
 def kind(path):
     name = path.name
-    if name.endswith("deviceinfo.bin"):
+    # GetDeviceInfo only: `deviceinfo.bin` and the test-bundle copy `a7c2-<link>-deviceinfo.bin`. Sony's
+    # `sdio-extdeviceinfo.bin` (and `a7c2-ptpip-sdio-extdeviceinfo.bin`) has another layout and is left as captured.
+    if name == "deviceinfo.bin" or name.endswith("-deviceinfo.bin"):
         return redact_deviceinfo
     if name == "ssdp-description.xml":
         return redact_ssdp

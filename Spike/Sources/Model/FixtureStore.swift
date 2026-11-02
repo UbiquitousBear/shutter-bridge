@@ -114,9 +114,9 @@ enum FixtureStore {
             log?.warn("fixture not saved: ptpip/\(name): after zeroing, the XML parser still reads a serialNumber that isn't all zeros (CDATA or an entity?)")
             return nil
         }
-        // The same check for the hardware ID, on the UDN the parser reads (the root device's): a UDN in CDATA or
-        // written with an entity escapes the zeroing pattern. Never logs the value.
-        if let parsed = SSDPDeviceDescription.parse(zeroed.data), hasNonZeroHardwareID(udn: parsed.udn) {
+        // The same check for the hardware ID, on every UDN the parser reads (root and embedded devices): a UDN in
+        // CDATA or written with an entity escapes the zeroing pattern. Never logs the value.
+        if let parsed = SSDPDeviceDescription.parse(zeroed.data), parsed.allUDNs.contains(where: { hasNonZeroHardwareID(udn: $0) }) {
             log?.warn("fixture not saved: ptpip/\(name): after zeroing, the XML parser still reads a UDN whose last group isn't all zeros (CDATA or an entity?)")
             return nil
         }
