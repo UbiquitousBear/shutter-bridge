@@ -688,7 +688,7 @@ extension GuidedRunner {
     }
 
     func wifiResume() async throws {
-        try await section("Resume after Wi-Fi off", "A reference download, then a read that pauses at 50 % for you to turn Wi-Fi off and on, then the resume. About 5 minutes.") {
+        try await section("Resume after Wi-Fi off", "The partial read probe if it hasn't run on this network in this kind of session, a reference download, then a read that pauses at 50 % for you to turn Wi-Fi off and on, then the resume. About 5–8 minutes.") {
             guard wireless.isConnected else { throw GuidedStop("connect first (Wi-Fi: one camera mode)") }
             if wireless.objects.isEmpty {
                 try await wifi("List card", "The resume needs the card listed.", timeout: 900) { wireless.listCard() }
@@ -696,13 +696,16 @@ extension GuidedRunner {
             // Which byte-range layout works on this network, unless a probe has already said: on 2 Nov the camera
             // answered the standard GetPartialObject InvalidObjectHandle in the whole-card contents transfer.
             let net = wireless.sessionNet ?? wifiTarget().net
-            if PartialReadProbe.remembered(net: net) == .notProbed {
+            // Remembered per kind of session too: the refusal was seen in the whole-card contents transfer only.
+            let session = wireless.partialProbeSession
+            if PartialReadProbe.remembered(net: net, session: session) == .notProbed {
+                // 600 s: up to three layouts may each wait 15 s and reconnect, and a reconnect means listing the card again.
                 try await wifi("Partial read probe",
-                               "GetObject of the newest ARW as a reference, then a 1 MiB byte-range read with each layout the camera lists. A layout the camera doesn't understand may get no answer: the app then waits 15 s, reconnects and tries the next.",
-                               timeout: 240) { wireless.probePartialReads() }
+                               "GetObject of the newest ARW as a reference, then a 1 MiB byte-range read with each layout the camera lists. A layout the camera doesn't understand may get no answer: the app then waits 15 s, reconnects and tries the next, and lists the card again at the end.",
+                               timeout: 600) { wireless.probePartialReads() }
             }
-            let probe = PartialReadProbe.remembered(net: net)
-            log.note("  guided: byte-range reads on \(net): \(probe.label)")
+            let probe = PartialReadProbe.remembered(net: net, session: session)
+            log.note("  guided: byte-range reads on \(net) in a \(session) session: \(probe.label)")
             switch probe {
             case .notProbed:
                 throw GuidedStop("the partial read probe didn't finish (see the log); run Partial read probe on the Wi-Fi tab")
@@ -710,11 +713,18 @@ extension GuidedRunner {
                 try await ask("Skip the Wi-Fi-off part",
                               "The camera refuses byte-range reads in this mode, so a file interrupted by a drop has to restart from the beginning: there is nothing to resume. Don't turn Wi-Fi off; this section ends here.",
                               buttons: ["OK"])
-                log.note("◆ Resume after Wi-Fi off: not run, no byte-range read works on \(net) in this mode")
+                log.note("◆ Resume after Wi-Fi off: not run, no byte-range read works on \(net) in a \(session) session")
                 return
             case .works:
                 break
             }
+            // A reconnect during the probe starts a session with an empty listing; the probe lists again, but not if
+            // that failed.
+            guard wireless.isConnected else { throw GuidedStop("the connection was lost during the partial read probe (see the log); connect again and rerun this section") }
+            if wireless.objects.isEmpty {
+                try await wifi("List card", "The probe reconnected, and the resume needs the card listed again.", timeout: 900) { wireless.listCard() }
+            }
+            if wireless.objects.isEmpty { throw GuidedStop("the card isn't listed after the partial read probe (see the log)") }
             try await wifi("Reference hash", "GetObject of the newest ARW, for the SHA-256 to compare with.", timeout: 300) { wireless.referenceHash() }
             step("Resumable read, paused at 50 %")
             wireless.startResumableRead(pauseAtHalf: true)
