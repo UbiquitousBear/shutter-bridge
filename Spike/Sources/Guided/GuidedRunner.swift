@@ -176,7 +176,8 @@ final class GuidedRunner {
         keepsBluetoothUntilRunEnds = false
         guard handover.isConnected || handover.busy else {
             log.note("◆ The Bluetooth link kept for this run (the camera's Wi-Fi was switched on over it) is already down")
-            // No Disconnect here: it would forget these codes, which the next Bluetooth connect's unsubscribe clears.
+            // No Disconnect here: there is no link to end, and these codes stay listed for the next Bluetooth connect's
+            // unsubscribe, which clears them (build 14: Disconnect keeps them too).
             if !handover.earlierLinkCodes.isEmpty {
                 log.warn("◆ Notifications this app turned on (\(handover.earlierLinkCodes.joined(separator: ", "))) couldn't be turned off: the link dropped; the camera may keep them on for this phone until the next Bluetooth connect turns them off")
             }

@@ -62,6 +62,10 @@ final class CameraSession: NSObject {
     @ObservationIgnored private var lastSerialARWThroughput: Double?
     @ObservationIgnored private var closingSession = false
     @ObservationIgnored private var loggedDownloadName = false
+    /// Build 14: whether requestDownload's Progress has been reported once (does it move during a PTP download?), and
+    /// for the download in progress the largest fraction seen strictly between 0 and 1 (-1: no Progress returned).
+    @ObservationIgnored private var loggedDownloadProgress = false
+    @ObservationIgnored private var downloadPartialFraction: Double = 0
     @ObservationIgnored private var thumbnailRuns = 0
     @ObservationIgnored private var successfulOpens = 0
     /// Devices any CameraSession has opened in this process: a new session on one of them (after a stall) is still a
@@ -861,8 +865,11 @@ final class CameraSession: NSObject {
 
     /// One requestDownload. Bytes are the size of the file on disk afterwards; seconds are request → completion.
     /// `timeout` nil (day 3, day 5): no bound, since a long clip can take minutes. Stop doesn't end the wait; a cable
-    /// pull does.
-    private func downloadFile(_ file: ICCameraFile, to dir: URL, timeout: Double? = nil) async throws -> (url: URL, bytes: Int64, seconds: Double) {
+    /// pull does. `onBytes` (build 14, the copy): requestDownload's returned Progress is polled every 0.25 s while the
+    /// request is pending, and its fraction times the file's size passed on as the bytes of the file in flight; whether
+    /// ImageCaptureCore moves it during a PTP download is `unverified`, so the first such download logs what it saw.
+    private func downloadFile(_ file: ICCameraFile, to dir: URL, timeout: Double? = nil,
+                              onBytes: (@MainActor (Int64) -> Void)? = nil) async throws -> (url: URL, bytes: Int64, seconds: Double) {
         if linkStalled { throw USBSpikeError.linkStalled }
         let name = file.name ?? "?"
         let options: [ICDownloadOption: Any] = [
@@ -872,16 +879,47 @@ final class CameraSession: NSObject {
         let clock = ContinuousClock()
         let start = clock.now
         let saved: String
+        let sizeOnCamera = Int64(file.fileSize)
+        var poller: Task<Void, Never>?
+        defer { poller?.cancel() }
+        downloadPartialFraction = -1
         do {
             saved = try await callback("requestDownload \(name)", timeout: timeout) { done in
                 // The completion is not declared @Sendable but runs "on any available queue" (Apple): keep it nonisolated.
-                _ = file.requestDownload(options: options) { @Sendable filename, error in
+                let requestProgress = file.requestDownload(options: options) { @Sendable filename, error in
                     if let error { done(.failure(error)) } else { done(.success(filename ?? name)) }
+                }
+                if let onBytes, let requestProgress {
+                    self.downloadPartialFraction = 0
+                    poller = Task { @MainActor in
+                        var last: Int64 = -1
+                        while !Task.isCancelled {
+                            let fraction = min(max(requestProgress.fractionCompleted, 0), 1)
+                            if fraction > 0 && fraction < 1 { self.downloadPartialFraction = max(self.downloadPartialFraction, fraction) }
+                            let bytes = Int64((Double(sizeOnCamera) * fraction).rounded(.down))
+                            if bytes != last {
+                                last = bytes
+                                onBytes(bytes)
+                            }
+                            try? await Task.sleep(for: .milliseconds(250))
+                        }
+                    }
                 }
             }
         } catch let error as USBSpikeError {
             if case .timedOut = error { noteNoAnswer("requestDownload \(name)") }
             throw error
+        }
+        poller?.cancel()
+        if onBytes != nil && !loggedDownloadProgress {
+            loggedDownloadProgress = true
+            if downloadPartialFraction < 0 {
+                log.note("requestDownload returned no Progress for \(name): the USB copy's progress moves once per file. Findings-page fact.")
+            } else if downloadPartialFraction > 0 {
+                log.note(String(format: "requestDownload's Progress moved during the download of %@ (up to %.0f %% seen before it completed, polled every 0.25 s): the USB copy's progress moves with the bytes. Findings-page fact.", name, downloadPartialFraction * 100))
+            } else {
+                log.note("requestDownload's Progress didn't move during the download of \(name) (only 0 % or 100 % seen, polled every 0.25 s): the USB copy's progress moves once per file. Findings-page fact.")
+            }
         }
         consecutiveNoAnswers = 0
         lifecycle.noteProgress("downloaded \(name)", link: "usb")
@@ -2992,6 +3030,12 @@ extension CameraSession {
         guard !linkStalled else { log.error("\(label): \(USBSpikeError.linkStalled)"); return }
         guard !continued.isRunning else { log.warn("\(label): a continued task is already running; stop it first"); return }
         guard destination.run == nil else { log.warn("\(label): a copy is already running"); return }
+        // Build 14: one pause record at a time; a new copy would leave the paused one behind.
+        guard destination.paused == nil else {
+            log.warn("\(label): a paused copy is waiting: Continue copy or Discard it first")
+            lastResult = "\(label): a paused copy is waiting (Continue copy or Discard)"
+            return
+        }
         let selection = copyAllFiles
         guard !selection.isEmpty else {
             log.warn("\(label): no ARW on the card (\(files.count) files)")
@@ -3008,12 +3052,86 @@ extension CameraSession {
             return
         }
         log.note("\(label): submitting a continued task for \(selection.count) ARW (oldest first), one at a time; lock the phone once it has started")
-        continued.run(title: "Copying RAW to Files (spike)", subtitle: "0 of \(selection.count)", totalUnits: selection.count) { [weak self] report, shouldStop in
+        // Build 14: in bytes (ICCameraFile.fileSize), after each file and, if requestDownload's Progress moves during a
+        // PTP download (`unverified`: the first download logs whether it does), with the bytes of the file in flight.
+        let totalBytes = items.reduce(UInt64(0)) { $0 + $1.size }
+        continued.run(title: "Copying RAW to Files (spike)", subtitle: "0 of \(selection.count)",
+                      totalUnits: Int(clamping: totalBytes), byteUnits: true) { [weak self] report, shouldStop in
             guard let self else { return false }
             var finished = false
             await self.perform(label, transfer: true) {
                 finished = try await self.copyAllSequence(selection, items: items, continued: continued, destination: destination,
                                                           report: report, shouldStop: shouldStop)
+            }
+            return finished
+        }
+    }
+
+    /// Build 14: Continue copy over USB, from a tap (USBLab.continuePausedCopy has made sure a session is open with the
+    /// catalogue complete): the files left are found again in ImageCaptureCore's catalogue by name and size (the same
+    /// PTP handle first where ImageCaptureCore gives one, and the same DCIM folder where the record has it), and a new
+    /// continued task copies them into the same run folder (FilesDestination.resume). The card's other ARW at the pause
+    /// claim their matches first, so with two ARW of the same name and size one already copied isn't taken for one
+    /// left; a file of the same name already in the folder makes the new one "NAME (2).ARW" (freeName), so nothing is
+    /// skipped or overwritten.
+    func continuePausedCopy(_ record: CopyPauseRecord, using continued: ContinuedTask, tappedAt: Date) {
+        let label = "Continue copy"
+        let destination = FilesDestination.shared
+        guard activity == nil else { log.warn("\(label): busy with \(activity ?? ""); wait for it or tap Stop"); return }
+        guard isOpen, !removed, catalogComplete, !linkStalled else {
+            log.error("\(label): the USB session isn't open with the card catalogued")
+            return
+        }
+        guard !continued.isRunning, destination.run == nil else { log.warn("\(label): a continued task or a copy is already running"); return }
+        // The files left, in order: the same handle first (when ImageCaptureCore gives one), then name and size, within
+        // the same DCIM folder when both sides name it.
+        let pool = copyAllFiles
+        var used: Set<ObjectIdentifier> = []
+        func claim(_ f: CopyPauseRecord.File) -> (file: ICCameraFile, sameHandle: Bool)? {
+            let name = f.name.lowercased()
+            func matches(_ c: ICCameraFile) -> Bool {
+                guard (c.name ?? "").lowercased() == name, UInt64(max(0, Int64(c.fileSize))) == f.size,
+                      !used.contains(ObjectIdentifier(c)) else { return false }
+                guard let wanted = f.folder, let folder = c.parentFolder?.name else { return true }
+                return folder == wanted
+            }
+            if let h = f.handle, h != 0, let same = pool.first(where: { $0.ptpObjectHandle == h && matches($0) }) {
+                used.insert(ObjectIdentifier(same))
+                return (same, true)
+            }
+            if let other = pool.first(where: { matches($0) }) {
+                used.insert(ObjectIdentifier(other))
+                return (other, false)
+            }
+            return nil
+        }
+        for f in record.others ?? [] { _ = claim(f) }
+        var selection: [ICCameraFile] = []
+        var missing: [String] = []
+        var sameHandle = 0
+        for f in record.remaining {
+            if let hit = claim(f) {
+                selection.append(hit.file)
+                if hit.sameHandle { sameHandle += 1 }
+            } else {
+                missing.append(f.name)
+            }
+        }
+        log.note("\(label): \(selection.count) of \(record.remaining.count) file(s) left found in the catalogue (\(sameHandle) by handle), \(missing.count) not found; submitting a continued task (\(record.done) of \(record.total) done before the pause); lock the phone once it has started")
+        let found = selection
+        let notFound = missing
+        continued.run(title: "Copying RAW to Files (spike)", subtitle: "\(record.done) of \(record.total)",
+                      totalUnits: Int(clamping: record.totalBytes), byteUnits: true) { [weak self] report, shouldStop in
+            guard let self else { return false }
+            var finished = false
+            await self.perform(label, transfer: true) {
+                try self.requireOpen()
+                let run = try destination.resume(record, tappedAt: tappedAt)
+                for name in notFound {
+                    run.fileFailed(name, "not in the camera's catalogue when the copy continued (no ARW of that name and size)")
+                }
+                finished = await self.copyAllRun(found, run: run, continued: continued, destination: destination,
+                                                 resumedFrom: record, report: report, shouldStop: shouldStop)
             }
             return finished
         }
@@ -3026,8 +3144,60 @@ extension CameraSession {
                                  report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async throws -> Bool {
         try requireOpen()
         let run = try destination.begin(link: "usb", items: items)
-        let reason = await log.withMemoryPeak(run.prefix, context: "\(selection.count) ARW to Files over USB") {
+        return await copyAllRun(selection, run: run, continued: continued, destination: destination, report: report, shouldStop: shouldStop)
+    }
+
+    /// The loop of a new or continued copy, and its end. Build 14: if iOS expired the continued task, the request in
+    /// flight is abandoned and the copy pauses (FilesDestination.pause: the pause record, `usb.copyAll.expired`, the
+    /// notification) instead of ending. The ImageCaptureCore session is left open: it belongs to ImageCaptureCore, a
+    /// close would mean a new catalogue (up to 65 s in MTP) before Continue, and Continue uses it if it is still open.
+    /// `resumedFrom`: a continued copy's pause record; if this segment loses the session (the camera removed, the
+    /// session closed, the link stalled) before it copies a file, the record is put back (FilesDestination.repause)
+    /// rather than the copy ending for good.
+    private func copyAllRun(_ selection: [ICCameraFile], run: CopyAllRun, continued: ContinuedTask, destination: FilesDestination,
+                            resumedFrom: CopyPauseRecord? = nil,
+                            report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> Bool {
+        // On an expiry the copy finishes nothing more: the wait for the requestDownload in flight ends at once (its file,
+        // if ImageCaptureCore still writes it, goes with the run's temporary folder).
+        continued.onExpire = { [weak self] in self?.abortPending(.stopped) }
+        // Build 14: sampled per segment, recorded once per copy (FilesDestination.finish or discardPaused), so a copy
+        // that pauses has one memory.peak.
+        let sampled = await log.samplingMemoryPeak {
             await self.copyAllLoop(selection, run: run, continued: continued, report: report, shouldStop: shouldStop)
+        }
+        run.noteMemory(peak: sampled.peak, baseline: sampled.baseline)
+        let outcome = sampled.value
+        let reason = outcome.reason
+        if reason != nil, continued.expired, !outcome.left.isEmpty {
+            let remaining = outcome.left.map { CopyPauseRecord.File(name: $0.name ?? "?", size: UInt64(max(0, Int64($0.fileSize))),
+                                                                    handle: $0.ptpObjectHandle == 0 ? nil : $0.ptpObjectHandle,
+                                                                    folder: $0.parentFolder?.name) }
+            // The card's other ARW: they claim their matches first when Continue looks for the files left.
+            let leftIDs = Set(outcome.left.map { ObjectIdentifier($0) })
+            let others = copyAllFiles.filter { !leftIDs.contains(ObjectIdentifier($0)) }
+                .map { CopyPauseRecord.File(name: $0.name ?? "?", size: UInt64(max(0, Int64($0.fileSize))),
+                                            handle: $0.ptpObjectHandle == 0 ? nil : $0.ptpObjectHandle,
+                                            folder: $0.parentFolder?.name) }
+            let expiry = continued.expiryConditions ?? continued.conditions()
+            // An expiry and a Live Activity Stop look the same here: the lock row's value of this absence waits for the cause.
+            lifecycle.holdNextRecord(reason: "the copy paused while away (iOS ended the continued task: an expiry or Stop in the Live Activity)")
+            do {
+                // Awaits the pause notification (about 2 s at most) before the work, and with it the task, ends.
+                try await destination.pause(run, remaining: remaining, others: others, wifi: nil,
+                                            expiredAt: continued.expiredAt ?? Date(), expiry: expiry)
+                lastResult = "Copy all RAW to Files: paused at \(run.copied + run.failed) of \(run.total) (iOS ended the continued task); Continue copy or Discard"
+                return false
+            } catch {
+                log.flag("\(run.prefix).expired", true,
+                         context: "iOS ended the continued task (an expiry, or Stop in the Live Activity) at \(run.copied + run.failed) of \(run.total) ARW; \(expiry); the pause record couldn't be saved, so the copy ended" + (run.conditions.map { "; \($0)" } ?? ""))
+                log.error("Copy all RAW: iOS ended the continued task, but the pause record couldn't be saved (\(CopyAllFormat.describe(error))); the copy ends here instead")
+            }
+        }
+        // Build 14: a continued segment that lost the session before copying a file keeps the copy paused.
+        if let record = resumedFrom, let why = reason, !continued.expired, removed || !isOpen || linkStalled,
+           run.copied == record.copied, destination.repause(run, record: record, why: why) {
+            lastResult = "Continue copy: the camera stopped answering before a file was copied (\(why)); the copy is still paused: Continue copy or Discard"
+            return false
         }
         destination.finish(run, stopReason: reason)
         lastResult = "Copy all RAW to Files: \(run.copied) of \(run.total) copied" + (run.failed > 0 ? ", \(run.failed) failed" : "")
@@ -3035,18 +3205,24 @@ extension CameraSession {
         return reason == nil && run.copied == run.total
     }
 
-    /// The copy itself. Returns why it ended early, or nil once it has been through the list.
+    /// The copy itself. Returns why it ended early, or nil once it has been through the list, and (build 14) on an
+    /// expiry the files not copied (the file in flight first), for the pause record; empty otherwise. The continued
+    /// task's progress is in bytes, after each file and, while requestDownload's Progress moves, during it.
     private func copyAllLoop(_ selection: [ICCameraFile], run: CopyAllRun, continued: ContinuedTask,
-                             report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> String? {
+                             report: @escaping ContinuedTask.Report,
+                             shouldStop: @escaping ContinuedTask.ShouldStop) async -> (reason: String?, left: [ICCameraFile]) {
         var failuresInARow = 0
+        // A continued copy starts with what was done before the pause.
+        report(Int(clamping: run.doneBytes), run.subtitle)
         for (i, file) in selection.enumerated() {
             if stopRequested || shouldStop() {
                 let why = continued.expired ? "the system expired the continued task" : "Stop (or Cancel run)"
-                return "\(why) after \(i) of \(selection.count) [\(lifecycle.stateDescription)]"
+                return ("\(why) after \(run.copied + run.failed) of \(run.total) [\(lifecycle.stateDescription)]",
+                        continued.expired ? Array(selection[i...]) : [])
             }
-            if removed { return "the camera was disconnected after \(i) of \(selection.count)" }
-            if !isOpen { return "the camera closed the session after \(i) of \(selection.count)" }
-            if linkStalled { return "the camera stopped answering after \(i) of \(selection.count)" }
+            if removed { return ("the camera was disconnected after \(i) of \(selection.count)", []) }
+            if !isOpen { return ("the camera closed the session after \(i) of \(selection.count)", []) }
+            if linkStalled { return ("the camera stopped answering after \(i) of \(selection.count)", []) }
             let name = file.name ?? "?"
             progressText = "\(run.progressLine) · \(name)"
             run.willRequest(name)
@@ -3055,15 +3231,23 @@ extension CameraSession {
                 // Bounded, unlike day 3's downloads: an ARW takes about 2 s on the cable, and with no bound a camera that
                 // stops answering would hang the run past Stop, Cancel run and the task's expiry. A first timeout fails
                 // the file; a second in a row marks the link stalled (noteNoAnswer), which ends the run below.
-                downloaded = try await downloadFile(file, to: run.temporaryDirectory, timeout: 60)
+                // Build 14: the bytes of the file in flight too, if requestDownload's Progress moves (`unverified`).
+                downloaded = try await downloadFile(file, to: run.temporaryDirectory, timeout: 60, onBytes: { inFlight in
+                    report(Int(clamping: run.doneBytes) + Int(clamping: inFlight), nil)
+                })
             } catch {
+                if continued.expired {
+                    // Build 14: the expiry ended the wait (onExpire): this file goes back into the list, uncounted.
+                    return ("the system expired the continued task during \(name) after \(run.copied + run.failed) of \(run.total) [\(lifecycle.stateDescription)]",
+                            Array(selection[i...]))
+                }
                 run.fileFailed(name, describe(error))
-                report(i + 1, run.subtitle)
-                if removed { return "the camera was disconnected at \(name)" }
-                if !isOpen { return "the camera closed the session at \(name)" }
-                if linkStalled { return "the camera stopped answering at \(name)" }
+                report(Int(clamping: run.doneBytes), run.subtitle)
+                if removed { return ("the camera was disconnected at \(name)", []) }
+                if !isOpen { return ("the camera closed the session at \(name)", []) }
+                if linkStalled { return ("the camera stopped answering at \(name)", []) }
                 failuresInARow += 1
-                if failuresInARow >= 3 { return "three files in a row failed (the last \(name))" }
+                if failuresInARow >= 3 { return ("three files in a row failed (the last \(name))", []) }
                 continue
             }
             // A short (or long) file never goes into the folder under the card's name.
@@ -3071,25 +3255,32 @@ extension CameraSession {
             if expected > 0, downloaded.bytes != expected {
                 try? FileManager.default.removeItem(at: downloaded.url)
                 run.fileFailed(name, "size mismatch: \(downloaded.bytes) B on disk, \(expected) B on the camera; the copy was deleted")
-                report(i + 1, run.subtitle)
+                report(Int(clamping: run.doneBytes), run.subtitle)
                 failuresInARow += 1
-                if failuresInARow >= 3 { return "three files in a row failed (the last \(name))" }
+                if failuresInARow >= 3 { return ("three files in a row failed (the last \(name))", []) }
                 continue
             }
             failuresInARow = 0
+            if continued.expired {
+                // Build 14: downloaded just as iOS expired the task: not moved into the folder (the copy finishes
+                // nothing more); it goes back into the list.
+                try? FileManager.default.removeItem(at: downloaded.url)
+                return ("the system expired the continued task after \(run.copied + run.failed) of \(run.total), with \(name) downloaded but not moved [\(lifecycle.stateDescription)]",
+                        Array(selection[i...]))
+            }
             do {
                 try await run.place(downloaded.url, cardName: name, bytes: UInt64(max(0, downloaded.bytes)),
                                     seconds: downloaded.seconds, state: lifecycle.stateDescription)
             } catch {
                 try? FileManager.default.removeItem(at: downloaded.url)
                 run.fileFailed(name, "couldn't be moved into the folder: \(error.localizedDescription)")
-                report(i + 1, run.subtitle)
-                return "couldn't write to \(run.destinationLabel): \(error.localizedDescription)"
+                report(Int(clamping: run.doneBytes), run.subtitle)
+                return ("couldn't write to \(run.destinationLabel): \(error.localizedDescription)", [])
             }
-            report(i + 1, run.subtitle)
+            report(Int(clamping: run.doneBytes), run.subtitle)
             progressText = run.progressLine
             lifecycle.noteProgress("copy all: \(name) (\(i + 1) of \(selection.count))", link: "usb")
         }
-        return nil
+        return (nil, [])
     }
 }

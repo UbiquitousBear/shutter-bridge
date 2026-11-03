@@ -38,6 +38,9 @@ actor PTPIPClient {
         case response(operation: PTPOperationCode, code: PTPResponseCode)
         case dataTooLarge(operation: PTPOperationCode, limit: Int)
         case fileError(String)
+        /// Build 14: the app cut the data phase off (TransferAbort: the copy's continued task expired). The channel is
+        /// left mid-transaction, so the client is poisoned like after a link failure.
+        case aborted(String)
 
         var description: String {
             switch self {
@@ -71,6 +74,8 @@ actor PTPIPClient {
                 return "\(operation): data phase larger than \(limit / 1_048_576) MiB; refused to buffer it"
             case .fileError(let text):
                 return "file error: \(text)"
+            case .aborted(let text):
+                return "\(text): cut off by the app"
             }
         }
 
@@ -548,8 +553,11 @@ actor PTPIPClient {
     }
 
     /// GetObject streamed to `url` (created or truncated) with an incremental SHA-256; nothing is buffered beyond
-    /// one socket read.
-    func getObject(_ handle: PTPObjectHandle, to url: URL) async throws -> FileDownload {
+    /// one socket read. Build 14: `progress` gets the bytes received so far, from the data sink, at most every 0.25 s
+    /// (throttled here, so the read loop makes no actor hop per chunk; the callback hops once itself); `abort`, once
+    /// set, cuts the data phase off with `.aborted` at once, also while no chunk is arriving (the client is then poisoned).
+    func getObject(_ handle: PTPObjectHandle, to url: URL, abort: TransferAbort? = nil,
+                   progress: (@Sendable (UInt64) -> Void)? = nil) async throws -> FileDownload {
         let file: FileHandle
         do {
             try Data().write(to: url)
@@ -563,10 +571,25 @@ actor PTPIPClient {
         var announced: UInt64? = nil
         let clock = ContinuousClock()
         let started = clock.now
+        var lastProgress = started
+        // An abort while the receive waits (no chunk coming) fails the command channel at once, which wakes it; the
+        // client is then poisoned (linkFailure reports `.aborted`), as after an abort at a chunk.
+        if let abort, let channel = command {
+            abort.setOnAbort { channel.fail(.aborted("GetObject")) }
+        }
+        defer { abort?.setOnAbort(nil) }
         try await perform(PTPCommand.getObject(handle, tx: tx.take()), dataSink: { chunk in
+            if let abort, abort.isAborted { throw ClientError.aborted("GetObject") }
             try file.write(contentsOf: chunk)
             hasher.update(data: chunk)
             bytes += UInt64(chunk.count)
+            if let progress {
+                let now = clock.now
+                if now - lastProgress >= .milliseconds(250) {
+                    lastProgress = now
+                    progress(bytes)
+                }
+            }
         }, onDataStarted: { total in
             announced = total
         })
@@ -928,5 +951,40 @@ final class OnceContinuation<T: Sendable>: @unchecked Sendable {
         let c = continuation
         continuation = nil
         return c
+    }
+}
+
+/// Build 14: a flag the main actor sets to cut a GetObject off at its next chunk (the copy's continued task expired:
+/// the copy finishes nothing more). Read from the client's data sink, so it is a lock, not actor state. While a
+/// GetObject runs it also holds an action that fails the command channel (setOnAbort), so abort() ends a receive that
+/// is waiting for data that doesn't come (a camera that stalls with its Wi-Fi still up) at once, not after the 30 s
+/// idle timeout.
+final class TransferAbort: @unchecked Sendable {
+    private let lock = NSLock()
+    private var aborted = false
+    private var onAbort: (@Sendable () -> Void)?
+
+    var isAborted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return aborted
+    }
+
+    /// `action` runs on abort(), or at once if abort() was already called; nil clears it.
+    func setOnAbort(_ action: (@Sendable () -> Void)?) {
+        lock.lock()
+        let already = aborted
+        onAbort = already ? nil : action
+        lock.unlock()
+        if already { action?() }
+    }
+
+    func abort() {
+        lock.lock()
+        aborted = true
+        let action = onAbort
+        onAbort = nil
+        lock.unlock()
+        action?()
     }
 }

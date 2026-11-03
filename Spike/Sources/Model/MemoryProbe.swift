@@ -21,6 +21,15 @@ enum MemoryProbe {
 extension SpikeLog {
     /// Runs `body`, sampling the footprint every 100 ms, and records `<name>.memory.peak` in MB.
     func withMemoryPeak<T>(_ name: String, context: String = "", _ body: () async throws -> T) async rethrows -> T {
+        let sampled = try await samplingMemoryPeak(body)
+        measure("\(name).memory.peak", Double(sampled.peak) / 1_000_000, "MB",
+                context: "baseline \(sampled.baseline / 1_000_000) MB" + (context.isEmpty ? "" : ", \(context)"))
+        return sampled.value
+    }
+
+    /// Build 14: runs `body`, sampling as withMemoryPeak does, and returns the peak and the baseline footprint (bytes)
+    /// without recording them: a copy that pauses records one peak for the whole copy, when it ends (CopyAllRun).
+    func samplingMemoryPeak<T>(_ body: () async throws -> T) async rethrows -> (value: T, peak: UInt64, baseline: UInt64) {
         let baseline = MemoryProbe.footprint()
         let sampler = Task.detached(priority: .utility) { () -> UInt64 in
             var peak = MemoryProbe.footprint()
@@ -31,11 +40,9 @@ extension SpikeLog {
             return peak
         }
         defer { sampler.cancel() }
-        let result = try await body()
+        let value = try await body()
         sampler.cancel()
         let peak = max(await sampler.value, MemoryProbe.footprint())
-        measure("\(name).memory.peak", Double(peak) / 1_000_000, "MB",
-                context: "baseline \(baseline / 1_000_000) MB" + (context.isEmpty ? "" : ", \(context)"))
-        return result
+        return (value, peak, baseline)
     }
 }

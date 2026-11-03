@@ -75,6 +75,36 @@ final class USBLab {
         await fresh.openSession(waitForCatalogue: wait)
     }
 
+    /// Build 14: Continue copy over USB, from a tap (the Wired tab, or the guided run's question). Uses the open session
+    /// when its catalogue is complete; otherwise opens one with the usual helper (a replugged camera is a new session)
+    /// and waits for the catalogue, then asks for the continued task if the app is still in front (as Copy all RAW over
+    /// Wi-Fi does after its listing). The pause lasts until this tap (`<link>.copyAll.pause.seconds`).
+    func continuePausedCopy(using continued: ContinuedTask) async {
+        let label = "Continue copy"
+        guard let record = FilesDestination.shared.paused, record.link == "usb" else {
+            log.warn("\(label): no paused USB copy")
+            return
+        }
+        // A lock-row value held back for the pause (the guided run has resolved it with the tester's answer first).
+        lifecycle.resolvePending(stoppedByTester: nil)
+        let tappedAt = Date()
+        if let session, session.isOpen, session.catalogComplete, !session.removed, !session.linkStalled {
+            session.continuePausedCopy(record, using: continued, tappedAt: tappedAt)
+            return
+        }
+        log.note("\(label): no open USB session with the card catalogued; opening one first (the continued task is asked for once the catalogue is complete, if the app is still in front)")
+        await openSession(waitForCatalogue: true)
+        guard let session, session.isOpen, session.catalogComplete else {
+            log.warn("\(label): the USB session didn't open with the card catalogued (see above); the copy is still paused")
+            return
+        }
+        guard lifecycle.isInForeground else {
+            log.warn("\(label): the app left the foreground while the session opened; tap Continue copy again")
+            return
+        }
+        session.continuePausedCopy(record, using: continued, tappedAt: tappedAt)
+    }
+
     /// Runs `work` on the current session and returns when it has finished.
     func run(_ work: @MainActor (CameraSession) async -> Void) async {
         guard let session else {
