@@ -454,11 +454,27 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 2. The app reads the network name and password over Bluetooth and joins with one iOS prompt the first time.
 3. The camera switches its Wi-Fi off again when the importing app leaves, which suits the camera's battery.
 
-Still open, for build 13's *Bluetooth: switch Wi-Fi on, join and import* run:
-- whether CC06/CC07 can be read once CC08 has switched the Wi-Fi on with PC Remote off (with the Wi-Fi off they fail with 0x9D);
-- the time from Start to the first file on this route;
-- whether the Wi-Fi stays up when the app's Bluetooth link closes;
-- whether the camera switches its Wi-Fi off when the spike's own session ends, as it did for Creators' App.
+**The 1.0 route, end to end: Bluetooth switches the Wi-Fi on, the app joins and imports** (guided run *Bluetooth: switch Wi-Fi on, join and import*, 3 Nov 14:56–15:04, build 0.1 (13.1)). Setup: camera on with its Wi-Fi off (PC Remote Function off), Creators' App quit, the camera's network forgotten in Settings first. Nothing was done on the camera. Times are from the Start tap.
+
+| Step | Took | From Start |
+| --- | --- | --- |
+| Bluetooth connect by the saved identifier (0.4–0.5 s in earlier runs) | 5.56 s | |
+| Service discovery, Sony's five notifications on, CC09 read | 3.9 s | |
+| CC08 = 0x01 (acknowledged in 55 ms) → Wi-Fi status 1 at +0.09 s → 2 at +0.84 s (`ble.auto.toWiFiOn`) | 0.84 s | 10.36 s |
+| Network details read on the first try, 0.45 s after status 2 (`ble.auto.toDetails`) | 0.45 s | 10.82 s |
+| iOS join prompt accepted; `apply` returned after 7.4 s; the camera answered at 192.168.122.1:15740 0.1 s later (`ble.auto.toCameraPort`) | 8.0 s | 18.78 s |
+| Whole-card contents transfer ready (1.97 s), 425 objects listed (6.07 s), newest ARW (46.3 MB) at 9.1 MB/s (`ble.auto.toFirstFile`, less 2.8 s on the app's own question) | 13.6 s | 32.38 s |
+
+- **The network details can be read once Bluetooth has switched the Wi-Fi on**, with PC Remote off: CC06/CC07 gave the same 21-character `DIRECT-` name and 8-character password on the first try. With the Wi-Fi off they fail with 0x9D, so the app reads them after status 2.
+- **The camera's screen showed nothing** throughout (`ble.auto.cameraShowsWiFi` no).
+- **The Wi-Fi survives the Bluetooth link closing.** With the notifications turned off and Bluetooth disconnected, a 46.3 MB ARW downloaded 14 s later and again 64 s later, both at about 13 MB/s.
+- **The camera doesn't switch its Wi-Fi off when the session ends** (`ble.auto.wifiOffAfterSession` no). After CloseSession, with the phone still joined to the camera's network, CC09 read status 2 every 2 s for 45 s. Creators' App's Wi-Fi went off about 1 s after it left, so Creators' App probably leaves the network or tells the camera; which of the two is still to find.
+- No Bluetooth pairing request; Creators' App connected afterwards.
+
+Still open:
+- the same run with Creators' App open in the background (on 3 Nov at 11:54, with it open, the camera dropped its Wi-Fi and the Bluetooth link about 30 s after a switch-on nobody joined);
+- how the app gets the camera to switch its Wi-Fi off after an import (leaving the network, or a Bluetooth write), and how long an unused Wi-Fi stays up;
+- why the Bluetooth connect took 5.6 s this time (0.4 s in earlier runs, and one 8 s timeout at 11:53 before a scan found the camera).
 
 - **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
 
