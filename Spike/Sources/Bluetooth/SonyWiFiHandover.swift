@@ -1,19 +1,27 @@
-// Build 10 (experimental): can the app switch the α7C II's Wi-Fi on over Bluetooth and read the network name and
-// password ("Wi-Fi handover"), so the phone can join the camera's network without the QR code?
+// Builds 10 and 11 (experimental): can the app switch the α7C II's Wi-Fi on over Bluetooth and read the network name
+// and password ("Wi-Fi handover"), so the phone can join the camera's network without the QR code?
 //
 // Everything here about Sony's GATT layout is reverse-engineered (CameraSync's notes on a decompiled Creators' App,
 // SonyCameraKit) and unverified on this camera. On 2 Nov the spike listed services 8000FF00, 8000CC00, 8000DD00,
 // 8000EE00 and 8000BB00 on the real camera. Inside 8000CC00 (all unverified):
 //
-//   CC08  "Wi-Fi on": write 0x01 with response            the ONLY write this file makes, after the tester confirms
+//   CC08  "Wi-Fi on": write 0x01 with response            the ONLY value this file writes, after the tester confirms
 //   CC06  SSID, CC07 password: read, ASCII after 3 bytes   never logged, displayed, stored or put on the pasteboard
 //   CC0C  BSSID: read, optional                            only "present, MAC-shaped yes/no" is logged
-//   CC09  status: read/notify, tag/length/value list       tag 0x0001 = Wi-Fi status (0 off … 2 launched)
+//   CC09  status: read/notify                              tag 0x0001 = Wi-Fi status (0 terminated, 1 launching,
+//                                                          2 launched, 3 terminating); one byte went 0 → 1 → 0
 //   CC0A  firmware, CC0B model name: read                  logged (unless they look like a serial or a MAC)
+//   CC10  battery, CC0F media, CC03 transfer, CC0E initial setting: notify   Sony's app subscribes to these
 //
-// Never written: EE01 (pairing / power off), FF01 (remote), anything in DD or BB, any CC characteristic but CC08.
-// The only other change: when CC09 can't be read, switchWiFiOn subscribes to its notifications (a descriptor write
-// iOS makes for setNotifyValue), and Disconnect turns them off again.
+// The writes are CC08 = 0x01 and notification subscriptions (the descriptor write iOS makes for setNotifyValue) on
+// characteristics inside 8000CC00, nothing else; unsubscribeAll() turns them off and waits for each answer (those
+// turned on over an earlier link are turned on and off again over this one), and Disconnect turns off any still on
+// without waiting, closing the link 2 s later. Never written: EE01 (pairing / power off), FF01 (remote),
+// anything in DD or BB, any CC characteristic's value but CC08's.
+// Every CC value other than CC06, CC07 and CC0C is logged masked (bytes up to 0x0F as hex, larger bytes as "··"),
+// including CC09's tag/length/value reading and its status; CC06, CC07 and CC0C only as lengths. Previous values are
+// kept in memory for diffs and dropped on the next connection or Disconnect; a link the camera drops keeps the
+// timeline, so the run can still report what came before the drop.
 // The camera is bonded to Creators' App on the same iPhone; iOS shares that bond with this app, so an encrypted
 // read should work without a prompt. If iOS shows a pairing request instead, lastPairingHint says so.
 
@@ -30,6 +38,8 @@ struct HandoverInventory {
     var hasCameraControl: Bool
     /// "CC06", "CC07", "CC08", "CC09", "CC0A", "CC0B", "CC0C" → present in service 8000CC00.
     var found: [String: Bool]
+    /// Build 11: the codes of every characteristic in 8000CC00 that can notify or indicate, sorted.
+    var notifiable: [String] = []
 }
 
 /// The camera's Wi-Fi network as read over Bluetooth. `description` is redacted: lengths and yes/no only, never the
@@ -56,6 +66,26 @@ struct HandoverCredentials: CustomStringConvertible {
 extension HandoverCredentials: CustomDebugStringConvertible, CustomReflectable {
     var debugDescription: String { description }
     var customMirror: Mirror { Mirror(self, children: ["redacted": description]) }
+}
+
+/// What CC09 reported since the latest timeline mark (build 11), for the guided run's watch of Creators' App.
+struct CC09Watch {
+    /// Notifications of every subscribed characteristic since the mark.
+    var notifications: Int
+    var cc09Notifications: Int
+    /// The CC09 byte read as the Wi-Fi status, and how it was chosen.
+    var position: Int?
+    var positionSource: String
+    /// The status byte's values since the mark: "0 → 1 (+0.15 s) → 2 (+1.20 s)".
+    var sequence: String
+    /// Seconds from the mark to CC09's first change, and to the first change to Wi-Fi status 2 from a known status
+    /// that wasn't 2 (status byte or tag 0x0001).
+    var firstChangeAt: Double?
+    var launchedAt: Double?
+    /// Some CC09 value since the mark (or the one at the mark) carried status 2, with or without a change to it.
+    var sawLaunched: Bool
+    /// The Wi-Fi status in CC09's latest value (status byte, else tag 0x0001); nil when unknown.
+    var current: Int?
 }
 
 enum HandoverError: Error, CustomStringConvertible, LocalizedError {
@@ -91,7 +121,7 @@ enum HandoverError: Error, CustomStringConvertible, LocalizedError {
     }
 }
 
-/// Build 10: the Bluetooth half of the Wi-Fi handover. Its own CBCentralManager (no restore identifier, created on
+/// Builds 10 and 11: the Bluetooth half of the Wi-Fi handover. Its own CBCentralManager (no restore identifier, created on
 /// the first Connect so launching the app never prompts for Bluetooth), main queue, delegate callbacks bridged to
 /// async calls with timeouts. Every call logs what it measured; see the file header for what is never logged.
 @Observable
@@ -104,6 +134,15 @@ final class SonyWiFiHandover: NSObject {
     nonisolated static let codes = ["CC06", "CC07", "CC08", "CC09", "CC0A", "CC0B", "CC0C"]
     /// Never read by safeReads and never logged in any form but lengths and yes/no.
     nonisolated static let secretCodes: Set<String> = ["CC06", "CC07", "CC0C"]
+    /// What Sony's app subscribes to (CameraSync's notes, unverified): status, battery, media, push transfer and
+    /// initial setting.
+    nonisolated static let sonyNotificationCodes = ["CC09", "CC10", "CC0F", "CC03", "CC0E"]
+    /// Where the CC09 byte that carries the Wi-Fi status is remembered once learnt: a position, not a camera value.
+    nonisolated static let statusByteKey = "ble.handover.cc09StatusByte"
+    /// How the remembered byte was learnt ("0 → 1 after CC08", "0 → 1 → 2 in a watch"), for the logs.
+    nonisolated static let statusByteSourceKey = "ble.handover.cc09StatusByteSource"
+    /// Notification lines logged live per timeline mark; after that they are only counted.
+    nonisolated static let liveLineCap = 300
 
     /// One line for the UI.
     private(set) var status = "idle"
@@ -115,6 +154,39 @@ final class SonyWiFiHandover: NSObject {
     var lastPairingHint: String?
 
     var isConnected: Bool { connectedName != nil }
+    /// Build 11: the codes this app turned notifications on for in 8000CC00 (Disconnect turns them off).
+    private(set) var subscribedCodes: Set<String> = []
+    /// The latest switchWiFiOn's status-byte values with times ("0 → 1 (+0.15 s) → 0 (+2.40 s)"), for contexts.
+    private(set) var lastStatusSequence = "none"
+    /// Whether CC09's notifications were on when the latest switchWiFiOn wrote CC08 (nil: it didn't get that far).
+    private(set) var lastCC09Notifying: Bool?
+    /// The codes this app had turned notifications on for, on that link, when the latest switchWiFiOn wrote CC08
+    /// (empty: none, or it didn't get that far).
+    private(set) var lastSubscribedAtWrite: [String] = []
+    /// Seconds from the timeline mark to the camera dropping the link, kept with the timeline (nil: no drop since).
+    private(set) var linkDroppedAt: Double?
+
+    /// The codes of 8000CC00's characteristics that can notify or indicate, sorted (empty before discovery).
+    var notifiableCodes: [String] {
+        ccAll.filter { Self.canNotify($0.value) }.keys.sorted()
+    }
+
+    /// How many characteristics of 8000CC00 have notifications on (or were turned on by this app) on this link.
+    var notifyingCount: Int { notifyingCharacteristics().count }
+
+    /// Codes this app turned notifications on for over an earlier link since the last Disconnect (the camera dropped
+    /// it and the app reconnected), or asked for without an answer, that aren't on over this link. A bonded camera
+    /// keeps a client's notification switches across connections, so unsubscribeAll() turns each on and off again.
+    var earlierLinkCodes: [String] {
+        let onNow = Set(notifyingCharacteristics().map { $0.0 })
+        return everSubscribed.subtracting(onNow).sorted()
+    }
+
+    /// Notifications are on for every characteristic in 8000CC00 that offers them.
+    var subscribedToAll: Bool {
+        let all = notifiableCodes
+        return !all.isEmpty && all.allSatisfy { subscribedCodes.contains($0) }
+    }
 
     @ObservationIgnored let log: SpikeLog
     /// The scanner's in-memory camera identifiers (marked rows, GATT listings with 8000CC00, connected peripherals
@@ -127,14 +199,47 @@ final class SonyWiFiHandover: NSObject {
     @ObservationIgnored private var peripheral: CBPeripheral?
     /// Characteristics of service 8000CC00 by their 4 hex digits.
     @ObservationIgnored private var cc: [String: CBCharacteristic] = [:]
+    /// Every characteristic of service 8000CC00 by its 4 hex digits (build 11: subscriptions and the timeline).
+    @ObservationIgnored private var ccAll: [String: CBCharacteristic] = [:]
     @ObservationIgnored private var discovered = false
     @ObservationIgnored private var scanFound: CBPeripheral?
     @ObservationIgnored private var cc09Latest: Data?
     @ObservationIgnored private var cc09Updates = 0
     /// Counts Disconnect taps, so a wait can tell a Disconnect from the camera dropping the link.
     @ObservationIgnored private var disconnectRequests = 0
+    /// Every code this app turned notifications on for since the last Disconnect, over any link: unlike
+    /// subscribedCodes it outlives a dropped link (resetLink), so the switches left at the camera can be cleared over
+    /// the next one. Codes leave it when confirmed off.
+    @ObservationIgnored private var everSubscribed: Set<String> = []
     @ObservationIgnored private var waiters: [String: Waiter] = [:]
+    /// The last value seen per code (read or notified), in memory only, for diffs. Never CC06, CC07 or CC0C.
+    @ObservationIgnored private var previous: [String: Data] = [:]
+    /// The last length seen for CC06, CC07 and CC0C: all that is kept of them.
+    @ObservationIgnored private var previousLength: [String: Int] = [:]
+    /// Notifications per code since the latest timeline mark.
+    @ObservationIgnored private var timeline: [String: TimelineEntry] = [:]
+    @ObservationIgnored private var timelineOrigin: ContinuousClock.Instant?
+    @ObservationIgnored private var timelineLabel = "none"
+    @ObservationIgnored private var liveLines = 0
+    @ObservationIgnored private var silentLines = 0
+    /// CC09's notifications since the mark, in seconds from it, and its value when the mark was set.
+    @ObservationIgnored private var cc09History: [(at: Double, value: Data)] = []
+    @ObservationIgnored private var cc09AtMark: Data?
+    /// While switchWiFiOn waits: CC09's notifications in arrival order, so none is missed between its checks.
+    @ObservationIgnored private var cc09Queue: [(at: ContinuousClock.Instant, value: Data)] = []
+    @ObservationIgnored private var cc09Watching = false
+    /// A clock that keeps running while the app is suspended, so the timeline's times stay right when Creators' App
+    /// is in front.
     private let clock = ContinuousClock()
+
+    private struct TimelineEntry {
+        var count = 0
+        var first: Double
+        var last: Double
+        /// Nil for CC06, CC07 and CC0C.
+        var lastValue: Data?
+        var lastLength = 0
+    }
 
     private struct Waiter {
         let id: UUID
@@ -255,8 +360,7 @@ final class SonyWiFiHandover: NSObject {
             return nil
         }
         connectedName = name
-        cc = [:]
-        discovered = false
+        resetLink()
         UserDefaults.standard.set(p.identifier.uuidString, forKey: Self.savedPeripheralKey)
         let total = (clock.now - started).inSeconds
         let attemptSeconds = (clock.now - attemptStart).inSeconds
@@ -267,19 +371,23 @@ final class SonyWiFiHandover: NSObject {
 
     // MARK: - Discover
 
-    /// Lists every service and characteristic UUID with its properties (no values) and records
-    /// ble.handover.services and ble.handover.cameraControl.
-    func discover() async throws -> HandoverInventory {
+    /// Lists every service and characteristic UUID with its properties (no values), keeps every characteristic of
+    /// 8000CC00 by its short code, logs which of them can notify or indicate (codes only), and records
+    /// `<record>.services` and `<record>.cameraControl` (ble.handover.* by default; nil records nothing, for callers
+    /// that record their own outcome, such as the Wi-Fi runs' join over Bluetooth).
+    func discover(record: String? = "ble.handover") async throws -> HandoverInventory {
         try await run("Discover") {
-            try await self.doDiscover()
+            try await self.doDiscover(record: record)
         }
     }
 
-    private func doDiscover() async throws -> HandoverInventory {
+    private func doDiscover(record: String? = "ble.handover") async throws -> HandoverInventory {
         let p = try connectedPeripheral()
         let started = clock.now
         status = "discovering services"
+        // Subscriptions stay: they belong to the link, not to this listing.
         cc = [:]
+        ccAll = [:]
         discovered = false
         _ = try await wait("services", timeout: 15, what: "service discovery") {
             p.discoverServices(nil)
@@ -301,24 +409,36 @@ final class SonyWiFiHandover: NSObject {
             for c in service.characteristics ?? [] {
                 let line = "\(c.uuid.uuidString) (\(Self.describe(c.properties)))"
                 lines.append(line)
-                if isControl, let code = Self.shortCode(c.uuid), Self.codes.contains(code) {
-                    cc[code] = c
-                    inventory.found[code] = true
+                if isControl, let code = Self.shortCode(c.uuid) {
+                    ccAll[code] = c
+                    if Self.codes.contains(code) {
+                        cc[code] = c
+                        inventory.found[code] = true
+                    }
                 }
             }
             inventory.characteristics[service.uuid.uuidString] = lines
             log.note("  \(service.uuid.uuidString)\(service.isPrimary ? "" : " (secondary)"): \(lines.isEmpty ? "no characteristics" : lines.joined(separator: ", "))")
         }
         discovered = true
+        inventory.notifiable = notifiableCodes
+        if inventory.hasCameraControl {
+            log.note("Wi-Fi handover: 8000CC00 has \(ccAll.count) characteristics with a short code; \(inventory.notifiable.count) can notify or indicate: \(inventory.notifiable.isEmpty ? "none" : inventory.notifiable.joined(separator: ", "))")
+        }
         let present = Self.codes.filter { inventory.found[$0] == true }
         let absent = Self.codes.filter { inventory.found[$0] != true }
         let seconds = (clock.now - started).inSeconds
-        log.measure("ble.handover.services", Double(services.count), "count",
-                    context: String(format: "%@, discovered in %.2f s", connectedName ?? "camera", seconds))
-        log.flag("ble.handover.cameraControl", inventory.hasCameraControl,
-                 context: inventory.hasCameraControl
-                    ? "8000CC00 present; \(present.isEmpty ? "none" : present.joined(separator: ", ")) found\(absent.isEmpty ? "" : ", \(absent.joined(separator: ", ")) missing")"
-                    : "no 8000CC00 service")
+        if let record {
+            log.measure("\(record).services", Double(services.count), "count",
+                        context: String(format: "%@, discovered in %.2f s", connectedName ?? "camera", seconds))
+            log.flag("\(record).cameraControl", inventory.hasCameraControl,
+                     context: inventory.hasCameraControl
+                        ? "8000CC00 present; \(present.isEmpty ? "none" : present.joined(separator: ", ")) found\(absent.isEmpty ? "" : ", \(absent.joined(separator: ", ")) missing")"
+                        : "no 8000CC00 service")
+        } else {
+            log.note(String(format: "Wi-Fi handover: %ld services discovered in %.2f s; 8000CC00 %@ (not recorded as ble.handover.*)",
+                            services.count, seconds, inventory.hasCameraControl ? "present" : "absent"))
+        }
         status = "discovered \(services.count) services; \(present.count) of \(Self.codes.count) CC characteristics"
         return inventory
     }
@@ -327,7 +447,7 @@ final class SonyWiFiHandover: NSObject {
 
     /// Reads CC0A (firmware), CC0B (model), CC09 (status, parsed) and, for other readable CC characteristics except
     /// CC06/CC07/CC0C, logs only the length. ATT errors are logged by name; a disconnect throws. Returns the Wi-Fi
-    /// status if CC09 carries tag 0x0001.
+    /// status: the byte at the remembered status position, else tag 0x0001 (nil when neither is known).
     func safeReads() async throws -> Int? {
         try await run("Safe reads") {
             try await self.doSafeReads()
@@ -350,9 +470,8 @@ final class SonyWiFiHandover: NSObject {
             if c.properties.contains(.read) {
                 switch try await read(c, code: "CC09") {
                 case .value(let data):
-                    let parsed = Self.describeStatus(data)
-                    wifiStatus = parsed.status
-                    log.note("Wi-Fi handover: CC09 status: \(parsed.text)")
+                    wifiStatus = Self.wifiStatus(in: data)
+                    log.note("Wi-Fi handover: CC09 status: \(Self.describeCC09(data))\(Self.statusByteNote(data))")
                 case .failed(let reason):
                     log.warn("Wi-Fi handover: CC09 status read failed: \(reason)")
                 }
@@ -371,81 +490,517 @@ final class SonyWiFiHandover: NSObject {
             case .failed(let reason): log.warn("Wi-Fi handover: \(code) read failed: \(reason)")
             }
         }
-        status = "safe reads done; Wi-Fi status \(wifiStatus.map { String($0) } ?? "unknown")"
+        status = "safe reads done; Wi-Fi status \(wifiStatus == nil ? "unknown" : Self.shownStatus(wifiStatus))"
         return wifiStatus
+    }
+
+    /// Build 11: one harmless CC09 read (`why` names it in the log), for a baseline or a final status. Returns the
+    /// Wi-Fi status as safeReads does; nil when CC09 can't be read or the status is unknown. A disconnect throws.
+    func readStatus(_ why: String) async throws -> Int? {
+        try await run("Read CC09") {
+            try await self.doReadStatus(why)
+        }
+    }
+
+    private func doReadStatus(_ why: String) async throws -> Int? {
+        _ = try connectedPeripheral()
+        if !discovered { _ = try await doDiscover() }
+        guard let c = cc["CC09"], c.properties.contains(.read) else {
+            log.note("Wi-Fi handover: CC09 isn't readable, so no status read \(why)")
+            return nil
+        }
+        status = "reading the camera's status"
+        switch try await read(c, code: "CC09") {
+        case .value(let data):
+            let s = Self.wifiStatus(in: data)
+            log.note("Wi-Fi handover: CC09 \(why) (read): \(Self.describeCC09(data))\(Self.statusByteNote(data))")
+            status = "Wi-Fi status \(s == nil ? "unknown" : Self.shownStatus(s))"
+            return s
+        case .failed(let reason):
+            log.warn("Wi-Fi handover: CC09 read \(why) failed: \(reason)")
+            status = "CC09 read failed: \(reason)"
+            return nil
+        }
+    }
+
+    // MARK: - Subscriptions (build 11)
+
+    /// Turns notifications on for `codes` in 8000CC00 (nil: every characteristic there that can notify or indicate),
+    /// as Sony's app does for CC09, CC10, CC0F, CC03 and CC0E when it connects. Each is a descriptor write iOS makes
+    /// for setNotifyValue, answered within 10 s; a failure is logged by name and the next code is tried, a
+    /// disconnect throws. Codes that are absent or can't notify are logged and skipped. Sets a timeline mark, waits
+    /// 1 s for the first notifications, and records ble.handover.subscribed. Returns the codes now notifying.
+    func subscribe(_ codes: [String]?) async throws -> [String] {
+        try await run("Subscribe") {
+            try await self.doSubscribe(codes)
+        }
+    }
+
+    private func doSubscribe(_ codes: [String]?) async throws -> [String] {
+        let p = try connectedPeripheral()
+        if !discovered { _ = try await doDiscover() }
+        let requests = disconnectRequests
+        let wanted = codes ?? notifiableCodes
+        let label = codes == nil ? "every 8000CC00 notification (\(wanted.count))" : wanted.joined(separator: ", ")
+        markTimeline("Subscribe: \(label)")
+        var done: [String] = []
+        var skipped: [String: String] = [:]
+        var failed: [String: String] = [:]
+        for code in wanted {
+            guard let c = ccAll[code] else {
+                log.note("Wi-Fi handover: \(code) isn't in 8000CC00; not subscribed")
+                skipped[code] = "absent"
+                continue
+            }
+            guard Self.canNotify(c) else {
+                log.note("Wi-Fi handover: \(code) can't notify (\(Self.describe(c.properties))); not subscribed")
+                skipped[code] = "can't notify"
+                continue
+            }
+            if let reason = try await enableNotifications(code, c, p) {
+                failed[code] = reason
+            } else {
+                done.append(code)
+            }
+        }
+        status = "collecting the first notifications"
+        try? await Task.sleep(for: .seconds(1))
+        guard peripheral === p, p.state == .connected else {
+            if disconnectRequests != requests { throw HandoverError.cancelled("Disconnect") }
+            throw HandoverError.disconnected("the link dropped after subscribing")
+        }
+        let initial = timeline.sorted { $0.key < $1.key }.map { "\($0.key) ×\($0.value.count)" }
+        var sony: [String] = []
+        for code in Self.sonyNotificationCodes where !done.contains(code) {
+            if let reason = failed[code] {
+                sony.append("\(code) failed (\(reason))")
+            } else if let reason = skipped[code] {
+                sony.append("\(code) \(reason)")
+            } else {
+                sony.append("\(code) not requested")
+            }
+        }
+        let failures = failed.sorted { $0.key < $1.key }.map { "\($0.key) (\($0.value))" }
+        let skips = skipped.sorted { $0.key < $1.key }.map { "\($0.key) (\($0.value))" }
+        let summary = "\(done.count) of \(wanted.count) requested now notifying: \(done.isEmpty ? "none" : done.joined(separator: ", "))"
+            + (failures.isEmpty ? "" : "; failed: \(failures.joined(separator: ", "))")
+            + (skips.isEmpty ? "" : "; skipped: \(skips.joined(separator: ", "))")
+        log.note("Wi-Fi handover: subscribed (\(label)): \(summary); first second: \(initial.isEmpty ? "no notifications" : initial.joined(separator: ", "))")
+        log.measure("ble.handover.subscribed", Double(done.count), "count",
+                    context: "\(codes == nil ? "every 8000CC00 notification" : "requested \(label)"): \(done.isEmpty ? "none" : done.joined(separator: ", ")); Sony's set (CC09, CC10, CC0F, CC03, CC0E): \(sony.isEmpty ? "all subscribed" : sony.joined(separator: ", ") + ", the rest subscribed")")
+        status = "subscribed to \(subscribedCodes.count) characteristic(s)"
+        return done
+    }
+
+    /// One setNotifyValue(true) and its answer (10 s). Nil when notifications are on (or already were), else why
+    /// not (logged). Throws only for a disconnect, a Disconnect tap or Bluetooth going off.
+    private func enableNotifications(_ code: String, _ c: CBCharacteristic, _ p: CBPeripheral) async throws -> String? {
+        if c.isNotifying {
+            subscribedCodes.insert(code)
+            everSubscribed.insert(code)
+            return nil
+        }
+        status = "subscribing to \(code)"
+        // Counted as this app's from the request on, so a first notification that beats the answer isn't marked as
+        // unsolicited; taken back if the subscription fails. everSubscribed keeps it after a timeout or a dropped
+        // link (the request may still have reached the camera), not after a refusal.
+        let wasEver = everSubscribed.contains(code)
+        subscribedCodes.insert(code)
+        everSubscribed.insert(code)
+        do {
+            _ = try await wait("notify:\(c.uuid.uuidString)", timeout: 10, what: "\(code) subscription") {
+                p.setNotifyValue(true, for: c)
+            }
+        } catch let e as HandoverError where !e.isTimeout {
+            throw e
+        } catch {
+            subscribedCodes.remove(code)
+            let timedOut = (error as? HandoverError)?.isTimeout == true
+            if !timedOut && !wasEver { everSubscribed.remove(code) }
+            noteIfPairing(error, during: "\(code) subscription")
+            let reason = Self.errorName(error)
+            log.warn("Wi-Fi handover: \(code) subscription failed: \(reason)")
+            return reason
+        }
+        guard c.isNotifying else {
+            subscribedCodes.remove(code)
+            if !wasEver { everSubscribed.remove(code) }
+            log.warn("Wi-Fi handover: \(code) subscription answered, but isNotifying is no")
+            return "isNotifying no"
+        }
+        return nil
+    }
+
+    /// Turns off every notification on in 8000CC00 (those this app turned on, and any the characteristic objects
+    /// report as on), one at a time, each waiting up to 5 s for the camera's answer, and logs which were confirmed
+    /// off and which weren't. Returns the codes not confirmed off. A disconnect throws; Disconnect still turns off
+    /// whatever is left without waiting.
+    func unsubscribeAll() async throws -> [String] {
+        try await run("Unsubscribe") {
+            try await self.doUnsubscribeAll()
+        }
+    }
+
+    private func doUnsubscribeAll() async throws -> [String] {
+        let p = try connectedPeripheral()
+        // Switches turned on over an earlier link first: on and off again over this one (CCCD writes only).
+        let earlier = earlierLinkCodes
+        var unconfirmedEarlier: [String] = []
+        if !earlier.isEmpty {
+            if !discovered { _ = try await doDiscover(record: nil) }
+            unconfirmedEarlier = try await clearEarlierLinkCodes(earlier, p)
+        }
+        let targets = notifyingCharacteristics()
+        guard !targets.isEmpty else {
+            log.note("Wi-Fi handover: no notifications on in 8000CC00 over this link; nothing more to turn off")
+            return unconfirmedEarlier
+        }
+        var confirmed: [String] = []
+        var unconfirmed: [String] = unconfirmedEarlier
+        for (code, c) in targets {
+            status = "turning off \(code)'s notifications"
+            do {
+                _ = try await wait("notify:\(c.uuid.uuidString)", timeout: 5, what: "\(code) notifications off") {
+                    p.setNotifyValue(false, for: c)
+                }
+                if c.isNotifying {
+                    unconfirmed.append("\(code) (answered, isNotifying still yes)")
+                } else {
+                    confirmed.append(code)
+                    subscribedCodes.remove(code)
+                    everSubscribed.remove(code)
+                }
+            } catch let e as HandoverError where !e.isTimeout {
+                log.warn("Wi-Fi handover: turning notifications off stopped at \(code) (\(e)); off: \(confirmed.isEmpty ? "none" : confirmed.joined(separator: ", "))")
+                throw e
+            } catch {
+                unconfirmed.append("\(code) (\(Self.errorName(error)))")
+            }
+        }
+        log.note("Wi-Fi handover: notifications turned off, confirmed by the camera, for \(confirmed.count) of \(targets.count): \(confirmed.isEmpty ? "none" : confirmed.joined(separator: ", "))\(unconfirmed.isEmpty ? "" : "; not confirmed: " + unconfirmed.joined(separator: ", "))")
+        if !unconfirmed.isEmpty {
+            log.warn("Wi-Fi handover: \(unconfirmed.count) notification(s) not confirmed off; the camera may keep them on for this phone (a bonded client) until another app turns them off")
+        }
+        status = "notifications off for \(confirmed.count) of \(targets.count)"
+        return unconfirmed
+    }
+
+    /// Codes turned on over an earlier link (`codes`, none notifying over this one): each is turned on (10 s for the
+    /// answer) and off again (5 s), descriptor writes inside 8000CC00 only, so the switch the bonded camera keeps
+    /// from the earlier link is cleared; CoreBluetooth sends no "off" for a characteristic it thinks is already off.
+    /// Logs which were cleared and which couldn't be confirmed, and returns the latter. A disconnect throws.
+    private func clearEarlierLinkCodes(_ codes: [String], _ p: CBPeripheral) async throws -> [String] {
+        log.note("Wi-Fi handover: \(codes.count) notification(s) this app turned on over an earlier link, not on over this one: \(codes.joined(separator: ", ")); turning each on and off again so the camera doesn't keep them on")
+        var cleared: [String] = []
+        var unconfirmed: [String] = []
+        for code in codes {
+            guard let c = ccAll[code], Self.canNotify(c) else {
+                unconfirmed.append("\(code) (earlier link; not in 8000CC00 over this link)")
+                continue
+            }
+            if let reason = try await enableNotifications(code, c, p) {
+                unconfirmed.append("\(code) (earlier link; turning it on again failed: \(reason))")
+                continue
+            }
+            status = "turning off \(code)'s notifications (earlier link)"
+            do {
+                _ = try await wait("notify:\(c.uuid.uuidString)", timeout: 5, what: "\(code) notifications off") {
+                    p.setNotifyValue(false, for: c)
+                }
+                if c.isNotifying {
+                    unconfirmed.append("\(code) (earlier link; answered, isNotifying still yes)")
+                } else {
+                    cleared.append(code)
+                    subscribedCodes.remove(code)
+                    everSubscribed.remove(code)
+                }
+            } catch let e as HandoverError where !e.isTimeout {
+                log.warn("Wi-Fi handover: clearing the earlier link's notifications stopped at \(code) (\(e)); cleared: \(cleared.isEmpty ? "none" : cleared.joined(separator: ", "))")
+                throw e
+            } catch {
+                unconfirmed.append("\(code) (earlier link; \(Self.errorName(error)))")
+            }
+        }
+        log.note("Wi-Fi handover: earlier link's notifications cleared, confirmed by the camera, for \(cleared.count) of \(codes.count): \(cleared.isEmpty ? "none" : cleared.joined(separator: ", "))\(unconfirmed.isEmpty ? "" : "; not confirmed: " + unconfirmed.joined(separator: ", "))")
+        return unconfirmed
+    }
+
+    /// The characteristics of 8000CC00 with notifications on, or turned on by this app on this link, by code:
+    /// those discovered (ccAll) plus any in the peripheral's current 8000CC00 service, sorted by code.
+    private func notifyingCharacteristics() -> [(String, CBCharacteristic)] {
+        var found: [String: CBCharacteristic] = [:]
+        for (code, c) in ccAll where c.isNotifying || subscribedCodes.contains(code) { found[code] = c }
+        if let p = peripheral, let service = p.services?.first(where: { Self.isCameraControl($0.uuid) }) {
+            for c in service.characteristics ?? [] where c.isNotifying {
+                if let code = Self.shortCode(c.uuid), found[code] == nil { found[code] = c }
+            }
+        }
+        return found.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+    }
+
+    // MARK: - Notification timeline (build 11)
+
+    /// Starts a new timeline: the times of the notifications logged from now on are from here, and the counts and
+    /// timelineSummary() start again. Logs the label.
+    func markTimeline(_ label: String) {
+        clearTimeline()
+        timelineOrigin = clock.now
+        timelineLabel = label
+        cc09AtMark = cc09Latest
+        log.note("Wi-Fi handover: timeline mark \"\(label)\" (notification times below are from here)")
+    }
+
+    private func clearTimeline() {
+        timeline = [:]
+        timelineOrigin = nil
+        timelineLabel = "none"
+        liveLines = 0
+        silentLines = 0
+        cc09History = []
+        cc09AtMark = nil
+        linkDroppedAt = nil
+    }
+
+    /// Per characteristic since the latest mark: how many notifications, the first and last time, and the last value
+    /// masked (CC06, CC07, CC0C: its length). Logged and returned.
+    @discardableResult
+    func timelineSummary() -> String {
+        let since = timelineOrigin.map { (clock.now - $0).inSeconds } ?? 0
+        let entries = timeline.sorted { a, b in
+            a.value.first != b.value.first ? a.value.first < b.value.first : a.key < b.key
+        }
+        let total = entries.reduce(0) { $0 + $1.value.count }
+        var text: String
+        if entries.isEmpty {
+            text = "no notifications"
+        } else {
+            let parts = entries.map { item -> String in
+                let e = item.value
+                let last = e.lastValue.map { Self.maskedHex($0) } ?? "\(e.lastLength) B (value not logged)"
+                return "\(item.key) ×\(e.count) (" + String(format: "+%.2f s … +%.2f s", e.first, e.last) + "), last \(last)"
+            }
+            text = "\(total) notification(s) from \(entries.count) characteristic(s): " + parts.joined(separator: "; ")
+        }
+        if silentLines > 0 { text += " (\(silentLines) not logged live)" }
+        log.note("Wi-Fi handover: timeline since \"\(timelineLabel)\" (" + String(format: "%.1f s", since) + "): \(text)")
+        return text
+    }
+
+    /// CC09 since the latest mark: the status byte (remembered, else the byte that went 0 → 1 → 2, which is then
+    /// remembered; a 0 → 1 → 2 at another byte than the remembered one replaces it), its values, when CC09 first
+    /// changed and when it first changed to status 2. No I/O but the log line for a newly learnt byte.
+    func cc09Watch() -> CC09Watch {
+        let history = cc09History
+        let values = (cc09AtMark.map { [$0] } ?? []) + history.map(\.value)
+        var position = Self.savedStatusByte()
+        var source = position == nil ? "unknown: no byte went 0 → 1 → 2" : "remembered (\(Self.savedStatusByteSource()))"
+        let learnt = Self.launchPosition(values)
+        if let learnt, learnt != position {
+            let replaced = position
+            // A remembered byte that went 0 → 1 → 2 itself keeps its place; otherwise the byte that did wins.
+            if replaced == nil || Self.launchPosition(values, only: replaced) == nil {
+                position = learnt
+                source = "the byte that went 0 → 1 → 2 during the watch" + (replaced.map { ", replacing [\($0)]" } ?? "")
+                Self.saveStatusByte(learnt, source: "0 → 1 → 2 in a watch")
+                log.measure("ble.handover.cc09.statusByte", Double(learnt), "index",
+                            context: "learnt from the watch (\"\(timelineLabel)\"): the byte that went 0 → 1 → 2\(replaced.map { "; replaces [\($0)], which didn't" } ?? ""); remembered for later runs")
+            }
+        }
+        func statusOf(_ value: Data?) -> Int? {
+            guard let value else { return nil }
+            return position.flatMap { Self.byte(at: $0, in: value) } ?? Self.describeStatus(value).status
+        }
+        var previousValue = cc09AtMark
+        var previousStatus = statusOf(cc09AtMark)
+        var firstChangeAt: Double?
+        var launchedAt: Double?
+        var sawLaunched = previousStatus == 2
+        var lastByte = position.flatMap { p in cc09AtMark.flatMap { Self.byte(at: p, in: $0) } }
+        var sequence: [String] = [Self.shownStatus(lastByte)]
+        for item in history {
+            if let old = previousValue, old != item.value, firstChangeAt == nil { firstChangeAt = item.at }
+            previousValue = item.value
+            let b = position.flatMap { Self.byte(at: $0, in: item.value) }
+            if let b, b != lastByte {
+                sequence.append("\(Self.shownStatus(b)) (" + String(format: "+%.2f s", item.at) + ")")
+                lastByte = b
+            }
+            let s = statusOf(item.value)
+            if s == 2 {
+                sawLaunched = true
+                // Only a change to 2 from a known other status counts as the launch.
+                if launchedAt == nil, let before = previousStatus, before != 2 { launchedAt = item.at }
+            }
+            if s != nil { previousStatus = s }
+        }
+        let current = statusOf(cc09Latest)
+        let total = timeline.values.reduce(0) { $0 + $1.count }
+        return CC09Watch(notifications: total, cc09Notifications: history.count, position: position,
+                         positionSource: source, sequence: sequence.joined(separator: " → "),
+                         firstChangeAt: firstChangeAt, launchedAt: launchedAt, sawLaunched: sawLaunched, current: current)
+    }
+
+    /// A value of a characteristic in 8000CC00 that wasn't the answer to a read: counted on the timeline, logged
+    /// live as a change from the previous value (masked; CC06, CC07, CC0C as a length), up to liveLineCap lines per
+    /// mark.
+    private func recordNotification(_ code: String, _ value: Data) {
+        let now = clock.now
+        if timelineOrigin == nil {
+            timelineOrigin = now
+            timelineLabel = "first notification"
+        }
+        let at = (now - (timelineOrigin ?? now)).inSeconds
+        let secret = Self.secretCodes.contains(code)
+        let change: String
+        if secret {
+            let was = previousLength[code].map { $0 == value.count ? "" : ", was \($0) B" } ?? ""
+            change = "\(value.count) B (value not logged\(was))"
+        } else {
+            change = Self.byteChanges(old: previous[code], new: value)
+        }
+        // A notification this app didn't turn on in this connection (left on from an earlier run, say).
+        let unsolicited = subscribedCodes.contains(code) ? "" : " (not subscribed by this app on this link)"
+        var entry = timeline[code] ?? TimelineEntry(first: at, last: at)
+        entry.count += 1
+        entry.last = at
+        entry.lastLength = value.count
+        entry.lastValue = secret ? nil : value
+        timeline[code] = entry
+        remember(code, value)
+        if code == "CC09" {
+            if cc09History.count < 2000 { cc09History.append((at: at, value: value)) }
+            if cc09Watching { cc09Queue.append((at: now, value: value)) }
+        }
+        // switchWiFiOn logs CC09's changes itself while it waits, with the status byte read.
+        if code == "CC09" && cc09Watching { return }
+        if liveLines < Self.liveLineCap {
+            liveLines += 1
+            log.note("Wi-Fi handover: " + String(format: "+%.2f s", at) + " \(code) notify: \(change)\(unsolicited)")
+            if liveLines == Self.liveLineCap {
+                log.note("Wi-Fi handover: \(Self.liveLineCap) notification lines since \"\(timelineLabel)\"; further ones are only counted until the next mark")
+            }
+        } else {
+            silentLines += 1
+        }
+    }
+
+    /// Keeps `value` for the next diff; for CC06, CC07 and CC0C only its length.
+    private func remember(_ code: String, _ value: Data) {
+        if Self.secretCodes.contains(code) {
+            previousLength[code] = value.count
+        } else {
+            previous[code] = value
+        }
+    }
+
+    /// Forgets the link's characteristics, subscriptions and remembered values. With `keepTimeline` (the camera
+    /// dropping the link, Bluetooth off) the timeline, CC09's history, its latest value and switchWiFiOn's queue stay,
+    /// so the run can still report what came before the drop, and the drop's time is noted; they go at the next
+    /// mark, the next connection or Disconnect.
+    private func resetLink(keepTimeline: Bool = false) {
+        cc = [:]
+        ccAll = [:]
+        discovered = false
+        subscribedCodes = []
+        previous = [:]
+        previousLength = [:]
+        if keepTimeline {
+            if let origin = timelineOrigin, linkDroppedAt == nil { linkDroppedAt = (clock.now - origin).inSeconds }
+            return
+        }
+        clearTimeline()
+        cc09Latest = nil
+        cc09Queue = []
+        cc09Watching = false
     }
 
     // MARK: - Switch Wi-Fi on (the one write)
 
-    /// Writes 0x01 to CC08 with response, then waits up to `timeout` for CC09 to report status 2, polling CC09 once
-    /// a second when it is readable. Only when CC09 can't be read does it subscribe to CC09's notifications (a
-    /// descriptor write; Disconnect turns them off). Records what CC09 reported as ble.handover.wifiOn.reported (the
-    /// guided run records what the camera shows as ble.handover.wifiOn), ble.handover.wifiOn.latency for status 2,
-    /// ble.handover.cc09.firstChange for the first change of any kind, and ble.handover.linkDroppedAfterWrite. A link
-    /// drop after the write is an outcome (returns false), not an error. Call only after the tester has confirmed.
-    func switchWiFiOn(timeout: Double = 30) async throws -> Bool {
+    /// Writes 0x01 to CC08 with response, then waits up to `timeout` for CC09 to report Wi-Fi status 2. If CC09 can
+    /// notify it subscribes first, as Sony's app does, and listens; it polls CC09 once a second when it can't notify
+    /// (or the subscription failed), and also when no CC09 notification has come 3 s after the acknowledgement. The
+    /// status byte is the CC09 byte remembered from an earlier run, else the first byte to change after the write
+    /// (one going 0 → 1 preferred); only a 0 → 1 is remembered for later runs (ble.handover.cc09.statusByte). If that
+    /// byte changes and returns to its value from before the write, it waits 3 s more and stops. Records what CC09
+    /// reported as ble.handover.wifiOn.reported (the guided run records what the camera shows),
+    /// ble.handover.wifiOn.latency for status 2, ble.handover.cc09.firstChange for the first change of any kind and
+    /// ble.handover.linkDroppedAfterWrite, each with `attempt` and the status byte's values in its context, then logs
+    /// timelineSummary() so every characteristic that changed after the write is listed. A link drop after the write
+    /// is an outcome, not an error (returns whether CC09 reported status 2 before it); the link is otherwise kept up.
+    /// Returns whether CC09 reported status 2. Call only after the tester has confirmed.
+    func switchWiFiOn(timeout: Double = 30, attempt: String = "Bluetooth tab") async throws -> Bool {
         try await run("Switch Wi-Fi on") {
-            try await self.doSwitchWiFiOn(timeout: timeout)
+            try await self.doSwitchWiFiOn(timeout: timeout, attempt: attempt)
         }
     }
 
-    private func doSwitchWiFiOn(timeout: Double) async throws -> Bool {
+    private func doSwitchWiFiOn(timeout: Double, attempt: String) async throws -> Bool {
         let p = try connectedPeripheral()
         if !discovered { _ = try await doDiscover() }
+        lastStatusSequence = "none"
+        lastCC09Notifying = nil
+        lastSubscribedAtWrite = []
         guard let cc08 = cc["CC08"] else {
-            log.flag("ble.handover.wifiOn.reported", false, context: "no CC08 characteristic in 8000CC00; nothing written")
+            log.flag("ble.handover.wifiOn.reported", false, context: "attempt \(attempt): no CC08 characteristic in 8000CC00; nothing written")
             throw HandoverError.missing("CC08")
         }
         let cc09 = cc["CC09"]
-        var pollCC09 = cc09?.properties.contains(.read) == true
+        let readable = cc09?.properties.contains(.read) == true
+        var notifying = cc09?.isNotifying == true
+        // Sony's app listens for CC09's notifications rather than polling, so subscribe whenever CC09 offers them.
+        if let cc09, Self.canNotify(cc09), !notifying {
+            if let reason = try await enableNotifications("CC09", cc09, p) {
+                log.warn("Wi-Fi handover: CC09 subscription failed (\(reason))\(readable ? "; polling CC09 instead" : "")")
+            } else {
+                log.note("Wi-Fi handover: subscribed to CC09's notifications before the write, as Sony's app does; they are turned off at the end")
+            }
+            notifying = cc09.isNotifying
+        }
+        lastCC09Notifying = notifying
+        lastSubscribedAtWrite = subscribedCodes.sorted()
+        var pollCC09 = readable && !notifying
         var baseline: Data?
         var lastStatus: Int?
-        if let cc09, pollCC09 {
+        if let cc09, readable {
             switch try await read(cc09, code: "CC09") {
             case .value(let data):
                 baseline = data
-                let parsed = Self.describeStatus(data)
-                lastStatus = parsed.status
-                log.note("Wi-Fi handover: CC09 before the write: \(parsed.text)")
+                lastStatus = Self.describeStatus(data).status
+                log.note("Wi-Fi handover: CC09 before the write (read): \(Self.describeCC09(data))")
             case .failed(let reason):
                 log.warn("Wi-Fi handover: CC09 read before the write failed: \(reason)")
             }
         }
-        var notifying = false
-        // Subscribing writes CC09's descriptor on the camera, so it happens only when CC09 can't be polled.
-        if let cc09, !pollCC09, cc09.properties.contains(.notify) || cc09.properties.contains(.indicate) {
-            status = "subscribing to CC09"
-            cc09Latest = nil
-            do {
-                _ = try await wait("notify:\(cc09.uuid.uuidString)", timeout: 10, what: "CC09 subscription") {
-                    p.setNotifyValue(true, for: cc09)
-                }
-                notifying = cc09.isNotifying
-                log.note("Wi-Fi handover: CC09 isn't readable, so subscribed to its notifications (isNotifying \(cc09.isNotifying ? "yes" : "no")); Disconnect turns them off")
-            } catch let e as HandoverError where !e.isTimeout {
-                throw e
-            } catch {
-                noteIfPairing(error, during: "CC09 subscription")
-                log.warn("Wi-Fi handover: CC09 subscription failed: \(Self.errorName(error))")
-            }
-        }
-        // CC09 not readable: the value the camera sent on subscribing (if any) is the baseline.
-        if baseline == nil, notifying, let value = cc09Latest {
+        // Not read: the latest notification (the value the camera sent on subscribing, if any) is the baseline.
+        if baseline == nil, let value = cc09Latest {
             baseline = value
-            let parsed = Self.describeStatus(value)
-            lastStatus = parsed.status
-            log.note("Wi-Fi handover: CC09 before the write (notification): \(parsed.text)")
+            lastStatus = Self.describeStatus(value).status
+            log.note("Wi-Fi handover: CC09 before the write (latest notification): \(Self.describeCC09(value))")
         }
         if !notifying && !pollCC09 {
             log.warn("Wi-Fi handover: CC09 can't be read or subscribed to: the camera's Wi-Fi state can't be seen over Bluetooth after the write; check the camera's screen")
+        }
+        // The status byte: remembered from an earlier run, else learnt from the first change after the write.
+        var position = Self.savedStatusByte()
+        var statusBaseline: Int? = position.flatMap { index in baseline.flatMap { Self.byte(at: index, in: $0) } }
+        if let position {
+            log.measure("ble.handover.cc09.statusByte", Double(position), "index",
+                        context: "attempt \(attempt): remembered (\(Self.savedStatusByteSource())); value before the write \(statusBaseline == nil ? "unknown" : Self.shownStatus(statusBaseline))")
         }
         let props = Self.describe(cc08.properties)
         if !cc08.properties.contains(.write) {
             log.warn("Wi-Fi handover: CC08's properties are \(props), without write; trying the write with response anyway")
         }
 
+        markTimeline("CC08 write, attempt \(attempt)")
+        cc09Queue = []
+        cc09Watching = true
+        defer {
+            cc09Watching = false
+            cc09Queue = []
+        }
         status = "writing 0x01 to CC08"
-        log.warn("Wi-Fi handover: writing 0x01 to CC08 with response (\(props)), confirmed by the tester")
+        log.warn("Wi-Fi handover: writing 0x01 to CC08 with response (\(props)), confirmed by the tester; attempt \(attempt); CC09 \(notifying ? "notifying" : (pollCC09 ? "polled once a second" : "not observable"))")
         let updatesBeforeWrite = cc09Updates
         let requestsBeforeWrite = disconnectRequests
         let writeStart = clock.now
@@ -455,7 +1010,10 @@ final class SonyWiFiHandover: NSObject {
             }
         } catch let e as HandoverError where !e.isTimeout {
             if case .disconnected(let reason) = e {
-                return linkDropped(writeStart, during: "the CC08 write's acknowledgement", reason: reason, changes: "none")
+                let result = linkDropped(writeStart, attempt: attempt, during: "the CC08 write's acknowledgement", reason: reason,
+                                         changes: "none", launchedAt: nil)
+                timelineSummary()
+                return result
             }
             // Disconnect tapped or Bluetooth off: no answer about the camera's Wi-Fi, so nothing is recorded.
             log.warn("Wi-Fi handover: the CC08 write stopped (\(e)); ble.handover.wifiOn.reported not recorded")
@@ -464,46 +1022,113 @@ final class SonyWiFiHandover: NSObject {
             noteIfPairing(error, during: "CC08 write")
             let reason = Self.errorName(error)
             log.error("Wi-Fi handover: CC08 write failed: \(reason)")
-            log.flag("ble.handover.wifiOn.reported", false, context: "CC08 ← 0x01 failed: \(reason)")
+            log.flag("ble.handover.wifiOn.reported", false, context: "attempt \(attempt): CC08 ← 0x01 failed: \(reason)")
             status = "CC08 write failed: \(reason)"
             return false
         }
-        let ackSeconds = (clock.now - writeStart).inSeconds
+        let ackAt = clock.now
+        let ackSeconds = (ackAt - writeStart).inSeconds
         log.note(String(format: "Wi-Fi handover: CC08 ← 0x01 acknowledged in %.0f ms; waiting up to %.0f s for CC09 status 2", ackSeconds * 1000, timeout))
 
         guard let status09 = cc09, notifying || pollCC09 else {
             status = "CC08 written; no CC09 to confirm (check the camera)"
             log.warn("Wi-Fi handover: ble.handover.wifiOn.reported not recorded: no CC09 status to confirm it; check the camera's screen")
+            timelineSummary()
             return false
         }
 
         var last = baseline
         var history: [String] = []
         var on = false
+        // Seconds from the write to the CC09 value that carried status 2.
+        var onElapsed: Double?
         var changed = false
-        var seenUpdates = updatesBeforeWrite
+        var lastByte = statusBaseline
+        var sequence: [String] = [Self.shownStatus(statusBaseline)]
+        // When the status byte went back to its value from before the write: the wait ends 3 s later.
+        var returnedAt: ContinuousClock.Instant?
+        var gaveUp = false
         var nextPoll = clock.now
-        let alreadyOn = lastStatus == 2
+        // A CC09 notification has arrived since the write; without one 3 s after the acknowledgement, CC09 is polled.
+        var notified = false
+        var silencePolling = false
+        let alreadyOn = lastStatus == 2 || statusBaseline == 2
         let deadline = writeStart + .seconds(timeout)
         status = "waiting for the camera's Wi-Fi (up to \(Int(timeout)) s)"
 
-        /// True only when `value` carries status 2. Any change is logged, and the first is timed on its own.
-        func consider(_ value: Data, via source: String) -> Bool {
+        /// The status byte's values so far, for the contexts.
+        func statusText() -> String {
+            guard let position else { return "status byte unknown" }
+            return "status byte [\(position)] \(sequence.joined(separator: " → "))"
+        }
+
+        /// True only when `value` carries status 2 (status byte or tag 0x0001). Every change is logged as a byte
+        /// diff, and the first is timed on its own; the first change also teaches the status byte if none is known.
+        func consider(_ value: Data, via source: String, at instant: ContinuousClock.Instant) -> Bool {
             guard value != last else { return false }
-            let elapsed = (clock.now - writeStart).inSeconds
+            let elapsed = (instant - writeStart).inSeconds
             let parsed = Self.describeStatus(value)
+            if let s = parsed.status { lastStatus = s }
+            guard let old = last else {
+                // Nothing from before the write: this first value is the baseline.
+                last = value
+                if let position {
+                    statusBaseline = Self.byte(at: position, in: value)
+                    lastByte = statusBaseline
+                    sequence = [Self.shownStatus(statusBaseline)]
+                }
+                log.note("Wi-Fi handover: " + String(format: "+%.2f s", elapsed) + " since the write, CC09 (\(source)): first value seen, taken as the baseline: \(Self.describeCC09(value))")
+                return parsed.status == 2 || statusBaseline == 2
+            }
             last = value
-            let summary: String = parsed.status.map { "status \($0)" } ?? "changed, no status tag"
-            history.append(String(format: "+%.2f s %@", elapsed, summary))
-            log.note(String(format: "Wi-Fi handover: +%.2f s since the write, CC09 (%@): %@", elapsed, source, parsed.text))
+            let diff = Self.byteChanges(old: old, new: value)
+            if position == nil, let guess = Self.statusByteGuess(old: old, new: value) {
+                position = guess.index
+                statusBaseline = Self.byte(at: guess.index, in: old)
+                lastByte = statusBaseline
+                sequence = [Self.shownStatus(statusBaseline)]
+                if guess.zeroToOne {
+                    Self.saveStatusByte(guess.index, source: "0 → 1 after CC08")
+                    log.measure("ble.handover.cc09.statusByte", Double(guess.index), "index",
+                                context: "attempt \(attempt): learnt from CC09's first change after CC08 ← 0x01, a 0 → 1 (\(diff)); remembered for later runs")
+                } else {
+                    log.measure("ble.handover.cc09.statusByte", Double(guess.index), "index",
+                                context: "attempt \(attempt): guessed from CC09's first change after CC08 ← 0x01 (\(diff)); no byte went 0 → 1, so for this attempt only, not remembered")
+                }
+            }
+            var byteText = ""
+            var byteValue: Int?
+            if let position, let b = Self.byte(at: position, in: value) {
+                byteValue = b
+                byteText = "; status byte [\(position)] = \(Self.shownStatus(b))\(Self.statusMeaning(b))"
+                if b != lastByte {
+                    sequence.append("\(Self.shownStatus(b)) (" + String(format: "+%.2f s", elapsed) + ")")
+                    lastByte = b
+                    returnedAt = b == statusBaseline ? instant : nil
+                }
+            }
+            history.append(String(format: "+%.2f s ", elapsed) + diff)
+            log.note("Wi-Fi handover: " + String(format: "+%.2f s", elapsed) + " since the write, CC09 (\(source)): \(diff)\(byteText)\(parsed.status.map { "; tag 0x0001 status \(Self.shownStatus($0))" } ?? "")")
             if !changed {
                 changed = true
                 log.measure("ble.handover.cc09.firstChange", elapsed, "s",
-                            context: "first change of CC09 after CC08 ← 0x01 (\(source)): \(summary)")
+                            context: "attempt \(attempt): first change of CC09 after CC08 ← 0x01 (\(source)): \(diff)")
             }
-            guard let s = parsed.status else { return false }
-            lastStatus = s
-            return s == 2
+            let launched = byteValue == 2 || parsed.status == 2
+            if launched && onElapsed == nil { onElapsed = elapsed }
+            return launched
+        }
+
+        /// Passes CC09's queued notifications to consider() in arrival order; true when one carried status 2.
+        func drainQueue() -> Bool {
+            guard !cc09Queue.isEmpty else { return false }
+            notified = true
+            let queued = cc09Queue
+            cc09Queue = []
+            for item in queued {
+                if consider(item.value, via: "notification", at: item.at) { return true }
+            }
+            return false
         }
 
         if alreadyOn {
@@ -511,20 +1136,33 @@ final class SonyWiFiHandover: NSObject {
         }
         do {
             waiting: while !alreadyOn && clock.now < deadline {
+                // First the notifications already queued, including any that came just before a drop.
+                if drainQueue() {
+                    on = true
+                    break waiting
+                }
                 guard peripheral === p, p.state == .connected else {
                     if disconnectRequests != requestsBeforeWrite { throw HandoverError.cancelled("Disconnect") }
                     throw HandoverError.disconnected("the link dropped while waiting for the Wi-Fi status")
                 }
-                if cc09Updates != seenUpdates {
-                    seenUpdates = cc09Updates
-                    if let value = cc09Latest, consider(value, via: "notification") { on = true; break waiting }
+                if let returned = returnedAt, clock.now >= returned + .seconds(3) {
+                    gaveUp = true
+                    break waiting
+                }
+                // Subscribed, but no CC09 notification 3 s after the acknowledgement: read CC09 as well.
+                if notifying, readable, !pollCC09, !notified, !silencePolling, clock.now >= ackAt + .seconds(3) {
+                    silencePolling = true
+                    pollCC09 = true
+                    log.note("Wi-Fi handover: no CC09 notification in 3 s after the acknowledgement; polling CC09 once a second as well")
                 }
                 if pollCC09, clock.now >= nextPoll {
                     nextPoll = clock.now + .seconds(1)
                     switch try await read(status09, code: "CC09", timeout: 5) {
                     case .value(let data):
-                        seenUpdates = cc09Updates
-                        if consider(data, via: "read") { on = true; break waiting }
+                        if consider(data, via: "read", at: clock.now) {
+                            on = true
+                            break waiting
+                        }
                     case .failed(let reason):
                         log.warn("Wi-Fi handover: CC09 poll failed (\(reason)); polling stops\(notifying ? ", notifications only" : "")")
                         pollCC09 = false
@@ -534,68 +1172,103 @@ final class SonyWiFiHandover: NSObject {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         } catch HandoverError.disconnected(let reason) {
-            return linkDropped(writeStart, during: "the wait for CC09", reason: reason,
-                               changes: history.isEmpty ? "none" : history.joined(separator: ", "))
+            // The notifications that arrived before the drop still count.
+            let launched = drainQueue()
+            lastStatusSequence = statusText()
+            let result = linkDropped(writeStart, attempt: attempt, during: "the wait for CC09", reason: reason,
+                                     changes: "\(statusText()); \(Self.listChanges(history))",
+                                     launchedAt: launched ? onElapsed : nil)
+            timelineSummary()
+            return result
         } catch {
             // Disconnect tapped (or the guided run's time limit): no answer about the camera's Wi-Fi, nothing recorded.
+            lastStatusSequence = statusText()
             let elapsed = (clock.now - writeStart).inSeconds
-            log.warn(String(format: "Wi-Fi handover: the wait stopped %.1f s after CC08 ← 0x01 (%@); ble.handover.wifiOn.reported not recorded; changes: %@",
-                            elapsed, "\(error)", history.isEmpty ? "none" : history.joined(separator: ", ")))
+            log.warn(String(format: "Wi-Fi handover: the wait stopped %.1f s after CC08 ← 0x01 (%@); ble.handover.wifiOn.reported not recorded; %@; changes: %@",
+                            elapsed, "\(error)", statusText(), Self.listChanges(history)))
             throw error
         }
 
         let elapsed = (clock.now - writeStart).inSeconds
-        let changes = history.isEmpty ? "none" : history.joined(separator: ", ")
-        log.flag("ble.handover.linkDroppedAfterWrite", false, context: String(format: "link still up %.1f s after CC08 ← 0x01", elapsed))
+        let changes = Self.listChanges(history)
+        let statusLine = statusText()
+        lastStatusSequence = statusLine
+        let ack = String(format: "ack %.0f ms", ackSeconds * 1000)
+        let linkUp = peripheral === p && p.state == .connected
+        log.note("Wi-Fi handover: attempt \(attempt): \(statusLine); CC09 updates since the write \(cc09Updates - updatesBeforeWrite)\(silencePolling ? "; polled after 3 s without a CC09 notification" : "")")
+        if linkUp {
+            log.flag("ble.handover.linkDroppedAfterWrite", false,
+                     context: String(format: "attempt %@: link still up %.1f s after CC08 ← 0x01; %@", attempt, elapsed, statusLine))
+        } else {
+            log.flag("ble.handover.linkDroppedAfterWrite", true,
+                     context: String(format: "attempt %@: link down %.1f s after CC08 ← 0x01, after CC09 reported status 2; %@", attempt, elapsed, statusLine))
+        }
         if alreadyOn {
             log.flag("ble.handover.wifiOn.reported", true,
-                     context: String(format: "CC09 already reported status 2 before CC08 ← 0x01 (ack %.0f ms); no latency recorded", ackSeconds * 1000))
+                     context: "attempt \(attempt): CC09 already reported status 2 before CC08 ← 0x01 (\(ack)); no latency recorded; \(statusLine)")
             status = "camera Wi-Fi already on"
-            return true
-        }
-        if on {
-            log.measure("ble.handover.wifiOn.latency", elapsed, "s",
-                        context: String(format: "CC08 ← 0x01 (ack %.0f ms) → CC09 status 2; changes: %@", ackSeconds * 1000, changes))
-            log.flag("ble.handover.wifiOn.reported", true, context: "CC09 reported status 2 after the CC08 write; changes: \(changes)")
-            status = String(format: "camera Wi-Fi on after %.1f s", elapsed)
-        } else {
-            let lastText: String = lastStatus.map { String($0) } ?? "unknown"
+        } else if on {
+            let latency = onElapsed ?? elapsed
+            log.measure("ble.handover.wifiOn.latency", latency, "s",
+                        context: "attempt \(attempt): CC08 ← 0x01 (\(ack)) → CC09 status 2; \(statusLine); changes: \(changes)")
+            log.flag("ble.handover.wifiOn.reported", true, context: "attempt \(attempt): CC09 reported status 2 after the CC08 write; \(statusLine); changes: \(changes)")
+            status = String(format: "camera Wi-Fi on after %.1f s", latency)
+        } else if gaveUp {
+            let back = Self.shownStatus(statusBaseline)
             log.flag("ble.handover.wifiOn.reported", false,
-                     context: String(format: "no CC09 status 2 within %.0f s of CC08 ← 0x01 (last status %@); changes: %@",
-                                     elapsed, lastText, changes))
+                     context: "attempt \(attempt): launching, then back to \(back): \(statusLine) (\(ack)); stopped 3 s after it went back; changes: \(changes)")
+            status = "the camera started its Wi-Fi, then went back to \(back) (check the camera)"
+        } else {
+            let lastText: String = lastStatus.map { "\(Self.shownStatus($0)) (tag 0x0001)" }
+                ?? (lastByte.map { "\(Self.shownStatus($0)) (status byte)" } ?? "unknown")
+            log.flag("ble.handover.wifiOn.reported", false,
+                     context: String(format: "attempt %@: no CC09 status 2 within %.0f s of CC08 ← 0x01 (last status %@); %@; changes: %@",
+                                     attempt, elapsed, lastText, statusLine, changes))
             status = "no Wi-Fi-on status after \(Int(elapsed)) s (check the camera)"
         }
-        return on
+        timelineSummary()
+        return on || alreadyOn
     }
 
     /// The link dropped after CC08 ← 0x01. That is an outcome (the camera may drop Bluetooth when its Wi-Fi comes
-    /// on), not a failure: records ble.handover.linkDroppedAfterWrite, leaves ble.handover.wifiOn.reported
-    /// unrecorded, and returns false so the guided run still asks what the camera shows.
-    private func linkDropped(_ writeStart: ContinuousClock.Instant, during what: String, reason: String,
-                             changes: String) -> Bool {
+    /// on), not a failure: records ble.handover.linkDroppedAfterWrite and, only when CC09 reported status 2 before
+    /// the drop (`launchedAt`, seconds from the write), ble.handover.wifiOn.reported and its latency. Returns whether
+    /// CC09 reported status 2; the guided run asks what the camera shows either way.
+    private func linkDropped(_ writeStart: ContinuousClock.Instant, attempt: String, during what: String, reason: String,
+                             changes: String, launchedAt: Double?) -> Bool {
         let elapsed = (clock.now - writeStart).inSeconds
-        log.warn(String(format: "Wi-Fi handover: the Bluetooth link dropped %.1f s after CC08 ← 0x01, during %@ (%@); ble.handover.wifiOn.reported not recorded; check the camera's screen", elapsed, what, reason))
+        let before = launchedAt.map { String(format: "; CC09 reported status 2 at +%.2f s, before the drop", $0) } ?? "; no CC09 status 2 before the drop"
+        log.warn(String(format: "Wi-Fi handover: the Bluetooth link dropped %.1f s after CC08 ← 0x01, during %@ (%@)%@; check the camera's screen", elapsed, what, reason, before))
         log.flag("ble.handover.linkDroppedAfterWrite", true,
-                 context: String(format: "%.1f s after CC08 ← 0x01, during %@ (%@); CC09 changes: %@", elapsed, what, reason, changes))
+                 context: String(format: "attempt %@: %.1f s after CC08 ← 0x01, during %@ (%@)%@; CC09: %@", attempt, elapsed, what, reason, before, changes))
+        if let launchedAt {
+            log.measure("ble.handover.wifiOn.latency", launchedAt, "s",
+                        context: "attempt \(attempt): CC08 ← 0x01 → CC09 status 2, then the link dropped; CC09: \(changes)")
+            log.flag("ble.handover.wifiOn.reported", true,
+                     context: "attempt \(attempt): CC09 reported status 2 after the CC08 write, then the link dropped; CC09: \(changes)")
+        } else {
+            log.note("Wi-Fi handover: ble.handover.wifiOn.reported not recorded (the link dropped before CC09 reported status 2)")
+        }
         status = String(format: "link dropped %.1f s after the write (check the camera)", elapsed)
-        return false
+        return launchedAt != nil
     }
 
     // MARK: - Credentials
 
     /// Reads CC06 (SSID), CC07 (password) and CC0C (BSSID, if present). Logs and returns only what
     /// `HandoverCredentials.description` shows, yes/no comparisons with the Wi-Fi tab's fields and the values' layout
-    /// as lengths and yes/no (`credentialLayout`). ble.handover.credentials is yes only for a usable pair: an SSID and
-    /// an 8–63 printable ASCII passphrase.
-    func readCredentials() async throws -> HandoverCredentials {
+    /// as lengths and yes/no (`credentialLayout`). `<record>.credentials` (ble.handover.credentials by default; nil
+    /// records nothing, for callers that record their own outcome) is yes only for a usable pair: an SSID and an 8–63
+    /// printable ASCII passphrase.
+    func readCredentials(record: String? = "ble.handover") async throws -> HandoverCredentials {
         try await run("Read Wi-Fi details") {
-            try await self.doReadCredentials()
+            try await self.doReadCredentials(record: record)
         }
     }
 
-    private func doReadCredentials() async throws -> HandoverCredentials {
+    private func doReadCredentials(record: String?) async throws -> HandoverCredentials {
         _ = try connectedPeripheral()
-        if !discovered { _ = try await doDiscover() }
+        if !discovered { _ = try await doDiscover(record: record) }
         status = "reading Wi-Fi details"
         do {
             let (ssid, ssidLayout) = try await readText("CC06", label: "SSID")
@@ -621,12 +1294,14 @@ final class SonyWiFiHandover: NSObject {
             if bssidPresent { comparisons.append("BSSID present, MAC-shaped \(bssidShaped ? "yes" : "no")") }
             log.note("Wi-Fi handover: Wi-Fi details read: \(credentials.description)\(comparisons.isEmpty ? "" : "; " + comparisons.joined(separator: "; "))")
             let usable = !ssid.isEmpty && HandoverCredentials.isValidPassphrase(passphrase)
-            log.flag("ble.handover.credentials", usable,
-                     context: credentials.description + (usable ? "" : "; not usable: an empty SSID or a passphrase that isn't 8–63 printable ASCII (see the layout line)"))
+            if let record {
+                log.flag("\(record).credentials", usable,
+                         context: credentials.description + (usable ? "" : "; not usable: an empty SSID or a passphrase that isn't 8–63 printable ASCII (see the layout line)"))
+            }
             status = "Wi-Fi details read: \(credentials.description)"
             return credentials
         } catch {
-            log.flag("ble.handover.credentials", false, context: "\(error)")
+            if let record { log.flag("\(record).credentials", false, context: "\(error)") }
             throw error
         }
     }
@@ -682,21 +1357,58 @@ final class SonyWiFiHandover: NSObject {
         return "\(data.count) B; DIRECT- at byte \(offset.map { String($0) } ?? "none")"
     }
 
+    // MARK: - Status byte (build 11)
+
+    /// Forgets the CC09 status byte remembered from an earlier run (the Bluetooth tab's button, or the guided runs'
+    /// offer at the start) and logs which byte it was (a position, not a camera value).
+    func forgetRememberedStatusByte(_ why: String) {
+        let index = Self.savedStatusByte()
+        let source = Self.savedStatusByteSource()
+        Self.forgetStatusByte()
+        log.note("Wi-Fi handover: CC09 status byte \(index.map { "[\($0)] (\(source))" } ?? "(none remembered)") forgotten (\(why)); it is learnt again from CC09's next changes")
+    }
+
     // MARK: - Disconnect
 
-    /// Drops this app's connection (if Creators' App holds one too, iOS keeps the link for it) and ends any
-    /// operation that is waiting.
+    /// Turns off, without waiting, every notification still on (unsubscribeAll() is the way that waits for the
+    /// camera's answers and also clears those turned on over an earlier link; call it first when there is time),
+    /// drops this app's connection (if Creators' App holds one too, iOS keeps the link for it), ends any operation that
+    /// is waiting, and forgets the subscriptions, the remembered values and the timeline. When it turned notifications
+    /// off, the connection is cancelled 2 s later rather than at once (CoreBluetooth may drop commands still pending
+    /// when a connection is cancelled), unless a new Connect has taken the same camera by then.
     func disconnect() {
         disconnectRequests += 1
         central?.stopScan()
+        // Switches turned on over an earlier link and not cleared: they can't be cleared without waiting.
+        let leftEarlier = earlierLinkCodes
+        if !leftEarlier.isEmpty {
+            log.warn("Wi-Fi handover: notifications turned on over an earlier link and not cleared: \(leftEarlier.joined(separator: ", ")); the camera may keep them on for this phone (a bonded client) until another app turns them off")
+        }
+        everSubscribed = []
         if let p = peripheral, p.state != .disconnected {
-            // Undo switchWiFiOn's CC09 subscription, if it made one (the link may close before the camera sees it).
-            if p.state == .connected, let c = cc["CC09"], c.isNotifying {
-                p.setNotifyValue(false, for: c)
-                log.note("Wi-Fi handover: CC09 notifications turned off")
+            // Undo the subscriptions left on; the link stays up 2 s so the camera can see the descriptor writes.
+            var off: [String] = []
+            if p.state == .connected {
+                for (code, c) in notifyingCharacteristics() {
+                    p.setNotifyValue(false, for: c)
+                    off.append(code)
+                }
             }
-            central?.cancelPeripheralConnection(p)
-            log.note("Wi-Fi handover: disconnecting from \(p.name ?? "(no name)")")
+            let name = p.name ?? "(no name)"
+            if off.isEmpty {
+                central?.cancelPeripheralConnection(p)
+                log.note("Wi-Fi handover: disconnecting from \(name)")
+            } else {
+                log.note("Wi-Fi handover: notifications turned off for \(off.joined(separator: ", ")) without waiting for the camera's answers; disconnecting from \(name) in 2 s, so the descriptor writes go out first")
+                let closing = central
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    // A Connect since then that took the same camera keeps the link.
+                    if let self, self.peripheral === p { return }
+                    closing?.cancelPeripheralConnection(p)
+                    self?.log.note("Wi-Fi handover: disconnected from \(name) (2 s after turning the notifications off)")
+                }
+            }
         } else {
             log.note("Wi-Fi handover: Disconnect (not connected)")
         }
@@ -704,8 +1416,7 @@ final class SonyWiFiHandover: NSObject {
         peripheral = nil
         scanFound = nil
         connectedName = nil
-        cc = [:]
-        discovered = false
+        resetLink()
         status = "disconnected"
     }
 
@@ -893,7 +1604,7 @@ final class SonyWiFiHandover: NSObject {
     }
 
     /// A firmware or model value for the log: printable text unless it looks like a serial number, a MAC address or
-    /// the network name, a short binary value as hex, anything else as a length only.
+    /// the network name, a short binary value masked (`maskedHex`), anything else as a length only.
     nonisolated static func describeInfo(_ data: Data) -> String {
         var bytes = Array(data)
         while bytes.last == 0 { bytes.removeLast() }
@@ -914,9 +1625,9 @@ final class SonyWiFiHandover: NSObject {
         }
         if let text = printable(bytes[...]) { return show(text, prefix: "") }
         if bytes.count > 3, let text = printable(bytes[3...]) {
-            return show(text, prefix: "after a 3-byte header \(Data(bytes.prefix(3)).hexDump()), ")
+            return show(text, prefix: "after a 3-byte header \(maskedHex(Data(bytes.prefix(3)))), ")
         }
-        if data.count <= 4 { return "\(data.count) B: \(data.hexDump())" }
+        if data.count <= 4 { return "\(data.count) B: \(maskedHex(data))" }
         return "\(data.count) B, not text (not logged)"
     }
 
@@ -937,6 +1648,8 @@ final class SonyWiFiHandover: NSObject {
 
     struct TLVItem {
         let tag: Int
+        /// The tag's size in bytes (1 or 2), so the log can mask it byte by byte.
+        let tagSize: Int
         let value: [UInt8]
     }
 
@@ -965,7 +1678,7 @@ final class SonyWiFiHandover: NSObject {
                     let tag = number(bytes[i ..< i + layout.tagSize], bigEndian: layout.bigEndian)
                     let length = number(bytes[i + layout.tagSize ..< headerEnd], bigEndian: layout.bigEndian)
                     guard headerEnd + length <= bytes.count else { ok = false; break }
-                    items.append(TLVItem(tag: tag, value: Array(bytes[headerEnd ..< headerEnd + length])))
+                    items.append(TLVItem(tag: tag, tagSize: layout.tagSize, value: Array(bytes[headerEnd ..< headerEnd + length])))
                     i = headerEnd + length
                 }
                 if ok, !items.isEmpty { return (layout.name + label, items) }
@@ -975,35 +1688,173 @@ final class SonyWiFiHandover: NSObject {
     }
 
     /// CC09 for the log: the layout, every tag with its length, the value of tag 0x0001 only (1 or 2 bytes; the other
-    /// tags are unknown and could hold a serial or part of an address), and the Wi-Fi status from tag 0x0001. Raw
-    /// bytes are never logged beyond the first 3.
+    /// tags are unknown and could hold a serial or part of an address), and the Wi-Fi status from tag 0x0001. The
+    /// parser is lenient, so its "tags" and "lengths" may really be data bytes: every byte shown, tags, lengths, the
+    /// value and the status, is masked like `maskedHex` (above 0x0F as "··"). A value that isn't a tag/length/value
+    /// list is logged only as `maskedHex`. `status` is the unmasked number, for comparisons only, never for the log.
     nonisolated static func describeStatus(_ data: Data) -> (status: Int?, text: String) {
         guard let parsed = parseTLV(data) else {
-            return (nil, "\(data.count) B, not a tag/length/value list (starts \(Data(data.prefix(3)).hexDump()))")
+            return (nil, "\(data.count) B, not a tag/length/value list: \(maskedHex(data))")
         }
         var status: Int?
         let parts = parsed.items.map { item -> String in
-            let tag = String(format: "0x%04X", item.tag)
+            let tagBytes = (0 ..< item.tagSize).reversed().map { UInt8(truncatingIfNeeded: item.tag >> (8 * $0)) }
+            let tag = "0x" + tagBytes.map { maskedByte($0) }.joined()
             if item.tag == 0x0001, status == nil, !item.value.isEmpty {
                 // One byte expected; for a longer value the first byte is taken (unverified).
                 status = Int(item.value[0])
             }
             guard item.tag == 0x0001, (1 ... 2).contains(item.value.count) else {
-                return "\(tag): \(item.value.count) B"
+                return "\(tag): \(shownStatus(item.value.count)) B"
             }
-            let value = item.value.reduce(0) { $0 << 8 | Int($1) }
-            return "\(tag) = \(value)\(item.value.count == 1 ? "" : " (\(item.value.count) B)")"
+            return "\(tag) = \(maskedHex(Data(item.value)))"
         }
-        let statusText = status.map { "Wi-Fi status \($0)\(statusMeaning($0))" } ?? "no tag 0x0001"
+        let statusText = status.map { "Wi-Fi status \(shownStatus($0))\(statusMeaning($0))" } ?? "no tag 0x0001"
         return (status, "\(statusText); \(parsed.layout): \(parts.joined(separator: ", "))")
     }
 
+    /// The notes' Wi-Fi status values (CameraSync, BLE_STATE_MONITORING.md), unverified on this camera.
     nonisolated static func statusMeaning(_ s: Int) -> String {
         switch s {
-        case 0: return " (off)"
-        case 2: return " (launched)"
-        default: return " (meaning unverified)"
+        case 0: return " (terminated, per the notes, unverified)"
+        case 1: return " (launching, per the notes, unverified)"
+        case 2: return " (launched, per the notes, unverified)"
+        case 3: return " (terminating, per the notes, unverified)"
+        default: return " (meaning unknown)"
         }
+    }
+
+    /// CC09 for the log: masked bytes, plus the tag/length/value reading when one fits.
+    nonisolated static func describeCC09(_ data: Data) -> String {
+        guard parseTLV(data) != nil else { return describeStatus(data).text }
+        return "\(maskedHex(data)) (\(describeStatus(data).text))"
+    }
+
+    // MARK: - Build 11 helpers (no I/O)
+
+    nonisolated static func canNotify(_ c: CBCharacteristic) -> Bool {
+        c.properties.contains(.notify) || c.properties.contains(.indicate)
+    }
+
+    /// Bytes up to 0x0F as two hex digits, larger bytes as "··", so flags and structure show but no text or large
+    /// binary value can: "00 01 ·· 0A". At most 64 bytes, then "… (N B)".
+    nonisolated static func maskedHex(_ data: Data) -> String {
+        let bytes = Array(data)
+        if bytes.isEmpty { return "0 B" }
+        let shown = bytes.prefix(64).map { maskedByte($0) }.joined(separator: " ")
+        return bytes.count > 64 ? shown + " … (\(bytes.count) B)" : shown
+    }
+
+    nonisolated static func maskedByte(_ b: UInt8) -> String {
+        b <= 0x0F ? String(format: "%02X", b) : "··"
+    }
+
+    /// A status byte's value for the log: the number up to 15, "··" above (masked like `maskedHex`), "?" unknown.
+    nonisolated static func shownStatus(_ value: Int?) -> String {
+        guard let value else { return "?" }
+        return (0 ... 0x0F).contains(value) ? String(value) : "··"
+    }
+
+    /// What changed from `old` to `new`, masked like `maskedHex`: the length change if any, then the positions that
+    /// differ ("[3] 00→01"; "–" for a byte past the end), at most 8 and then "+N more". "no change" when equal;
+    /// without `old`, the masked value.
+    nonisolated static func byteChanges(old: Data?, new: Data) -> String {
+        guard let old else { return "first value, \(new.count) B: \(maskedHex(new))" }
+        if old == new { return "no change" }
+        let a = Array(old)
+        let b = Array(new)
+        var parts: [String] = []
+        if a.count != b.count { parts.append("length \(a.count) → \(b.count) B") }
+        var positions: [String] = []
+        var more = 0
+        for i in 0 ..< max(a.count, b.count) {
+            let x: UInt8? = i < a.count ? a[i] : nil
+            let y: UInt8? = i < b.count ? b[i] : nil
+            guard x != y else { continue }
+            if positions.count < 8 {
+                positions.append("[\(i)] \(x.map { maskedByte($0) } ?? "–")→\(y.map { maskedByte($0) } ?? "–")")
+            } else {
+                more += 1
+            }
+        }
+        if !positions.isEmpty { parts.append(positions.joined(separator: ", ") + (more > 0 ? " +\(more) more" : "")) }
+        return parts.joined(separator: "; ")
+    }
+
+    /// The byte at `index`, nil past the end.
+    nonisolated static func byte(at index: Int, in data: Data) -> Int? {
+        let bytes = Array(data)
+        return index >= 0 && index < bytes.count ? Int(bytes[index]) : nil
+    }
+
+    /// The status byte as guessed from one change: the first position that went 0 → 1 (`zeroToOne`), else the first
+    /// that changed. Only a 0 → 1 is good enough to remember for later runs.
+    nonisolated static func statusByteGuess(old: Data, new: Data) -> (index: Int, zeroToOne: Bool)? {
+        let a = Array(old)
+        let b = Array(new)
+        let common = min(a.count, b.count)
+        let changed = (0 ..< common).filter { a[$0] != b[$0] }
+        if let i = changed.first(where: { a[$0] == 0 && b[$0] == 1 }) { return (index: i, zeroToOne: true) }
+        guard let first = changed.first else { return nil }
+        return (index: first, zeroToOne: false)
+    }
+
+    /// The first position whose values, in order, went 0, then 1, then 2 (other values in between allowed); with
+    /// `only`, that position or nil.
+    nonisolated static func launchPosition(_ values: [Data], only: Int? = nil) -> Int? {
+        let arrays = values.map { Array($0) }
+        let width = arrays.map(\.count).max() ?? 0
+        let positions: [Int] = only.map { $0 >= 0 && $0 < width ? [$0] : [] } ?? Array(0 ..< width)
+        for i in positions {
+            var wanted: UInt8 = 0
+            for bytes in arrays where i < bytes.count && bytes[i] == wanted {
+                wanted += 1
+                if wanted == 3 { return i }
+            }
+        }
+        return nil
+    }
+
+    /// The CC09 status byte remembered from an earlier run, if any.
+    nonisolated static func savedStatusByte() -> Int? {
+        guard let index = UserDefaults.standard.object(forKey: statusByteKey) as? Int, index >= 0 else { return nil }
+        return index
+    }
+
+    /// How the remembered status byte was learnt, for the logs.
+    nonisolated static func savedStatusByteSource() -> String {
+        let source = UserDefaults.standard.string(forKey: statusByteSourceKey) ?? "how it was learnt not recorded"
+        return "learnt from \(source)"
+    }
+
+    nonisolated static func saveStatusByte(_ index: Int, source: String) {
+        UserDefaults.standard.set(index, forKey: statusByteKey)
+        UserDefaults.standard.set(source, forKey: statusByteSourceKey)
+    }
+
+    /// Forgets the remembered status byte (forgetRememberedStatusByte logs it).
+    nonisolated static func forgetStatusByte() {
+        UserDefaults.standard.removeObject(forKey: statusByteKey)
+        UserDefaults.standard.removeObject(forKey: statusByteSourceKey)
+    }
+
+    /// A CC09 value's Wi-Fi status: the byte at the remembered position, else tag 0x0001; nil when neither is known.
+    /// The unmasked number, for comparisons; log it with `shownStatus`.
+    nonisolated static func wifiStatus(in data: Data) -> Int? {
+        if let index = savedStatusByte(), let b = byte(at: index, in: data) { return b }
+        return describeStatus(data).status
+    }
+
+    /// "; status byte [i] = n (meaning)" for a CC09 value when a status byte is remembered, else "".
+    nonisolated static func statusByteNote(_ data: Data) -> String {
+        guard let index = savedStatusByte(), let b = byte(at: index, in: data) else { return "" }
+        return "; status byte [\(index)] = \(shownStatus(b))\(statusMeaning(b))"
+    }
+
+    /// Up to 12 changes for a context, "none" when there were none.
+    nonisolated static func listChanges(_ history: [String]) -> String {
+        guard !history.isEmpty else { return "none" }
+        return history.prefix(12).joined(separator: ", ") + (history.count > 12 ? ", +\(history.count - 12) more" : "")
     }
 }
 
@@ -1019,8 +1870,7 @@ extension SonyWiFiHandover: @preconcurrency CBCentralManagerDelegate {
             log.warn("Wi-Fi handover: Bluetooth is \(state)")
             failAll(HandoverError.bluetooth(state))
             connectedName = nil
-            cc = [:]
-            discovered = false
+            resetLink(keepTimeline: true)
             status = "Bluetooth \(state)"
         }
     }
@@ -1057,8 +1907,8 @@ extension SonyWiFiHandover: @preconcurrency CBCentralManagerDelegate {
         self.peripheral = nil
         scanFound = nil
         connectedName = nil
-        cc = [:]
-        discovered = false
+        // The timeline stays: the run may still want what the camera reported before it dropped the link.
+        resetLink(keepTimeline: true)
         status = "disconnected (\(reason))"
     }
 }
@@ -1076,20 +1926,30 @@ extension SonyWiFiHandover: @preconcurrency CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard peripheral === self.peripheral else { return }
-        let isStatus = characteristic.service.map { Self.isCameraControl($0.uuid) } == true
-            && Self.shortCode(characteristic.uuid) == "CC09"
-        if isStatus, error == nil, let value = characteristic.value {
+        let inControl = characteristic.service.map { Self.isCameraControl($0.uuid) } == true
+        let code = inControl ? Self.shortCode(characteristic.uuid) : nil
+        if code == "CC09", error == nil, let value = characteristic.value {
             cc09Latest = value
             cc09Updates += 1
         }
-        // A read's answer; anything else is a notification (only CC09 is subscribed to) and is handled above.
+        // The answer to a pending read; anything else in 8000CC00 is a notification, for the timeline.
         let key = "read:\(characteristic.uuid.uuidString)"
-        guard waiters[key] != nil else { return }
-        if let error {
-            resolve(key, .failure(error))
-        } else {
-            resolve(key, .success(characteristic.value ?? Data()))
+        if waiters[key] != nil {
+            if let error {
+                resolve(key, .failure(error))
+            } else {
+                let value = characteristic.value ?? Data()
+                if let code { remember(code, value) }
+                resolve(key, .success(value))
+            }
+            return
         }
+        guard let code else { return }
+        if let error {
+            log.warn("Wi-Fi handover: \(code) notification with an error: \(Self.errorName(error))")
+            return
+        }
+        recordNotification(code, characteristic.value ?? Data())
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -1104,8 +1964,15 @@ extension SonyWiFiHandover: @preconcurrency CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard peripheral === self.peripheral else { return }
-        log.warn("Wi-Fi handover: the camera changed its services (\(invalidatedServices.map(\.uuid.uuidString).joined(separator: ", "))); discover again")
+        // Only 8000CC00's characteristics matter here; those of a service that wasn't invalidated stay valid.
+        guard invalidatedServices.contains(where: { Self.isCameraControl($0.uuid) }) else {
+            log.warn("Wi-Fi handover: the camera changed services other than 8000CC00 (\(invalidatedServices.map(\.uuid.uuidString).joined(separator: ", "))); 8000CC00 and its subscriptions are unchanged")
+            return
+        }
+        log.warn("Wi-Fi handover: the camera changed its services, including 8000CC00 (\(invalidatedServices.map(\.uuid.uuidString).joined(separator: ", "))); its subscriptions are gone; discover again")
         cc = [:]
+        ccAll = [:]
         discovered = false
+        subscribedCodes = []
     }
 }

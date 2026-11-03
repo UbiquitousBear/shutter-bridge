@@ -44,6 +44,7 @@ private struct WirelessPanel: View {
             handshakeSection
             sonySection
             downloadSection
+            CopyAllSection(linkName: "Wi-Fi", canStart: lab.isConnected && !lab.busy) { lab.copyAllARW() }
             resumeSection
         }
         .onAppear {
@@ -1565,6 +1566,183 @@ final class WirelessLab {
         return dir.appendingPathComponent(name, isDirectory: false)
     }
 
+    // MARK: Copy all RAW to Files
+
+    /// Every ARW listed, oldest first by capture date (`objects` is newest first).
+    private var copyAllObjects: [CardObject] {
+        Array(objects.filter { $0.info.fileExtension.uppercased() == "ARW" }.reversed())
+    }
+
+    /// What *Copy all RAW to Files* would copy now, for the guided run's count and size.
+    var copyAllItems: [CopyAllItem] {
+        copyAllObjects.map { CopyAllItem(name: $0.info.filename, size: $0.info.sizeExceeds32Bits ? 0 : UInt64($0.info.objectCompressedSize)) }
+    }
+
+    /// *Copy all RAW to Files* over Wi-Fi: every ARW listed, oldest first, inside a continued task (so it survives the
+    /// phone locking), each one GetObject to a temporary file and then moved into a new folder in Files
+    /// (FilesDestination). Measurements `ptpip.<net>.copyAll.…`. Must be started from a tap. With nothing listed in a
+    /// contents-transfer session it lists the card first and then starts, if the app is still in front.
+    func copyAllARW() {
+        let label = "Copy all RAW to Files"
+        let destination = FilesDestination.shared
+        guard client != nil, sessionNet != nil else {
+            log.warn("\(label): not connected; tap Contents transfer: whole card (or Connect), then List card")
+            return
+        }
+        guard !busy, !continued.isRunning else { log.warn("\(label): another operation is running; wait for it or stop it first"); return }
+        guard destination.run == nil else { log.warn("\(label): a copy is already running"); return }
+        guard objects.isEmpty else {
+            startCopyAll(destination)
+            return
+        }
+        guard contentsMode != nil else {
+            log.warn("\(label): nothing listed; tap List card first")
+            return
+        }
+        log.note("\(label): the card isn't listed yet; listing it first in this contents-transfer session, then the copy starts")
+        runSession("List card", needsListing: false) { c, net in try await self.listObjects(c, net: net) }
+        Task { @MainActor in
+            // runSession marked the lab busy before returning (unless it refused); its work runs in a Task of its own.
+            while self.busy { try? await Task.sleep(for: .milliseconds(200)) }
+            guard !self.objects.isEmpty else {
+                self.log.warn("\(label): the listing found nothing (see above); nothing copied")
+                return
+            }
+            // A continued task has to be asked for while the app is in front.
+            guard self.lifecycle.isInForeground else {
+                self.log.warn("\(label): the app left the foreground during the listing; tap Copy all RAW to Files again")
+                return
+            }
+            self.startCopyAll(destination)
+        }
+    }
+
+    private func startCopyAll(_ destination: FilesDestination) {
+        let label = "Copy all RAW to Files"
+        guard let c = client, let net = sessionNet else { log.warn("\(label): not connected"); return }
+        guard !busy, !continued.isRunning, destination.run == nil else { log.warn("\(label): another operation is running"); return }
+        let items = copyAllObjects
+        guard !items.isEmpty else {
+            log.warn("\(label): no ARW among the \(objects.count) objects listed")
+            return
+        }
+        let link = "ptpip.\(net)"
+        let files = copyAllItems
+        // Only Sony's whole-card contents transfer has listed the whole card; another session's list may be a part of it.
+        let session = sessionKind
+        if contentsMode != .wholeCard {
+            log.warn("\(label): this session (\(session)) lists \(objects.count) objects, not necessarily the whole card; for the whole card use Contents transfer: whole card, then List card")
+        }
+        do {
+            try destination.checkSpace(for: files, link: link)
+        } catch {
+            log.error("\(label): \(CopyAllFormat.describe(error))")
+            return
+        }
+        log.note("\(label): submitting a continued task for \(items.count) ARW (oldest first) over \(net == "lan" ? "the home LAN" : "the camera's network"); lock the phone once it has started")
+        continued.run(title: "Copying RAW to Files (spike)", subtitle: "0 of \(items.count)", totalUnits: items.count) { [weak self] report, shouldStop in
+            guard let self else { return false }
+            return await self.continuedCopyAll(items, files: files, client: c, link: link, session: session,
+                                               destination: destination, report: report, shouldStop: shouldStop)
+        }
+    }
+
+    private func continuedCopyAll(_ items: [CardObject], files: [CopyAllItem], client c: PTPIPClient, link: String,
+                                  session: String, destination: FilesDestination,
+                                  report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> Bool {
+        busy = true
+        activity = "Copy all RAW to Files"
+        progress = 0
+        lifecycle.transferStarted(link: link)
+        defer {
+            busy = false
+            activity = ""
+            progress = nil
+            lifecycle.transferEnded()
+            lifecycle.operationEnded()
+        }
+        while keepAliveInFlight { try? await Task.sleep(for: .milliseconds(20)) }
+        // Before begin: a dead link creates no run folder and records nothing.
+        if let failure = await c.linkFailure {
+            connectionState = "connection lost (\(failure)); tap Reconnect"
+            log.error("Copy all RAW to Files: the connection had already dropped (\(failure)); reconnect, List card and copy again")
+            return false
+        }
+        let run: CopyAllRun
+        do {
+            run = try destination.begin(link: link, items: files, session: session)
+        } catch {
+            // Not the error itself: a file error's userInfo can hold the chosen folder's full path.
+            log.error("Copy all RAW to Files: couldn't start: \(CopyAllFormat.describe(error))")
+            return false
+        }
+        let reason = await log.withMemoryPeak(run.prefix, context: "\(items.count) ARW to Files over PTP/IP") {
+            await self.copyAllLoop(items, run: run, client: c, link: link, report: report, shouldStop: shouldStop)
+        }
+        destination.finish(run, stopReason: reason)
+        return reason == nil && run.copied == run.total
+    }
+
+    /// The copy itself. Returns why it ended early, or nil once it has been through the list. A non-OK response skips
+    /// the file (counted as failed); a link failure ends the run, and the files copied so far stay.
+    private func copyAllLoop(_ items: [CardObject], run: CopyAllRun, client c: PTPIPClient, link: String,
+                             report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> String? {
+        for (i, o) in items.enumerated() {
+            if shouldStop() {
+                let why = continued.expired ? "the system expired the continued task" : "Stop (or Cancel run)"
+                return "\(why) after \(i) of \(items.count) [\(lifecycle.stateDescription)]"
+            }
+            let name = o.info.filename.isEmpty ? "object-\(o.handle.rawValue).ARW" : o.info.filename
+            activity = "Copy all RAW: \(i + 1) of \(items.count), \(name)"
+            progress = Double(i) / Double(items.count)
+            let tmp = run.temporaryURL("object-\(o.handle.rawValue).download")
+            run.willRequest(name)
+            let r: PTPIPClient.FileDownload
+            do {
+                r = try await c.getObject(o.handle, to: tmp)
+            } catch PTPIPClient.ClientError.response(let op, let code) {
+                try? FileManager.default.removeItem(at: tmp)
+                run.fileFailed(name, "\(op) answered \(code)")
+                report(i + 1, run.subtitle)
+                continue
+            } catch {
+                try? FileManager.default.removeItem(at: tmp)
+                run.fileFailed(name, "\(error)")
+                report(i + 1, run.subtitle)
+                if let failure = await c.linkFailure {
+                    connectionState = "connection lost (\(failure)); tap Reconnect"
+                    return "the link failed at \(name): \(failure) [\(lifecycle.stateDescription)]"
+                }
+                return "GetObject \(name) failed: \(error) [\(lifecycle.stateDescription)]"
+            }
+            // PTPIPClient only warns when the data phase is short but the response is OK: a short file is failed and
+            // deleted here, never put in the folder under the card's name.
+            let expected: UInt64? = o.info.sizeExceeds32Bits ? nil : UInt64(o.info.objectCompressedSize)
+            let shortOfAnnounced = r.announcedLength.map { $0 != r.bytes } ?? false
+            let shortOfListing = expected.map { $0 > 0 && $0 != r.bytes } ?? false
+            if shortOfAnnounced || shortOfListing {
+                try? FileManager.default.removeItem(at: tmp)
+                let wanted = expected ?? r.announcedLength ?? 0
+                run.fileFailed(name, "size mismatch: \(r.bytes) B received, \(wanted) B expected; the copy was deleted")
+                report(i + 1, run.subtitle)
+                continue
+            }
+            do {
+                try await run.place(tmp, cardName: name, bytes: r.bytes, seconds: r.seconds,
+                                    detail: "sha256 \(r.sha256.prefix(12))…", state: lifecycle.stateDescription)
+            } catch {
+                try? FileManager.default.removeItem(at: tmp)
+                run.fileFailed(name, "couldn't be moved into the folder: \(error.localizedDescription)")
+                report(i + 1, run.subtitle)
+                return "couldn't write to \(run.destinationLabel): \(error.localizedDescription)"
+            }
+            progress = Double(i + 1) / Double(items.count)
+            report(i + 1, run.subtitle)
+            lifecycle.noteProgress("copy all: \(name) (\(i + 1) of \(items.count))", link: link)
+        }
+        return nil
+    }
+
     // MARK: Battery
 
     private func readBattery(_ c: PTPIPClient) async -> Int? {
@@ -2254,17 +2432,19 @@ final class WirelessLab {
     }
 
     /// Build 10, Bluetooth handover: joins the network whose name and password the camera gave over Bluetooth, the
-    /// same way as Join camera Wi-Fi (NEHotspotConfiguration, joinOnce false, timed as `ptpip.ap.join` with the
-    /// context "Bluetooth handover"), but the SSID and passphrase stay in this call: never in joinSSID or
+    /// same way as Join camera Wi-Fi (NEHotspotConfiguration, joinOnce false, timed as `ptpip.ap.join` with `source`
+    /// as the context, "Bluetooth handover" unless the caller names its run or tab; never the SSID or passphrase), but
+    /// the SSID and passphrase stay in this call: never in joinSSID or
     /// joinPassphrase, UserDefaults or the log (HotspotJoiner's redacted path logs the SSID as its length and
     /// whether it starts with "DIRECT-", and the joined network's SSID and BSSID as yes/no answers only).
-    func joinHandover(ssid: String, passphrase: String) {
+    func joinHandover(ssid: String, passphrase: String, source: String = "Bluetooth handover") {
         guard !joining else { return }
         joining = true
         lastJoinGateway = nil
         lastJoinAlreadyAssociated = nil
         Task { @MainActor in
-            let outcome = await HotspotJoiner.join(ssid: ssid, passphrase: passphrase, log: self.log, redacted: true)
+            let outcome = await HotspotJoiner.join(ssid: ssid, passphrase: passphrase, log: self.log, redacted: true,
+                                                   source: source)
             if let gateway = outcome?.gateway {
                 self.joinedGateway = gateway
                 self.lastJoinGateway = gateway

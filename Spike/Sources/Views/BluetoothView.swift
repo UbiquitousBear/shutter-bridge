@@ -10,6 +10,8 @@ struct BluetoothView: View {
     @Environment(AdvertisementScanner.self) private var scanner
     /// Build 10: created by the app and shared with the Guided tab's runner.
     @Environment(SonyWiFiHandover.self) private var handover
+    /// For Read details and join: the same join as the guided runs' (NEHotspotConfiguration, redacted).
+    @Environment(WirelessLab.self) private var wireless
     @AppStorage(ProximityWatcher.Keys.serviceUUID) private var serviceUUID = ""
     @AppStorage("ble.snapshot.power") private var powerRaw = AdvertisementScanner.PowerState.on.rawValue
     @AppStorage("ble.snapshot.pairing") private var pairingRaw = AdvertisementScanner.PairingContext.connected.rawValue
@@ -19,6 +21,10 @@ struct BluetoothView: View {
     @State private var confirmWiFiOn = false
     /// The redacted description of the last Wi-Fi details read (lengths and yes/no only); the values aren't kept.
     @State private var handoverDetails: String?
+    /// Read details and join is running (it spans several handover operations and the join).
+    @State private var joiningOverBluetooth = false
+    /// Read details and join's outcome in one redacted line: never the network's name or password.
+    @State private var bluetoothJoinOutcome: String?
 
     private var power: AdvertisementScanner.PowerState { AdvertisementScanner.PowerState(rawValue: powerRaw) ?? .on }
     private var pairing: AdvertisementScanner.PairingContext {
@@ -279,11 +285,11 @@ struct BluetoothView: View {
         }
     }
 
-    // MARK: - Experimental · Wi-Fi handover (build 10)
+    // MARK: - Experimental · Wi-Fi handover
 
     /// Every action logs what it measured; failures are logged by SonyWiFiHandover itself, so the buttons drop them.
     private var handoverSection: some View {
-        Section("Experimental · Wi-Fi handover (build 10)") {
+        Section("Experimental · Wi-Fi handover") {
             LabeledContent("Status") {
                 Text(handover.status).font(.caption)
             }
@@ -303,6 +309,22 @@ struct BluetoothView: View {
                 Task { _ = try? await handover.safeReads() }
             }
             .disabled(handover.busy || !handover.isConnected)
+            Button("Subscribe (Sony's set)") {
+                Task { _ = try? await handover.subscribe(SonyWiFiHandover.sonyNotificationCodes) }
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Subscribe (all 8000CC00)") {
+                Task { _ = try? await handover.subscribe(nil) }
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Notification summary") {
+                _ = handover.timelineSummary()
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Forget CC09 status byte") {
+                handover.forgetRememberedStatusByte("Bluetooth tab")
+            }
+            .disabled(handover.busy)
             Button("Switch camera Wi-Fi on…") { confirmWiFiOn = true }
                 .disabled(handover.busy || !handover.isConnected)
                 .confirmationDialog("Switch the camera's Wi-Fi on?", isPresented: $confirmWiFiOn, titleVisibility: .visible) {
@@ -311,7 +333,7 @@ struct BluetoothView: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only Bluetooth write the spike makes, except that if the camera's Wi-Fi status can't be read, the app subscribes to its status notifications and turns them off on Disconnect. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
+                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only value the spike writes over Bluetooth; the app also turns on the camera's status notifications (CC09) if they aren't on, and Disconnect turns every notification off. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
                 }
             Button("Read Wi-Fi details") {
                 Task {
@@ -324,15 +346,84 @@ struct BluetoothView: View {
             if let handoverDetails {
                 Text(handoverDetails).font(.caption)
             }
+            Button(joiningOverBluetooth ? "Joining…" : "Read details and join") {
+                joiningOverBluetooth = true
+                bluetoothJoinOutcome = nil
+                Task {
+                    let outcome = await readDetailsAndJoin()
+                    log.note("Bluetooth tab: Read details and join: \(outcome)")
+                    bluetoothJoinOutcome = outcome
+                    joiningOverBluetooth = false
+                }
+            }
+            .disabled(joiningOverBluetooth || handover.busy || wireless.joining)
+            if let bluetoothJoinOutcome {
+                Text(bluetoothJoinOutcome).font(.caption)
+            }
             Button("Disconnect", role: .destructive) {
-                handover.disconnect()
                 handoverDetails = nil
+                bluetoothJoinOutcome = nil
+                Task {
+                    // Notifications off first, waiting for the camera's answers; while an operation runs, Disconnect
+                    // cancels it at once and turns them off without waiting.
+                    if !handover.busy && handover.isConnected
+                        && (handover.notifyingCount > 0 || !handover.earlierLinkCodes.isEmpty) {
+                        _ = try? await handover.unsubscribeAll()
+                    }
+                    handover.disconnect()
+                }
             }
             .disabled(!handover.isConnected && !handover.busy)
-            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, and on request switches the camera's Wi-Fi on and reads the network name and password. The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
+            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, on request turns on the camera's notifications (Sony's set: CC09, CC10, CC0F, CC03, CC0E; or every one in 8000CC00; logged masked, turned off on Disconnect; Forget CC09 status byte makes the next run learn which byte of CC09 is the Wi-Fi status again), switches the camera's Wi-Fi on and reads the network name and password. Read details and join connects if needed, reads them (nothing written), disconnects Bluetooth again if it connected, and joins that network, then sets the Wi-Fi tab to Camera AP with the join's gateway as Camera IP; the camera's Wi-Fi network must be up (PC Remote). The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
                 .font(.footnote)
                 .foregroundStyle(.orange)
         }
+    }
+
+    /// Read details and join: Connect + discover if not connected, the network details read, the join with them
+    /// (WirelessLab.joinHandover), then Camera AP and the join's gateway as Camera IP, which is what the Wi-Fi tab's
+    /// Join camera Wi-Fi and Use gateway as camera IP set. Returns a one-line outcome with no name or password; the
+    /// details exist only in this call, made from the button's Task. Failures are also logged by the handover and
+    /// HotspotJoiner themselves. Nothing is recorded under the handover run's ble.handover.* names (`ptpip.ap.join`
+    /// says "Bluetooth tab"), and a Bluetooth link this call connected is dropped once the details are read, as the
+    /// guided join does, so a later run connects on its own; a link that was already up is left as it is.
+    private func readDetailsAndJoin() async -> String {
+        guard !wireless.joining else { return "Not joined: another join is running" }
+        let ownLink = !handover.isConnected
+        let details: HandoverCredentials
+        do {
+            if ownLink {
+                _ = try await handover.connect()
+                _ = try await handover.discover(record: nil)
+            }
+            details = try await handover.readCredentials(record: nil)
+        } catch {
+            // Not while another operation runs: Disconnect would cancel it.
+            if ownLink && handover.isConnected && !handover.busy { handover.disconnect() }
+            if let e = error as? HandoverError, case .readFailed = e {
+                return "Not joined: \(e). Is the camera's Wi-Fi network up (PC Remote)? With none set up the camera refuses the read (ATT error 0x9D)."
+            }
+            return "Not joined: \(SonyWiFiHandover.errorName(error))"
+        }
+        // Bluetooth isn't needed for the join itself.
+        if ownLink { handover.disconnect() }
+        guard !details.ssid.isEmpty, HandoverCredentials.isValidPassphrase(details.passphrase) else {
+            return "Not joined: the details read aren't usable (\(details.description))"
+        }
+        let network = "the camera's network (\(HotspotJoiner.ssidSummary(details.ssid)))"
+        wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase, source: "Bluetooth tab, Read details and join")
+        while wireless.joining {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let already = wireless.lastJoinAlreadyAssociated else {
+            return "Not joined: the join to \(network) failed (see the log)"
+        }
+        UserDefaults.standard.set("ap", forKey: "ptpip.net")
+        guard let gateway = wireless.lastJoinGateway else {
+            return "Joined \(network)\(already ? " (already on it)" : ""), but no Wi-Fi path with a gateway came up within 20 s; network set to Camera AP, Camera IP unchanged"
+        }
+        UserDefaults.standard.set(gateway, forKey: "ptpip.host")
+        return "Joined \(network)\(already ? " (already on it)" : ""); network Camera AP, Camera IP \(gateway)"
     }
 
     private var gattDialogShown: Binding<Bool> {
