@@ -9,11 +9,11 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 | Item | Value |
 | --- | --- |
 | iPhone model and iOS build (from the Log tab's Device section) | `iPhone18,4`, iOS 27.2 (24B119) |
-| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). From 2 Nov 13:47: 0.1 (7.1), from `main` at d6d33a7 (spike build 9: Sony contents transfer over Wi-Fi). From 2 Nov 22:08: 0.1 (9.1), run 9, from `main` at 8e010ff (spike build 9.1: no battery read where the camera won't answer). From 3 Nov 00:04: 0.1 (11.1), run 11, from `main` at 7c4909f (spike build 10: the Bluetooth Wi-Fi handover experiment). From 3 Nov 11:33: 0.1 (12.1), run 12, from `main` at 994c3be (spike build 12: notification subscriptions before the Wi-Fi-on write, the Bluetooth join, copy all RAW to Files). TestFlight's build number is the workflow run, not the spike build. |
+| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). From 2 Nov 13:47: 0.1 (7.1), from `main` at d6d33a7 (spike build 9: Sony contents transfer over Wi-Fi). From 2 Nov 22:08: 0.1 (9.1), run 9, from `main` at 8e010ff (spike build 9.1: no battery read where the camera won't answer). From 3 Nov 00:04: 0.1 (11.1), run 11, from `main` at 7c4909f (spike build 10: the Bluetooth Wi-Fi handover experiment). From 3 Nov 11:33: 0.1 (12.1), run 12, from `main` at 994c3be (spike build 12: notification subscriptions before the Wi-Fi-on write, the Bluetooth join, copy all RAW to Files). From 3 Nov 14:56: 0.1 (13.1), run 13, from `main` at 3944ee9 (spike build 13: Bluetooth switches the camera's Wi-Fi on, then join and import). From 3 Nov 22:43: 0.1 (14.1), run 14, from `main` at 303a13f (spike build 14: the camera's Wi-Fi lifecycle, copy recovery and pause). TestFlight's build number is the workflow run, not the spike build. |
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | Sony Corporation ILCE-7CM2 (α7C II), firmware 2.0 (GetDeviceInfo over USB, 1 Nov); over PTP/IP on 2 Nov DeviceInfo says 2.01. The serial number is in DeviceInfo and in `usb/deviceinfo.bin`; it is deliberately not written here. |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
-| Camera access point band and channel | **5 GHz only** (Shamil, 3 Nov, from the camera's menu); channel not known. Build 14 reads the band the camera reports over Bluetooth (CCAB) and matches it to the menu. |
+| Camera access point band and channel | **5 GHz only** (Shamil, 3 Nov, from the camera's menu); channel not known. Over Bluetooth, CCAB reads `04 00 00 02 03` with the menu on 5 GHz (3 Nov 22:44, build 0.1 (14.1)); one menu setting, so the mapping is a single point. |
 | Home LAN (SSID band, access point model) | _to fill_ |
 
 ## Go/no-go questions
@@ -113,7 +113,7 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 
 - **A full card copies over Wi-Fi in about 12 minutes, in the background.** Files ran at 13–19 MB/s each; memory peaked at 68 MB (baseline 60 MB).
 - **The camera's Wi-Fi is the limit, not the app or the phone.** Moving each file into place took about 0.01 s and the gap between files was small, so 16.3 MB/s (about 135 Mbit/s of data) is the link itself. The camera was on 5 GHz only; that rate fits a single-antenna camera on 5 GHz. The same card reads at 38–41 MB/s over USB, where the phone's USB 2 port is the limit.
-- **Creators' App open in the background is the likely cause of the camera dropping its card and Wi-Fi.** It happened in both runs with Creators' App open (also at 11:54 during a Bluetooth switch-on) and in none of the runs with it quit. Not proven; 1.0 has to recover either way.
+- **Creators' App open in the background is the likely cause of the camera dropping its card and Wi-Fi.** It happened in both runs with Creators' App open (also at 11:54 during a Bluetooth switch-on) and in none of the runs with it quit. A later Bluetooth run with Creators' App open (22:43, about 4 minutes with three downloads; *BLE advertisement* below) had no drop, so it happens sometimes rather than every time. Not proven; 1.0 has to recover either way.
 - **iOS can expire the continued task when the phone is busy with something heavy.** The 271 s expiry coincided with the Camera app; the run that kept going for 709 s had only Files in front. iOS gives no reason with an expiry. Apple documents expiry under resource pressure and for tasks that report little progress, and publishes no time limit.
 - **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file.
 
@@ -124,9 +124,11 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 | Items on the card | Wi-Fi, whole-card session | USB, MSC (7.17 s for 391 files, about 18 ms each) | USB, MTP (165 ms per object) |
 | --- | --- | --- | --- |
 | 435 (3 Nov) | 5–7 s | about 8 s | about 72 s |
+| 555 (3 Nov 22:44) | **7.3 s, measured** | about 10 s | about 1½ min |
 | 2,000 | about 25–35 s | about 37 s | about 5½ min |
 | 5,000 | about 1–1½ min | about 1½ min | about 14 min |
 
+- **A second size point** (3 Nov 22:44, build 0.1 (14.1)): 555 handles (547 objects: 360 ARW, 187 JPG; 8 folders) listed in **7.32 s**, 13.2 ms per handle, inside the 11–17 ms range. The card was ready at the first poll (2.03 s, mostly the sequence's fixed waits), as at 432 handles. The spread at one size (4.97–7.30 s) is still as large as the change, so the projection stands.
 - Each Wi-Fi item is one GetObjectInfo round trip, so the growth should be linear. The part not checked at a larger size is the camera indexing the card when the session opens (2 s for 432 handles; 0.1 s on a reopen).
 - **It matters for the first import only.** Handles are stable across sessions (above), so 1.0 can keep what it has listed and ask only for new handles; a day's shooting then adds seconds.
 - Later listings come for free as the card grows; each Wi-Fi run logs `ptpip.ap.enumerate`, and one more MSC listing at a larger size gives USB its second point.
@@ -480,7 +482,7 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 **What this means for 1.0:**
 1. The app connects over Bluetooth, subscribes to the camera's status notifications and writes CC08 = 0x01. The camera's Wi-Fi is up about 2.2 s later, with nothing to do on the camera.
 2. The app reads the network name and password over Bluetooth and joins with one iOS prompt the first time.
-3. The camera switches its Wi-Fi off again when the importing app leaves, which suits the camera's battery.
+3. The camera switches its Wi-Fi off again when the importing app leaves, which suits the camera's battery (Creators' App: about 1 s; this app leaving the network: about 51 s, below).
 
 **The 1.0 route, end to end: Bluetooth switches the Wi-Fi on, the app joins and imports** (guided run *Bluetooth: switch Wi-Fi on, join and import*, 3 Nov 14:56–15:04, build 0.1 (13.1)). Setup: camera on with its Wi-Fi off (PC Remote Function off), Creators' App quit, the camera's network forgotten in Settings first. Nothing was done on the camera. Times are from the Start tap.
 
@@ -499,9 +501,31 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 - **The camera doesn't switch its Wi-Fi off when the session ends** (`ble.auto.wifiOffAfterSession` no). After CloseSession, with the phone still joined to the camera's network, CC09 read status 2 every 2 s for 45 s. Creators' App's Wi-Fi went off about 1 s after it left, so Creators' App probably leaves the network or tells the camera; which of the two is still to find.
 - No Bluetooth pairing request; Creators' App connected afterwards.
 
+**The same run with Creators' App open in the background, then leaving the network** (guided run *Bluetooth: switch Wi-Fi on, join and import*, 3 Nov 22:43–22:48, build 0.1 (14.1)). Setup: camera on with its Wi-Fi off (PC Remote Function off), Creators' App open in the background, the camera's network not forgotten in Settings. Nothing was done on the camera. Times are from the Start tap.
+
+| Step | Took | From Start |
+| --- | --- | --- |
+| Bluetooth connect: iOS already held a link to the camera (Creators' App's), so it was immediate | 0.00 s | |
+| Service discovery (0.02 s), Sony's five notifications on (1.4 s), CC09 and CCAB read | 3.4 s | |
+| CC08 = 0x01 (acknowledged in 56 ms) → Wi-Fi status 1 at +0.09 s → 2 at +2.34 s (`ble.auto.toWiFiOn`) | 2.5 s | 5.94 s |
+| A CCAB read, then the network details read on the first try, 0.47 s after status 2 (`ble.auto.toDetails`) | 0.94 s | 6.88 s |
+| iOS join prompt accepted; `apply` returned after 8.0 s; the camera answered at 192.168.122.1:15740 0.1 s later (`ble.auto.toCameraPort`) | 8.7 s | 15.61 s |
+| Whole-card contents transfer ready (2.03 s), 547 objects listed (7.32 s), newest ARW (39.0 MB) at 10.0 MB/s (`ble.auto.toFirstFile`, less 2.5 s on the app's own question) | 13.9 s | 29.52 s |
+
+- **The route works with Creators' App open, and nothing dropped this time.** The camera kept its card, its Wi-Fi and the Bluetooth link for the whole run (about 4 minutes: a listing, three downloads and the lifecycle steps). Earlier runs with Creators' App open lost the Wi-Fi and the link 30 s after a switch-on nobody joined (11:54) and the card 28 s into a copy (15:14), so the drop happens sometimes, not every time.
+- **Bluetooth is quicker when Creators' App holds the link.** Our connect was immediate (0.00 s, against 5.2–5.6 s for the first connect to an idle camera). The switch-on took 2.34 s (0.81–0.84 s in the runs with Creators' App quit; Creators' App's own, 2.1–2.5 s).
+- **The Wi-Fi outlived our Bluetooth link again** (`ble.auto.wifiSurvivesBluetoothOff` yes 13 s after, 13.8 MB/s; `.60s` yes 63 s after, 14.0 MB/s). Weaker than the 13.1 runs: iOS still listed a camera link afterwards (Creators' App's), so the camera's Bluetooth never went down.
+- **Turning the notifications off isn't confirmed while another app shares the link.** Only CC0E came back confirmed; CC03, CC09, CC0F and CC10 returned CoreBluetooth's "unknown" error. iOS shares one link, and one set of notification switches, between the apps using a device, so it probably keeps on a notification Creators' App still wants and reports our request as an error. Creators' App connected and worked afterwards (`ble.auto.creatorsAppStillWorks` yes). 1.0 can treat this error as harmless when iOS lists another app's link to the camera.
+- **The camera keeps its Wi-Fi up while the phone stays joined** (`ble.auto.wifiOffAfterSession` no): status 2 for 45 s after CloseSession, as in the 13.1 runs.
+- **Leaving the network makes the camera switch its Wi-Fi off, after about 51 s.** The app removed its hotspot configuration 45.6 s after the session closed, and the iPhone left the camera's network 0.1 s later (its Wi-Fi path went to none, then to the home network). CC09, read every 2 s over the Bluetooth link, stayed at 2, then went 2 → 3 (*terminating*) at +51.2 s and 3 → 0 at +53.2 s (`ble.auto.wifiOffAfterLeaving` yes, `ble.auto.wifiOffAfterLeaving.latency` 53.2 s).
+  - This run can't tell the camera noticing the phone gone after about 50 s from a timer that switches the Wi-Fi off about 97 s after the last session closed, phone joined or not: step (b) watched only 45 s. *Bluetooth: how long an unused Wi-Fi stays up* (up to 180 s with nobody joining) separates them.
+  - Creators' App's Wi-Fi went off about 1 s after it left (11:35), much sooner, so Creators' App probably tells the camera, over PTP/IP or Bluetooth, rather than only leaving.
+  - Either way, if 1.0 leaves the camera's network after an import, the camera's Wi-Fi is off within about a minute, which is enough for its battery. A faster switch-off would need a write the spike hasn't made; 1.0 doesn't need one.
+- **CCAB read `04 00 00 02 03` with the camera's menu on 5 GHz** (`ble.handover.wifiBand` 2): one entry, tag 0x0000, value 02 03, the same with the Wi-Fi off, right after status 2 and after the import. One menu setting gives one point, so the notes' mapping is still unverified; 1.0 doesn't need it.
+- No Bluetooth pairing request (`ble.auto.pairingPrompt` no); the camera's screen showed nothing (`ble.auto.cameraShowsWiFi` no).
+
 Still open:
-- the same run with Creators' App open in the background (on 3 Nov at 11:54, with it open, the camera dropped its Wi-Fi and the Bluetooth link about 30 s after a switch-on nobody joined; at 15:14 it dropped its card and Wi-Fi 28 s into a copy);
-- how the app gets the camera to switch its Wi-Fi off after an import (leaving the network, or a Bluetooth write), and how long an unused Wi-Fi stays up;
+- how long an unused Wi-Fi stays up, which also tells whether the switch-off after leaving comes from the leave or from a timer (*Bluetooth: how long an unused Wi-Fi stays up*);
 - why the Bluetooth connect took 5.6 s this time (0.4 s in earlier runs, and one 8 s timeout at 11:53 before a scan found the camera). A second run at 15:21 took 5.2 s for the first connect and 0.37 s for a reconnect a minute later, so the camera seems slow to take the first connection after it has been idle. That run otherwise matched the first: Wi-Fi status 2 at +0.81 s, `ble.auto.toWiFiOn` 9.88 s, `ble.auto.toFirstFile` 36.8 s, and the Wi-Fi again outlived Bluetooth (14 s and 64 s) and stayed up for 45 s after the session closed.
 
 - **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
