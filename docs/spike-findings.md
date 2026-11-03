@@ -118,10 +118,24 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
+**Listing time against card size (projected, 3 Nov).** The guided *Scaling* run (a burst of about 300 frames) was dropped; the projections come from the listings already made. Over Wi-Fi the card was listed nine times on 2–3 Nov at 397–435 handles in 4.74–7.30 s, so about **11–17 ms per handle**. The card grew too little across those runs to separate a fixed cost from a per-object cost, and run-to-run spread (4.97–7.30 s at the same size) exceeds the size effect, so the whole time is counted as per-object, which makes these upper bounds:
+
+| Items on the card | Wi-Fi, whole-card session | USB, MSC (7.17 s for 391 files, about 18 ms each) | USB, MTP (165 ms per object) |
+| --- | --- | --- | --- |
+| 435 (3 Nov) | 5–7 s | about 8 s | about 72 s |
+| 2,000 | about 25–35 s | about 37 s | about 5½ min |
+| 5,000 | about 1–1½ min | about 1½ min | about 14 min |
+
+- Each Wi-Fi item is one GetObjectInfo round trip, so the growth should be linear. The part not checked at a larger size is the camera indexing the card when the session opens (2 s for 432 handles; 0.1 s on a reopen).
+- **It matters for the first import only.** Handles are stable across sessions (above), so 1.0 can keep what it has listed and ask only for new handles; a day's shooting then adds seconds.
+- Later listings come for free as the card grows; each Wi-Fi run logs `ptpip.ap.enumerate`, and one more MSC listing at a larger size gives USB its second point.
+
 **Still to run:**
-- *Smartphone Connect* (no QR code on 2 Nov; possibly because PC Remote Function was on, or Creators' App held the link);
-- *PC Remote* over an access point (the home LAN);
-- *Send to Smartphone*, the fallback.
+- *PC Remote* over an access point (the home LAN).
+
+**Dropped (Shamil, 3 Nov):**
+- *Smartphone Connect*: the Bluetooth switch-on (*BLE advertisement* below) is the smartphone connection Creators' App uses, and it lists the whole card, so this row adds nothing.
+- *Send to Smartphone*: the fallback for a camera that doesn't list its card over PTP/IP, which this one does.
 
 **Evidence:** Guided run *Wi-Fi: one camera mode* › *PC Remote (camera's network)*, 2 Nov 13:47–13:49, build 0.1 (7.1):
 - "SDIO_OpenSession (0x9210) [1, 1], ContentsTransfer: OK"; 0x9212 [2,0,0] OK and [2,1,0] OK; then the event "StoreAdded (0x4004) … [0x00010001]".
@@ -351,7 +365,7 @@ One row per camera mode. Note in the last column when the Mac (`gphoto2`, `nmap`
 
 | Camera mode | SSDP | Port 15740 open | Handshake accepted | Card listed | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Smartphone Connect | not run: the camera showed no QR code on 2 Nov |  |  |  |  |
+| Smartphone Connect | dropped 3 Nov: covered by the Bluetooth switch-on, the smartphone connection Creators' App uses (the camera showed no QR code on 2 Nov) |  |  |  |  |
 | PC Remote over Wi-Fi Direct (camera's own network; method to confirm) | **announces:** NOTIFY to the multicast group, received in 0.73 s without the entitlement; no answer to a unicast M-SEARCH; our multicast M-SEARCH never sent | **yes**, 1.53 s, including allowing the Local Network prompt | **yes**, 0.02 s; Init_Command_Ack after 6 ms, so probably no prompt on the camera | **yes, through Sony's contents transfer:** 391 files in 4.74 s after SDIO_OpenSession [1,1] and 0x9212 [2,0,0] → [2,1,0]; a plain session gets StoreNotAvailable (0x2013) even after the init sequence | iPhone only, no Mac probes. Bonjour `_ptp._tcp`: none. Joined in Settings (no QR code in PC Remote). Build 8 run (12:08) labelled *Smartphone Connect*; build 9 run 13:47 |
 | PC Remote over Access Point |  |  |  |  |  |
 
