@@ -13,7 +13,7 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | Sony Corporation ILCE-7CM2 (α7C II), firmware 2.0 (GetDeviceInfo over USB, 1 Nov); over PTP/IP on 2 Nov DeviceInfo says 2.01. The serial number is in DeviceInfo and in `usb/deviceinfo.bin`; it is deliberately not written here. |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
-| Camera access point band and channel | _to fill_ |
+| Camera access point band and channel | **5 GHz only** (Shamil, 3 Nov, from the camera's menu); channel not known. Build 14 reads the band the camera reports over Bluetooth (CCAB) and matches it to the menu. |
 | Home LAN (SSID band, access point model) | _to fill_ |
 
 ## Go/no-go questions
@@ -112,6 +112,7 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 | 15:30 | quit | in the background, phone unlocked and in use (Files) | **267 of 267, 11.53 GB in 11.8 min at 16.3 MB/s, no failures.** The continued task ran 709 s without expiring. Every file opens in Files. |
 
 - **A full card copies over Wi-Fi in about 12 minutes, in the background.** Files ran at 13–19 MB/s each; memory peaked at 68 MB (baseline 60 MB).
+- **The camera's Wi-Fi is the limit, not the app or the phone.** Moving each file into place took about 0.01 s and the gap between files was small, so 16.3 MB/s (about 135 Mbit/s of data) is the link itself. The camera was on 5 GHz only; that rate fits a single-antenna camera on 5 GHz. The same card reads at 38–41 MB/s over USB, where the phone's USB 2 port is the limit.
 - **Creators' App open in the background is the likely cause of the camera dropping its card and Wi-Fi.** It happened in both runs with Creators' App open (also at 11:54 during a Bluetooth switch-on) and in none of the runs with it quit. Not proven; 1.0 has to recover either way.
 - **iOS can expire the continued task when the phone is busy with something heavy.** The 271 s expiry coincided with the Camera app; the run that kept going for 709 s had only Files in front. iOS gives no reason with an expiry. Apple documents expiry under resource pressure and for tasks that report little progress, and publishes no time limit.
 - **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file.
