@@ -2522,11 +2522,11 @@ extension GuidedRunner {
         // reconnect nor the baseline read is inside the latency.
         let reconnected = !handover.isConnected
         try await ensureHandoverLink("before leaving the camera's network", record: nil)
-        let linkText = reconnected ? "reconnected (connect and discovery only) after it dropped after step (b)" : "from step (b)"
+        let stepCLinkText = reconnected ? "reconnected (connect and discovery only) after it dropped after step (b)" : "from step (b)"
         // A fresh baseline: (b)'s last read may be a minute old, and its link may have dropped since.
         let leaveBaseline = try await watchStatusRead("baseline before leaving the camera's network")
         guard leaveBaseline == 2 else {
-            log.note("  guided: step (c) skipped: CC09 reads Wi-Fi status \(statusText(leaveBaseline)) just before leaving the camera's network, not 2 (Bluetooth link \(linkText)); ble.auto.wifiOffAfterLeaving not recorded")
+            log.note("  guided: step (c) skipped: CC09 reads Wi-Fi status \(statusText(leaveBaseline)) just before leaving the camera's network, not 2 (Bluetooth link \(stepCLinkText)); ble.auto.wifiOffAfterLeaving not recorded")
             return
         }
         // Leaving means something only if the iPhone is on the camera's network now: its Wi-Fi gateway is the camera.
@@ -2555,7 +2555,7 @@ extension GuidedRunner {
         let afterText = "after the reads: \(wifiPathText(pathAfter, host: host))"
         let leaveText = leftAfter.map { "the iPhone left the camera's network \(fmt($0)) s after the removal (Wi-Fi path then: \(wifiPathText(watched.path, host: host)); \(afterText))" }
             ?? "the iPhone's Wi-Fi path still had gateway \(host) 15 s after the removal (\(afterText))"
-        let leaveContext = "the app removed its hotspot configuration for the camera's network \(fmt(sinceClose)) s after the PTP/IP session closed, CC09 2 just before the removal; Bluetooth link \(linkText) (no notifications, nothing written); \(leaveText); times from the removal: \(leave.sequence)\(dropContext(leave)); step (b): \(poll.sequence)"
+        let leaveContext = "the app removed its hotspot configuration for the camera's network \(fmt(sinceClose)) s after the PTP/IP session closed, CC09 2 just before the removal; Bluetooth link \(stepCLinkText) (no notifications, nothing written); \(leaveText); times from the removal: \(leave.sequence)\(dropContext(leave)); step (b): \(poll.sequence)"
         guard let leftSeconds = leftAfter, !backOnCamera else {
             log.note("  guided: iPhone still on \(host) after the configuration was removed (joinOnce false / saved profile?), or back on it after the reads, so leaving wasn't confirmed; ble.auto.wifiOffAfterLeaving not recorded (\(leaveContext))")
             return
@@ -2818,7 +2818,7 @@ extension GuidedRunner {
             let clock = ContinuousClock()
             // A suspension (the phone locked, another app in front) would stretch the waits: said in the contexts.
             let backgroundBefore = lifecycle.backgroundEntries
-            func suspensionText() -> String {
+            @MainActor func suspensionText() -> String {
                 let left = lifecycle.backgroundEntries - backgroundBefore
                 guard left > 0 else { return "app in the foreground throughout" }
                 return "the app left the foreground \(left) time(s) since Start\(lifecycle.isInForeground ? " (last away \(fmt(lifecycle.lastAwaySeconds)) s)" : " and is still in the background"), so the waits may include a suspension"
