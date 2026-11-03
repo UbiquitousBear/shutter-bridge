@@ -22,6 +22,13 @@ private final class HandoverCall<T> {
     var result: Result<T, Error>?
 }
 
+/// What GuidedRunner.joinCameraOverBluetooth did: whether the phone is on the camera's network, and if it isn't, why
+/// in a few words (for the fallback step's message).
+private struct BluetoothJoin {
+    let joined: Bool
+    let reason: String
+}
+
 /// One decimal by default, as in the log lines elsewhere.
 private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
 
@@ -467,7 +474,8 @@ extension GuidedRunner {
         if !idle { throw GuidedStop("\(title) didn't finish within \(Int(timeout)) s") }
     }
 
-    /// Network, join and camera IP: on the camera's access point the QR code and join, on the home LAN the IP.
+    /// Network, join and camera IP: on the camera's access point a join over Bluetooth first
+    /// (joinCameraOverBluetooth), then the QR code or Settings if that didn't work; on the home LAN the IP.
     /// `homeLAN` answers "Which network?" for the caller when the camera mode already says which (nil asks).
     func wifiJoin(homeLAN: Bool? = nil) async throws {
         let net: String
@@ -487,12 +495,16 @@ extension GuidedRunner {
             if typed != "Done" { throw GuidedStop("no camera IP") }
             return
         }
+        // The camera's network: over Bluetooth first; the QR code or Settings only if that didn't work.
+        let viaBluetooth = try await joinCameraOverBluetooth(context: homeLAN == nil ? "Wi-Fi run, camera access point chosen"
+                                                                                     : "Wi-Fi run, camera's network (from the camera mode)")
+        if viaBluetooth.joined { return }
         let scans = wireless.qrScans
         // The SSID from an earlier scan stays in memory for the whole launch: only a new scan (or a newly typed
         // SSID) means the app should join; Done with nothing new means the tester joined in Settings.
         let ssidBefore = wireless.joinSSID
         let scanned = try await waitInTabs("Join the camera's network",
-                                           "On the camera, open the screen with its QR code (Smartphone Connect) or its network name and password (PC Remote over Wi-Fi Direct). Scan the code on the Wi-Fi tab, or join the camera's network in Settings › Wi-Fi, then tap Done here.",
+                                           "Joining over Bluetooth didn't work (\(viaBluetooth.reason)). On the camera, open the screen with its QR code (Smartphone Connect) or its network name and password (PC Remote over Wi-Fi Direct). Scan the code on the Wi-Fi tab, or join the camera's network in Settings › Wi-Fi, then tap Done here.",
                                            timeout: 900) {
             self.wireless.qrScans > scans
         }
@@ -540,6 +552,108 @@ extension GuidedRunner {
             if retry != "Try again" { break }
         }
         throw GuidedStop("not on the camera's network")
+    }
+
+    /// Gets the phone onto the camera's own network without the QR code or Settings. If the camera already answers a
+    /// 2 s TCP connect at 192.168.122.1:15740 (or the stored camera IP), that is noted and the camera IP set, with no
+    /// Bluetooth and nothing recorded. Otherwise: connect and list the services over Bluetooth, read the network name
+    /// and password (CC06, CC07; no subscriptions, no CC08 write, nothing written to the camera), join with them
+    /// (NEHotspotConfiguration, one iOS prompt), wait up to 60 s for the camera at 192.168.122.1:15740, set Camera AP
+    /// and that camera IP, and disconnect Bluetooth. The details exist only in this call and reach the log only as
+    /// `HandoverCredentials.description` and HotspotJoiner's redacted lines. Records `ptpip.ap.bluetoothJoin` (yes:
+    /// on the camera's network through the details read over Bluetooth) and, on success,
+    /// `ptpip.ap.bluetoothJoin.toCameraPort` [s] from this call's start to the camera answering. A Bluetooth or join
+    /// failure (camera not found, no network set up on the camera, join failed, no answer at the port) is logged,
+    /// Bluetooth is disconnected and the result says why in a few words, so the caller can fall back; "Cancel run"
+    /// still throws.
+    private func joinCameraOverBluetooth(context: String) async throws -> BluetoothJoin {
+        let clock = ContinuousClock()
+        let started = clock.now
+        let usual = "192.168.122.1"
+
+        // Already on the camera's network (joined earlier, or rejoined by itself)?
+        let stored = (UserDefaults.standard.string(forKey: "ptpip.host") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hosts = stored.isEmpty || stored == usual ? [usual] : [usual, stored]
+        step("Is the phone on the camera's network? (TCP \(hosts.joined(separator: " or ")):15740)")
+        // Quiet: a refused or timed-out connect here is the expected case, and the note below says so.
+        let quiet: PTPIPClient.Logger = { _, _ in }
+        for host in hosts {
+            if let seconds = try? await PTPIPClient.probePort(host: host, timeout: 2, log: quiet) {
+                UserDefaults.standard.set(host, forKey: "ptpip.host")
+                log.note("  guided: \(context): already on the camera's network: \(host):15740 answered in \(fmt(seconds, 2)) s; camera IP set to \(host); no Bluetooth join needed")
+                return BluetoothJoin(joined: true, reason: "")
+            }
+        }
+        let checkSeconds = (clock.now - started).inSeconds
+        log.note("  guided: \(context): nothing answered at \(hosts.joined(separator: " or ")):15740 (2 s each); joining the camera's network over Bluetooth")
+
+        // How far it got, for the fallback's message; the log gets the full reason.
+        var short = "the camera wasn't found over Bluetooth"
+        var joinText = "no join attempted"
+        do {
+            _ = try await connectHandover { short = "the camera's Bluetooth services couldn't be listed" }
+            // The network name and password: only in this scope.
+            let details: HandoverCredentials
+            do {
+                details = try await bluetooth("Reading the network details", "Reading the camera's network name and password over Bluetooth. They are never shown or logged; nothing is written to the camera.",
+                                              timeout: 60, detail: false) { try await self.handover.readCredentials() }
+            } catch let stop as GuidedStop {
+                // With the link still up the read itself failed: the camera answers ATT error 0x9D when no network
+                // is set up on it.
+                short = handover.isConnected ? "no Wi-Fi network is set up on the camera" : "the network details read didn't finish"
+                throw stop
+            }
+            log.note("  guided: \(context): network details read over Bluetooth: \(details.description)")
+            guard !details.ssid.isEmpty, HandoverCredentials.isValidPassphrase(details.passphrase) else {
+                short = "the network details read over Bluetooth aren't usable"
+                throw GuidedStop("the network details read over Bluetooth aren't usable (\(details.description))")
+            }
+            short = "the join didn't work"
+            try await wifi("Join the camera's network", "Joining with the details read over Bluetooth. Accept the system prompt if iOS asks.", timeout: 90) {
+                wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase)
+            }
+            let already = wireless.lastJoinAlreadyAssociated
+            joinText = joinOutcome(already)
+            guard already != nil else { throw GuidedStop("the join failed (see the log)") }
+            let host = usual
+            if let gateway = wireless.lastJoinGateway, gateway != host {
+                log.warn("  guided: \(context): the join reported gateway \(gateway), not \(host); waiting at \(host) anyway")
+            }
+            short = "the camera didn't answer on its network"
+            step("Waiting for the camera at \(host):15740")
+            let port = try await pollCameraPort(host: host, title: "Waiting for the camera",
+                                                message: "Waiting for the camera to answer at \(host):15740 on its own network (up to 60 s).",
+                                                timeout: 60)
+            guard let after = port.answeredAfter else {
+                throw GuidedStop("nothing answered at \(host):15740 within 60 s of the join (\(port.attempts) TCP connect(s); last: \(port.lastError))")
+            }
+            UserDefaults.standard.set("ap", forKey: "ptpip.net")
+            UserDefaults.standard.set(host, forKey: "ptpip.host")
+            let total = (clock.now - started).inSeconds
+            log.note("  guided: \(context): on the camera's network over Bluetooth: \(host):15740 answered \(fmt(after)) s after the join, \(fmt(total)) s after the start; network Camera AP, camera IP set to \(host)")
+            log.flag("ptpip.ap.bluetoothJoin", true,
+                     context: "\(context); details read over Bluetooth (\(details.description)); \(joinText); the camera answered at \(host):15740 \(fmt(after)) s after the join")
+            log.measure("ptpip.ap.bluetoothJoin.toCameraPort", total, "s",
+                        context: "\(context); from the start of the join over Bluetooth (including the \(fmt(checkSeconds)) s check for the camera on the current network and any tap on iOS's join prompt) to the camera answering at \(host):15740; \(joinText)")
+        } catch let stop as GuidedStop {
+            log.warn("  guided: \(context): joining over Bluetooth didn't work: \(stop.reason); falling back to the QR code or Settings")
+            log.flag("ptpip.ap.bluetoothJoin", false, context: "\(context); \(joinText); \(stop.reason)")
+            disconnectAfterBluetoothJoin()
+            return BluetoothJoin(joined: false, reason: short)
+        } catch {
+            // "Cancel run" (or anything else unexpected): Bluetooth off, then let it end the run.
+            disconnectAfterBluetoothJoin()
+            throw error
+        }
+        disconnectAfterBluetoothJoin()
+        return BluetoothJoin(joined: true, reason: "")
+    }
+
+    /// Bluetooth off after joinCameraOverBluetooth, unless the link is already down and nothing is running.
+    private func disconnectAfterBluetoothJoin() {
+        guard handover.isConnected || handover.busy else { return }
+        handover.disconnect()
+        log.note("  guided: Bluetooth disconnected (\(handover.status)); the network details are dropped")
     }
 
     // MARK: - Wi-Fi sections
@@ -642,9 +756,18 @@ extension GuidedRunner {
 
     func wifiGUID() async throws {
         try await section("GUID after a power cycle", "Is this phone remembered after the camera restarts, and is a new phone asked to confirm? About 5 minutes.") {
-            try await ask("Restart the camera", "Switch the camera off and on, put it back in the same Wi-Fi mode, and wait for its Wi-Fi screen. If the phone doesn't rejoin the camera's network by itself, rejoin it in Settings.",
+            let onCameraAP = wifiTarget().net == "ap"
+            try await ask("Restart the camera", "Switch the camera off and on, put it back in the same Wi-Fi mode, and wait for its Wi-Fi screen. "
+                            + (onCameraAP ? "If the phone doesn't rejoin the camera's network by itself, the app joins it over Bluetooth."
+                                          : "If the phone doesn't rejoin the camera's network by itself, rejoin it in Settings."),
                           buttons: ["Done"])
-            try await waitForCameraPort()
+            // On the camera's network: rejoin over Bluetooth first; the wait below then answers at once.
+            var bluetoothFailure: String?
+            if onCameraAP {
+                let viaBluetooth = try await joinCameraOverBluetooth(context: "Wi-Fi GUID run, after the camera restart")
+                if !viaBluetooth.joined { bluetoothFailure = viaBluetooth.reason }
+            }
+            try await waitForCameraPort(bluetoothFailure: bluetoothFailure)
             try await wifi("Reconnect (same GUID)", "Reconnecting as the same phone.", timeout: 120) { wireless.reconnect(wifiTarget()) }
             let reconnected = wireless.isConnected && wireless.connectionState.hasPrefix("connected")
             if !reconnected { log.warn("  guided: the reconnect after the power cycle didn't connect: \(wireless.connectionState)") }
@@ -663,11 +786,13 @@ extension GuidedRunner {
     /// After a camera restart: waits (up to 300 s) until the camera's PTP/IP port answers at the stored camera IP,
     /// trying a 2 s TCP connect every 2 s, while an alert asks the tester to switch the camera's Wi-Fi back on and,
     /// if needed, rejoin its network. Logs how long the camera took to answer and after how many tries.
-    private func waitForCameraPort() async throws {
+    /// `bluetoothFailure`: why the join over Bluetooth just before didn't work, to start the alert's message with.
+    private func waitForCameraPort(bluetoothFailure: String? = nil) async throws {
         let host = wifiTarget().host
         step("Waiting for the camera at \(host):15740")
         let state = try await pollCameraPort(host: host, title: "Switch the camera's Wi-Fi on",
-                                             message: "After a restart the camera's Wi-Fi is off: switch it back on in PC Remote. If the phone moved to your home Wi-Fi, join the camera's network again in Settings › Wi-Fi.",
+                                             message: (bluetoothFailure.map { "Joining over Bluetooth didn't work (\($0)). " } ?? "")
+                                                + "After a restart the camera's Wi-Fi is off: switch it back on in PC Remote. If the phone moved to your home Wi-Fi, join the camera's network again in Settings › Wi-Fi.",
                                              timeout: 300)
         if let after = state.answeredAfter {
             log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the restart was confirmed (\(state.attempts) TCP connect(s), 2 s timeout each)")
@@ -713,7 +838,13 @@ extension GuidedRunner {
     private func ensureWiFiSession() async throws {
         guard !wireless.isConnected else { return }
         log.note("  guided: no Wi-Fi session (the app restarted?); opening one")
-        try await findCameraJoinedOutsideApp()
+        // On the camera's network: over Bluetooth first, then the probes and the question about Settings. The home
+        // LAN keeps the probes alone (the camera's own network has nothing to do with it).
+        var onCameraNetwork = false
+        if wifiTarget().net == "ap" {
+            onCameraNetwork = try await joinCameraOverBluetooth(context: "no Wi-Fi session, opening one").joined
+        }
+        if !onCameraNetwork { try await findCameraJoinedOutsideApp() }
         try await wifi("Contents transfer: whole card", "Opening Sony's whole-card session (PC Remote) on the camera's network.", timeout: 180) {
             wireless.connectContentsTransfer(wifiTarget(), mode: .wholeCard)
         }
@@ -797,8 +928,20 @@ extension GuidedRunner {
             }
             try await waitUntil("Finishing the transfer", "Waiting for it to end or fail.", timeout: 1200) { !self.wireless.busy }
 
-            // Two minutes locked has likely ended the PTP/IP session: start the second half on a fresh one.
-            try await ask("Reconnect", "Make sure the phone is back on the camera's network (Settings › Wi-Fi), then tap OK to reconnect.", buttons: ["OK"])
+            // Two minutes locked has likely ended the PTP/IP session: start the second half on a fresh one. On the
+            // camera's network the app rejoins over Bluetooth first if the phone isn't on it; Settings otherwise.
+            var rejoined = false
+            var bluetoothFailure: String?
+            if wifiTarget().net == "ap" {
+                let viaBluetooth = try await joinCameraOverBluetooth(context: "Wi-Fi lock run, before the reconnect")
+                rejoined = viaBluetooth.joined
+                if !rejoined { bluetoothFailure = viaBluetooth.reason }
+            }
+            if !rejoined {
+                try await ask("Reconnect", (bluetoothFailure.map { "Joining over Bluetooth didn't work (\($0)). " } ?? "")
+                                + "Make sure the phone is back on the camera's network (Settings › Wi-Fi), then tap OK to reconnect.",
+                              buttons: ["OK"])
+            }
             try await wifi("Reconnect (same GUID)", "Reconnecting before the continued task.", timeout: 120) { wireless.reconnect(wifiTarget()) }
             guard wireless.isConnected, wireless.connectionState.hasPrefix("connected") else {
                 throw GuidedStop("couldn't reconnect: \(wireless.connectionState)")
