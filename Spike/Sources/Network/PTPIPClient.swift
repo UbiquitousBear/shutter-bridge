@@ -38,6 +38,9 @@ actor PTPIPClient {
         case response(operation: PTPOperationCode, code: PTPResponseCode)
         case dataTooLarge(operation: PTPOperationCode, limit: Int)
         case fileError(String)
+        /// Build 14: the app cut the data phase off (TransferAbort: the copy's continued task expired). The channel is
+        /// left mid-transaction, so the client is poisoned like after a link failure.
+        case aborted(String)
 
         var description: String {
             switch self {
@@ -71,6 +74,8 @@ actor PTPIPClient {
                 return "\(operation): data phase larger than \(limit / 1_048_576) MiB; refused to buffer it"
             case .fileError(let text):
                 return "file error: \(text)"
+            case .aborted(let text):
+                return "\(text): cut off by the app"
             }
         }
 
@@ -548,8 +553,11 @@ actor PTPIPClient {
     }
 
     /// GetObject streamed to `url` (created or truncated) with an incremental SHA-256; nothing is buffered beyond
-    /// one socket read.
-    func getObject(_ handle: PTPObjectHandle, to url: URL) async throws -> FileDownload {
+    /// one socket read. Build 14: `progress` gets the bytes received so far, from the data sink, at most every 0.25 s
+    /// (throttled here, so the read loop makes no actor hop per chunk; the callback hops once itself); `abort`, once
+    /// set, cuts the data phase off at the next chunk with `.aborted` (the client is then poisoned).
+    func getObject(_ handle: PTPObjectHandle, to url: URL, abort: TransferAbort? = nil,
+                   progress: (@Sendable (UInt64) -> Void)? = nil) async throws -> FileDownload {
         let file: FileHandle
         do {
             try Data().write(to: url)
@@ -563,10 +571,19 @@ actor PTPIPClient {
         var announced: UInt64? = nil
         let clock = ContinuousClock()
         let started = clock.now
+        var lastProgress = started
         try await perform(PTPCommand.getObject(handle, tx: tx.take()), dataSink: { chunk in
+            if let abort, abort.isAborted { throw ClientError.aborted("GetObject") }
             try file.write(contentsOf: chunk)
             hasher.update(data: chunk)
             bytes += UInt64(chunk.count)
+            if let progress {
+                let now = clock.now
+                if now - lastProgress >= .milliseconds(250) {
+                    lastProgress = now
+                    progress(bytes)
+                }
+            }
         }, onDataStarted: { total in
             announced = total
         })
@@ -928,5 +945,24 @@ final class OnceContinuation<T: Sendable>: @unchecked Sendable {
         let c = continuation
         continuation = nil
         return c
+    }
+}
+
+/// Build 14: a flag the main actor sets to cut a GetObject off at its next chunk (the copy's continued task expired:
+/// the copy finishes nothing more). Read from the client's data sink, so it is a lock, not actor state.
+final class TransferAbort: @unchecked Sendable {
+    private let lock = NSLock()
+    private var aborted = false
+
+    var isAborted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return aborted
+    }
+
+    func abort() {
+        lock.lock()
+        aborted = true
+        lock.unlock()
     }
 }

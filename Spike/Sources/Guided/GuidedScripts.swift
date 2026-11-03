@@ -1555,6 +1555,37 @@ extension GuidedRunner {
         }
     }
 
+    /// Build 14: one harmless CCAB read (the camera's Wi-Fi band, per the notes; mapping unverified), recorded as
+    /// `ble.handover.wifiBand`: the first value byte as a number when the value parses in the [length][tag][value]
+    /// layout and the byte is at most 0x0F (larger bytes stay masked, so nothing is recorded), with the masked bytes, the
+    /// layout and when it was read ("Wi-Fi on" / "Wi-Fi off") in the context. Returns a short masked summary for the
+    /// band question's context, or nil when nothing was read. Never stops the run; nothing is written.
+    @discardableResult
+    private func readWiFiBand(_ run: String, wifiOn: Bool, moment: String) async throws -> String? {
+        let when = wifiOn ? "Wi-Fi on" : "Wi-Fi off"
+        guard handover.isConnected else {
+            log.note("  guided: CCAB not read (\(when), \(moment)): the Bluetooth link is down")
+            return nil
+        }
+        let band: SonyWiFiHandover.WiFiBandRead?
+        do {
+            band = try await bluetooth("Reading CCAB", "Reading CCAB, the camera's Wi-Fi band per the notes (\(when)). Nothing is written.",
+                                       timeout: 30) { try await self.handover.readWiFiBand("\(run), \(when), \(moment)") }
+        } catch let stop as GuidedStop {
+            log.warn("  guided: the CCAB read (\(when), \(moment)) didn't work (\(stop.reason)); going on without it")
+            return nil
+        }
+        guard let band else { return nil }
+        let summary = "\(when) (\(moment)): \(band.length) B \(band.masked), \(band.layout)"
+        if let value = band.value, value <= 0x0F {
+            log.measure("ble.handover.wifiBand", Double(value), "value",
+                        context: "\(run); when read: \(when), \(moment); CCAB \(band.length) B: \(band.masked); layout: \(band.layout); the first value byte; mapping to 2.4 / 5 GHz unverified")
+        } else {
+            log.note("  guided: ble.handover.wifiBand not recorded (\(summary)): \(band.value == nil ? "no value in the [length][tag][value] layout" : "the first value byte is above 0x0F, so it stays masked")")
+        }
+        return summary
+    }
+
     /// One harmless CC09 read for the watch (`why` names it); nil when CC09 can't be read or the link is down. A
     /// failure doesn't stop the run, so the watch's results are still recorded.
     private func watchStatusRead(_ why: String) async throws -> Int? {
@@ -2200,6 +2231,8 @@ extension GuidedRunner {
         // CC09's Wi-Fi status values with times from the switch-on, for the screen question asked after the section.
         var onSequence = ""
         var imported = false
+        // Build 14: CCAB's reads (masked), for the band question's context.
+        var bandReads: [String] = []
         // Build 14: the camera's network name, kept in memory only for the lifecycle's step (c) (removing the app's
         // configuration for it, so the iPhone leaves the network), then dropped. Never logged, shown or stored.
         var cameraSSID: String?
@@ -2228,6 +2261,15 @@ extension GuidedRunner {
             var sequence = "Wi-Fi status \(statusText(before)) at Start"
             // When CC09 reported status 2 after the write: the gap to the first details read is recorded.
             var statusOnAt = started
+            // Build 14: CCAB with the Wi-Fi off, with the harmless CC09 read at Start (a read of about 0.1 s, inside
+            // ble.auto.toWiFiOn), for comparison with the reads after status 2.
+            var bandAtStart = false
+            if before != 2 {
+                bandAtStart = handover.isConnected
+                if let band = try await readWiFiBand("ble.auto", wifiOn: false, moment: "at Start, before the write") {
+                    bandReads.append(band)
+                }
+            }
             if before == 2 {
                 // No switch-on to time: every ble.auto time means "after the app's own CC08 write", so the run stops.
                 log.warn("  guided: CC09 already reports Wi-Fi status 2 at Start (the camera's Wi-Fi is on), so no CC08 write and nothing timed")
@@ -2256,11 +2298,16 @@ extension GuidedRunner {
                 }
                 statusOnAt = clock.now
                 log.measure("ble.auto.toWiFiOn", (statusOnAt - started).inSeconds, "s",
-                            context: "from Start: Bluetooth connect, discovery, Sony's notifications, CC08 = 01 and CC09 status 2; \(sequence)")
+                            context: "from Start: Bluetooth connect, discovery, Sony's notifications, \(bandAtStart ? "a CCAB read, " : "")CC08 = 01 and CC09 status 2; \(sequence)")
                 log.flag("ble.auto.wifiOn", true, context: "CC09 reported status 2 after CC08 = 01; \(sequence); \(setup)")
             }
             wifiOn = true
             onSequence = sequence
+            // Build 14: CCAB right after status 2 (Wi-Fi on): about 0.1 s, inside the gap to the first details read.
+            let bandAfterOn = handover.isConnected
+            if let band = try await readWiFiBand("ble.auto", wifiOn: true, moment: "right after status 2") {
+                bandReads.append(band)
+            }
 
             // The network details: 2 s apart for up to 20 s (at least 3 tries) while the status is 2, straight after
             // status 2 (the screen question comes at the end of the run). The camera may have dropped Bluetooth
@@ -2277,7 +2324,7 @@ extension GuidedRunner {
             let attempts = try await readDetailsWhileOn(tries: 3, window: 20, statusOn: statusOnAt)
             let firstGap = attempts.firstTryAfterOn ?? 0
             log.measure("ble.auto.statusOnToFirstRead", firstGap, "s",
-                        context: "from CC09 status 2 after CC08 = 01 to the start of the first network details read\(reconnected ? ", a Bluetooth reconnect and Sony's notifications again in between" : ", no question in between"); \(attempts.summary)")
+                        context: "from CC09 status 2 after CC08 = 01 to the start of the first network details read\(reconnected ? ", a Bluetooth reconnect and Sony's notifications again in between" : ", no question in between")\(bandAfterOn ? ", a CCAB read in between" : ""); \(attempts.summary)")
             let gapText = "first read \(fmt(firstGap)) s after CC09 status 2\(reconnected ? " (after a Bluetooth reconnect)" : "")"
             guard let details = attempts.details else {
                 log.flag("ble.auto.credentials", false, context: "\(attempts.summary); \(gapText); \(setup)")
@@ -2295,6 +2342,11 @@ extension GuidedRunner {
             cameraSSID = details.ssid
             imported = try await joinAndImport(details, prefix: "ble.auto", what: "Bluetooth switch-on run", note: "; \(setup)",
                                                started: started, joinSource: "ble.auto", joinAgain: false)
+        }
+
+        // Build 14: CCAB once more after the import, before the lifecycle (Wi-Fi on, the phone on the camera's network).
+        if imported, let band = try await readWiFiBand("ble.auto", wifiOn: true, moment: "after the import") {
+            bandReads.append(band)
         }
 
         // Asked after the section, so no question sits inside the times from Start: the α7C II showed nothing in build 12.
@@ -2350,6 +2402,15 @@ extension GuidedRunner {
         guard connectedThisRun else {
             log.note("  guided: this run never connected to the camera over Bluetooth, so ble.auto.creatorsAppStillWorks isn't asked")
             return
+        }
+        // Build 14: the camera's own band setting, to match against CCAB's values (ble.handover.wifiBand).
+        let menuBand = try await ask("Wi-Fi band", "On the camera, what is the Wi-Fi frequency band set to? (Network › Wi-Fi, look for a 2.4 GHz / 5 GHz setting)",
+                                     buttons: ["2.4 GHz", "5 GHz", "Not found"])
+        let bandContext = "tester: \(menuBand) in the camera's menu; CCAB in this run: \(bandReads.isEmpty ? "not read" : bandReads.joined(separator: "; ")); mapping of CCAB unverified"
+        if menuBand == "Not found" {
+            log.note("  guided: ble.handover.wifiBand.menu not recorded (no band setting found on the camera); \(bandContext)")
+        } else {
+            log.flag("ble.handover.wifiBand.menu", menuBand == "5 GHz", context: bandContext)
         }
         let works = try await ask("Creators' App", "Open Creators' App and check that it still connects to the camera as before. Then come back here. Does it?",
                                   buttons: ["Yes", "No"])
@@ -2838,6 +2899,8 @@ extension GuidedRunner {
                 throw GuidedStop("the camera's Wi-Fi is already on (CC09 status 2 at Start), so no switch-on could be timed: switch the camera off and on with PC Remote off, then run again")
             }
             log.flag("ble.idle.alreadyOnAtStart", false, context: "\(sequence), so CC08 = 01 follows; \(setup)")
+            // Build 14: CCAB with the Wi-Fi off, with the harmless CC09 read at Start, for comparison.
+            try await readWiFiBand("ble.idle", wifiOn: false, moment: "at Start, before the write")
             wroteCC08 = true
             let writeStarted = clock.now
             // switchWiFiOn's own worst case: a 15 s status read, a 15 s acknowledgement, 30 s from the write.
@@ -2860,6 +2923,8 @@ extension GuidedRunner {
             let onAt = clock.now
             wifiLeftOn = true
             log.flag("ble.idle.wifiOn", true, context: "CC09 reported status 2 \(fmt((onAt - writeStarted).inSeconds)) s after the switch-on call (baseline read, CC08 = 01 and the wait; ble.handover.wifiOn.latency has the time from the write); \(sequence); \(setup)")
+            // Build 14: CCAB right after status 2 (Wi-Fi on); phase A's times are from status 2, so it is inside them.
+            try await readWiFiBand("ble.idle", wifiOn: true, moment: "right after status 2")
 
             // Phase A: Bluetooth connected with Sony's notifications on; nobody joins.
             let limit = 180.0

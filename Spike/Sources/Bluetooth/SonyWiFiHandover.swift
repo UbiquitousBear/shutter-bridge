@@ -537,6 +537,8 @@ final class SonyWiFiHandover: NSObject {
             case .failed(let reason): log.warn("Wi-Fi handover: \(code) read failed: \(reason)")
             }
         }
+        // Build 14: CCAB (the Wi-Fi band, per the notes), masked, with the Wi-Fi status just read for comparison.
+        _ = try await doReadWiFiBand("at the safe reads, Wi-Fi status \(wifiStatus == nil ? "unknown" : Self.shownStatus(wifiStatus))")
         status = "safe reads done; Wi-Fi status \(wifiStatus == nil ? "unknown" : Self.shownStatus(wifiStatus))"
         return wifiStatus
     }
@@ -584,6 +586,60 @@ final class SonyWiFiHandover: NSObject {
             log.warn("Wi-Fi handover: CC09 read \(why) failed: \(reason)")
             status = "CC09 read failed: \(reason)"
             return (status: nil, value: nil)
+        }
+    }
+
+    // MARK: - Wi-Fi band (build 14)
+
+    /// What one CCAB read gave: masked for the log and contexts, plus the first value byte when the value parses in
+    /// the [length 1 B][tag 2 B BE][value] layout CC09 has (`value`: unmasked, for a measurement only when ≤ 0x0F).
+    struct WiFiBandRead {
+        let length: Int
+        let masked: String
+        /// "[length][tag][value]: tag 0x00··, value 1" or "not in the [length][tag][value] layout".
+        let layout: String
+        let value: Int?
+    }
+
+    nonisolated static let wifiBandLogPrefix = "CCAB (Wi-Fi band, per the notes; mapping unverified)"
+
+    /// Build 14: one harmless read of CCAB, "Wi-Fi Freq: 2.4GHz / 5GHz status" (read) in 8000CC00 per the
+    /// reverse-engineered notes on Sony's service list (the α7C II offers it with read); its layout is unknown. Logged
+    /// with its length and masked bytes and, when it parses as CC09's [length][tag][value] entries, the first entry's
+    /// tag and value (masked). Returns nil when CCAB isn't offered, isn't readable or the read failed (all logged).
+    /// Never writes; a disconnect throws. `why` names the moment in the log.
+    func readWiFiBand(_ why: String) async throws -> WiFiBandRead? {
+        try await run("Read CCAB") {
+            try await self.doReadWiFiBand(why)
+        }
+    }
+
+    private func doReadWiFiBand(_ why: String) async throws -> WiFiBandRead? {
+        _ = try connectedPeripheral()
+        if !discovered { _ = try await doDiscover() }
+        guard let c = ccAll["CCAB"] else {
+            log.note("\(Self.wifiBandLogPrefix): not offered by the camera (\(why))")
+            return nil
+        }
+        guard c.properties.contains(.read) else {
+            log.note("\(Self.wifiBandLogPrefix): not readable (\(Self.describe(c.properties))) (\(why))")
+            return nil
+        }
+        switch try await read(c, code: "CCAB") {
+        case .value(let data):
+            let masked = Self.maskedHex(data)
+            if let entries = Self.alpha7CIIEntries(data), let first = entries.first {
+                let layout = "[length][tag][value]: tag \(Self.maskedTag(first.tag)), value \(Self.cc09ValueText(first.value))"
+                    + (entries.count > 1 ? " (+\(entries.count - 1) more entries)" : "")
+                log.note("\(Self.wifiBandLogPrefix): \(why): \(data.count) B: \(masked); \(layout)")
+                return WiFiBandRead(length: data.count, masked: masked, layout: layout, value: first.value.first.map { Int($0) })
+            }
+            let layout = "not in the [length][tag][value] layout"
+            log.note("\(Self.wifiBandLogPrefix): \(why): \(data.count) B: \(masked); \(layout)")
+            return WiFiBandRead(length: data.count, masked: masked, layout: layout, value: nil)
+        case .failed(let reason):
+            log.warn("\(Self.wifiBandLogPrefix): read \(why) failed: \(reason)")
+            return nil
         }
     }
 

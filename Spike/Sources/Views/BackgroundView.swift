@@ -17,7 +17,7 @@ struct BackgroundView: View {
                     LabeledContent("State", value: task.state)
                     VStack(alignment: .leading, spacing: 4) {
                         ProgressView(value: Double(task.completed), total: Double(max(task.total, 1)))
-                        Text("\(task.completed) of \(task.total) half-second steps")
+                        Text(verbatim: task.byteUnits ? task.progressText : "\(task.completed) of \(task.total) half-second steps")
                             .font(.caption)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)

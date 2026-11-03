@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UIKit
+import UserNotifications
 
 /// One file to copy, as the camera listed it.
 struct CopyAllItem: Sendable {
@@ -29,11 +30,14 @@ struct CopyAllOutcome {
     let stopReason: String?
     /// Build 14: recoveries the Wi-Fi copy attempted (always 0 over USB).
     let recoveries: Int
+    /// Build 14: times iOS paused the copy (its continued task expired) before it was continued.
+    let pauses: Int
 
     var summary: String {
         var text = "Last copy: \(copied) of \(total) ARW"
         if failed > 0 { text += ", \(failed) failed" }
         if recoveries > 0 { text += ", \(recoveries) \(recoveries == 1 ? "recovery" : "recoveries")" }
+        if pauses > 0 { text += ", \(pauses) \(pauses == 1 ? "pause" : "pauses")" }
         text += ", " + CopyAllFormat.gb(bytes)
         if let seconds, seconds > 0 {
             text += String(format: " in %.1f min (%.1f MB/s)", seconds / 60, Double(bytes) / seconds / 1_000_000)
@@ -41,6 +45,98 @@ struct CopyAllOutcome {
         text += " → \(destination) › \(folderName)"
         if let stopReason { text += "; ended early: \(stopReason)" }
         return text
+    }
+}
+
+/// Build 14: a copy iOS paused (its continued task expired), kept until *Continue copy* or *Discard* as a small JSON
+/// file in Application Support (never in UserDefaults: it can hold a security-scoped bookmark). It has what the
+/// continuation needs (the link and session, the run folder, the files left) and what the copy's measurements need
+/// once it ends, since they cover the whole copy across pauses.
+struct CopyPauseRecord: Codable, Sendable {
+    struct File: Codable, Sendable {
+        /// The name the copy uses (Wi-Fi: "object-N.ARW" for an object without a name).
+        let name: String
+        /// Bytes from the listing; 0 when unknown.
+        let size: UInt64
+        /// The PTP object handle, tried first when the card is listed again; nil when unknown (USB in MSC).
+        let handle: UInt32?
+        /// USB: the name of the DCIM folder holding the file ("100MSDCF"), so two files of the same name and size in
+        /// different folders aren't taken for each other; nil over Wi-Fi and in records from before it was kept.
+        var folder: String? = nil
+    }
+
+    /// The Wi-Fi session to reopen: the network, the camera's address, this app's GUID and the kind of session.
+    struct WiFiSession: Codable, Sendable {
+        /// "ap" or "lan".
+        let net: String
+        let host: String
+        let guid: String
+        /// A SonyContentsMode raw value; nil for a plain session.
+        let contentsMode: String?
+    }
+
+    /// "usb", "ptpip.ap" or "ptpip.lan".
+    let link: String
+    /// The kind of session that listed the files (Wi-Fi), as CopyAllRun.session.
+    let session: String?
+    let wifi: WiFiSession?
+    let folderName: String
+    /// Where the run folder is, as CopyAllRun.destination (never a full path).
+    let destination: String
+    /// A bookmark to the folder chosen in Files that holds the run folder; nil for the default folder.
+    var bookmark: Data?
+    /// Not copied yet, in copy order (the file in flight at the expiry first among them).
+    let remaining: [File]
+    let total: Int
+    let totalBytes: UInt64
+    let copied: Int
+    let failed: Int
+    let bytes: UInt64
+    /// The listed sizes of the files counted as failed, so the progress counts them as done.
+    let failedBytes: UInt64
+    let failures: [String]
+    let recoveries: Int
+    let recoveryCauses: [String]
+    /// Active copying seconds up to this pause: each segment from its first request to its pause.
+    let activeSeconds: Double
+    /// What the copy runs under (Creators' App, Bluetooth recovery, the screen), as CopyAllRun.conditions.
+    let conditions: String?
+    /// The copy's first start (wall time is measured from it).
+    let startedAt: Date
+    /// The expiry.
+    let pausedAt: Date
+    /// Pauses so far, this one included, and the seconds of the earlier ones (each from the expiry to Continue).
+    let pauses: Int
+    let pauseSeconds: Double
+    let wasLocked: Bool
+    let lockedSeconds: Double
+    let batteryBefore: Float?
+    let batteryStateBefore: String
+    /// The conditions at the expiry (ContinuedTask.conditions()).
+    let expiry: String
+    /// The card's other ARW at the pause (copied, failed, or not part of the copy): when Continue copy finds the files
+    /// left again, these claim their matches first, so with two ARW of the same name and size (File Number Reset
+    /// across DCIM folders) one already copied isn't taken for one left. Nil in records from before it was kept.
+    var others: [File]? = nil
+
+    var done: Int { copied + failed }
+    var doneBytes: UInt64 { bytes + failedBytes }
+
+    /// The Wired or Wi-Fi tab's copy section shows it ("USB-C" or "Wi-Fi").
+    func belongs(toLinkName linkName: String) -> Bool {
+        linkName == "USB-C" ? link == "usb" : link.hasPrefix("ptpip")
+    }
+
+    /// For the copy sections: "Paused at 102 of 267 ARW (4.31 GB) at 14:02, when iOS ended the continued task · into
+    /// Copy 2026-11-03 13.51.10". iOS ends it on an expiry and when Stop is tapped in the Live Activity alike.
+    var summary: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        var text = "Paused at \(done) of \(total) ARW (\(CopyAllFormat.gb(bytes))) at \(formatter.string(from: pausedAt)), when iOS ended the continued task"
+        if failed > 0 { text += ", \(failed) failed" }
+        if pauses > 1 { text += " (pause \(pauses))" }
+        return text + " · into \(destination) › \(folderName)"
     }
 }
 
@@ -118,14 +214,33 @@ final class FilesDestination {
     private(set) var lastOutcome: CopyAllOutcome?
     /// Runs ended (finished or not) since launch: the guided run waits for this to change.
     private(set) var runsFinished = 0
+    /// Build 14: the copy iOS paused (its continued task expired), until Continue copy or Discard; read from its file
+    /// at launch, since iOS may end the app while it is paused.
+    private(set) var paused: CopyPauseRecord?
+    /// Build 14: pause records saved since launch: the guided run looks for this to change when its copy ends.
+    private(set) var pausesSaved = 0
+    /// Build 14: keep the screen on (no Auto-Lock) while a copy runs with the app in front; kept in UserDefaults.
+    var keepScreenOn: Bool {
+        get { keepScreenOnSetting }
+        set {
+            keepScreenOnSetting = newValue
+            UserDefaults.standard.set(newValue, forKey: Self.keepScreenOnKey)
+        }
+    }
+    static let keepScreenOnKey = "copyAll.keepScreenOn"
+    /// Observed storage behind `keepScreenOn`.
+    private var keepScreenOnSetting = UserDefaults.standard.bool(forKey: "copyAll.keepScreenOn")
 
     @ObservationIgnored private let log: SpikeLog
+    /// Build 14: isIdleTimerDisabled from before the running copy set it (nil: the copy didn't set it).
+    @ObservationIgnored private var idleTimerWas: Bool?
 
     init() {
         log = SpikeLog.shared
         if UserDefaults.standard.data(forKey: Self.bookmarkKey) != nil {
             pickedName = UserDefaults.standard.string(forKey: Self.folderNameKey) ?? "chosen folder"
         }
+        paused = Self.loadPauseRecord(log: log)
     }
 
     var isPicked: Bool { pickedName != nil }
@@ -262,34 +377,43 @@ final class FilesDestination {
     func checkSpace(for items: [CopyAllItem], link: String) throws {
         let resolved = try resolve()
         defer { if resolved.scoped { resolved.root.stopAccessingSecurityScopedResource() } }
+        try spaceCheck(items: items, root: resolved.root, description: resolved.description, link: link, continuing: false)
+    }
+
+    /// checkSpace's arithmetic, log line and refusals for the folder `root` (inside its security scope). Build 14:
+    /// `continuing`, Continue copy's check (FilesDestination.resume) for the files left of a paused copy, since a pause
+    /// can last hours and anything saved meanwhile comes out of the margin the start check left.
+    private func spaceCheck(items: [CopyAllItem], root: URL, description: String, link: String, continuing: Bool) throws {
         let total = items.reduce(UInt64(0)) { $0 + $1.size }
         let largest = items.map(\.size).max() ?? 0
         let margin: UInt64 = 1_000_000_000
         let tmp = FileManager.default.temporaryDirectory
-        let destinationFree = CopyAllFiles.freeBytes(at: resolved.root)
+        let destinationFree = CopyAllFiles.freeBytes(at: root)
         let tmpFree = CopyAllFiles.freeBytes(at: tmp)
-        let same = CopyAllFiles.sameVolume(tmp, resolved.root) ?? false
+        let same = CopyAllFiles.sameVolume(tmp, root) ?? false
         func free(_ bytes: Int64?) -> String { bytes.map { CopyAllFormat.gb($0) } ?? "unknown" }
 
         // Same volume: each file is renamed out of tmp, so the volume ends up holding all of them, plus a margin.
         // Another volume: the destination takes all of them, tmp only the one in flight.
         let destinationNeeds = same ? total + margin : total + 100_000_000
         let tmpNeeds = largest + margin
-        var line = "Copy all RAW (\(link)): \(items.count) ARW, \(CopyAllFormat.gb(total)) (largest \(CopyAllFormat.gb(largest))) to \(resolved.description); "
+        let what = continuing ? "Continue copy's check: \(items.count) ARW left" : "\(items.count) ARW"
+        var line = "Copy all RAW (\(link)): \(what), \(CopyAllFormat.gb(total)) (largest \(CopyAllFormat.gb(largest))) to \(description); "
             + "destination volume \(free(destinationFree)) free, needs \(CopyAllFormat.gb(destinationNeeds))"
         line += same ? "; the temporary folder is on the same volume" : "; temporary folder \(free(tmpFree)) free, needs \(CopyAllFormat.gb(tmpNeeds))"
         log.note(line)
 
+        let again = continuing ? "; free some space and tap Continue copy again (the copy is still paused)" : ""
         if let destinationFree, UInt64(max(0, destinationFree)) < destinationNeeds {
-            throw CopyAllError.message("not enough free space at \(resolved.description): \(CopyAllFormat.gb(destinationFree)) free, \(CopyAllFormat.gb(destinationNeeds)) needed for \(items.count) ARW (\(CopyAllFormat.gb(total)))")
+            throw CopyAllError.message("not enough free space at \(description): \(CopyAllFormat.gb(destinationFree)) free, \(CopyAllFormat.gb(destinationNeeds)) needed for \(items.count) ARW (\(CopyAllFormat.gb(total)))\(again)")
         }
         if !same, let tmpFree, UInt64(max(0, tmpFree)) < tmpNeeds {
-            throw CopyAllError.message("not enough free space on the phone for the temporary copy: \(CopyAllFormat.gb(tmpFree)) free, \(CopyAllFormat.gb(tmpNeeds)) needed")
+            throw CopyAllError.message("not enough free space on the phone for the temporary copy: \(CopyAllFormat.gb(tmpFree)) free, \(CopyAllFormat.gb(tmpNeeds)) needed\(again)")
         }
         if destinationFree == nil {
             log.warn("Copy all RAW: the destination's free space can't be read (a cloud or external provider?); copying anyway")
         }
-        if destinationFree != nil && resolved.description != Self.defaultDescription {
+        if destinationFree != nil && description != Self.defaultDescription {
             log.note("Copy all RAW: for iCloud Drive the figure is the phone's own free space, not the iCloud quota")
         }
     }
@@ -301,9 +425,16 @@ final class FilesDestination {
     /// `session`: what kind of session listed the files when that matters (Wi-Fi), for the ▶ line and `finished`.
     /// `conditions` (build 14, Wi-Fi): what the run was copied under (Creators' App, Bluetooth recovery), added to the
     /// context of every copy measurement.
+    /// Build 14: whether the screen is kept on, for every copy measurement's context (via the run's conditions).
+    var screenCondition: String {
+        keepScreenOn ? "screen kept on during the copy" : "screen not kept on (Auto-Lock as set)"
+    }
+
     func begin(link: String, items: [CopyAllItem], session: String? = nil, conditions: String? = nil) throws -> CopyAllRun {
         guard run == nil else { throw CopyAllError.message("a copy is already running") }
         let resolved = try resolve()
+        // Build 14: the screen setting goes with every copy measurement, over USB too.
+        let allConditions = [conditions, screenCondition].compactMap { $0 }.joined(separator: "; ")
         do {
             let folder = try CopyAllFiles.makeRunFolder(in: resolved.root, startedAt: Date())
             let tmp = FileManager.default.temporaryDirectory.appending(path: "copy-all", directoryHint: .isDirectory)
@@ -312,9 +443,10 @@ final class FilesDestination {
             let same = CopyAllFiles.sameVolume(tmp, folder) ?? false
             let started = CopyAllRun(link: link, items: items, root: resolved.root, scoped: resolved.scoped, folder: folder,
                                      temporaryDirectory: tmp, destination: resolved.description, sameVolume: same,
-                                     session: session, conditions: conditions, log: log)
+                                     session: session, conditions: allConditions, log: log)
             run = started
-            log.note("▶ Copy all RAW to Files (\(link)\(session.map { ", \($0)" } ?? "")\(conditions.map { "; \($0)" } ?? "")): \(items.count) ARW, \(CopyAllFormat.gb(started.totalBytes)), oldest first, into \(resolved.description) › \(started.folderName) (\(same ? "same volume: each file is renamed into place" : "another volume: each file is copied, then the temporary copy deleted"))")
+            holdScreen()
+            log.note("▶ Copy all RAW to Files (\(link)\(session.map { ", \($0)" } ?? ""); \(allConditions)): \(items.count) ARW, \(CopyAllFormat.gb(started.totalBytes)), oldest first, into \(resolved.description) › \(started.folderName) (\(same ? "same volume: each file is renamed into place" : "another volume: each file is copied, then the temporary copy deleted"))")
             return started
         } catch {
             if resolved.scoped { resolved.root.stopAccessingSecurityScopedResource() }
@@ -343,12 +475,23 @@ final class FilesDestination {
             log.measure("\(p).recoveries", Double(run.recoveries), "count",
                         context: (run.recoveryCauses.isEmpty ? "none" : run.recoveryCauses.joined(separator: "; ")) + conditions)
         }
+        // Build 14: a copy iOS paused and the tester continued is measured as one copy: files, size and failed across
+        // the pauses, seconds and throughput from the active copying time (each segment from its first request to its
+        // pause, the last to its last move), the wall time from the first start in the context.
+        let wallSeconds = Date().timeIntervalSince(run.startedAt)
+        let pausedText = run.pauses > 0
+            ? String(format: "; %ld pause(s) by iOS, %.0f s paused in all (expiry to Continue), wall time %.1f min from the first start",
+                     run.pauses, run.pauseSeconds, wallSeconds / 60)
+            : ""
+        log.measure("\(p).pauses", Double(run.pauses), "count",
+                    context: (run.pauses > 0 ? String(format: "iOS ended the continued task %ld time(s) (an expiry, or Stop in the Live Activity) and the copy was continued; %.0f s paused in all, wall time %.1f min", run.pauses, run.pauseSeconds, wallSeconds / 60) : "none") + conditions)
         if let seconds {
-            log.measure("\(p).seconds", seconds, "s", context: String(format: "first request to last move, %.1f min", seconds / 60) + conditions)
+            let span = run.pauses > 0 ? "active copying time across \(run.pauses + 1) segments (each first request to its pause or last move)" : "first request to last move"
+            log.measure("\(p).seconds", seconds, "s", context: String(format: "%@, %.1f min", span, seconds / 60) + pausedText + conditions)
             log.throughput("\(p).throughput", bytes: Int(run.bytes), seconds: seconds,
-                           context: String(format: "%ld ARW, %@ in %.1f s (first request to last move, moves included)%@",
-                                           run.copied, CopyAllFormat.gb(run.bytes), seconds, run.failed > 0 ? ", \(run.failed) failed" : "")
-                            + (run.recoveries > 0 ? ", recovery time included (\(run.recoveries))" : "") + conditions)
+                           context: String(format: "%ld ARW, %@ in %.1f s (%@, moves included)%@",
+                                           run.copied, CopyAllFormat.gb(run.bytes), seconds, span, run.failed > 0 ? ", \(run.failed) failed" : "")
+                            + (run.recoveries > 0 ? ", recovery time included (\(run.recoveries))" : "") + pausedText + conditions)
         } else {
             log.note("Copy all RAW (\(run.link)): nothing was copied, so no time or throughput")
         }
@@ -360,7 +503,7 @@ final class FilesDestination {
         }
         let session = run.session.map { "; listed by \($0)" } ?? ""
         let recovered = run.recoveries > 0 ? "; \(run.recoveries) recover\(run.recoveries == 1 ? "y" : "ies")" : ""
-        log.flag("\(p).finished", finished, context: "\(run.copied) of \(run.total) copied; \(ending)\(recovered)\(session); thermal state \(thermal)\(conditions)")
+        log.flag("\(p).finished", finished, context: "\(run.copied) of \(run.total) copied; \(ending)\(recovered)\(session); thermal state \(thermal)\(pausedText)\(conditions)")
         log.flag("\(p).underLock", run.wasLocked,
                  context: String(format: "locked for about %.0f s of %.0f s (protected-data notifications and checks after each file; a phone without a passcode never reports a lock)",
                                  run.lockedSeconds, Date().timeIntervalSince(run.startedAt)) + conditions)
@@ -368,7 +511,7 @@ final class FilesDestination {
             log.measure("\(p).phoneBattery", Double(before - after) * 100, "points",
                         context: String(format: "%.0f %% → %.0f %% over %@ (%@ at the start, %@ at the end)",
                                         Double(before) * 100, Double(after) * 100, CopyAllFormat.gb(run.bytes),
-                                        run.batteryStateBefore, run.batteryStateAfter) + conditions)
+                                        run.batteryStateBefore, run.batteryStateAfter) + pausedText + conditions)
         } else {
             log.note("Copy all RAW (\(run.link)): the phone's battery level couldn't be read; \(p).phoneBattery not recorded")
         }
@@ -378,16 +521,354 @@ final class FilesDestination {
         let rate = (seconds ?? 0) > 0 ? Double(run.bytes) / (seconds ?? 1) / 1e6 : 0
         log.note(String(format: "◼ Copy all RAW to Files (%@): %ld of %ld ARW copied, %ld failed, %.2f GB in %.1f min = %.1f MB/s, into %@ › %@; %@; thermal state %@",
                         run.link, run.copied, run.total, run.failed, gigabytes, minutes, rate, run.destination, run.folderName,
-                        ending, thermal) + recovered + conditions)
+                        ending, thermal) + recovered + pausedText + conditions)
 
         try? FileManager.default.removeItem(at: run.temporaryDirectory)
         if run.scoped { run.root.stopAccessingSecurityScopedResource() }
+        releaseScreen()
         lastOutcome = CopyAllOutcome(prefix: p, folderName: run.folderName, destination: run.destination,
                                      destinationLabel: label, total: run.total,
                                      copied: run.copied, failed: run.failed, bytes: run.bytes, seconds: seconds,
-                                     finished: finished, stopReason: stopReason, recoveries: run.recoveries)
+                                     finished: finished, stopReason: stopReason, recoveries: run.recoveries,
+                                     pauses: run.pauses)
         runsFinished += 1
         if self.run === run { self.run = nil }
+    }
+
+    // MARK: Pause and continue (build 14)
+
+    /// The pause record's file: Application Support, never UserDefaults (it can hold a security-scoped bookmark).
+    static var pauseRecordURL: URL {
+        URL.applicationSupportDirectory.appending(path: "copy-pause.json", directoryHint: .notDirectory)
+    }
+
+    /// The pause record, if there is one. One that doesn't decode (a later build changed its fields, or the file is
+    /// damaged) is logged, without paths, and moved aside as copy-pause.unreadable.json, so it doesn't vanish unexplained
+    /// and isn't tried again at every launch. One that can't be read at all (a launch before the phone's first unlock)
+    /// is logged and kept.
+    private static func loadPauseRecord(log: SpikeLog) -> CopyPauseRecord? {
+        let url = pauseRecordURL
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            log.warn("Copy all RAW: a paused copy's record is there but couldn't be read now (\(CopyAllFormat.describe(error))); it is kept and read again at the next launch")
+            return nil
+        }
+        do {
+            return try JSONDecoder().decode(CopyPauseRecord.self, from: data)
+        } catch {
+            // A DecodingError names the field, never a path.
+            let why = String(describing: error)
+            let aside = url.deletingLastPathComponent().appending(path: "copy-pause.unreadable.json", directoryHint: .notDirectory)
+            try? FileManager.default.removeItem(at: aside)
+            let moved = (try? FileManager.default.moveItem(at: url, to: aside)) != nil
+            if !moved { try? FileManager.default.removeItem(at: url) }
+            log.warn("Copy all RAW: a paused copy's record couldn't be read (\(why)); it can't be continued: start a new copy (the files it copied stay in its folder). The record was \(moved ? "moved aside as copy-pause.unreadable.json" : "deleted")")
+            return nil
+        }
+    }
+
+    private static func savePauseRecord(_ record: CopyPauseRecord) throws {
+        let url = pauseRecordURL
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(record)
+        try data.write(to: url, options: .atomic)
+    }
+
+    private static func deletePauseRecord() {
+        try? FileManager.default.removeItem(at: pauseRecordURL)
+    }
+
+    /// iOS ended the copy's continued task (an expiry, or Stop in the Live Activity: both reach the expiration handler
+    /// and iOS gives no reason): the copy has finished nothing more (the caller has cut the file in flight off). Saves
+    /// the pause record first (the app may be suspended soon after), then records `<link>.copyAll.expired` with the
+    /// conditions at the expiry, logs it, and ends the run without its measurements, which come when the continued
+    /// copy ends (or at Discard): watching stops, the temporary folder (with any partial download) is deleted, the
+    /// security scope is stopped and the screen released. Last, it posts a notification if notifications are allowed
+    /// (never asking for permission), waiting at most about 2 s for it, so the caller's work (and with it the task)
+    /// ends only once it is posted. `remaining`: the files not copied, in order; `others`: the card's other ARW (see
+    /// CopyPauseRecord.others). The active seconds run to `expiredAt`, not to now, so time spent winding down (or
+    /// suspended) after the expiry isn't counted. Throws when the record can't be saved; the caller then finishes the
+    /// run instead (nothing paused).
+    func pause(_ run: CopyAllRun, remaining: [CopyPauseRecord.File], others: [CopyPauseRecord.File] = [],
+               wifi: CopyPauseRecord.WiFiSession?, expiredAt: Date, expiry: String) async throws {
+        var bookmark: Data?
+        if run.destination != Self.defaultDescription {
+            // A fresh bookmark to the folder the run is writing into, while its security scope is still on.
+            do {
+                bookmark = try run.root.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            } catch {
+                bookmark = UserDefaults.standard.data(forKey: Self.bookmarkKey)
+                log.warn("Copy all RAW: couldn't make a bookmark to the chosen folder for the pause record (\(error.localizedDescription)); keeping the chosen folder's saved bookmark")
+            }
+        }
+        let active = run.activeSeconds(until: expiredAt)
+        run.endWatching()
+        let record = CopyPauseRecord(link: run.link, session: run.session, wifi: wifi, folderName: run.folderName,
+                                     destination: run.destination, bookmark: bookmark, remaining: remaining,
+                                     total: run.total, totalBytes: run.totalBytes, copied: run.copied, failed: run.failed,
+                                     bytes: run.bytes, failedBytes: run.failedBytes, failures: run.failures,
+                                     recoveries: run.recoveries, recoveryCauses: run.recoveryCauses, activeSeconds: active,
+                                     conditions: run.conditions, startedAt: run.startedAt, pausedAt: expiredAt,
+                                     pauses: run.pauses + 1, pauseSeconds: run.pauseSeconds, wasLocked: run.wasLocked,
+                                     lockedSeconds: run.lockedSeconds, batteryBefore: run.batteryBefore,
+                                     batteryStateBefore: run.batteryStateBefore, expiry: expiry, others: others)
+        try Self.savePauseRecord(record)
+        paused = record
+        pausesSaved += 1
+        let conditions = run.conditions.map { "; \($0)" } ?? ""
+        let tab = run.link == "usb" ? "Wired" : "Wi-Fi"
+        log.flag("\(run.prefix).expired", true,
+                 context: String(format: "iOS ended the continued task (an expiry, or Stop in the Live Activity; no reason given) at %ld of %ld ARW, %@ copied, after %.0f s of active copying; ",
+                                 record.done, record.total, CopyAllFormat.gb(record.bytes), active)
+                    + "\(expiry); the copy is paused (pause \(record.pauses)), \(remaining.count) ARW left\(conditions)")
+        log.warn("⏸ Copy all RAW to Files (\(run.link)) paused at \(record.done) of \(record.total) ARW (\(CopyAllFormat.gb(record.bytes))): iOS ended the continued task (an expiry, or Stop in the Live Activity); \(remaining.count) left; the pause record is saved; Continue copy (or Discard) on the \(tab) tab once the app is in front again; conditions then: \(expiry)")
+        try? FileManager.default.removeItem(at: run.temporaryDirectory)
+        if run.scoped { run.root.stopAccessingSecurityScopedResource() }
+        releaseScreen()
+        if self.run === run { self.run = nil }
+        await notifyPaused(record)
+    }
+
+    static let pauseNotificationID = "spike.copyAll.paused"
+    /// Pause notifications being posted (notifyPaused waits for this to drop back).
+    @ObservationIgnored private var pauseNotificationsPending = 0
+
+    /// "Copy paused at N of M (X GB). Open SB Spike to continue.", only when notifications are allowed: this never asks.
+    /// Waits about 2 s at most for the two round trips (settings, add): the caller's continued task completes once its
+    /// work returns, and the app may be suspended straight after, which would hold the notification back until the
+    /// app is next opened.
+    private func notifyPaused(_ record: CopyPauseRecord) async {
+        let body = "Copy paused at \(record.done) of \(record.total) (\(CopyAllFormat.gb(record.bytes))). Open \(Self.appFolderName) to continue."
+        pauseNotificationsPending += 1
+        Task { @MainActor in
+            defer { self.pauseNotificationsPending -= 1 }
+            let center = UNUserNotificationCenter.current()
+            let status = await center.notificationSettings().authorizationStatus
+            guard status == .authorized || status == .provisional || status == .ephemeral else {
+                self.log.note("Copy all RAW: no notification for the pause: notifications aren't allowed for the app (the copy doesn't ask)")
+                return
+            }
+            let content = UNMutableNotificationContent()
+            content.title = "Copy paused"
+            content.body = body
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: Self.pauseNotificationID, content: content, trigger: nil)
+            do {
+                try await center.add(request)
+                self.log.note("Copy all RAW: notification posted: \(body)")
+            } catch {
+                self.log.warn("Copy all RAW: the pause notification wasn't posted: \(error.localizedDescription)")
+            }
+        }
+        let clock = ContinuousClock()
+        let started = clock.now
+        while pauseNotificationsPending > 0 && (clock.now - started).inSeconds < 2 {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        if pauseNotificationsPending > 0 {
+            log.note("Copy all RAW: the pause notification wasn't confirmed within 2 s; the copy's work ends anyway")
+        }
+    }
+
+    /// The pause notification, once it is no longer needed (Continue copy or Discard).
+    private func removePauseNotification() {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.pauseNotificationID])
+    }
+
+    /// Continue copy: resolves the folder the paused copy was writing into again (the record's bookmark, with stale
+    /// handling as `resolve`, or the default folder), starts its security scope, finds the run folder by name, and
+    /// starts a run that carries on the paused copy's counts, bytes, active time, pauses and conditions, into the same
+    /// run folder. Records `<link>.copyAll.pause.seconds` (from the expiry to `tappedAt`, the Continue tap) and deletes
+    /// the pause record. Throws, keeping the record, when the folder can't be used, when there isn't enough free space
+    /// for the files left (the start's check, again: a pause can last hours), or when the paused copy was discarded or
+    /// replaced after the tap. The caller has already got the session back and listed the card. `change` (Wi-Fi): what
+    /// this segment may do differently from the start, e.g. "Bluetooth recovery off", added to the conditions.
+    func resume(_ record: CopyPauseRecord, tappedAt: Date, change: String? = nil) throws -> CopyAllRun {
+        guard run == nil else { throw CopyAllError.message("a copy is already running") }
+        // The record captured at the tap must still be the paused copy (Discard can be tapped while the session opens).
+        guard let current = paused, current.pausedAt == record.pausedAt, current.folderName == record.folderName else {
+            throw CopyAllError.message("the paused copy was discarded (or replaced) after Continue copy was tapped; nothing was continued")
+        }
+        let resolved = try resolveForContinuation(record)
+        do {
+            let folder = resolved.root.appending(path: record.folderName, directoryHint: .isDirectory)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw CopyAllError.message("the run folder \(record.folderName) isn't in \(resolved.description) any more; Discard the paused copy and copy again")
+            }
+            let tmp = FileManager.default.temporaryDirectory.appending(path: "copy-all", directoryHint: .isDirectory)
+            try? FileManager.default.removeItem(at: tmp)
+            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            let same = CopyAllFiles.sameVolume(tmp, folder) ?? false
+            // Inside this do block, so a refusal stops the folder's security scope, and before the record is deleted.
+            try spaceCheck(items: record.remaining.map { CopyAllItem(name: $0.name, size: $0.size) }, root: folder,
+                           description: resolved.description, link: record.link, continuing: true)
+            let pauseSeconds = max(0, tappedAt.timeIntervalSince(record.pausedAt))
+            // The conditions the copy started under; the screen setting at Continue only when it changed.
+            var conditions = record.conditions ?? ""
+            if !conditions.contains(screenCondition) {
+                conditions += (conditions.isEmpty ? "" : "; ") + "after pause \(record.pauses): \(screenCondition)"
+            }
+            if let change, !conditions.contains("after pause \(record.pauses): \(change)") {
+                conditions += (conditions.isEmpty ? "" : "; ") + "after pause \(record.pauses): \(change)"
+            }
+            let started = CopyAllRun(link: record.link, items: record.remaining.map { CopyAllItem(name: $0.name, size: $0.size) },
+                                     root: resolved.root, scoped: resolved.scoped, folder: folder, temporaryDirectory: tmp,
+                                     destination: resolved.description, sameVolume: same, session: record.session,
+                                     conditions: conditions.isEmpty ? nil : conditions, log: log,
+                                     restoring: record, pauseSeconds: pauseSeconds)
+            run = started
+            log.measure("\(started.prefix).pause.seconds", pauseSeconds, "s",
+                        context: String(format: "pause %ld: from iOS expiring the continued task at %ld of %ld ARW to Continue; conditions at the expiry: %@",
+                                        record.pauses, record.done, record.total, record.expiry)
+                            + (started.conditions.map { "; \($0)" } ?? ""))
+            Self.deletePauseRecord()
+            paused = nil
+            removePauseNotification()
+            holdScreen()
+            log.note("▶ Copy all RAW to Files continues (\(record.link)\(record.session.map { ", \($0)" } ?? ""); pause \(record.pauses) ended after \(String(format: "%.0f", pauseSeconds)) s): \(record.remaining.count) ARW left of \(record.total), \(CopyAllFormat.gb(record.doneBytes)) of \(CopyAllFormat.gb(record.totalBytes)) done, into the same folder, \(resolved.description) › \(record.folderName)")
+            return started
+        } catch {
+            if resolved.scoped { resolved.root.stopAccessingSecurityScopedResource() }
+            throw error
+        }
+    }
+
+    /// The folder holding the paused copy's run folder: the record's bookmark resolved (a stale one re-created and
+    /// kept in the record, as `resolve` keeps the chosen folder's; one now in Recently Deleted or on a camera card
+    /// refused), or the default folder when the record has none.
+    private func resolveForContinuation(_ record: CopyPauseRecord) throws -> Resolved {
+        guard let data = record.bookmark else {
+            let root = URL.documentsDirectory.appending(path: Self.defaultFolderName, directoryHint: .isDirectory)
+            return Resolved(root: root, scoped: false, description: Self.defaultDescription)
+        }
+        var stale = false
+        let url: URL
+        do {
+            url = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
+        } catch {
+            throw CopyAllError.message("the folder the paused copy was writing into can't be found (\(error.localizedDescription)); Discard the paused copy and copy again")
+        }
+        let scoped = url.startAccessingSecurityScopedResource()
+        let name = url.lastPathComponent
+        if let refusal = CopyAllFiles.refusal(for: url) {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            throw CopyAllError.message("the folder \"\(name)\" the paused copy was writing into \(refusal); Discard the paused copy")
+        }
+        if !scoped {
+            log.warn("Copy all RAW: no security scope for the folder \"\(name)\" the paused copy was writing into (startAccessingSecurityScopedResource returned false); trying anyway")
+        }
+        if stale {
+            do {
+                var updated = record
+                updated.bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+                try Self.savePauseRecord(updated)
+                if paused != nil { paused = updated }
+                log.note("Copy all RAW: the paused copy's bookmark to \"\(name)\" was stale; re-created it")
+            } catch {
+                log.warn("Copy all RAW: the paused copy's bookmark to \"\(name)\" is stale and couldn't be re-created (\(error.localizedDescription)); using it this time")
+            }
+        }
+        return Resolved(root: url, scoped: scoped, description: "\(name) (chosen in Files)")
+    }
+
+    /// Discard: deletes the pause record only. The files already copied stay in the run folder. The copy's standard
+    /// measurements are recorded from the record, as a copy that ended early ("discarded after pause N"): files,
+    /// failed, size, seconds and throughput from the active copying time, recoveries (Wi-Fi), pauses, underLock and
+    /// finished (no). phoneBattery isn't: the battery now, after a pause of any length, says nothing about the copy.
+    func discardPaused() {
+        guard let record = paused else { return }
+        Self.deletePauseRecord()
+        paused = nil
+        removePauseNotification()
+        let p = "\(record.link).copyAll"
+        let ended = "discarded after pause \(record.pauses), \(record.remaining.count) ARW not copied"
+        let label = record.destination == Self.defaultDescription ? "the default folder" : "a folder chosen in Files"
+        let conditions = record.conditions.map { "; \($0)" } ?? ""
+        let wallSeconds = record.pausedAt.timeIntervalSince(record.startedAt)
+        let pausedText = String(format: "; %ld pause(s), %.0f s paused before the last one (expiry to Continue), wall time %.1f min from the first start to the last pause",
+                                record.pauses, record.pauseSeconds, wallSeconds / 60)
+        log.measure("\(p).files", Double(record.copied), "count", context: "of \(record.total) ARW listed; into \(label); \(ended)\(conditions)")
+        let failuresText: String
+        if record.failures.isEmpty {
+            failuresText = "none"
+        } else {
+            failuresText = record.failures.prefix(5).joined(separator: "; ") + (record.failures.count > 5 ? "; …" : "")
+        }
+        log.measure("\(p).failed", Double(record.failed), "count", context: "\(failuresText); \(ended)\(conditions)")
+        log.measure("\(p).size", Double(record.bytes) / 1e6, "MB", context: "\(record.copied) ARW, \(CopyAllFormat.gb(record.bytes)); \(ended)\(conditions)")
+        if record.link.hasPrefix("ptpip") {
+            let causes = record.recoveryCauses.isEmpty ? "none" : record.recoveryCauses.joined(separator: "; ")
+            log.measure("\(p).recoveries", Double(record.recoveries), "count", context: "\(causes); \(ended)\(conditions)")
+        }
+        log.measure("\(p).pauses", Double(record.pauses), "count",
+                    context: "iOS ended the continued task \(record.pauses) time(s); \(ended)\(pausedText)\(conditions)")
+        if record.activeSeconds > 0 && record.copied > 0 {
+            let span = "active copying time across \(record.pauses) segment(s) (each first request to its pause)"
+            let minutes = String(format: "%.1f min", record.activeSeconds / 60)
+            log.measure("\(p).seconds", record.activeSeconds, "s", context: "\(span), \(minutes); \(ended)\(pausedText)\(conditions)")
+            let head = String(format: "%ld ARW, %@ in %.1f s", record.copied, CopyAllFormat.gb(record.bytes), record.activeSeconds)
+            let failedText = record.failed > 0 ? ", \(record.failed) failed" : ""
+            let recoveredText = record.recoveries > 0 ? ", recovery time included (\(record.recoveries))" : ""
+            log.throughput("\(p).throughput", bytes: Int(clamping: record.bytes), seconds: record.activeSeconds,
+                           context: "\(head) (\(span), moves included)\(failedText)\(recoveredText); \(ended)\(pausedText)\(conditions)")
+        } else {
+            log.note("Copy all RAW (\(record.link)): the discarded copy copied nothing, so no time or throughput")
+        }
+        let listedBy = record.session.map { "; listed by \($0)" } ?? ""
+        log.flag("\(p).finished", false,
+                 context: "\(record.copied) of \(record.total) copied; ended early: \(ended)\(listedBy)\(pausedText)\(conditions)")
+        let lockedText = String(format: "locked for about %.0f s up to the last pause (protected-data notifications and checks after each file; a phone without a passcode never reports a lock)",
+                                record.lockedSeconds)
+        log.flag("\(p).underLock", record.wasLocked, context: "\(lockedText); \(ended)\(conditions)")
+        log.note("Copy all RAW (\(record.link)): the paused copy was discarded (only its pause record was deleted): \(record.done) of \(record.total) ARW done, \(CopyAllFormat.gb(record.bytes)) copied, stay in \(record.destination) › \(record.folderName); \(record.remaining.count) not copied; its measurements were recorded as a copy that ended early (no phoneBattery: the battery after the pause says nothing about the copy)")
+        lastOutcome = CopyAllOutcome(prefix: p, folderName: record.folderName, destination: record.destination,
+                                     destinationLabel: label, total: record.total, copied: record.copied, failed: record.failed,
+                                     bytes: record.bytes, seconds: record.activeSeconds > 0 ? record.activeSeconds : nil,
+                                     finished: false, stopReason: ended, recoveries: record.recoveries, pauses: record.pauses)
+    }
+
+    /// Build 14: a continued segment that lost its session (USB: the camera removed, the session closed or the link
+    /// stalled; Wi-Fi: the recovery failed or the recovery limit) before it copied a file. Rather than ending the copy
+    /// for good, ends `run` without measurements and puts the paused copy's record back as it was at the tap: the files
+    /// this segment counted as failed go back among the files left, so Continue copy can try again once the camera is
+    /// back. Doesn't bump `pausesSaved` (iOS didn't pause it). The `pause.seconds` recorded at this Continue stays; the
+    /// next Continue records another from the same expiry. False when the record can't be saved: the caller then
+    /// finishes the run as before.
+    func repause(_ run: CopyAllRun, record: CopyPauseRecord, why: String) -> Bool {
+        do {
+            try Self.savePauseRecord(record)
+        } catch {
+            log.error("Copy all RAW: the continued copy lost its session before copying a file, but the pause record couldn't be saved again (\(CopyAllFormat.describe(error))); the copy ends here")
+            return false
+        }
+        run.endWatching()
+        paused = record
+        let tab = record.link == "usb" ? "Wired" : "Wi-Fi"
+        log.warn("⏸ Copy all RAW to Files (\(record.link)): the continued copy lost its session before copying a file (\(why)); the copy is still paused at \(record.done) of \(record.total) ARW with \(record.remaining.count) left (the failures of this attempt are dropped): Continue copy (or Discard) on the \(tab) tab once the camera is back")
+        try? FileManager.default.removeItem(at: run.temporaryDirectory)
+        if run.scoped { run.root.stopAccessingSecurityScopedResource() }
+        releaseScreen()
+        if self.run === run { self.run = nil }
+        return true
+    }
+
+    /// Keep the screen on: isIdleTimerDisabled while the copy runs (it only matters with the app in front).
+    private func holdScreen() {
+        guard keepScreenOn, idleTimerWas == nil else { return }
+        idleTimerWas = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        log.note("Copy all RAW: the screen stays on while the copy runs with the app in front (Auto-Lock off until it ends)")
+    }
+
+    private func releaseScreen() {
+        guard let was = idleTimerWas else { return }
+        UIApplication.shared.isIdleTimerDisabled = was
+        idleTimerWas = nil
     }
 }
 
@@ -409,12 +890,18 @@ final class CopyAllRun {
     let sameVolume: Bool
     /// The kind of session that listed the files (Wi-Fi), nil over USB.
     let session: String?
-    /// Build 14, Wi-Fi: what the run was copied under ("Creators' App open in the background; Bluetooth recovery
-    /// allowed"), for every copy measurement's context; nil over USB.
+    /// Build 14: what the run was copied under ("Creators' App open in the background; Bluetooth recovery allowed" over
+    /// Wi-Fi, and on both links whether the screen was kept on), for every copy measurement's context.
     let conditions: String?
-    let startedAt = Date()
+    /// The copy's first start: this run's, or (a continued copy) the paused copy's.
+    let startedAt: Date
     let batteryBefore: Float?
     let batteryStateBefore: String
+    /// Build 14, a continued copy: the active copying seconds, pauses and paused seconds (expiry to Continue) before
+    /// this run; 0 for a copy that hasn't been paused.
+    let activeSecondsBefore: Double
+    let pauses: Int
+    let pauseSeconds: Double
 
     /// Build 14: recoveries the Wi-Fi copy attempted, and the cause of each.
     private(set) var recoveries = 0
@@ -422,6 +909,8 @@ final class CopyAllRun {
     private(set) var copied = 0
     private(set) var failed = 0
     private(set) var bytes: UInt64 = 0
+    /// Build 14: the listed sizes of the files counted as failed, so the byte progress counts them as done.
+    private(set) var failedBytes: UInt64 = 0
     /// The file being fetched.
     private(set) var current = ""
     private(set) var failures: [String] = []
@@ -440,13 +929,20 @@ final class CopyAllRun {
     @ObservationIgnored private var lockedSince: Date?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private let batteryMonitoringWasEnabled: Bool
+    /// Build 14: listed size by lower-cased name, so a failed file's bytes count as done in the progress.
+    @ObservationIgnored private let sizes: [String: UInt64]
+    /// Build 14: `bytes` when this run started (a continued copy starts with the paused copy's), for the MB/s shown.
+    @ObservationIgnored private var bytesAtStart: UInt64 = 0
 
+    /// `restoring` (build 14): a continued copy, which takes the paused copy's totals, counts, bytes, failures,
+    /// recoveries, active time, pauses, lock time and battery at the start from the record; `items` are then the files
+    /// left, and `pauseSeconds` the pause that just ended (expiry to Continue).
     init(link: String, items: [CopyAllItem], root: URL, scoped: Bool, folder: URL, temporaryDirectory: URL,
-         destination: String, sameVolume: Bool, session: String?, conditions: String? = nil, log: SpikeLog) {
+         destination: String, sameVolume: Bool, session: String?, conditions: String? = nil, log: SpikeLog,
+         restoring record: CopyPauseRecord? = nil, pauseSeconds: Double = 0) {
         self.link = link
         self.conditions = conditions
-        self.total = items.count
-        self.totalBytes = items.reduce(UInt64(0)) { $0 + $1.size }
+        self.sizes = Dictionary(items.map { ($0.name.lowercased(), $0.size) }, uniquingKeysWith: { first, _ in first })
         self.root = root
         self.scoped = scoped
         self.folder = folder
@@ -459,8 +955,37 @@ final class CopyAllRun {
         let device = UIDevice.current
         batteryMonitoringWasEnabled = device.isBatteryMonitoringEnabled
         device.isBatteryMonitoringEnabled = true
-        batteryBefore = device.batteryLevel >= 0 ? device.batteryLevel : nil
-        batteryStateBefore = Self.describe(device.batteryState)
+        if let record {
+            self.total = record.total
+            self.totalBytes = record.totalBytes
+            self.startedAt = record.startedAt
+            self.activeSecondsBefore = record.activeSeconds
+            self.pauses = record.pauses
+            self.pauseSeconds = record.pauseSeconds + pauseSeconds
+            batteryBefore = record.batteryBefore
+            batteryStateBefore = record.batteryStateBefore
+        } else {
+            self.total = items.count
+            self.totalBytes = items.reduce(UInt64(0)) { $0 + $1.size }
+            self.startedAt = Date()
+            self.activeSecondsBefore = 0
+            self.pauses = 0
+            self.pauseSeconds = 0
+            batteryBefore = device.batteryLevel >= 0 ? device.batteryLevel : nil
+            batteryStateBefore = CopyAllRun.describe(device.batteryState)
+        }
+        if let record {
+            copied = record.copied
+            failed = record.failed
+            bytes = record.bytes
+            failedBytes = record.failedBytes
+            failures = record.failures
+            recoveries = record.recoveries
+            recoveryCauses = record.recoveryCauses
+            wasLocked = record.wasLocked
+            lockedSeconds = record.lockedSeconds
+            bytesAtStart = record.bytes
+        }
 
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil, queue: .main) { [weak self] _ in
@@ -488,19 +1013,32 @@ final class CopyAllRun {
     /// For the tabs: "12 of 400 · 1.90 of 19.84 GB · 14.2 MB/s".
     var progressLine: String {
         var text = String(format: "%ld of %ld · %.2f of %.2f GB", copied + failed, total, Double(bytes) / 1e9, Double(totalBytes) / 1e9)
+        // This run's own rate: a continued copy starts with the paused copy's bytes.
         if let firstRequestDate {
             let seconds = Date().timeIntervalSince(firstRequestDate)
-            if seconds > 0, bytes > 0 { text += String(format: " · %.1f MB/s", Double(bytes) / seconds / 1e6) }
+            if seconds > 0, bytes > bytesAtStart { text += String(format: " · %.1f MB/s", Double(bytes - bytesAtStart) / seconds / 1e6) }
         }
         if failed > 0 { text += " · \(failed) failed" }
         return text
     }
 
-    /// Wall time from the first request to the last move; nil until a file has been moved into place.
+    /// Wall time from the first request to the last move; nil until a file has been moved into place. Build 14: for a
+    /// continued copy, plus the active copying time before the pauses (each earlier segment from its first request to
+    /// its pause), so it is the whole copy's active time.
     var transferSeconds: Double? {
-        guard let firstRequest, let lastMove else { return nil }
-        return (lastMove - firstRequest).inSeconds
+        guard let firstRequest, let lastMove else { return activeSecondsBefore > 0 ? activeSecondsBefore : nil }
+        return activeSecondsBefore + (lastMove - firstRequest).inSeconds
     }
+
+    /// Build 14: the active copying time up to `until` (the expiry, at a pause): earlier segments, then this one from its
+    /// first request. Wall time, so the seconds between the expiry and the pause being saved (the copy winding down,
+    /// or the app suspended meanwhile) aren't counted.
+    func activeSeconds(until: Date) -> Double {
+        activeSecondsBefore + max(0, until.timeIntervalSince(firstRequestDate ?? until))
+    }
+
+    /// Build 14: bytes of the files done, copied or counted as failed (listed size), for the byte progress.
+    var doneBytes: UInt64 { bytes + failedBytes }
 
     /// Call right before each file's download request.
     func willRequest(_ name: String) {
@@ -558,6 +1096,7 @@ final class CopyAllRun {
     /// A file that didn't download (or couldn't be moved): counted, logged, and the run goes on unless the caller ends it.
     func fileFailed(_ name: String, _ why: String) {
         failed += 1
+        failedBytes += sizes[name.lowercased()] ?? 0
         current = ""
         failures.append("\(name): \(why)")
         log.warn("  copy \(copied + failed)/\(total): \(name) failed: \(why)")

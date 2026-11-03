@@ -8,6 +8,10 @@ import ImageCaptureCore
 extension GuidedRunner {
     func copyAllToFiles() async throws {
         let destination = FilesDestination.shared
+        if let paused = destination.paused {
+            // Build 14: one pause record at a time; said before any setup (the session, the join, the folder).
+            throw GuidedStop("a paused copy is waiting (\(paused.summary)): Continue copy or Discard it on the \(paused.link == "usb" ? "Wired" : "Wi-Fi") tab first")
+        }
         let link = try await ask("Copy all RAW to Files",
                                  "Copies every RAW (ARW) on the card into a new folder in the Files app. Nothing on the card or already in Files is changed or deleted, and nothing goes to the Photos library. Which link?",
                                  buttons: ["USB-C", "Wi-Fi"])
@@ -73,16 +77,27 @@ extension GuidedRunner {
         } catch {
             throw GuidedStop(CopyAllFormat.describe(error))
         }
+        // Build 14: the screen, recorded with every copy measurement.
+        let screen = try await ask("Keep the screen on?",
+                                   "Keep the screen on during the copy? With the app in front the phone then doesn't lock by itself (Auto-Lock), so iOS doesn't suspend the app; the side button still locks it. Your answer goes with every copy measurement.",
+                                   buttons: ["Keep the screen on during the copy", "Let it lock as set"])
+        let keepOn = screen == "Keep the screen on during the copy"
+        destination.keepScreenOn = keepOn
         let bytes = items.reduce(UInt64(0)) { $0 + $1.size }
         let minutes = max(1, Int((Double(bytes) / 1e6 / rate / 60).rounded(.up)))
+        // Worded from the screen answer, so a copy recorded as "screen kept on" isn't run locked.
+        let startHint = keepOn
+            ? "Tap Start, then leave the app in front and don't lock the phone (the screen stays on)."
+            : "Tap Start, then lock the phone once the copy shows on the Lock Screen or in the Dynamic Island: it carries on while locked."
         // checkSpace has resolved the folder (a chosen one that can't be used refuses above), so this is where they go.
         let go = try await ask("Ready to copy",
-                               "\(items.count) ARW, \(CopyAllFormat.gb(bytes)), into \(destination.locationDescription): about \(minutes) min at \(Int(rate)) MB/s. Tap Start, then lock the phone once the copy shows on the Lock Screen or in the Dynamic Island: it carries on while locked. Keep the camera on and \(overUSB ? "plugged in" : "close to the phone").",
+                               "\(items.count) ARW, \(CopyAllFormat.gb(bytes)), into \(destination.locationDescription): about \(minutes) min at \(Int(rate)) MB/s. \(startHint) Keep the camera on and \(overUSB ? "plugged in" : "close to the phone").",
                                buttons: ["Start", "Not now"])
         if go != "Start" { throw GuidedStop("not started") }
         let finishedBefore = destination.runsFinished
         let returns = lifecycle.foregroundReturns
         let entries = lifecycle.backgroundEntries
+        var pausesSeen = destination.pausesSaved
         try await startContinued("The copy") {
             if overUSB {
                 usb.session?.copyAllARW(using: continued)
@@ -91,33 +106,89 @@ extension GuidedRunner {
             }
         }
 
-        // Until it ends: no limit shorter than an hour, then the choice to keep waiting.
+        // Until it ends: no limit shorter than an hour, then the choice to keep waiting. Build 14: if the copy pauses (iOS
+        // ended its continued task: an expiry, or Stop in the Live Activity), the run asks, once the app is in front again,
+        // whether the tester stopped it and whether to continue, and waits again. A Continue that leaves the copy still
+        // paused (the session didn't come back, or the folder or the space refused it) is offered again.
         step("Copying \(items.count) ARW (about \(minutes) min)")
-        do {
-            while true {
-                let ended = try await waitUntil("Copying \(items.count) ARW",
-                                                "Lock the phone now if you like: the copy carries on, and this run picks up when it ends (about \(minutes) min). Cancel run stops it; what has been copied stays.",
-                                                timeout: 3600) { !self.continued.isRunning }
-                if ended { break }
-                let progress = destination.run?.progressLine ?? continued.state
-                let next = try await ask("Still copying", "After an hour: \(progress). Keep waiting?", buttons: ["Keep waiting", "Stop the copy"])
-                if next == "Stop the copy" {
-                    continued.stop()
-                    try await waitUntil("Stopping", "Stopping after the file in flight.", timeout: 600) { !self.continued.isRunning }
-                    break
+        let lockHint = keepOn
+            ? "Leave the app in front and don't lock the phone (the screen stays on)"
+            : "Lock the phone now if you like"
+        var continuing = false
+        while true {
+            do {
+                while true {
+                    let ended = try await waitUntil("Copying \(items.count) ARW",
+                                                    "\(lockHint): the copy carries on, and this run picks up when it ends (about \(minutes) min). Cancel run stops it; what has been copied stays.",
+                                                    timeout: 3600) { !self.continued.isRunning }
+                    if ended { break }
+                    let progress = destination.run?.progressLine ?? continued.state
+                    let next = try await ask("Still copying", "After an hour: \(progress). Keep waiting?", buttons: ["Keep waiting", "Stop the copy"])
+                    if next == "Stop the copy" {
+                        continued.stop()
+                        try await waitUntil("Stopping", "Stopping after the file in flight.", timeout: 600) { !self.continued.isRunning }
+                        break
+                    }
                 }
+            } catch is GuidedCancelled {
+                // Cancel run has stopped the copy: let it record its measurements before the report is made.
+                let deadline = Date().addingTimeInterval(120)
+                while continued.isRunning && Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
+                throw GuidedCancelled()
             }
-        } catch is GuidedCancelled {
-            // Cancel run has stopped the copy: let it record its measurements before the report is made.
-            let deadline = Date().addingTimeInterval(120)
-            while continued.isRunning && Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
-            throw GuidedCancelled()
+            // Paused (a pause record for this link, and the copy didn't end)?
+            guard destination.runsFinished == finishedBefore, let paused = destination.paused,
+                  overUSB ? paused.link == "usb" : paused.link.hasPrefix("ptpip") else { break }
+            let camera = overUSB ? "Keep the camera on and plugged in." : "Keep the camera on, with its Wi-Fi up and the phone on its network."
+            let question: String
+            if destination.pausesSaved != pausesSeen {
+                // A new pause.
+                pausesSeen = destination.pausesSaved
+                if !lifecycle.isInForeground {
+                    try await waitUntil("Copy paused", "iOS ended the copy's continued task at \(paused.done) of \(paused.total). Open the app to continue it.",
+                                        timeout: 86_400) { self.lifecycle.isInForeground }
+                }
+                // iOS runs the same expiration handler for Stop in the Live Activity as for an expiry: only you can tell.
+                let who = try await ask("Copy paused",
+                                        "iOS ended the copy's continued task at \(paused.done) of \(paused.total) (pause \(paused.pauses)). Did you stop it from the Lock Screen or the Dynamic Island?",
+                                        buttons: ["No, I didn't", "Yes, I stopped it"])
+                let byTester = who == "Yes, I stopped it"
+                log.flag("\(paused.link).copyAll.pause.stoppedByTester", byTester,
+                         context: "tester, pause \(paused.pauses) at \(paused.done) of \(paused.total) ARW: " + (byTester ? "Stop in the Live Activity, so this pause's expired flag is the tester's Stop" : "not stopped by the tester, so this pause's expired flag is an iOS expiry"))
+                question = "The copy is paused at \(paused.done) of \(paused.total). \(camera) Continue?"
+            } else if continuing {
+                // The Continue didn't take: the session didn't come back, or the folder or the free space refused it.
+                question = "Continue didn't get the copy going (the session didn't come back, or the folder or the free space refused it; see the log). The copy is still paused at \(paused.done) of \(paused.total). \(camera) Try again?"
+            } else {
+                break
+            }
+            let answer = try await ask("Copy paused", question, buttons: ["Continue", "Stop here"])
+            guard answer == "Continue" else {
+                throw GuidedStop("the copy is paused at \(paused.done) of \(paused.total) and wasn't continued: Continue copy (or Discard) on the \(tab) tab")
+            }
+            // The answer is a tap, so a new continued task may be asked for.
+            do {
+                if overUSB {
+                    await usb.continuePausedCopy(using: continued)
+                    try await startContinued("The continued copy") {}
+                } else {
+                    try await startContinued("The continued copy") { wireless.continuePausedCopy(recovery: recovery) }
+                }
+            } catch let stop as GuidedStop {
+                // Not started, or ended before it was seen running: the check above says whether the copy is still paused.
+                log.note("  guided: \(stop.reason)")
+            }
+            continuing = true
+            step("Copying the \(paused.remaining.count) ARW left (\(paused.done) of \(paused.total) done)")
         }
         if lifecycle.backgroundEntries > entries {
             log.note(String(format: "  guided: the app left the foreground during the copy%@", lifecycle.foregroundReturns > returns ? String(format: " (away %.0f s the last time)", lifecycle.lastAwaySeconds) : ""))
         }
 
         guard destination.runsFinished != finishedBefore, let outcome = destination.lastOutcome else {
+            if destination.paused != nil {
+                throw GuidedStop("the paused copy couldn't be continued (see the log); it is still paused: Continue copy or Discard on the \(tab) tab")
+            }
             throw GuidedStop("the copy didn't run (continued task: \(continued.state); see the log)")
         }
         log.note("◆ Copy all RAW to Files: \(outcome.summary)")

@@ -31,7 +31,8 @@ struct WiredView: View {
                     }
                 }
 
-                CopyAllSection(linkName: "USB-C", canStart: canRun && (session?.catalogComplete ?? false)) {
+                CopyAllSection(linkName: "USB-C", canStart: canRun && (session?.catalogComplete ?? false), canContinue: !isBusy,
+                               continuePaused: { Task { await usb.continuePausedCopy(using: continued) } }) {
                     session?.copyAllARW(using: continued)
                 }
 
@@ -155,7 +156,7 @@ struct WiredView: View {
                         .disabled(!canRun || continued.isRunning)
                     Button("10-minute continued task (whole card, repeated)") { session?.continuedLongDownload(using: continued, minutes: 10) }
                         .disabled(!canRun || continued.isRunning)
-                    LabeledContent("Continued task", value: "\(continued.state) · \(continued.completed)/\(continued.total)")
+                    LabeledContent("Continued task", value: "\(continued.state) · \(continued.progressText)")
                     Button("Stop continued task") { continued.stop() }
                         .disabled(!continued.isRunning)
                 }
