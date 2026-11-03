@@ -106,6 +106,14 @@ enum HotspotJoiner {
         return Outcome(alreadyAssociated: alreadyAssociated, seconds: alreadyAssociated ? nil : total, gateway: gateway)
     }
 
+    /// Build 11: whether the iPhone's current Wi-Fi network has a DIRECT- name (a camera's Wi-Fi Direct network);
+    /// nil when iOS doesn't say (fetchCurrent answers only for networks this app configured, without the Access
+    /// Wi-Fi Information entitlement). Only yes/no leaves this function: never the SSID or the BSSID.
+    static func onDirectNetwork() async -> Bool? {
+        guard let current = await NEHotspotNetwork.fetchCurrent() else { return nil }
+        return current.ssid.hasPrefix("DIRECT-")
+    }
+
     /// An SSID as the handover path logs it: "12 characters, DIRECT- prefix yes", never the name itself.
     nonisolated static func ssidSummary(_ ssid: String) -> String {
         "\(ssid.count) characters, DIRECT- prefix \(ssid.hasPrefix("DIRECT-") ? "yes" : "no")"

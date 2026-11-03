@@ -279,11 +279,11 @@ struct BluetoothView: View {
         }
     }
 
-    // MARK: - Experimental · Wi-Fi handover (build 10)
+    // MARK: - Experimental · Wi-Fi handover
 
     /// Every action logs what it measured; failures are logged by SonyWiFiHandover itself, so the buttons drop them.
     private var handoverSection: some View {
-        Section("Experimental · Wi-Fi handover (build 10)") {
+        Section("Experimental · Wi-Fi handover") {
             LabeledContent("Status") {
                 Text(handover.status).font(.caption)
             }
@@ -303,6 +303,22 @@ struct BluetoothView: View {
                 Task { _ = try? await handover.safeReads() }
             }
             .disabled(handover.busy || !handover.isConnected)
+            Button("Subscribe (Sony's set)") {
+                Task { _ = try? await handover.subscribe(SonyWiFiHandover.sonyNotificationCodes) }
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Subscribe (all 8000CC00)") {
+                Task { _ = try? await handover.subscribe(nil) }
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Notification summary") {
+                _ = handover.timelineSummary()
+            }
+            .disabled(handover.busy || !handover.isConnected)
+            Button("Forget CC09 status byte") {
+                handover.forgetRememberedStatusByte("Bluetooth tab")
+            }
+            .disabled(handover.busy)
             Button("Switch camera Wi-Fi on…") { confirmWiFiOn = true }
                 .disabled(handover.busy || !handover.isConnected)
                 .confirmationDialog("Switch the camera's Wi-Fi on?", isPresented: $confirmWiFiOn, titleVisibility: .visible) {
@@ -311,7 +327,7 @@ struct BluetoothView: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only Bluetooth write the spike makes, except that if the camera's Wi-Fi status can't be read, the app subscribes to its status notifications and turns them off on Disconnect. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
+                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only value the spike writes over Bluetooth; the app also turns on the camera's status notifications (CC09) if they aren't on, and Disconnect turns every notification off. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
                 }
             Button("Read Wi-Fi details") {
                 Task {
@@ -325,11 +341,18 @@ struct BluetoothView: View {
                 Text(handoverDetails).font(.caption)
             }
             Button("Disconnect", role: .destructive) {
-                handover.disconnect()
                 handoverDetails = nil
+                Task {
+                    // Notifications off first, waiting for the camera's answers; while an operation runs, Disconnect
+                    // cancels it at once and turns them off without waiting.
+                    if !handover.busy && handover.isConnected && handover.notifyingCount > 0 {
+                        _ = try? await handover.unsubscribeAll()
+                    }
+                    handover.disconnect()
+                }
             }
             .disabled(!handover.isConnected && !handover.busy)
-            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, and on request switches the camera's Wi-Fi on and reads the network name and password. The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
+            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, on request turns on the camera's notifications (Sony's set: CC09, CC10, CC0F, CC03, CC0E; or every one in 8000CC00; logged masked, turned off on Disconnect; Forget CC09 status byte makes the next run learn which byte of CC09 is the Wi-Fi status again), switches the camera's Wi-Fi on and reads the network name and password. The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
                 .font(.footnote)
                 .foregroundStyle(.orange)
         }
