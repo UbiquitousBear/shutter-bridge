@@ -103,6 +103,19 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 - **The reference download is repeatable.** DSC02046.ARW gave the same SHA-256 (763d068d7de5…) in two sessions 14 minutes apart.
 - **Evidence for the resume:** guided run *Wi-Fi: resume after Wi-Fi off*, 2 Nov 23:10, build 0.1 (10.1). `ptpip.ap.partial.sonyLarge9211` yes; `ptpip.ap.partial.standard32`, `.sony64` and `.sonyLarge9219` no; `ptpip.ap.resume.verified` yes (DSC02052.ARW, SHA-256 13605b153d9a…).
 
+**A whole card copied to Files over Wi-Fi** (guided run *Copy all RAW to Files*, 3 Nov, build 0.1 (13.1); the camera's network, whole-card contents transfer, inside `BGContinuedProcessingTask`, into the app's Documents folder; Shamil shoots RAW only):
+
+| Run | Creators' App | Phone | Result |
+| --- | --- | --- | --- |
+| 15:13 | open in the background, connected over Bluetooth | locked for most of it | 7 of 267 copied. 28 s in, the camera sent StoreRemoved, refused the next GetObject with StoreNotAvailable, closed both channels and switched its Wi-Fi off. The copy wrongly counted the next 82 files as failed before the link closed. |
+| 15:25 | quit | locked for 217 s of 271 s | 102 of 267 (4.32 GB) at 15.9 MB/s, no failures. iOS expired the continued task at 271 s, when Shamil opened the phone's Camera app. |
+| 15:30 | quit | in the background, phone unlocked and in use (Files) | **267 of 267, 11.53 GB in 11.8 min at 16.3 MB/s, no failures.** The continued task ran 709 s without expiring. Every file opens in Files. |
+
+- **A full card copies over Wi-Fi in about 12 minutes, in the background.** Files ran at 13–19 MB/s each; memory peaked at 68 MB (baseline 60 MB).
+- **Creators' App open in the background is the likely cause of the camera dropping its card and Wi-Fi.** It happened in both runs with Creators' App open (also at 11:54 during a Bluetooth switch-on) and in none of the runs with it quit. Not proven; 1.0 has to recover either way.
+- **iOS can expire the continued task when the phone is busy with something heavy.** The 271 s expiry coincided with the Camera app; the run that kept going for 709 s had only Files in front. iOS gives no reason with an expiry. Apple documents expiry under resource pressure and for tasks that report little progress, and publishes no time limit.
+- **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file.
+
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
 **Still to run:**
@@ -472,9 +485,9 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 - No Bluetooth pairing request; Creators' App connected afterwards.
 
 Still open:
-- the same run with Creators' App open in the background (on 3 Nov at 11:54, with it open, the camera dropped its Wi-Fi and the Bluetooth link about 30 s after a switch-on nobody joined);
+- the same run with Creators' App open in the background (on 3 Nov at 11:54, with it open, the camera dropped its Wi-Fi and the Bluetooth link about 30 s after a switch-on nobody joined; at 15:14 it dropped its card and Wi-Fi 28 s into a copy);
 - how the app gets the camera to switch its Wi-Fi off after an import (leaving the network, or a Bluetooth write), and how long an unused Wi-Fi stays up;
-- why the Bluetooth connect took 5.6 s this time (0.4 s in earlier runs, and one 8 s timeout at 11:53 before a scan found the camera).
+- why the Bluetooth connect took 5.6 s this time (0.4 s in earlier runs, and one 8 s timeout at 11:53 before a scan found the camera). A second run at 15:21 took 5.2 s for the first connect and 0.37 s for a reconnect a minute later, so the camera seems slow to take the first connection after it has been idle. That run otherwise matched the first: Wi-Fi status 2 at +0.81 s, `ble.auto.toWiFiOn` 9.88 s, `ble.auto.toFirstFile` 36.8 s, and the Wi-Fi again outlived Bluetooth (14 s and 64 s) and stayed up for 45 s after the session closed.
 
 - **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
 
