@@ -31,6 +31,10 @@ struct WiredView: View {
                     }
                 }
 
+                CopyAllSection(linkName: "USB-C", canStart: canRun && (session?.catalogComplete ?? false)) {
+                    session?.copyAllARW(using: continued)
+                }
+
                 Section("Day 1 · Browser") {
                     LabeledContent("Authorisation", value: browser.authorization)
                     Picker("Device mask", selection: $bindableBrowser.maskChoice) {

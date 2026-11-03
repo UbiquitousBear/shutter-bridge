@@ -2960,3 +2960,136 @@ private func gb(_ bytes: UInt64) -> String { fmt(Double(bytes) / 1_000_000_000, 
 private func percent(_ part: UInt64, _ whole: UInt64) -> String {
     whole == 0 ? "0" : fmt(Double(part) / Double(whole) * 100, 0)
 }
+
+// MARK: - Copy all RAW to Files
+
+// In this file rather than one of its own: it uses the session's private plumbing (perform, requireOpen,
+// downloadFile, describe) and sets progressText and lastResult.
+extension CameraSession {
+    /// Every ARW on the card, oldest first (`files` is newest first).
+    private var copyAllFiles: [ICCameraFile] {
+        Array(files.filter { Self.ext($0) == "ARW" }.reversed())
+    }
+
+    /// What *Copy all RAW to Files* would copy now, for the guided run's count and size.
+    var copyAllItems: [CopyAllItem] {
+        copyAllFiles.map { CopyAllItem(name: $0.name ?? "?", size: UInt64(max(0, Int64($0.fileSize)))) }
+    }
+
+    /// *Copy all RAW to Files* over USB: every ARW, oldest first, inside a continued task (so it survives the phone
+    /// locking), one requestDownload at a time into a temporary folder, each file then moved into a new folder in
+    /// Files (FilesDestination). Stops on a cable pull, a closed session, Stop, or three failures in a row.
+    /// Measurements `usb.copyAll.…`. Must be started from a tap.
+    func copyAllARW(using continued: ContinuedTask) {
+        let label = "Copy all RAW to Files"
+        let destination = FilesDestination.shared
+        guard activity == nil else { log.warn("\(label): busy with \(activity ?? ""); wait for it or tap Stop"); return }
+        guard isOpen, !removed else { log.error("\(label): open a session first (Day 2 · Open session)"); return }
+        guard catalogComplete else {
+            log.error("\(label): \(USBSpikeError.catalogueIncomplete(device.contentCatalogPercentCompleted, device.mediaFiles?.count ?? 0))")
+            return
+        }
+        guard !linkStalled else { log.error("\(label): \(USBSpikeError.linkStalled)"); return }
+        guard !continued.isRunning else { log.warn("\(label): a continued task is already running; stop it first"); return }
+        guard destination.run == nil else { log.warn("\(label): a copy is already running"); return }
+        let selection = copyAllFiles
+        guard !selection.isEmpty else {
+            log.warn("\(label): no ARW on the card (\(files.count) files)")
+            lastResult = "\(label): no ARW on the card"
+            return
+        }
+        let items = copyAllItems
+        do {
+            try destination.checkSpace(for: items, link: "usb")
+        } catch {
+            let text = CopyAllFormat.describe(error)
+            log.error("\(label): \(text)")
+            lastResult = "\(label): \(text)"
+            return
+        }
+        log.note("\(label): submitting a continued task for \(selection.count) ARW (oldest first), one at a time; lock the phone once it has started")
+        continued.run(title: "Copying RAW to Files (spike)", subtitle: "0 of \(selection.count)", totalUnits: selection.count) { [weak self] report, shouldStop in
+            guard let self else { return false }
+            var finished = false
+            await self.perform(label, transfer: true) {
+                finished = try await self.copyAllSequence(selection, items: items, continued: continued, destination: destination,
+                                                          report: report, shouldStop: shouldStop)
+            }
+            return finished
+        }
+    }
+
+    /// One requestDownload at a time: the 2-in-flight preset gained under 5 % on the cable (38.19 vs 39.05 MB/s in MTP),
+    /// and one at a time keeps a stop or a cable pull to a single partial file.
+    private func copyAllSequence(_ selection: [ICCameraFile], items: [CopyAllItem], continued: ContinuedTask,
+                                 destination: FilesDestination,
+                                 report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async throws -> Bool {
+        try requireOpen()
+        let run = try destination.begin(link: "usb", items: items)
+        let reason = await log.withMemoryPeak(run.prefix, context: "\(selection.count) ARW to Files over USB") {
+            await self.copyAllLoop(selection, run: run, continued: continued, report: report, shouldStop: shouldStop)
+        }
+        destination.finish(run, stopReason: reason)
+        lastResult = "Copy all RAW to Files: \(run.copied) of \(run.total) copied" + (run.failed > 0 ? ", \(run.failed) failed" : "")
+            + (reason.map { "; ended early: \($0)" } ?? "")
+        return reason == nil && run.copied == run.total
+    }
+
+    /// The copy itself. Returns why it ended early, or nil once it has been through the list.
+    private func copyAllLoop(_ selection: [ICCameraFile], run: CopyAllRun, continued: ContinuedTask,
+                             report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> String? {
+        var failuresInARow = 0
+        for (i, file) in selection.enumerated() {
+            if stopRequested || shouldStop() {
+                let why = continued.expired ? "the system expired the continued task" : "Stop (or Cancel run)"
+                return "\(why) after \(i) of \(selection.count) [\(lifecycle.stateDescription)]"
+            }
+            if removed { return "the camera was disconnected after \(i) of \(selection.count)" }
+            if !isOpen { return "the camera closed the session after \(i) of \(selection.count)" }
+            if linkStalled { return "the camera stopped answering after \(i) of \(selection.count)" }
+            let name = file.name ?? "?"
+            progressText = "\(run.progressLine) · \(name)"
+            run.willRequest(name)
+            let downloaded: (url: URL, bytes: Int64, seconds: Double)
+            do {
+                // Bounded, unlike day 3's downloads: an ARW takes about 2 s on the cable, and with no bound a camera that
+                // stops answering would hang the run past Stop, Cancel run and the task's expiry. A first timeout fails
+                // the file; a second in a row marks the link stalled (noteNoAnswer), which ends the run below.
+                downloaded = try await downloadFile(file, to: run.temporaryDirectory, timeout: 60)
+            } catch {
+                run.fileFailed(name, describe(error))
+                report(i + 1, run.subtitle)
+                if removed { return "the camera was disconnected at \(name)" }
+                if !isOpen { return "the camera closed the session at \(name)" }
+                if linkStalled { return "the camera stopped answering at \(name)" }
+                failuresInARow += 1
+                if failuresInARow >= 3 { return "three files in a row failed (the last \(name))" }
+                continue
+            }
+            // A short (or long) file never goes into the folder under the card's name.
+            let expected = Int64(file.fileSize)
+            if expected > 0, downloaded.bytes != expected {
+                try? FileManager.default.removeItem(at: downloaded.url)
+                run.fileFailed(name, "size mismatch: \(downloaded.bytes) B on disk, \(expected) B on the camera; the copy was deleted")
+                report(i + 1, run.subtitle)
+                failuresInARow += 1
+                if failuresInARow >= 3 { return "three files in a row failed (the last \(name))" }
+                continue
+            }
+            failuresInARow = 0
+            do {
+                try await run.place(downloaded.url, cardName: name, bytes: UInt64(max(0, downloaded.bytes)),
+                                    seconds: downloaded.seconds, state: lifecycle.stateDescription)
+            } catch {
+                try? FileManager.default.removeItem(at: downloaded.url)
+                run.fileFailed(name, "couldn't be moved into the folder: \(error.localizedDescription)")
+                report(i + 1, run.subtitle)
+                return "couldn't write to \(run.destinationLabel): \(error.localizedDescription)"
+            }
+            report(i + 1, run.subtitle)
+            progressText = run.progressLine
+            lifecycle.noteProgress("copy all: \(name) (\(i + 1) of \(selection.count))", link: "usb")
+        }
+        return nil
+    }
+}

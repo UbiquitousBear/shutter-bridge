@@ -59,6 +59,8 @@ extension GuidedScript {
                      summary: "A continued task over the whole card for 10 min with the phone locked (12 min, mostly unattended).") { r in try await r.usbLongLock() },
         GuidedScript(id: "usb.scaling", group: "Scaling", title: "Scaling: listing time vs card size",
                      summary: "Cold listing now, a burst of about 300 frames, cold listing again; projects 2,000 and 5,000 files (20–30 min).") { r in try await r.scaling() },
+        GuidedScript(id: "copy.all", group: "Copy to Files", title: "Copy all RAW to Files",
+                     summary: "Every ARW on the card into a new folder in Files, over USB-C or Wi-Fi, phone locked if you like (400 RAW, 10–25 GB: about 5–12 min on the cable, 10–35 min on Wi-Fi).") { r in try await r.copyAllToFiles() },
 
         GuidedScript(id: "wifi.mode", group: "Wi-Fi (session S2)", title: "Wi-Fi: one camera mode",
                      summary: "Join, probes, connect, list (Sony contents transfer if nothing lists), thumbnails, 20 ARW, shutter (15 min). Run once per mode.") { r in try await r.wifiModePass() },
@@ -1762,5 +1764,12 @@ extension GuidedRunner {
         case .some(false): return "apply joined"
         case .none: return "the join failed (see the log)"
         }
+    }
+}
+
+extension GuidedRunner {
+    /// GuidedCopyAll.swift's way to ensureWiFiSession, which is private to this file.
+    func ensureWiFiSessionForCopy() async throws {
+        try await ensureWiFiSession()
     }
 }
