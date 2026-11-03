@@ -482,7 +482,7 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 **What this means for 1.0:**
 1. The app connects over Bluetooth, subscribes to the camera's status notifications and writes CC08 = 0x01. The camera's Wi-Fi is up about 2.2 s later, with nothing to do on the camera.
 2. The app reads the network name and password over Bluetooth and joins with one iOS prompt the first time.
-3. The camera switches its Wi-Fi off again when the importing app leaves, which suits the camera's battery (Creators' App: about 1 s; this app leaving the network: about 51 s, below).
+3. The camera switches its Wi-Fi off again when the importing app leaves, which suits the camera's battery: about 1 s after Creators' App leaves, and otherwise about 50 s after the last phone leaves its network or after a switch-on nobody joins (below).
 
 **The 1.0 route, end to end: Bluetooth switches the Wi-Fi on, the app joins and imports** (guided run *Bluetooth: switch Wi-Fi on, join and import*, 3 Nov 14:56–15:04, build 0.1 (13.1)). Setup: camera on with its Wi-Fi off (PC Remote Function off), Creators' App quit, the camera's network forgotten in Settings first. Nothing was done on the camera. Times are from the Start tap.
 
@@ -513,20 +513,36 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 | Whole-card contents transfer ready (2.03 s), 547 objects listed (7.32 s), newest ARW (39.0 MB) at 10.0 MB/s (`ble.auto.toFirstFile`, less 2.5 s on the app's own question) | 13.9 s | 29.52 s |
 
 - **The route works with Creators' App open, and nothing dropped this time.** The camera kept its card, its Wi-Fi and the Bluetooth link for the whole run (about 4 minutes: a listing, three downloads and the lifecycle steps). Earlier runs with Creators' App open lost the Wi-Fi and the link 30 s after a switch-on nobody joined (11:54) and the card 28 s into a copy (15:14), so the drop happens sometimes, not every time.
-- **Bluetooth is quicker when Creators' App holds the link.** Our connect was immediate (0.00 s, against 5.2–5.6 s for the first connect to an idle camera). The switch-on took 2.34 s (0.81–0.84 s in the runs with Creators' App quit; Creators' App's own, 2.1–2.5 s).
+- **Bluetooth is quicker when Creators' App holds the link.** Our connect was immediate (0.00 s, against 5.2–5.6 s for the first connect to an idle camera). The switch-on took 2.34 s; across runs it has taken 0.8–2.5 s whether Creators' App was open or not (Creators' App's own, 2.1–2.5 s).
 - **The Wi-Fi outlived our Bluetooth link again** (`ble.auto.wifiSurvivesBluetoothOff` yes 13 s after, 13.8 MB/s; `.60s` yes 63 s after, 14.0 MB/s). Weaker than the 13.1 runs: iOS still listed a camera link afterwards (Creators' App's), so the camera's Bluetooth never went down.
 - **Turning the notifications off isn't confirmed while another app shares the link.** Only CC0E came back confirmed; CC03, CC09, CC0F and CC10 returned CoreBluetooth's "unknown" error. iOS shares one link, and one set of notification switches, between the apps using a device, so it probably keeps on a notification Creators' App still wants and reports our request as an error. Creators' App connected and worked afterwards (`ble.auto.creatorsAppStillWorks` yes). 1.0 can treat this error as harmless when iOS lists another app's link to the camera.
 - **The camera keeps its Wi-Fi up while the phone stays joined** (`ble.auto.wifiOffAfterSession` no): status 2 for 45 s after CloseSession, as in the 13.1 runs.
 - **Leaving the network makes the camera switch its Wi-Fi off, after about 51 s.** The app removed its hotspot configuration 45.6 s after the session closed, and the iPhone left the camera's network 0.1 s later (its Wi-Fi path went to none, then to the home network). CC09, read every 2 s over the Bluetooth link, stayed at 2, then went 2 → 3 (*terminating*) at +51.2 s and 3 → 0 at +53.2 s (`ble.auto.wifiOffAfterLeaving` yes, `ble.auto.wifiOffAfterLeaving.latency` 53.2 s).
-  - This run can't tell the camera noticing the phone gone after about 50 s from a timer that switches the Wi-Fi off about 97 s after the last session closed, phone joined or not: step (b) watched only 45 s. *Bluetooth: how long an unused Wi-Fi stays up* (up to 180 s with nobody joining) separates them.
+  - *Bluetooth: how long an unused Wi-Fi stays up* (below) settles the cause: the camera switches its Wi-Fi off about 50 s after the last phone leaves, not on a timer from the session's end.
   - Creators' App's Wi-Fi went off about 1 s after it left (11:35), much sooner, so Creators' App probably tells the camera, over PTP/IP or Bluetooth, rather than only leaving.
-  - Either way, if 1.0 leaves the camera's network after an import, the camera's Wi-Fi is off within about a minute, which is enough for its battery. A faster switch-off would need a write the spike hasn't made; 1.0 doesn't need one.
+  - If 1.0 leaves the camera's network after an import, the camera's Wi-Fi is off within about a minute, which is enough for its battery. A faster switch-off would need a write the spike hasn't made; 1.0 doesn't need one.
 - **CCAB read `04 00 00 02 03` with the camera's menu on 5 GHz** (`ble.handover.wifiBand` 2): one entry, tag 0x0000, value 02 03, the same with the Wi-Fi off, right after status 2 and after the import. One menu setting gives one point, so the notes' mapping is still unverified; 1.0 doesn't need it.
 - No Bluetooth pairing request (`ble.auto.pairingPrompt` no); the camera's screen showed nothing (`ble.auto.cameraShowsWiFi` no).
 
+**How long an unused Wi-Fi stays up** (guided run *Bluetooth: how long an unused Wi-Fi stays up*, 3 Nov 22:55–22:59, build 0.1 (14.1), run twice). Setup: camera on with its Wi-Fi off (PC Remote Function off). The app switched the Wi-Fi on over Bluetooth (Sony's five notifications on, CC08 = 0x01), stayed connected with the notifications on, and nobody joined the camera's network: the iPhone wasn't on it at the start or the end of the watch, and the app stayed in front. Times are from status 2.
+
+| Run | Creators' App | Bluetooth connect | CC08 to status 2 | Status 2 → 3 (*terminating*) | Status 0 (`ble.idle.wifiUpWithBluetooth`) |
+| --- | --- | --- | --- | --- | --- |
+| 22:56 | quit; no system link to the camera; the camera's network forgotten in Settings | 0.57 s | 2.46 s | 49.8 s | **51.3 s** |
+| 22:58 | open in the background; one system link; the network not forgotten | 0.03 s | 2.31 s | 49.9 s | **51.6 s** |
+
+- **The camera switches an unused Wi-Fi off by itself about 50 s after it comes up**, the same with Creators' App quit or open. A Bluetooth link with Sony's notifications on doesn't keep it up, and the link stayed up after the Wi-Fi went off (`ble.idle.linkDropped` no). The run's second phase (Bluetooth off for 60 s, then a status read) didn't run, because the Wi-Fi was already off.
+- **One rule explains test 1 as well: the camera switches its Wi-Fi off about 50 s after it has no phone on its network.** In test 1 it began *terminating* between 49.1 s and 51.2 s after the iPhone left (CC09 read every 2 s), the same delay as here. The session's end doesn't start the count: the Wi-Fi was still up 95 s after CloseSession, and the phone had stayed on the network for the first 45.6 s of that. A timer from the session's end would have to be about 97 s and fall, by coincidence, 50 s after the leave.
+- **What this means for 1.0:**
+  - when the import ends, leave the camera's network (remove the app's hotspot configuration); the camera's Wi-Fi is off about 50 s later, with no write needed;
+  - the phone has about 50 s from the switch-on to join. The joins so far took 8–11 s including the prompt; if the person leaves the iOS prompt longer, or a recovery takes longer, the app reads CC09 and writes CC08 = 0x01 again;
+  - switching the Wi-Fi on early (when the camera is found, before the person decides) costs the camera at most about 50 s of Wi-Fi.
+- **Turning the notifications off: all five confirmed with Creators' App quit, only CC0E with it open** (the other four "CoreBluetooth unknown", as in test 1). That fits the shared-link explanation above. Creators' App connected afterwards both times (`ble.idle.creatorsAppStillWorks` yes).
+- **CC10 notified once with Creators' App quit**, 24 s into the watch: 19 bytes, `·· 00 00 02 03 00 01 00 04 00 00 00 00 ·· 00 00 00 00 01` (bytes above 0x0F masked); meaning unknown, and nothing followed it.
+- CCAB read `04 00 00 02 03` again, with the Wi-Fi off and on, in both runs.
+
 Still open:
-- how long an unused Wi-Fi stays up, which also tells whether the switch-off after leaving comes from the leave or from a timer (*Bluetooth: how long an unused Wi-Fi stays up*);
-- why the Bluetooth connect took 5.6 s this time (0.4 s in earlier runs, and one 8 s timeout at 11:53 before a scan found the camera). A second run at 15:21 took 5.2 s for the first connect and 0.37 s for a reconnect a minute later, so the camera seems slow to take the first connection after it has been idle. That run otherwise matched the first: Wi-Fi status 2 at +0.81 s, `ble.auto.toWiFiOn` 9.88 s, `ble.auto.toFirstFile` 36.8 s, and the Wi-Fi again outlived Bluetooth (14 s and 64 s) and stayed up for 45 s after the session closed.
+- why the Bluetooth connect took 5.6 s this time (0.4 s in earlier runs, and one 8 s timeout at 11:53 before a scan found the camera). A second run at 15:21 took 5.2 s for the first connect and 0.37 s for a reconnect a minute later, so the camera seems slow to take the first connection after it has been idle. Not always: at 22:56 the first connect, 8 minutes after the last one and with Creators' App quit, took 0.57 s. That run otherwise matched the first: Wi-Fi status 2 at +0.81 s, `ble.auto.toWiFiOn` 9.88 s, `ble.auto.toFirstFile` 36.8 s, and the Wi-Fi again outlived Bluetooth (14 s and 64 s) and stayed up for 45 s after the session closed.
 
 - **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
 
