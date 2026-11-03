@@ -25,6 +25,14 @@ struct BluetoothView: View {
     @State private var joiningOverBluetooth = false
     /// Read details and join's outcome in one redacted line: never the network's name or password.
     @State private var bluetoothJoinOutcome: String?
+    /// Build 13: Read details and join's read failed with the link up (the camera's Wi-Fi off), so it offers to switch
+    /// the Wi-Fi on first, with the same confirmation as Switch camera Wi-Fi on….
+    @State private var offerSwitchOnForJoin = false
+    /// The link Read details and join connected is kept up while that offer is on screen (Cancel drops it).
+    @State private var linkKeptForOffer = false
+
+    /// What Switch camera Wi-Fi on… (and Read details and join's offer) writes, for both confirmations.
+    private static let switchOnMessage = "Experimental: first turns on the camera's status notifications that Sony's app uses (CC09, CC10, CC0F, CC03, CC0E; only their notification switches are written) if they aren't on, then writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which switches the camera's Wi-Fi on (with the notifications on, the α7C II's status went 0 → 1 → 2 and stayed there; its screen may show nothing). It is the only value the spike writes over Bluetooth, and Disconnect turns every notification off. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice."
 
     private var power: AdvertisementScanner.PowerState { AdvertisementScanner.PowerState(rawValue: powerRaw) ?? .on }
     private var pairing: AdvertisementScanner.PairingContext {
@@ -329,11 +337,11 @@ struct BluetoothView: View {
                 .disabled(handover.busy || !handover.isConnected)
                 .confirmationDialog("Switch the camera's Wi-Fi on?", isPresented: $confirmWiFiOn, titleVisibility: .visible) {
                     Button("Write 0x01 to CC08") {
-                        Task { _ = try? await handover.switchWiFiOn() }
+                        Task { _ = await switchWiFiOnFromTab(attempt: "Bluetooth tab") }
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Experimental: writes the single byte 0x01 to characteristic CC08 in service 8000CC00, which reverse-engineered notes (unverified on this camera) say switches the camera's Wi-Fi on. It is the only value the spike writes over Bluetooth; the app also turns on the camera's status notifications (CC09) if they aren't on, and Disconnect turns every notification off. The app then waits up to 30 s for the camera to report its Wi-Fi as on. Creators' App may notice.")
+                    Text(Self.switchOnMessage)
                 }
             Button("Read Wi-Fi details") {
                 Task {
@@ -350,13 +358,32 @@ struct BluetoothView: View {
                 joiningOverBluetooth = true
                 bluetoothJoinOutcome = nil
                 Task {
-                    let outcome = await readDetailsAndJoin()
+                    let outcome = await readDetailsAndJoin(switchOnFirst: false)
                     log.note("Bluetooth tab: Read details and join: \(outcome)")
                     bluetoothJoinOutcome = outcome
                     joiningOverBluetooth = false
                 }
             }
             .disabled(joiningOverBluetooth || handover.busy || wireless.joining)
+            .confirmationDialog("Switch the camera's Wi-Fi on?", isPresented: $offerSwitchOnForJoin, titleVisibility: .visible) {
+                Button("Write 0x01 to CC08, then join") {
+                    joiningOverBluetooth = true
+                    bluetoothJoinOutcome = nil
+                    Task {
+                        let outcome = await readDetailsAndJoin(switchOnFirst: true)
+                        log.note("Bluetooth tab: Read details and join (Wi-Fi switched on first): \(outcome)")
+                        bluetoothJoinOutcome = outcome
+                        joiningOverBluetooth = false
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    // The link was kept only for this offer.
+                    if linkKeptForOffer && !handover.busy { handover.disconnect() }
+                    linkKeptForOffer = false
+                }
+            } message: {
+                Text("The camera refused the network details, so its Wi-Fi seems to be off. " + Self.switchOnMessage)
+            }
             if let bluetoothJoinOutcome {
                 Text(bluetoothJoinOutcome).font(.caption)
             }
@@ -374,7 +401,7 @@ struct BluetoothView: View {
                 }
             }
             .disabled(!handover.isConnected && !handover.busy)
-            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, on request turns on the camera's notifications (Sony's set: CC09, CC10, CC0F, CC03, CC0E; or every one in 8000CC00; logged masked, turned off on Disconnect; Forget CC09 status byte makes the next run learn which byte of CC09 is the Wi-Fi status again), switches the camera's Wi-Fi on and reads the network name and password. Read details and join connects if needed, reads them (nothing written), disconnects Bluetooth again if it connected, and joins that network, then sets the Wi-Fi tab to Camera AP with the join's gateway as Camera IP; the camera's Wi-Fi network must be up (PC Remote). The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
+            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, on request turns on the camera's notifications (Sony's set: CC09, CC10, CC0F, CC03, CC0E; or every one in 8000CC00; logged masked, turned off on Disconnect; Forget CC09 status byte makes the next run learn which byte of CC09 is the Wi-Fi status again, for values that don't parse as the α7C II's tag list), switches the camera's Wi-Fi on (Sony's notifications first, if they aren't on) and reads the network name and password. Read details and join connects if needed, reads them (nothing written), disconnects Bluetooth again if it connected, and joins that network, then sets the Wi-Fi tab to Camera AP with the join's gateway as Camera IP; if the camera refuses the read (its Wi-Fi off), it offers to switch the Wi-Fi on first, and then keeps Bluetooth connected. The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
                 .font(.footnote)
                 .foregroundStyle(.orange)
         }
@@ -387,26 +414,47 @@ struct BluetoothView: View {
     /// HotspotJoiner themselves. Nothing is recorded under the handover run's ble.handover.* names (`ptpip.ap.join`
     /// says "Bluetooth tab"), and a Bluetooth link this call connected is dropped once the details are read, as the
     /// guided join does, so a later run connects on its own; a link that was already up is left as it is.
-    private func readDetailsAndJoin() async -> String {
+    /// Build 13: when the read fails with the link up (the camera refuses it with ATT 0x9D while its Wi-Fi is off), the
+    /// link is kept and a confirmation offers to switch the Wi-Fi on first; `switchOnFirst` is that path: Sony's
+    /// notifications on if they aren't, CC08 = 01, then the details read (up to 3 tries, 2 s apart, while CC09 says
+    /// status 2) and the join. A link over which the Wi-Fi was switched on stays connected (the Wi-Fi may go off when
+    /// it closes); Disconnect turns the notifications off.
+    private func readDetailsAndJoin(switchOnFirst: Bool) async -> String {
         guard !wireless.joining else { return "Not joined: another join is running" }
-        let ownLink = !handover.isConnected
+        // A link kept for the switch-on offer counts as this button's own.
+        let ownLink = !handover.isConnected || (switchOnFirst && linkKeptForOffer)
+        linkKeptForOffer = false
+        var switchedOn = false
         let details: HandoverCredentials
         do {
-            if ownLink {
+            if !handover.isConnected {
                 _ = try await handover.connect()
                 _ = try await handover.discover(record: nil)
             }
-            details = try await handover.readCredentials(record: nil)
+            if switchOnFirst {
+                guard await switchWiFiOnFromTab(attempt: "Bluetooth tab, Read details and join") else {
+                    return "Not joined: the camera didn't report its Wi-Fi on after CC08 = 01 (see the log); Bluetooth stays connected, and Disconnect turns the notifications off"
+                }
+                switchedOn = true
+            }
+            details = try await readDetailsRetrying(tries: switchedOn ? 3 : 1)
         } catch {
-            // Not while another operation runs: Disconnect would cancel it.
-            if ownLink && handover.isConnected && !handover.busy { handover.disconnect() }
+            if !switchedOn, handover.isConnected, !handover.busy, let e = error as? HandoverError, case .readFailed = e {
+                // The camera refused the read with the link up: its Wi-Fi is probably off. Offer to switch it on,
+                // keeping the link for that.
+                linkKeptForOffer = ownLink
+                offerSwitchOnForJoin = true
+                return "Not joined: \(e). The camera's Wi-Fi seems to be off (with no network up it refuses the read, ATT error 0x9D): confirm to switch it on over Bluetooth, or cancel."
+            }
+            // Not while another operation runs: Disconnect would cancel it. A link the Wi-Fi was switched on over stays.
+            if ownLink && !switchedOn && handover.isConnected && !handover.busy { handover.disconnect() }
             if let e = error as? HandoverError, case .readFailed = e {
-                return "Not joined: \(e). Is the camera's Wi-Fi network up (PC Remote)? With none set up the camera refuses the read (ATT error 0x9D)."
+                return "Not joined: \(e)\(switchedOn ? " after switching the camera's Wi-Fi on; Bluetooth stays connected" : ""). Is the camera's Wi-Fi network up? With none set up the camera refuses the read (ATT error 0x9D)."
             }
             return "Not joined: \(SonyWiFiHandover.errorName(error))"
         }
-        // Bluetooth isn't needed for the join itself.
-        if ownLink { handover.disconnect() }
+        // Bluetooth isn't needed for the join itself, unless the Wi-Fi was switched on over it.
+        if ownLink && !switchedOn { handover.disconnect() }
         guard !details.ssid.isEmpty, HandoverCredentials.isValidPassphrase(details.passphrase) else {
             return "Not joined: the details read aren't usable (\(details.description))"
         }
@@ -423,7 +471,39 @@ struct BluetoothView: View {
             return "Joined \(network)\(already ? " (already on it)" : ""), but no Wi-Fi path with a gateway came up within 20 s; network set to Camera AP, Camera IP unchanged"
         }
         UserDefaults.standard.set(gateway, forKey: "ptpip.host")
-        return "Joined \(network)\(already ? " (already on it)" : ""); network Camera AP, Camera IP \(gateway)"
+        return "Joined \(network)\(already ? " (already on it)" : ""); network Camera AP, Camera IP \(gateway)\(switchedOn ? "; the camera's Wi-Fi was switched on over Bluetooth, which stays connected (Disconnect turns the notifications off)" : "")"
+    }
+
+    /// Build 13: Switch camera Wi-Fi on… and Read details and join's offer: Sony's notifications on first if they
+    /// aren't all on (subscribe logs which took), then CC08 = 01 (switchWiFiOn, `attempt` names it). True when CC09
+    /// reported status 2; failures are logged by the handover itself.
+    private func switchWiFiOnFromTab(attempt: String) async -> Bool {
+        do {
+            if !handover.sonySetNotifying {
+                _ = try await handover.subscribe(SonyWiFiHandover.sonyNotificationCodes)
+            }
+            return try await handover.switchWiFiOn(attempt: attempt)
+        } catch {
+            return false
+        }
+    }
+
+    /// The network details read (nothing recorded), up to `tries` times, 2 s apart, trying again only while the link
+    /// is up and the merged CC09 state says Wi-Fi status 2. The last failure is thrown.
+    private func readDetailsRetrying(tries: Int) async throws -> HandoverCredentials {
+        let total = max(1, tries)
+        var lastError: Error = HandoverError.notConnected
+        for attempt in 1 ... total {
+            do {
+                return try await handover.readCredentials(record: nil)
+            } catch {
+                lastError = error
+                guard attempt < total, handover.isConnected, handover.currentWiFiStatus() == 2 else { throw error }
+                log.warn("Bluetooth tab: network details read, try \(attempt) of \(total), failed (\(SonyWiFiHandover.errorName(error))); trying again in 2 s while the camera reports its Wi-Fi on")
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        throw lastError
     }
 
     private var gattDialogShown: Binding<Bool> {

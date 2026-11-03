@@ -1439,6 +1439,47 @@ final class WirelessLab {
         }
     }
 
+    /// Build 13: whether the latest downloadOneARW got the whole file (nil while it hasn't finished, or when it never
+    /// started: not connected, or another action running), and one line about it (file name, size, time; or why
+    /// not), for a guided run's context.
+    private(set) var oneARWDownloaded: Bool?
+    private(set) var oneARWSummary = "not run"
+
+    /// Build 13: GetObject of one ARW, the `index`-th newest (0 the newest, 1 the second-newest), to a temporary file
+    /// deleted after measuring (`ptpip.<net>.getObject.file`), as GetObject 20 newest ARW does. A session that has
+    /// dropped is reopened first in the same kind of session (runSession), and the card listed again.
+    func downloadOneARW(newestIndex index: Int) {
+        oneARWDownloaded = nil
+        oneARWSummary = "not started (not connected, or another action was running)"
+        runSession("GetObject ARW \(index + 1) newest", transfer: true, needsListing: true) { c, net in
+            let prefix = "ptpip.\(net)"
+            let items = self.newest(ext: "ARW", count: index + 1)
+            guard items.count > index else {
+                self.oneARWDownloaded = false
+                self.oneARWSummary = "only \(items.count) ARW listed"
+                throw WiFiLabError.message("fewer than \(index + 1) ARW listed; tap List card first")
+            }
+            let o = items[index]
+            let url = try self.downloadURL(for: o)
+            defer { try? FileManager.default.removeItem(at: url) }
+            do {
+                let r = try await c.getObject(o.handle, to: url)
+                let expected = UInt64(o.info.objectCompressedSize)
+                let whole = o.info.objectCompressedSize == UInt32.max || r.bytes == expected
+                self.log.throughput("\(prefix).getObject.file", bytes: Int(r.bytes), seconds: r.seconds,
+                                    context: String(format: "%@ (ARW %ld newest), %.1f MB in %.2f s, sha256 %@…", o.info.filename, index + 1,
+                                                    Double(r.bytes) / 1e6, r.seconds, String(r.sha256.prefix(12))))
+                self.oneARWDownloaded = whole
+                self.oneARWSummary = String(format: "%@ (ARW %ld newest): %.1f MB in %.2f s%@", o.info.filename, index + 1,
+                                            Double(r.bytes) / 1e6, r.seconds, whole ? "" : ", but ObjectInfo says \(expected) bytes")
+            } catch {
+                self.oneARWDownloaded = false
+                self.oneARWSummary = "\(o.info.filename) (ARW \(index + 1) newest): \(error)"
+                throw error
+            }
+        }
+    }
+
     func downloadMP4() {
         runSession("GetObject 3 newest MP4", transfer: true, needsListing: true) { c, net in
             let prefix = "ptpip.\(net)"

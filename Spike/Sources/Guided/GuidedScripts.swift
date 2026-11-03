@@ -29,6 +29,30 @@ private struct BluetoothJoin {
     let reason: String
 }
 
+/// What GuidedRunner.readDetailsWhileOn got (build 13): the network details (nil when every try failed), how many
+/// tries it took and why each failed try failed (error names, never values). Only `summary` goes into the log.
+private struct DetailsRead {
+    var details: HandoverCredentials?
+    var tries = 0
+    var failures: [String] = []
+    /// When readDetailsWhileOn was given the instant CC09 reported status 2: seconds from it to the start of the
+    /// first try, and to the read that worked (nil when none did).
+    var firstTryAfterOn: Double?
+    var readAfterOn: Double?
+
+    var firstTryWorked: Bool { details != nil && tries == 1 }
+
+    /// "read on the first try", "read on try 2 (try 1: reading CC06 (SSID) failed: ATT error 0x9D)", "not read
+    /// after 3 tries (…)".
+    var summary: String {
+        let failed = failures.enumerated().map { "try \($0.offset + 1): \($0.element)" }.joined(separator: "; ")
+        if details != nil {
+            return tries <= 1 ? "read on the first try" : "read on try \(tries) (\(failed))"
+        }
+        return "not read after \(tries) \(tries == 1 ? "try" : "tries") (\(failed.isEmpty ? "no failure recorded" : failed))"
+    }
+}
+
 /// One decimal by default, as in the log lines elsewhere.
 private func fmt(_ value: Double, _ digits: Int = 1) -> String { String(format: "%.\(digits)f", value) }
 
@@ -83,6 +107,8 @@ extension GuidedScript {
                      summary: "Every notification of the camera's 8000CC00 service on, then record what the camera reports while Creators' App imports and after it is quit; no CC08 write (about 10 min).") { r in try await r.bleWatch() },
         GuidedScript(id: "ble.join", group: "Bluetooth (session S3)", title: "Bluetooth: join with the camera's Wi-Fi on",
                      summary: "The 1.0 fallback: with PC Remote's network up, read its details over Bluetooth (never logged), join, import the newest ARW, timed from Start; nothing written to the camera (about 10 min).") { r in try await r.bleJoin() },
+        GuidedScript(id: "ble.auto", group: "Bluetooth (session S3)", title: "Bluetooth: switch Wi-Fi on, join and import",
+                     summary: "The whole 1.0 flow from a camera with its Wi-Fi off: Sony's status notifications and CC08 = 01 over Bluetooth (you confirm both), the network details (never logged), join, import the newest ARW, timed from Start; then does the Wi-Fi outlive Bluetooth, and does it go off when the session ends (about 10 min).") { r in try await r.bleAuto() },
     ]
 }
 
@@ -561,7 +587,7 @@ extension GuidedRunner {
     /// Gets the phone onto the camera's own network without the QR code or Settings. If the camera already answers a
     /// 2 s TCP connect at 192.168.122.1:15740 (or the stored camera IP), that is noted and the camera IP set, with no
     /// Bluetooth and nothing recorded. Otherwise: connect and list the services over Bluetooth, read the network name
-    /// and password (CC06, CC07; no subscriptions, no CC08 write, nothing written to the camera), join with them
+    /// and password (CC06, CC07; nothing written to the camera unless you choose to switch its Wi-Fi on, below), join with them
     /// (NEHotspotConfiguration, one iOS prompt), wait up to 60 s for the camera at 192.168.122.1:15740, set Camera AP
     /// and that camera IP, and disconnect Bluetooth. The details exist only in this call and reach the log only as
     /// `HandoverCredentials.description` and HotspotJoiner's redacted lines. Records `ptpip.ap.bluetoothJoin` (yes:
@@ -574,6 +600,13 @@ extension GuidedRunner {
     /// iOS that long to rejoin the camera's network by itself, polling 192.168.122.1:15740 under a waiting alert (after
     /// a camera restart or a long lock). A Bluetooth operation already running (the Bluetooth tab's) is waited for up
     /// to 60 s; if it doesn't end, the result is a fallback with nothing recorded.
+    /// Build 13: when the details read fails with the link up (the camera answers ATT 0x9D with no network up), one
+    /// harmless CC09 read: at Wi-Fi status 2 the read is tried twice more, 2 s apart; otherwise you're asked whether to
+    /// switch the camera's Wi-Fi on over Bluetooth (Sony's five notifications on, then CC08 = 01, recorded as
+    /// `ptpip.ap.bluetoothWiFiOn`: status 2 reached), and the details are read again (2 s apart for up to 20 s, at
+    /// least 3 tries; `ptpip.ap.bluetoothWiFiOn.toDetails` from status 2 to the read that worked) and joined. Then
+    /// the link this call connected stays up, with its notifications, until the guided run ends, and the contexts say
+    /// "Wi-Fi switched on over Bluetooth".
     private func joinCameraOverBluetooth(context: String, waitFirst: Double = 0) async throws -> BluetoothJoin {
         let clock = ContinuousClock()
         let started = clock.now
@@ -624,20 +657,80 @@ extension GuidedRunner {
         // How far it got, for the fallback's message; the log gets the full reason.
         var short = "the camera wasn't found over Bluetooth"
         var joinText = "no join attempted"
+        // Build 13: whether this call switched the camera's Wi-Fi on over Bluetooth (CC08 = 01), and whether it turned
+        // Sony's notifications on for that; "; Wi-Fi switched on over Bluetooth" for the contexts when it did.
+        var switchedOn = false
+        var subscribedHere = false
+        var wifiNote = ""
+        // Notifications already on over the link before this call subscribed (a Bluetooth-tab link may have its own),
+        // and the seconds the tester spent on the "Switch on" question (taken off the time to the camera's port).
+        var notifyingBefore = 0
+        var questionSeconds = 0.0
         do {
             _ = try await connectHandover(record: nil) { short = "the camera's Bluetooth services couldn't be listed" }
+            short = "the network details read didn't finish"
             // The network name and password: only in this scope.
-            let details: HandoverCredentials
-            do {
-                details = try await bluetooth("Reading the network details", "Reading the camera's network name and password over Bluetooth. They are never shown or logged; nothing is written to the camera.",
-                                              timeout: 60, detail: false) { try await self.handover.readCredentials(record: nil) }
-            } catch let stop as GuidedStop {
-                // With the link still up the read itself failed: the camera answers ATT error 0x9D when no network
-                // is set up on it.
-                short = handover.isConnected ? "no Wi-Fi network is set up on the camera" : "the network details read didn't finish"
-                throw stop
+            var read = try await tryReadDetails("Reading the camera's network name and password over Bluetooth. They are never shown or logged; nothing is written to the camera.")
+            if read.details == nil {
+                let failure = read.failures.first ?? "unknown failure"
+                guard handover.isConnected else {
+                    throw GuidedStop("the network details read didn't finish (\(failure))")
+                }
+                // With the link still up the read itself failed: the camera answers ATT error 0x9D when no network is
+                // up on it. CC09 (one harmless read) says whether its Wi-Fi is on.
+                let wifiStatus = try await watchStatusRead("after the network details read failed")
+                log.note("  guided: \(context): the network details read failed with the Bluetooth link up (\(failure)); the camera's Wi-Fi status \(statusText(wifiStatus))")
+                if wifiStatus == 2 {
+                    // On, but not readable yet: two more tries, 2 s apart.
+                    try? await Task.sleep(for: .seconds(2))
+                    let again = try await readDetailsWhileOn(tries: 2)
+                    read = DetailsRead(details: again.details, tries: read.tries + again.tries, failures: read.failures + again.failures)
+                } else {
+                    let asked = clock.now
+                    let choice = try await ask("The camera's Wi-Fi is off",
+                                               "The camera's Wi-Fi is off. Switch it on over Bluetooth? This writes CC08 = 01 and turns on Sony's five status notifications.",
+                                               buttons: ["Switch on", "Use the QR code or Settings"])
+                    questionSeconds = (clock.now - asked).inSeconds
+                    guard choice == "Switch on" else {
+                        short = "the camera's Wi-Fi is off"
+                        throw GuidedStop("the camera's Wi-Fi is off (network details read: \(failure); Wi-Fi status \(statusText(wifiStatus))); you chose the QR code or Settings")
+                    }
+                    short = "switching the camera's Wi-Fi on over Bluetooth didn't work"
+                    let sony = SonyWiFiHandover.sonyNotificationCodes
+                    notifyingBefore = handover.notifyingCount
+                    subscribedHere = true
+                    let codes = try await bluetooth("Subscribing to the camera's notifications",
+                                                    "Turning on notifications for \(sony.joined(separator: ", ")) (up to 10 s each), then collecting the first ones for 1 s.",
+                                                    timeout: subscribeTimeout()) { try await self.handover.subscribe(sony, attempt: "Wi-Fi run") }
+                    // switchWiFiOn's own worst case: a 15 s status read, a 15 s acknowledgement, 30 s from the write.
+                    let on = try await bluetooth("Switching the camera's Wi-Fi on", "Writing 01 to CC08, then waiting up to 30 s for the camera to report its Wi-Fi on.",
+                                                 timeout: 100) { try await self.handover.switchWiFiOn(timeout: 30, attempt: "Wi-Fi run") }
+                    log.flag("ptpip.ap.bluetoothWiFiOn", on,
+                             context: "\(context); CC08 = 01 after the network details read failed (\(failure)) with Wi-Fi status \(statusText(wifiStatus)); Sony's notifications on: \(codes.isEmpty ? "none" : codes.joined(separator: ", ")); \(handover.lastStatusSequence)")
+                    guard on else {
+                        throw GuidedStop("the camera didn't report its Wi-Fi on after CC08 = 01 (\(handover.lastStatusSequence))")
+                    }
+                    let onAt = clock.now
+                    switchedOn = true
+                    wifiNote = "; Wi-Fi switched on over Bluetooth"
+                    // The Wi-Fi may go off when the Bluetooth link closes (unknown until ble.auto answers it): a link
+                    // this call connected stays up, with its notifications, until the run ends.
+                    if ownLink { keepsBluetoothUntilRunEnds = true }
+                    short = "the network details couldn't be read after the camera's Wi-Fi came on"
+                    // Straight after status 2, with no question in between: tried for up to 20 s while the status is 2.
+                    let after = try await readDetailsWhileOn(tries: 3, window: 20, statusOn: onAt)
+                    read = DetailsRead(details: after.details, tries: read.tries + after.tries, failures: read.failures + after.failures,
+                                       firstTryAfterOn: after.firstTryAfterOn, readAfterOn: after.readAfterOn)
+                    if let seconds = after.readAfterOn {
+                        log.measure("ptpip.ap.bluetoothWiFiOn.toDetails", seconds, "s",
+                                    context: "\(context); from CC09 status 2 after CC08 = 01 to the network details read (first try \(after.firstTryAfterOn.map { "\(fmt($0)) s after status 2" } ?? "at an unknown time")): \(after.summary)")
+                    }
+                }
             }
-            log.note("  guided: \(context): network details read over Bluetooth: \(details.description)")
+            guard let details = read.details else {
+                throw GuidedStop("the network details couldn't be read over Bluetooth (\(read.summary))")
+            }
+            log.note("  guided: \(context): network details read over Bluetooth: \(details.description) (\(read.summary))\(wifiNote)")
             guard !details.ssid.isEmpty, HandoverCredentials.isValidPassphrase(details.passphrase) else {
                 short = "the network details read over Bluetooth aren't usable"
                 throw GuidedStop("the network details read over Bluetooth aren't usable (\(details.description))")
@@ -669,29 +762,74 @@ extension GuidedRunner {
                 // Bluetooth didn't get it there, so neither name is recorded.
                 log.note("  guided: \(context): apply answered already associated: iOS had rejoined the camera's network by itself after the \(fmt(checkSeconds)) s check; \(host):15740 answered \(fmt(after)) s later; network Camera AP, camera IP set to \(host); ptpip.ap.bluetoothJoin and its time not recorded")
             } else {
-                log.note("  guided: \(context): on the camera's network over Bluetooth: \(host):15740 answered \(fmt(after)) s after the join, \(fmt(total)) s after the start; network Camera AP, camera IP set to \(host)")
+                log.note("  guided: \(context): on the camera's network over Bluetooth: \(host):15740 answered \(fmt(after)) s after the join, \(fmt(total)) s after the start; network Camera AP, camera IP set to \(host)\(wifiNote)")
                 log.flag("ptpip.ap.bluetoothJoin", true,
-                         context: "\(context); details read over Bluetooth (\(details.description)); \(joinText); the camera answered at \(host):15740 \(fmt(after)) s after the join")
-                log.measure("ptpip.ap.bluetoothJoin.toCameraPort", total, "s",
-                            context: "\(context); from the start of the join over Bluetooth (including the \(fmt(checkSeconds)) s check for the camera on the current network and any tap on iOS's join prompt) to the camera answering at \(host):15740; \(joinText)")
+                         context: "\(context)\(wifiNote); details read over Bluetooth (\(details.description); \(read.summary)); \(joinText); the camera answered at \(host):15740 \(fmt(after)) s after the join")
+                log.measure("ptpip.ap.bluetoothJoin.toCameraPort", total - questionSeconds, "s",
+                            context: "\(context)\(wifiNote); from the start of the join over Bluetooth (including the \(fmt(checkSeconds)) s check for the camera on the current network and any tap on iOS's join prompt\(questionSeconds > 0 ? ", less \(fmt(questionSeconds)) s on the \"Switch on\" question" : "")) to the camera answering at \(host):15740; \(joinText)")
             }
         } catch let stop as GuidedStop {
             log.warn("  guided: \(context): joining over Bluetooth didn't work: \(stop.reason); falling back to the QR code or Settings")
-            log.flag("ptpip.ap.bluetoothJoin", false, context: "\(context); \(joinText); \(stop.reason)")
-            disconnectAfterBluetoothJoin(ownLink: ownLink)
+            log.flag("ptpip.ap.bluetoothJoin", false, context: "\(context)\(wifiNote); \(joinText); \(stop.reason)")
+            try await endBluetoothJoin(ownLink: ownLink, switchedOn: switchedOn, subscribedHere: subscribedHere, notifyingBefore: notifyingBefore)
             return BluetoothJoin(joined: false, reason: short)
         } catch {
-            // "Cancel run" (or anything else unexpected): Bluetooth off, then let it end the run.
-            disconnectAfterBluetoothJoin(ownLink: ownLink)
+            // "Cancel run" (or anything else unexpected): Bluetooth off, then let it end the run; a link kept because
+            // the Wi-Fi was switched on over Bluetooth in this run is released at the end of the run.
+            if !(ownLink && (switchedOn || keepsBluetoothUntilRunEnds)) { disconnectAfterBluetoothJoin(ownLink: ownLink) }
             throw error
         }
-        disconnectAfterBluetoothJoin(ownLink: ownLink)
+        try await endBluetoothJoin(ownLink: ownLink, switchedOn: switchedOn, subscribedHere: subscribedHere, notifyingBefore: notifyingBefore)
         return BluetoothJoin(joined: true, reason: "")
     }
 
+    /// The end of joinCameraOverBluetooth (build 13). When it switched the camera's Wi-Fi on, the link stays up with its
+    /// notifications: until the run ends when this call connected it (GuidedRunner.releaseKeptBluetooth), as it is when
+    /// the Bluetooth tab did (logged as a warning, since the run's notifications stay on). Otherwise the notifications
+    /// this call turned on, and any left from a link the camera dropped, are turned off, waiting for the camera (on a
+    /// link kept for the run, at the end of the run instead), and disconnectAfterBluetoothJoin follows. Over the
+    /// Bluetooth tab's link they are turned off only when the tab had none on before (`notifyingBefore` 0), since
+    /// turning off is all or nothing; otherwise the log says they stay on.
+    private func endBluetoothJoin(ownLink: Bool, switchedOn: Bool, subscribedHere: Bool, notifyingBefore: Int) async throws {
+        if switchedOn {
+            if ownLink {
+                log.note("  guided: the Bluetooth link and Sony's notifications stay up until this run ends, since the camera's Wi-Fi was switched on over Bluetooth and may go off when the link closes; the network details are dropped")
+            } else {
+                log.warn("  guided: the camera's Wi-Fi was switched on over the Bluetooth tab's link, which is left connected with the notifications this run turned on (\(SonyWiFiHandover.sonyNotificationCodes.joined(separator: ", "))) still on: Disconnect on the Bluetooth tab turns them off; the network details are dropped")
+            }
+            return
+        }
+        if ownLink {
+            // A link kept for the run (the Wi-Fi was switched on over Bluetooth earlier in it) keeps its notifications
+            // until the run ends, when releaseKeptBluetooth turns them off, those of a dropped link included.
+            let kept = keepsBluetoothUntilRunEnds && handover.isConnected
+            if !kept && (subscribedHere || !handover.earlierLinkCodes.isEmpty) { try await turnNotificationsOff() }
+        } else if subscribedHere && handover.isConnected {
+            if notifyingBefore == 0 {
+                try await turnNotificationsOff()
+            } else {
+                log.warn("  guided: the Bluetooth tab's link had \(notifyingBefore) notification(s) on before this run turned on Sony's (\(SonyWiFiHandover.sonyNotificationCodes.joined(separator: ", "))), so none are turned off here (turning off is all or nothing): Disconnect on the Bluetooth tab turns them off")
+            }
+        }
+        disconnectAfterBluetoothJoin(ownLink: ownLink)
+    }
+
+    /// Build 13: before a Wi-Fi measurement taken locked or in the background, logs that the Bluetooth link kept for
+    /// this run is up with Sony's notifications (they can wake this app), so the measurement isn't read as one from a
+    /// run without it. Nothing when no link is kept.
+    private func noteKeptBluetooth(_ what: String) {
+        guard keepsBluetoothUntilRunEnds else { return }
+        log.note("  guided: \(what): the Bluetooth link with Sony's notifications is up (the camera's Wi-Fi was switched on over Bluetooth in this run, so \(handover.isConnected ? "the link is kept until the run ends" : "the link was kept, but is down now")); its notifications can wake this app while the phone is locked or the app is in the background")
+    }
+
     /// Bluetooth off after joinCameraOverBluetooth, unless the link is already down and nothing is running, or the
-    /// link was up before the join (`ownLink` false: the Bluetooth tab's), which is left as it is.
+    /// link was up before the join (`ownLink` false: the Bluetooth tab's), which is left as it is, or this call's link
+    /// is to stay up until the run ends (the camera's Wi-Fi was switched on over Bluetooth earlier in this run).
     private func disconnectAfterBluetoothJoin(ownLink: Bool) {
+        if ownLink && keepsBluetoothUntilRunEnds && handover.isConnected {
+            log.note("  guided: this new Bluetooth link stays up until the run ends, since the camera's Wi-Fi was switched on over Bluetooth earlier in this run")
+            return
+        }
         guard handover.isConnected || handover.busy else { return }
         guard ownLink else {
             log.note("  guided: the Bluetooth link was up before the join (Bluetooth tab), so it is left connected; the network details are dropped")
@@ -946,6 +1084,7 @@ extension GuidedRunner {
             }
             if wireless.objects.isEmpty { throw GuidedStop("the card isn't listed after the partial read probe (see the log)") }
             try await wifi("Reference hash", "GetObject of the newest ARW, for the SHA-256 to compare with.", timeout: 300) { wireless.referenceHash() }
+            noteKeptBluetooth("the resumable read")
             step("Resumable read, paused at 50 %")
             wireless.startResumableRead(pauseAtHalf: true)
             try await waitUntil("Reading to 50 %", "The read pauses at 50 %.", timeout: 300) {
@@ -972,6 +1111,7 @@ extension GuidedRunner {
             }
             try await ask("Plain transfer, phone locked", "Tap Start, then lock the phone within 10 s and leave it locked about 2 minutes.", buttons: ["Start"])
             var returns = lifecycle.foregroundReturns
+            noteKeptBluetooth("the locked plain transfer")
             step("GetObject 20 newest ARW, phone locked")
             wireless.downloadARW()
             try await waitUntil("Lock the phone now", "Lock the phone. Unlock after about 2 minutes.", timeout: 1200) {
@@ -1002,6 +1142,7 @@ extension GuidedRunner {
             try await ask("Continued task, phone locked", "Tap Start, then lock the phone once the import shows on the Lock Screen or in the Dynamic Island; unlock after about 2 minutes.",
                           buttons: ["Start"])
             returns = lifecycle.foregroundReturns
+            noteKeptBluetooth("the locked continued task")
             step("Continued task: 20 ARW over Wi-Fi, phone locked")
             try await startContinued("The Wi-Fi continued task") { wireless.downloadARWContinued() }
             try await waitUntil("Lock the phone now", "Lock the phone. Unlock after about 2 minutes.", timeout: 1200) {
@@ -1204,14 +1345,15 @@ extension GuidedRunner {
     }
 
     /// Reconnects and lists the services again when the Bluetooth link is down (the camera may drop it after the
-    /// CC08 write, or while another app is in front). Subscriptions don't carry over to the new link.
-    private func ensureHandoverLink(_ when: String) async throws {
+    /// CC08 write, or while another app is in front). Subscriptions don't carry over to the new link. `record`: the
+    /// prefix the listing is recorded under, as connectHandover's (nil for none).
+    private func ensureHandoverLink(_ when: String, record: String? = "ble.handover") async throws {
         guard !handover.isConnected else { return }
         log.note("  guided: the Bluetooth link is down \(when); reconnecting")
         _ = try await bluetooth("Reconnecting over Bluetooth", "The Bluetooth link dropped; connecting again (up to about a minute).",
                                 timeout: 120) { try await self.handover.connect(timeout: 20) }
         let again = try await bluetooth("Listing services again", "Discovering the camera's services and characteristics.",
-                                        timeout: 45) { try await self.handover.discover() }
+                                        timeout: 45) { try await self.handover.discover(record: record) }
         guard again.hasCameraControl else { throw GuidedStop("no 8000CC00 service after reconnecting") }
     }
 
@@ -1237,34 +1379,95 @@ extension GuidedRunner {
         Double(max(handover.notifiableCodes.count, SonyWiFiHandover.sonyNotificationCodes.count)) * 10 + 30
     }
 
-    /// One CC08 write (`attempt`, after the tester has confirmed it) and what the camera shows, recorded as `flag`
-    /// (not when the tester answers that its Wi-Fi was already on), with whether CC09's notifications were on at the
-    /// write. Returns the tester's answer.
-    private func handoverAttempt(_ attempt: String, flag: String, statusBefore: Int?) async throws -> String {
+    /// One CC08 write (`attempt`, after the tester has confirmed it) and the camera-screen question. Build 13: `flag`
+    /// records whether CC09 reported status 2 after the write (the app's evidence; not recorded when the tester answers
+    /// that its Wi-Fi was already on), `ble.handover.cameraShowsWiFi` whether anything about Wi-Fi appeared on the
+    /// camera's screen (the α7C II showed nothing while its Wi-Fi came on in build 12), each with the other in its
+    /// context, and whether CC09's notifications were on at the write. Returns both, and `onAt`: when switchWiFiOn
+    /// returned (just after CC09 reported status 2 when `cc09On`), before the screen question.
+    private func handoverAttempt(_ attempt: String, flag: String, statusBefore: Int?) async throws -> (cc09On: Bool, shows: String, onAt: ContinuousClock.Instant) {
         let clock = ContinuousClock()
         let started = clock.now
         // switchWiFiOn's own worst case: a 10 s CC09 subscription, a 15 s status read, a 15 s acknowledgement, then
         // 30 s from the write plus a 5 s poll.
         let on = try await bluetooth("Switching the camera's Wi-Fi on", "Attempt \(attempt): writing 01 to CC08, then waiting up to 30 s for the camera to report its Wi-Fi on.",
                                      timeout: 100) { try await self.handover.switchWiFiOn(timeout: 30, attempt: attempt) }
-        let seconds = (clock.now - started).inSeconds
+        let onAt = clock.now
+        let seconds = (onAt - started).inSeconds
         let linkUp = handover.isConnected
         let sequence = handover.lastStatusSequence
         log.note("  guided: attempt \(attempt): CC08 = 01 written; the camera reported its Wi-Fi \(on ? "on" : "not on") after \(fmt(seconds)) s; \(sequence); Bluetooth link \(linkUp ? "still up" : "dropped") (Bluetooth: \(handover.status))")
-        let shows = try await ask("On the camera", "What does the camera show now? (Including anything that showed for a moment after you tapped Write.)",
-                                  buttons: ["Wi-Fi came on", "It was already on", "Something showed briefly, then went", "Nothing changed", "Something else"])
+        let shows = try await ask("On the camera", "Did anything about Wi-Fi appear on the camera's screen? (The α7C II may show nothing even when its Wi-Fi is on.)",
+                                  buttons: ["Wi-Fi came on", "It was already on", "Something showed briefly, then went", "Nothing appeared", "Something else"])
         let cc09Notifying = handover.lastCC09Notifying.map { $0 ? "yes" : "no" } ?? "unknown"
         let atWrite = handover.lastSubscribedAtWrite
         // Only this app's switches on this link are known: a bonded camera may keep others on from earlier runs or
         // from Creators' App, which would show as notifications "not subscribed by this app on this link".
         let subscribedText = "this app's notifications on at the write: \(atWrite.isEmpty ? "none" : atWrite.joined(separator: ", ")) (earlier runs or Creators' App may have left others on at the camera)"
-        let context = "attempt \(attempt): after CC08 = 01; CC09 notifications on at the write: \(cc09Notifying); \(subscribedText); switchWiFiOn returned \(on ? "on" : "not on") after \(fmt(seconds)) s; \(sequence); Bluetooth link \(linkUp ? "up" : "dropped"); CC09 status at the harmless reads \(statusText(statusBefore)); camera shows: \(shows)"
+        let context = "attempt \(attempt): after CC08 = 01; CC09 status 2 \(on ? "reported" : "not reported"); CC09 notifications on at the write: \(cc09Notifying); \(subscribedText); switchWiFiOn returned \(on ? "on" : "not on") after \(fmt(seconds)) s; \(sequence); Bluetooth link \(linkUp ? "up" : "dropped"); CC09 status at the harmless reads \(statusText(statusBefore)); camera's screen, tester: \(shows)"
         if shows == "It was already on" {
             log.note("  guided: \(flag) not recorded: the camera's Wi-Fi was already on (\(context))")
         } else {
-            log.flag(flag, shows == "Wi-Fi came on", context: context)
+            log.flag(flag, on, context: context)
         }
-        return shows
+        log.flag("ble.handover.cameraShowsWiFi", shows != "Nothing appeared", context: context)
+        return (cc09On: on, shows: shows, onAt: onAt)
+    }
+
+    /// One network details read (nothing recorded) under a waiting alert, build 13: a failed read comes back in the
+    /// result as an error name (never a value) instead of stopping the section; no answer in 60 s or "Cancel run"
+    /// still throws (and disconnects, as bluetooth() does).
+    private func tryReadDetails(_ message: String) async throws -> DetailsRead {
+        try await bluetooth("Reading the network details", message, timeout: 60, detail: false) { () async -> DetailsRead in
+            do {
+                let details = try await self.handover.readCredentials(record: nil)
+                return DetailsRead(details: details, tries: 1)
+            } catch {
+                return DetailsRead(details: nil, tries: 1, failures: [SonyWiFiHandover.errorName(error)])
+            }
+        }
+    }
+
+    /// Reads the network details 2 s apart (build 13): at least `tries` times and, with `window` > 0, until `window`
+    /// seconds have passed since the first try, trying again only while the Bluetooth link is up and the camera
+    /// reports Wi-Fi status 2 (the merged CC09 state, else one harmless CC09 read): just after its Wi-Fi launches the
+    /// camera may not hand the details over yet. `statusOn`: the instant CC09 reported status 2, so each failed try
+    /// says how long after it it started and the result carries the seconds to the first try and to the read that
+    /// worked. Records nothing; each failed try is logged, and the caller records the outcome with `summary`.
+    private func readDetailsWhileOn(tries: Int = 3, window: Double = 0, statusOn: ContinuousClock.Instant? = nil) async throws -> DetailsRead {
+        let minimum = max(1, tries)
+        let clock = ContinuousClock()
+        let firstStarted = clock.now
+        var result = DetailsRead()
+        var attempt = 0
+        while true {
+            attempt += 1
+            let tryStarted = clock.now
+            let sinceOn = statusOn.map { (tryStarted - $0).inSeconds }
+            if attempt == 1 { result.firstTryAfterOn = sinceOn }
+            let one = try await tryReadDetails("Reading the camera's network name and password over Bluetooth\(attempt > 1 ? " (try \(attempt))" : ""). They are never shown or logged.")
+            result.tries = attempt
+            if let details = one.details {
+                result.details = details
+                result.readAfterOn = statusOn.map { (clock.now - $0).inSeconds }
+                return result
+            }
+            let when = sinceOn.map { " (started \(fmt($0)) s after CC09 status 2)" } ?? ""
+            let failure = (one.failures.first ?? "unknown failure") + when
+            result.failures.append(failure)
+            log.warn("  guided: network details read, try \(attempt), failed: \(failure)")
+            // Another try only if it starts (2 s from now) inside the window, or fewer than `tries` were made.
+            let more = attempt < minimum || (clock.now - firstStarted).inSeconds + 2 <= window
+            guard more, handover.isConnected else { break }
+            var wifiStatus = handover.currentWiFiStatus()
+            if wifiStatus == nil { wifiStatus = try await watchStatusRead("after a failed network details read") }
+            guard wifiStatus == 2 else {
+                log.note("  guided: the camera's Wi-Fi status is \(statusText(wifiStatus)), not 2, so the network details read isn't tried again")
+                break
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        return result
     }
 
     /// A Wi-Fi status for a log line or context: masked like the handover's other values, "not reported" when nil.
@@ -1294,7 +1497,12 @@ extension GuidedRunner {
     private func turnNotificationsOff() async throws {
         let earlier = handover.earlierLinkCodes
         guard handover.isConnected else {
-            log.note("  guided: the Bluetooth link is down at the end, so the notifications can't be turned off now (any this app turned on may stay on for this phone\(earlier.isEmpty ? "" : ": \(earlier.joined(separator: ", "))"))")
+            // With the link down, earlierLinkCodes is every code this app turned on since the last Disconnect.
+            if earlier.isEmpty {
+                log.note("  guided: the Bluetooth link is down at the end, so the notifications can't be turned off now (none is known to be on from this app)")
+            } else {
+                log.warn("  guided: the Bluetooth link is down at the end, so the notifications this app turned on (\(earlier.joined(separator: ", "))) can't be turned off now; the camera may keep them on for this phone until the next Bluetooth connect turns them off")
+            }
             return
         }
         let current = handover.notifyingCount
@@ -1369,7 +1577,7 @@ extension GuidedRunner {
         let drop = handover.linkDroppedAt.map { "Bluetooth link dropped at +\(fmt($0, 2)) s" } ?? (linkUp ? "Bluetooth link up" : "Bluetooth link dropped")
         let imported = try await ask("Did Creators' App import?", "Did Creators' App connect to the camera over Wi-Fi and import the photo?",
                                      buttons: ["Yes, it imported", "It connected, but no import", "It couldn't connect to the camera"])
-        let base = "\(watch.notifications) notification(s), CC09 ×\(watch.cc09Notifications); status byte \(watch.position.map { "[\($0)]" } ?? "unknown") (\(watch.positionSource)): \(watch.sequence); CC09 read before the watch \(statusText(statusAtMark)), after it \(linkUp ? statusText(statusBack) : "not read (link down)"); \(away); \(drop); Creators' App: \(imported)"
+        let base = "\(watch.notifications) notification(s), CC09 ×\(watch.cc09Notifications); Wi-Fi status from \(watch.positionSource): \(watch.sequence); CC09 read before the watch \(statusText(statusAtMark)), after it \(linkUp ? statusText(statusBack) : "not read (link down)"); \(away); \(drop); Creators' App: \(imported)"
         let reached = watch.sawLaunched || statusBack == 2
         let launchedText = watch.launchedAt.map { "status 2 at +\(fmt($0, 2)) s" }
             ?? (reached ? "status 2 seen, but no change to it from a known other status" : "no status 2 seen")
@@ -1415,7 +1623,7 @@ extension GuidedRunner {
                                        buttons: ["Yes", "No", "Not sure"])
             onNetwork = answer == "Not sure" ? "not sure" : "\(answer.lowercased()) (tester)"
         }
-        let context = "15 s after Creators' App was quit: status \(statusText(known)) (\(source); status byte \(after?.position.map { "[\($0)]" } ?? "unknown"): \(after?.sequence ?? "not watched, link down")); \(after.map { "\($0.notifications) notification(s) since the quit" } ?? "notifications not watched"); Bluetooth link \(linkAtEnd ? "up" : "dropped"); iPhone still on a DIRECT- network: \(onNetwork ?? "unknown")\(testerSays.map { "; camera's Wi-Fi still on, tester: \($0)" } ?? "")"
+        let context = "15 s after Creators' App was quit: status \(statusText(known)) (\(source); Wi-Fi status from \(after?.positionSource ?? "unknown"): \(after?.sequence ?? "not watched, link down")); \(after.map { "\($0.notifications) notification(s) since the quit" } ?? "notifications not watched"); Bluetooth link \(linkAtEnd ? "up" : "dropped"); iPhone still on a DIRECT- network: \(onNetwork ?? "unknown")\(testerSays.map { "; camera's Wi-Fi still on, tester: \($0)" } ?? "")"
         if let known {
             log.flag("\(prefix).wifiStaysAfterQuit", known == 2, context: context)
         } else {
@@ -1427,43 +1635,54 @@ extension GuidedRunner {
     /// Joins the camera's network with `details`, waits for the camera at 192.168.122.1:15740, opens Sony's
     /// whole-card contents transfer, lists the card and downloads the newest ARW; with `joinAgain`, joins a second
     /// time. Flags `<prefix>.joinPrompt`, `<prefix>.import` and `<prefix>.joinPromptAgain`. With `started`, also
-    /// measures `<prefix>.toCameraPort` and `<prefix>.toFirstFile` in seconds from it, less the time spent on the
-    /// join-prompt question. `note` is added to the join-prompt, import and second join-prompt flags' contexts.
+    /// measures `<prefix>.toCameraPort` and `<prefix>.toFirstFile` in seconds from it; build 13 asks the join-prompt
+    /// question after the wait for the camera's port, so only `toFirstFile` has its time taken off. `note` is added to
+    /// the join-prompt, import and second join-prompt flags' contexts.
+    /// Build 13: `questionsBefore` (seconds the tester spent on the run's own questions before this call) is taken off
+    /// those times too, and the context says so; `joinSource` names the run in ptpip.ap.join's context (default:
+    /// derived from `prefix`). Returns whether the newest ARW was downloaded.
+    @discardableResult
     private func joinAndImport(_ details: HandoverCredentials, prefix: String, what: String, note: String = "",
-                               started: ContinuousClock.Instant? = nil, joinAgain: Bool) async throws {
+                               started: ContinuousClock.Instant? = nil, questionsBefore: Double = 0,
+                               joinSource: String? = nil, joinAgain: Bool) async throws -> Bool {
         let clock = ContinuousClock()
         // A path monitor left running by an earlier Wi-Fi run would log every path change on this network.
         wireless.path.stop()
         // f. Join and find the camera.
         UserDefaults.standard.set("ap", forKey: "ptpip.net")
         // ptpip.ap.join's context names the run (never the network).
-        let source = prefix == "ble.handover" ? "Bluetooth handover" : "Bluetooth join run (\(prefix))"
+        let source = joinSource ?? (prefix == "ble.handover" ? "Bluetooth handover" : "Bluetooth join run (\(prefix))")
+        let earlier = questionsBefore > 0 ? " and \(fmt(questionsBefore)) s on the run's earlier questions" : ""
         try await wifi("Join the camera's network", "Accept the system prompt if iOS asks.", timeout: 90) {
             wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase, source: source)
         }
         let firstAlready = wireless.lastJoinAlreadyAssociated
-        let asked = clock.now
-        let prompted = try await ask("Did iOS ask to join?", "Did a system prompt ask to join the camera's network?", buttons: ["Yes", "No"])
-        let questionSeconds = (clock.now - asked).inSeconds
-        log.flag("\(prefix).joinPrompt", prompted == "Yes",
-                 context: "first NEHotspotConfiguration join with the details from Bluetooth; " + joinOutcome(firstAlready) + note)
         let host = "192.168.122.1"
         if let gateway = wireless.lastJoinGateway, gateway != host {
             log.warn("  guided: the join reported gateway \(gateway), not \(host); waiting at \(host) anyway")
         }
+        // Build 13: the wait for the camera's port starts right after the join, and the join-prompt question comes
+        // after it. Build 12 asked first and took the question off, so the camera's DHCP and port readiness ran
+        // inside the subtracted time and its ble.join.toCameraPort left out most of the join-to-port interval.
         step("Waiting for the camera at \(host):15740")
         let port = try await pollCameraPort(host: host, title: "Waiting for the camera",
                                             message: "Waiting for the camera to answer at \(host):15740 on its own network (up to 60 s).",
                                             timeout: 60)
+        let portAt = clock.now
+        let prompted = try await ask("Did iOS ask to join?", "Did a system prompt ask to join the camera's network?", buttons: ["Yes", "No"])
+        let questionSeconds = (clock.now - portAt).inSeconds
+        log.flag("\(prefix).joinPrompt", prompted == "Yes",
+                 context: "first NEHotspotConfiguration join with the details from Bluetooth (asked after the wait for the camera's port); " + joinOutcome(firstAlready) + note)
         guard let after = port.answeredAfter else {
             log.warn("  guided: nothing answered at \(host):15740 within 60 s of the join (\(port.attempts) TCP connect(s); last: \(port.lastError))")
             throw GuidedStop("the camera didn't answer at \(host):15740 after the join")
         }
         UserDefaults.standard.set(host, forKey: "ptpip.host")
-        log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the join (\(port.attempts) TCP connect(s)); camera IP set to \(host)")
+        log.note("  guided: the camera answered at \(host):15740 \(fmt(after)) s after the join returned (the wait started straight after it; \(port.attempts) TCP connect(s)); camera IP set to \(host)")
         if let started {
-            log.measure("\(prefix).toCameraPort", (clock.now - started).inSeconds - questionSeconds, "s",
-                        context: "from Start to the camera answering at \(host):15740, less \(fmt(questionSeconds)) s on the join-prompt question; " + joinOutcome(firstAlready))
+            let lessBefore = questionsBefore > 0 ? ", less \(fmt(questionsBefore)) s on the run's earlier questions" : ""
+            log.measure("\(prefix).toCameraPort", (portAt - started).inSeconds - questionsBefore, "s",
+                        context: "from Start to the camera answering at \(host):15740\(lessBefore); the join-prompt question comes after this wait (build 13; build 12 asked it before the wait and took it off, which left out most of the join-to-port time); " + joinOutcome(firstAlready))
         }
 
         // g. Import one file over a whole-card contents-transfer session.
@@ -1485,10 +1704,10 @@ extension GuidedRunner {
                  context: (imported ? "GetObject of the newest ARW over the network joined from Bluetooth; \(wireless.objects.count) objects listed"
                                     : "GetObject of the newest ARW failed (see the log)") + note)
         if imported, let started {
-            log.measure("\(prefix).toFirstFile", (clock.now - started).inSeconds - questionSeconds, "s",
-                        context: "from Start to the newest ARW downloaded over the camera's network, less \(fmt(questionSeconds)) s on the join-prompt question; \(wireless.objects.count) objects listed")
+            log.measure("\(prefix).toFirstFile", (clock.now - started).inSeconds - questionSeconds - questionsBefore, "s",
+                        context: "from Start to the newest ARW downloaded over the camera's network, less \(fmt(questionSeconds)) s on the join-prompt question\(earlier); \(wireless.objects.count) objects listed")
         }
-        guard joinAgain else { return }
+        guard joinAgain else { return imported }
 
         // h. Join again with the same details.
         try await wifi("Join again", "The same join a second time. Accept the system prompt if iOS asks.", timeout: 90) {
@@ -1503,6 +1722,7 @@ extension GuidedRunner {
             log.flag("\(prefix).joinPromptAgain", again == "Yes",
                      context: "second join with the same details, while on the camera's network; " + joinOutcome(secondAlready) + note)
         }
+        return imported
     }
 
     /// Bluetooth: Wi-Fi handover. Can the app switch the camera's Wi-Fi on over Bluetooth (the one value written, CC08
@@ -1511,7 +1731,9 @@ extension GuidedRunner {
     /// subscribes to (CC09, CC10, CC0F, CC03, CC0E); a second attempt with every 8000CC00 notification on; then, if the
     /// Wi-Fi still isn't on, a watch of Creators' App switching it on. The name and password stay in memory for the
     /// two joins and are then dropped: the log gets lengths, yes/no answers and the handover's redacted description
-    /// only.
+    /// only. Build 13: the Wi-Fi counts as on when CC09 reports status 2 after the write or you say it came on (the
+    /// α7C II may show nothing on its screen); with status 2 after attempt 1 the run goes straight to the network
+    /// details, read 2 s apart for up to 20 s (at least 3 tries) while the status is 2.
     func bleHandover() async throws {
         let ready = try await ask("Camera ready",
                                   "Set the camera up: switched on, its Wi-Fi OFF (Network › PC Remote Function off, so no Wi-Fi Direct network is up; to see whether Bluetooth switches the Wi-Fi on), Bluetooth on, Smartphone Connect set as Creators' App uses it (Bluetooth Function on, this phone paired), and a memory card with a few photos in it (Sony's app gives up switching the Wi-Fi on when the camera reports no media). Quit Creators' App (swipe it away). Then tap Ready.",
@@ -1538,6 +1760,8 @@ extension GuidedRunner {
         var earlierHint: String?
         // How the camera's Wi-Fi came on in this run; nil while it isn't (known to be) on.
         var wifiOnBy: String?
+        // When CC09 reported status 2 after a CC08 write (nil otherwise): the details read says how long after it it ran.
+        var statusOnAt: ContinuousClock.Instant?
         var subscriptions = "none"
         var watched = false
 
@@ -1595,13 +1819,19 @@ extension GuidedRunner {
                     firstLabel = "CC09 notifications only"
                     firstFlag = "ble.handover.wifiOn.cc09Only"
                 }
+                // Build 13: on = CC09 reported status 2 after the write, or the tester says the Wi-Fi came on (the
+                // α7C II may show nothing on its screen while its Wi-Fi is on).
                 let first = try await handoverAttempt("1, \(firstLabel)", flag: firstFlag, statusBefore: status)
-                outcomes.append("attempt 1 (\(firstLabel), CC09 notifying at the write \(handover.lastCC09Notifying.map { $0 ? "yes" : "no" } ?? "unknown")): camera shows \(first)")
-                switch first {
-                case "Wi-Fi came on": wifiOnBy = "CC08, attempt 1"
-                case "It was already on": wifiOnBy = "already on"
-                default: break
+                outcomes.append("attempt 1 (\(firstLabel), CC09 notifying at the write \(handover.lastCC09Notifying.map { $0 ? "yes" : "no" } ?? "unknown")): CC09 status 2 \(first.cc09On ? "reported" : "not reported"), camera's screen \(first.shows)")
+                if first.shows == "It was already on" {
+                    wifiOnBy = "already on"
+                } else if first.cc09On {
+                    wifiOnBy = "CC08, attempt 1 (CC09 status 2)"
+                    statusOnAt = first.onAt
+                } else if first.shows == "Wi-Fi came on" {
+                    wifiOnBy = "CC08, attempt 1 (the tester saw it)"
                 }
+                // Status 2 after attempt 1: no attempt 2 and no watch; straight to the network details.
                 if wifiOnBy == nil {
                     // After a dropped link notifiableCodes is empty until the reconnect: use the first listing's count.
                     let notifiable = handover.notifiableCodes.isEmpty ? inventory.notifiable.count : handover.notifiableCodes.count
@@ -1618,11 +1848,14 @@ extension GuidedRunner {
                         log.note("  guided: subscribed to \(codes.count): \(codes.isEmpty ? "none" : codes.joined(separator: ", "))")
                         let second = try await handoverAttempt("2, all notifications", flag: "ble.handover.wifiOn.allNotifications",
                                                                statusBefore: status)
-                        outcomes.append("attempt 2 (all notifications): camera shows \(second)")
-                        switch second {
-                        case "Wi-Fi came on": wifiOnBy = "CC08, attempt 2"
-                        case "It was already on": wifiOnBy = "already on"
-                        default: break
+                        outcomes.append("attempt 2 (all notifications): CC09 status 2 \(second.cc09On ? "reported" : "not reported"), camera's screen \(second.shows)")
+                        if second.shows == "It was already on" {
+                            wifiOnBy = "already on"
+                        } else if second.cc09On {
+                            wifiOnBy = "CC08, attempt 2 (CC09 status 2)"
+                            statusOnAt = second.onAt
+                        } else if second.shows == "Wi-Fi came on" {
+                            wifiOnBy = "CC08, attempt 2 (the tester saw it)"
                         }
                     }
                 }
@@ -1664,8 +1897,23 @@ extension GuidedRunner {
             // have dropped Bluetooth when its Wi-Fi came on, so reconnect first if it did.
             if !handover.isConnected { earlierHint = earlierHint ?? handover.lastPairingHint }
             try await ensureHandoverLink("before the network details read")
-            let read = try await bluetooth("Reading the network details", "Reading the camera's network name and password over Bluetooth. They are never shown or logged.",
-                                           timeout: 60, detail: false) { try await self.handover.readCredentials() }
+            // Build 13: 2 s apart for up to 20 s (at least 3 tries) while CC09 reports status 2 (unknown before this
+            // build: whether the camera hands the details over once CC08 has launched its Wi-Fi with PC Remote off).
+            let attempts = try await readDetailsWhileOn(tries: 3, window: 20, statusOn: statusOnAt)
+            if route.hasPrefix("CC08") {
+                // Not "right after" the write: the screen question (and any prompts or a reconnect) come first.
+                let gap = attempts.firstTryAfterOn.map { "first read \(fmt($0)) s after CC09 status 2 (the screen question and any prompts or reconnect in between)" }
+                    ?? "first read after the screen question (no CC09 status 2 reported, so the gap isn't known)"
+                log.flag("ble.handover.credentials.firstTry", attempts.firstTryWorked,
+                         context: "the network details read after CC08 = 01 switched the camera's Wi-Fi on (\(route)), PC Remote off; \(gap): \(attempts.summary)")
+            }
+            guard let read = attempts.details else {
+                log.flag("ble.handover.credentials", false, context: "\(attempts.summary); camera's Wi-Fi: \(route)")
+                throw GuidedStop("the network details couldn't be read over Bluetooth (\(attempts.summary))")
+            }
+            let usable = !read.ssid.isEmpty && HandoverCredentials.isValidPassphrase(read.passphrase)
+            log.flag("ble.handover.credentials", usable,
+                     context: read.description + "; \(attempts.summary); camera's Wi-Fi: \(route)" + (usable ? "" : "; not usable: an empty SSID or a passphrase that isn't 8–63 printable ASCII (see the layout line)"))
             log.note("  guided: network details read: \(read.description)")
             let ssidOK = !read.ssid.isEmpty
             let passphraseShape = (8...63).contains(read.passphrase.count)
@@ -1848,6 +2096,356 @@ extension GuidedRunner {
         handover.disconnect()
         disconnected = true
         log.note("  guided: Bluetooth disconnected (\(handover.status)); the network details are dropped")
+    }
+
+    /// Bluetooth: switch Wi-Fi on, join and import (build 13). The whole 1.0 flow from a camera whose Wi-Fi is off:
+    /// after one confirmation that names every write, Sony's five status notifications and CC08 = 01 over Bluetooth,
+    /// a wait for CC09's Wi-Fi status 2, the network details (2 s apart for up to 20 s; never shown or logged), the
+    /// join, Sony's whole-card contents transfer and the newest ARW, timed from Start with no question in between (the
+    /// screen question comes after the section, the join-prompt question after the wait for the camera's port). A
+    /// camera whose CC09 already says status 2 at Start stops the run (`ble.auto.alreadyOnAtStart`). Then two lifecycle
+    /// answers for 1.0: does the Wi-Fi outlive the Bluetooth link (another ARW 10 s after Bluetooth off, and one more
+    /// 60 s after it), and does the camera switch its Wi-Fi off when the phone's session ends (Bluetooth reconnected
+    /// first with no notifications and nothing written, CC09 at 2 as the baseline, then CC09 read every 2 s from the
+    /// close)? The details stay in memory only until the join and import are done.
+    func bleAuto() async throws {
+        let ready = try await ask("Camera ready",
+                                  "Set the camera up: switched on, its Wi-Fi OFF (Network › PC Remote Function off), Bluetooth on (this phone paired, as Creators' App uses it), a few photos on the card. If an earlier run may have left the camera's Wi-Fi on, switch the camera off and on first (its screen doesn't show the Wi-Fi). Either quit Creators' App (swipe it away) or leave it open in the background: run once each way; the next question records which. For a clean measurement of iOS's join prompt, forget the camera's network in Settings › Wi-Fi first (optional). Then tap Ready.",
+                                  buttons: ["Ready", "Skip"])
+        guard ready == "Ready" else {
+            log.note("◆ Bluetooth: switch Wi-Fi on, join and import: skipped")
+            return
+        }
+        // On 3 Nov, with Creators' App open in the background, the camera dropped its Wi-Fi and the Bluetooth link about
+        // 30 s after a switch-on nobody joined; with it quit, the Wi-Fi stayed up for over 50 s. Each log says which.
+        let creatorsApp = try await ask("Creators' App", "Is Creators' App quit (swiped away), or open in the background?",
+                                        buttons: ["Quit", "Open in the background"])
+        let forgot = try await ask("Network forgotten?", "Did you forget the camera's network in Settings › Wi-Fi before this run?",
+                                   buttons: ["Forgotten", "Not forgotten"])
+        let systemLinks = handover.systemConnectedCameraCount()
+        let setup = "camera's Wi-Fi off at the start (PC Remote off), Creators' App \(creatorsApp == "Quit" ? "quit" : "open in the background"), \(systemLinks.map { "\($0) camera link(s) held by the system at setup" } ?? "system camera links unknown at setup"), camera's network \(forgot == "Forgotten" ? "forgotten in Settings first" : "not forgotten in Settings")"
+        let sony = SonyWiFiHandover.sonyNotificationCodes
+        // The one confirmation for every write of the run, before Start.
+        let confirm = try await ask("Write to the camera?",
+                                    "This run writes, over Bluetooth: the notification switches of \(sony.joined(separator: ", ")) (the camera's status notifications, turned off at the end) and 01 to CC08, which switches the camera's Wi-Fi on. Nothing else is written. After Start, watch the camera's screen until the import begins: the app asks at the end whether anything about Wi-Fi appeared. Go ahead?",
+                                    buttons: ["Go ahead", "Skip"])
+        guard confirm == "Go ahead" else {
+            log.note("◆ Bluetooth: switch Wi-Fi on, join and import: skipped (the writes weren't confirmed)")
+            return
+        }
+        log.note("◆ Switch Wi-Fi on, join and import: \(setup); the tester confirmed Sony's notification switches and CC08 = 01")
+        // Before Start: a link left up by the Bluetooth tab would leave the connect out of the times from Start.
+        try await dropEarlierHandoverLink("switch-on run")
+
+        var disconnected = false
+        defer { if !disconnected { handover.disconnect() } }
+        var connectedThisRun = false
+        var wroteCC08 = false
+        var wifiOn = false
+        // CC09's Wi-Fi status values with times from the switch-on, for the screen question asked after the section.
+        var onSequence = ""
+        var imported = false
+
+        try await section("Switch the camera's Wi-Fi on, join and import",
+                          "Start starts the clock: watch the camera's screen from now until the import begins. The app connects over Bluetooth, turns on Sony's status notifications, writes 01 to CC08 and waits for the camera to report its Wi-Fi on, reads the network name and password (never shown or logged), joins, waits for the camera at 192.168.122.1, connects for the whole card, lists it and downloads the newest ARW. No question comes between Start and the wait for the camera.") {
+            let clock = ContinuousClock()
+            let started = clock.now
+            // Recorded as ble.auto.* by this run, not as the handover run's ble.handover.* names.
+            _ = try await connectHandover(record: nil) { connectedThisRun = true }
+            let codes = try await bluetooth("Subscribing to the camera's notifications",
+                                            "Turning on notifications for \(sony.joined(separator: ", ")) (up to 10 s each), then collecting the first ones for 1 s.",
+                                            timeout: subscribeTimeout()) { try await self.handover.subscribe(sony, attempt: "ble.auto") }
+            log.note("  guided: subscribed to \(codes.isEmpty ? "none" : codes.joined(separator: ", "))")
+            let read = try await watchStatusRead("at Start, before the write")
+            let before = read ?? handover.currentWiFiStatus()
+            var sequence = "Wi-Fi status \(statusText(before)) at Start"
+            // When CC09 reported status 2 after the write: the gap to the first details read is recorded.
+            var statusOnAt = started
+            if before == 2 {
+                // No switch-on to time: every ble.auto time means "after the app's own CC08 write", so the run stops.
+                log.warn("  guided: CC09 already reports Wi-Fi status 2 at Start (the camera's Wi-Fi is on), so no CC08 write and nothing timed")
+                log.flag("ble.auto.alreadyOnAtStart", true, context: "CC09 status 2 at Start, before any CC08 write; \(sequence); \(setup)")
+                throw GuidedStop("the camera's Wi-Fi is already on (CC09 status 2 at Start), so no switch-on could be timed: switch the camera off and on with PC Remote off, then run again")
+            } else {
+                log.flag("ble.auto.alreadyOnAtStart", false, context: "\(sequence), so CC08 = 01 follows; \(setup)")
+                wroteCC08 = true
+                let writeStarted = clock.now
+                // switchWiFiOn's own worst case: a 15 s status read, a 15 s acknowledgement, 30 s from the write.
+                var on = try await bluetooth("Switching the camera's Wi-Fi on", "Writing 01 to CC08, then waiting up to 30 s for the camera to report its Wi-Fi on.",
+                                             timeout: 100) { try await self.handover.switchWiFiOn(timeout: 30, attempt: "ble.auto") }
+                sequence = handover.lastStatusSequence
+                // switchWiFiOn stops 3 s after the status goes back to where it was: wait out the rest of the 30 s.
+                let waited = (clock.now - writeStarted).inSeconds
+                if !on, handover.isConnected, waited < 29 {
+                    let rest = 30 - waited
+                    let more = try await bluetooth("Waiting for the camera's Wi-Fi", "Waiting up to \(Int(rest.rounded(.up))) s more for the camera to report its Wi-Fi on. Nothing is written.",
+                                                   timeout: rest + 15) { await self.handover.waitForWiFiStatus([2], timeout: rest) }
+                    on = more.status == 2
+                    sequence += "; then \(more.sequence) over \(fmt(more.seconds)) s more"
+                }
+                guard on else {
+                    log.flag("ble.auto.wifiOn", false, context: "no CC09 status 2 within 30 s of CC08 = 01; \(sequence); Bluetooth link \(handover.isConnected ? "up" : "dropped"); \(setup)")
+                    throw GuidedStop("the camera didn't report its Wi-Fi on within 30 s of CC08 = 01 (\(sequence))")
+                }
+                statusOnAt = clock.now
+                log.measure("ble.auto.toWiFiOn", (statusOnAt - started).inSeconds, "s",
+                            context: "from Start: Bluetooth connect, discovery, Sony's notifications, CC08 = 01 and CC09 status 2; \(sequence)")
+                log.flag("ble.auto.wifiOn", true, context: "CC09 reported status 2 after CC08 = 01; \(sequence); \(setup)")
+            }
+            wifiOn = true
+            onSequence = sequence
+
+            // The network details: 2 s apart for up to 20 s (at least 3 tries) while the status is 2, straight after
+            // status 2 (the screen question comes at the end of the run). The camera may have dropped Bluetooth
+            // meanwhile: reconnect, with Sony's notifications on again, if it did.
+            var reconnected = false
+            if !handover.isConnected {
+                reconnected = true
+                try await ensureHandoverLink("before the network details read", record: nil)
+                let again = try await bluetooth("Subscribing to the camera's notifications again",
+                                                "Turning on notifications for \(sony.joined(separator: ", ")) over the new link.",
+                                                timeout: subscribeTimeout()) { try await self.handover.subscribe(sony, attempt: "ble.auto, after a reconnect") }
+                log.note("  guided: subscribed again to \(again.isEmpty ? "none" : again.joined(separator: ", "))")
+            }
+            let attempts = try await readDetailsWhileOn(tries: 3, window: 20, statusOn: statusOnAt)
+            let firstGap = attempts.firstTryAfterOn ?? 0
+            log.measure("ble.auto.statusOnToFirstRead", firstGap, "s",
+                        context: "from CC09 status 2 after CC08 = 01 to the start of the first network details read\(reconnected ? ", a Bluetooth reconnect and Sony's notifications again in between" : ", no question in between"); \(attempts.summary)")
+            let gapText = "first read \(fmt(firstGap)) s after CC09 status 2\(reconnected ? " (after a Bluetooth reconnect)" : "")"
+            guard let details = attempts.details else {
+                log.flag("ble.auto.credentials", false, context: "\(attempts.summary); \(gapText); \(setup)")
+                throw GuidedStop("the network details couldn't be read over Bluetooth (\(attempts.summary))")
+            }
+            if let toDetails = attempts.readAfterOn {
+                log.measure("ble.auto.statusOnToDetails", toDetails, "s",
+                            context: "from CC09 status 2 after CC08 = 01 to the network details read that worked; \(gapText); \(attempts.summary)")
+            }
+            log.measure("ble.auto.toDetails", (clock.now - started).inSeconds, "s",
+                        context: "from Start to the network details read (no question in between); \(gapText); \(attempts.summary); \(details.description)")
+            let usable = !details.ssid.isEmpty && HandoverCredentials.isValidPassphrase(details.passphrase)
+            log.flag("ble.auto.credentials", usable, context: "\(details.description); \(attempts.summary); \(gapText); \(setup)")
+            guard usable else { throw GuidedStop("the network details from Bluetooth aren't usable (see the layout line in the log)") }
+            imported = try await joinAndImport(details, prefix: "ble.auto", what: "Bluetooth switch-on run", note: "; \(setup)",
+                                               started: started, joinSource: "ble.auto", joinAgain: false)
+        }
+
+        // Asked after the section, so no question sits inside the times from Start: the α7C II showed nothing in build 12.
+        if wifiOn {
+            let screen = try await ask("On the camera", "While the app switched the camera's Wi-Fi on and joined it, did anything about Wi-Fi appear on the camera's screen? (The α7C II may show nothing even when its Wi-Fi is on.)",
+                                       buttons: ["Yes", "No"])
+            log.flag("ble.auto.cameraShowsWiFi", screen == "Yes",
+                     context: "asked after the section (the tester watched the screen from Start); CC09 reported Wi-Fi status 2 after CC08 = 01; \(onSequence)")
+        }
+
+        // Asked whenever the run connected: an unseen pairing request would be inside ble.auto.toWiFiOn.
+        if connectedThisRun {
+            try await askPairingPrompt(flag: "ble.auto.pairingPrompt", earlierHint: nil,
+                                       steps: "connect, Sony's notification switches\(wroteCC08 ? ", the CC08 write" : ""), the network details read",
+                                       context: "during the switch-on run's Bluetooth steps (Sony's notifications on; CC08 write \(wroteCC08 ? "made" : "not made"); a request would be inside ble.auto.toWiFiOn); \(setup)")
+        }
+
+        if imported && wireless.isConnected {
+            try await section("1.0 lifecycle: the Wi-Fi without Bluetooth, and after the session",
+                              "Two answers for 1.0. First, Bluetooth off (notifications off, then disconnect), 10 s, then another ARW over the Wi-Fi session still open, and one more 60 s after Bluetooth went off. Second, the app connects over Bluetooth again (no notifications, nothing written), checks that the camera still reports its Wi-Fi on, closes the Wi-Fi session and reads the camera's status every 2 s for up to 45 s: does the camera switch its Wi-Fi off by itself? About 2 minutes.") {
+                try await bleAutoLifecycle(setup: setup)
+            }
+        } else {
+            log.note("  guided: \(wifiOn ? "no import (or the Wi-Fi session closed)" : "this run didn't switch the camera's Wi-Fi on"), so ble.auto.wifiSurvivesBluetoothOff and ble.auto.wifiOffAfterSession aren't asked")
+        }
+
+        // End: notifications off (if any), Bluetooth off; the network details went with the first section.
+        if wireless.isConnected {
+            try await wifi("Disconnect PTP/IP", "Closing the Wi-Fi session, so Creators' App can connect.", timeout: 30) { wireless.disconnect() }
+        }
+        // Notifications turned on over a link the camera dropped stay on at a bonded camera: connect once more (only
+        // connect and discovery) so they are turned on and off again over it (CCCD writes inside 8000CC00 only).
+        if connectedThisRun && !handover.isConnected && !handover.busy && !handover.earlierLinkCodes.isEmpty {
+            log.note("  guided: notifications turned on over a dropped link (\(handover.earlierLinkCodes.joined(separator: ", "))) aren't cleared; connecting once more to turn them off")
+            do {
+                try await ensureHandoverLink("at the end of the run, with notifications from a dropped link to turn off", record: nil)
+            } catch let stop as GuidedStop {
+                log.warn("  guided: the reconnect to turn those notifications off didn't work (\(stop.reason))")
+            }
+        }
+        try await turnNotificationsOff()
+        step("Disconnect Bluetooth")
+        handover.disconnect()
+        disconnected = true
+        log.note("  guided: Bluetooth disconnected (\(handover.status)); the network details are dropped")
+        guard connectedThisRun else {
+            log.note("  guided: this run never connected to the camera over Bluetooth, so ble.auto.creatorsAppStillWorks isn't asked")
+            return
+        }
+        let works = try await ask("Creators' App", "Open Creators' App and check that it still connects to the camera as before. Then come back here. Does it?",
+                                  buttons: ["Yes", "No"])
+        log.flag("ble.auto.creatorsAppStillWorks", works == "Yes",
+                 context: "after the switch-on run; CC08 write \(wroteCC08 ? "made" : "not made"); Sony's notifications on during the run, turned off at the end; \(setup)")
+    }
+
+    /// ble.auto's lifecycle answers, after the import with the whole-card session open. a. Notifications off and
+    /// Bluetooth disconnected, 10 s, then GetObject of the second-newest ARW (the newest if only one is listed) over
+    /// the Wi-Fi session, reopened in the same whole-card mode first if it dropped (said in the log and the context):
+    /// `ble.auto.wifiSurvivesBluetoothOff`, with whether iOS still listed a camera link after the 10 s; then, if that
+    /// worked, a wait until 60 s after Bluetooth went off and GetObject of the newest ARW:
+    /// `ble.auto.wifiSurvivesBluetoothOff.60s`. A link the camera had already dropped isn't disconnected (Disconnect
+    /// would forget the notifications turned on over it, which the run's end turns off over a new link). b. With a
+    /// Wi-Fi session open: a new Bluetooth link (connect and discover, no notifications, nothing written) and one CC09
+    /// read as the baseline, which must say status 2; then the PTP/IP session closed and CC09 read every 2 s for up to
+    /// 45 s from the close: `ble.auto.wifiOffAfterSession` (status 0 reached; recorded only when a status was read) and
+    /// `ble.auto.wifiOffAfterSession.latency` [s] from the session closing to the read that saw 0, with whether the
+    /// iPhone was on a DIRECT- network at the close and at the end in the contexts.
+    private func bleAutoLifecycle(setup: String) async throws {
+        let clock = ContinuousClock()
+        let host = "192.168.122.1"
+        // a. Does the Wi-Fi survive the Bluetooth link going away?
+        try await turnNotificationsOff()
+        step("Disconnect Bluetooth")
+        if handover.isConnected || handover.busy {
+            handover.disconnect()
+            log.note("  guided: Bluetooth disconnected (\(handover.status)); the Wi-Fi session stays open")
+        } else {
+            log.note("  guided: the camera had already dropped the Bluetooth link; not disconnected, so the notifications turned on over it are turned off over the next link; the Wi-Fi session stays open")
+        }
+        let offAt = clock.now
+        try await waitUntil("Bluetooth off", "Bluetooth is off; waiting 10 s before another download over the camera's Wi-Fi.",
+                            timeout: 12) { clock.now >= offAt + .seconds(10) }
+        // Disconnect only ends this app's connection: iOS keeps the link while anything else holds it.
+        let systemLinks = handover.systemConnectedCameraCount()
+        let linkText = systemLinks.map { "iOS listed \($0) camera link(s) with 8000CC00 after the 10 s" }
+            ?? "iOS's camera links after the 10 s unknown (Bluetooth not powered on)"
+        log.note("  guided: \(linkText)")
+        let quiet: PTPIPClient.Logger = { _, _ in }
+        let portAnswers = (try? await PTPIPClient.probePort(host: host, timeout: 2, log: quiet)) != nil
+        var session = "the Wi-Fi session was still open"
+        if !wireless.isConnected {
+            session = "the Wi-Fi session had closed, so it was reopened in Sony's whole-card mode"
+            log.warn("  guided: \(session)")
+            try await wifi("Contents transfer: whole card", "The Wi-Fi session had closed; reopening it in Sony's whole-card mode.", timeout: 180) {
+                wireless.connectContentsTransfer(wifiTarget(), mode: .wholeCard)
+            }
+            if wireless.isConnected {
+                try await wifi("List card", "Listing the card again on the new session.", timeout: 900) { wireless.listCard() }
+            }
+        } else if let c = wireless.client {
+            let failure = await c.linkFailure
+            if let failure {
+                session = "the Wi-Fi session had dropped (\(failure)), so it was reconnected in the same whole-card mode"
+                log.warn("  guided: \(session)")
+                try await wifi("Reconnect", "The Wi-Fi session had dropped; reconnecting in Sony's whole-card mode.", timeout: 180) {
+                    wireless.reconnect(wifiTarget())
+                }
+                if wireless.isConnected {
+                    try await wifi("List card", "Listing the card again on the new session.", timeout: 900) { wireless.listCard() }
+                }
+            }
+        }
+        let arws = wireless.objects.filter { $0.info.fileExtension == "ARW" }.count
+        var survives = false
+        var downloadText = "no Wi-Fi session"
+        if wireless.isConnected && arws > 0 {
+            let index = arws >= 2 ? 1 : 0
+            try await wifi("GetObject \(index == 1 ? "second-newest" : "newest") ARW", "Downloading over the camera's Wi-Fi with Bluetooth off.", timeout: 300) {
+                wireless.downloadOneARW(newestIndex: index)
+            }
+            survives = wireless.oneARWDownloaded == true
+            downloadText = (index == 1 ? "" : "only one ARW listed, so the newest again; ") + wireless.oneARWSummary
+        } else if wireless.isConnected {
+            downloadText = "no ARW listed"
+        }
+        let secondsOff = (clock.now - offAt).inSeconds
+        log.flag("ble.auto.wifiSurvivesBluetoothOff", survives,
+                 context: "GetObject \(survives ? "worked" : "failed") \(fmt(secondsOff)) s after Bluetooth was disconnected (notifications off first): \(downloadText); \(session); TCP \(host):15740 answered after the 10 s: \(portAnswers ? "yes" : "no"); \(linkText); \(setup)")
+
+        // a2. Still up a minute later? A camera that drops its Wi-Fi 20–60 s after Bluetooth goes would break a long
+        // 1.0 import, and the 10 s answer can't see that.
+        var survivesMinute = false
+        if survives {
+            let minuteAt = offAt + .seconds(60)
+            if clock.now < minuteAt {
+                try await waitUntil("Bluetooth off", "Waiting until 60 s after Bluetooth went off before one more download over the camera's Wi-Fi.",
+                                    timeout: 65) { clock.now >= minuteAt }
+            }
+            let systemLater = handover.systemConnectedCameraCount()
+            if wireless.isConnected {
+                try await wifi("GetObject newest ARW", "Downloading over the camera's Wi-Fi, about a minute after Bluetooth went off.", timeout: 300) {
+                    wireless.downloadOneARW(newestIndex: 0)
+                }
+            }
+            survivesMinute = wireless.isConnected && wireless.oneARWDownloaded == true
+            let laterText = wireless.isConnected ? wireless.oneARWSummary : "the Wi-Fi session had closed"
+            log.flag("ble.auto.wifiSurvivesBluetoothOff.60s", survivesMinute,
+                     context: "GetObject \(survivesMinute ? "worked" : "failed") \(fmt((clock.now - offAt).inSeconds)) s after Bluetooth was disconnected (the download started about 60 s after it): \(laterText); \(systemLater.map { "iOS listed \($0) camera link(s) with 8000CC00 before it" } ?? "iOS's camera links before it unknown"); \(setup)")
+        }
+        let survivesText = survives ? (survivesMinute ? "yes, 10 s and 60 s after" : "yes at 10 s, not at 60 s") : "no"
+
+        // b. Does the camera switch its Wi-Fi off when the phone's session ends? Bluetooth comes back first, so a CC09
+        // read just before the close is the baseline and the reconnect isn't inside the latency. Build 12 saw CC09 go
+        // 2 → 3 → 0 with this app's link up, so a link up at the close doesn't keep the Wi-Fi on.
+        guard wireless.isConnected else {
+            log.note("  guided: no Wi-Fi session is open after (a), so there is no session end to time; ble.auto.wifiOffAfterSession not recorded")
+            return
+        }
+        // No subscriptions and no writes over this link: only connect, discovery and CC09 reads.
+        _ = try await connectHandover(record: nil) {}
+        let baseline = try await watchStatusRead("baseline before the PTP/IP session closes")
+        guard baseline == 2 else {
+            log.warn("  guided: CC09 reads Wi-Fi status \(statusText(baseline)) just before the PTP/IP session closes, not 2, so the camera's switch-off after the session can't be timed; ble.auto.wifiOffAfterSession not recorded")
+            return
+        }
+        let directAtClose = await HotspotJoiner.onDirectNetwork()
+        try await wifi("Disconnect PTP/IP", "Closing the Wi-Fi session (CloseSession), as the app does when an import ends.", timeout: 30) { wireless.disconnect() }
+        let closedAt = clock.now
+        let poll = try await bluetooth("Watching the camera's Wi-Fi status",
+                                       "Reading the camera's status (CC09) every 2 s for up to 45 s from the session's end: does the camera switch its Wi-Fi off by itself? Nothing is written.",
+                                       timeout: 90) { await self.pollWiFiOff(since: closedAt, limit: 45) }
+        let directAtEnd = await HotspotJoiner.onDirectNetwork()
+        func directText(_ value: Bool?) -> String { value.map { $0 ? "yes" : "no" } ?? "unknown (iOS doesn't say)" }
+        // The camera may react to the station leaving rather than to CloseSession: the phone stays joined (joinOnce false).
+        let context = "CC09 2 before the close, Bluetooth link already up (no notifications, nothing written); times from the PTP/IP session's end: \(poll.sequence); iPhone on a DIRECT- network at the close: \(directText(directAtClose)), at the end: \(directText(directAtEnd)); Wi-Fi survived Bluetooth off: \(survivesText)"
+        if poll.known {
+            log.flag("ble.auto.wifiOffAfterSession", poll.offAfter != nil, context: "\(context); \(setup)")
+            if let off = poll.offAfter {
+                log.measure("ble.auto.wifiOffAfterSession.latency", off, "s",
+                            context: "from the PTP/IP session closing to the CC09 read that saw Wi-Fi status 0 (reads every 2 s); \(context)")
+            }
+        } else {
+            log.note("  guided: ble.auto.wifiOffAfterSession not recorded: no CC09 read gave the Wi-Fi status (\(poll.sequence))")
+        }
+    }
+
+    /// Reads CC09 every 2 s (one harmless read each, nothing written) until the Wi-Fi status is 0 or `limit` seconds
+    /// have passed since `start`. Returns the seconds from `start` to the read that saw 0 (nil if none did), the
+    /// status's values with times from `start`, and whether any read gave a status. A read that throws (the link
+    /// dropped, Disconnect) ends it.
+    private func pollWiFiOff(since start: ContinuousClock.Instant, limit: Double) async -> (offAfter: Double?, sequence: String, known: Bool) {
+        let clock = ContinuousClock()
+        var sequence: [String] = []
+        var last: Int?
+        var known = false
+        var reads = 0
+        while !Task.isCancelled {
+            let readAt = clock.now
+            let status: Int?
+            do {
+                status = try await handover.readWiFiStatus("every 2 s after the PTP/IP session closed")
+            } catch {
+                sequence.append("reads stopped: \(SonyWiFiHandover.errorName(error))")
+                break
+            }
+            reads += 1
+            if status != nil { known = true }
+            let at = (readAt - start).inSeconds
+            if reads == 1 || status != last {
+                sequence.append("\(statusText(status)) (+\(fmt(at)) s)")
+                last = status
+            }
+            if status == 0 { return (at, sequence.joined(separator: " → "), known) }
+            let next = readAt + .seconds(2)
+            if (next - start).inSeconds > limit { break }
+            let wait = (next - clock.now).inSeconds
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+        }
+        return (nil, sequence.isEmpty ? "no read" : sequence.joined(separator: " → "), known)
     }
 
     /// How a join answered, for a join-prompt flag's context.
