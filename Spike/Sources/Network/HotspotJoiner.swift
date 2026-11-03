@@ -25,9 +25,11 @@ enum HotspotJoiner {
     /// Applies the configuration and waits up to 20 s for the new Wi-Fi path. Records `ptpip.ap.join` for a real
     /// join; `alreadyAssociated` counts as success but is not timed (forget the network in Settings to time it).
     ///
-    /// `redacted`: the Bluetooth handover path (see the type's comment). `ptpip.ap.join` then carries the context
-    /// "Bluetooth handover" and no SSID.
-    static func join(ssid rawSSID: String, passphrase: String, log: SpikeLog, redacted: Bool = false) async -> Outcome? {
+    /// `redacted`: the Bluetooth handover path (see the type's comment). `ptpip.ap.join` then carries `source` as its
+    /// context ("Bluetooth handover" by default; the caller names the run or tab) and no SSID. `source` must never hold
+    /// the SSID or passphrase.
+    static func join(ssid rawSSID: String, passphrase: String, log: SpikeLog, redacted: Bool = false,
+                     source: String = "Bluetooth handover") async -> Outcome? {
         let ssid = rawSSID.trimmingCharacters(in: .whitespacesAndNewlines)
         // How the log names the network: the SSID itself on the typed or scanned path, never on the handover path.
         let network = redacted ? "the camera's network (\(ssidSummary(ssid)))" : "\"\(ssid)\""
@@ -51,7 +53,7 @@ enum HotspotJoiner {
         let before = await PathMonitor.waitForWiFi(timeout: 0.5) { _ in true }
         let gatewayBefore: String? = (before?.isSatisfied ?? false) ? before?.firstIPv4Gateway : nil
 
-        log.note("Join: applying NEHotspotConfiguration for \(network)\(redacted ? " from the Bluetooth handover" : "") (passphrase \(passphrase.isEmpty ? "none" : "••••")); confirm the system prompt. Gateway before: \(gatewayBefore ?? "none")")
+        log.note("Join: applying NEHotspotConfiguration for \(network)\(redacted ? " from Bluetooth (\(source))" : "") (passphrase \(passphrase.isEmpty ? "none" : "••••")); confirm the system prompt. Gateway before: \(gatewayBefore ?? "none")")
         let clock = ContinuousClock()
         let started = clock.now
         var alreadyAssociated = false
@@ -98,7 +100,7 @@ enum HotspotJoiner {
         } else {
             log.measure("ptpip.ap.join", total, "s",
                         context: String(format: "%@; apply returned after %.1f s (includes the user's tap on the prompt); Wi-Fi path with gateway %@ after %.1f s",
-                                        redacted ? "Bluetooth handover" : "\"\(ssid)\"", applied, gateway ?? "?", total))
+                                        redacted ? source : "\"\(ssid)\"", applied, gateway ?? "?", total))
         }
         // The path summary lists IPv6 gateways too, and a link-local one can be built from the camera's MAC.
         let pathText = redacted ? "on Wi-Fi with IPv4 gateway \(gateway ?? "?") (full path left out on the handover path)" : snapshot.summary

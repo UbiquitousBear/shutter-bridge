@@ -2432,17 +2432,19 @@ final class WirelessLab {
     }
 
     /// Build 10, Bluetooth handover: joins the network whose name and password the camera gave over Bluetooth, the
-    /// same way as Join camera Wi-Fi (NEHotspotConfiguration, joinOnce false, timed as `ptpip.ap.join` with the
-    /// context "Bluetooth handover"), but the SSID and passphrase stay in this call: never in joinSSID or
+    /// same way as Join camera Wi-Fi (NEHotspotConfiguration, joinOnce false, timed as `ptpip.ap.join` with `source`
+    /// as the context, "Bluetooth handover" unless the caller names its run or tab; never the SSID or passphrase), but
+    /// the SSID and passphrase stay in this call: never in joinSSID or
     /// joinPassphrase, UserDefaults or the log (HotspotJoiner's redacted path logs the SSID as its length and
     /// whether it starts with "DIRECT-", and the joined network's SSID and BSSID as yes/no answers only).
-    func joinHandover(ssid: String, passphrase: String) {
+    func joinHandover(ssid: String, passphrase: String, source: String = "Bluetooth handover") {
         guard !joining else { return }
         joining = true
         lastJoinGateway = nil
         lastJoinAlreadyAssociated = nil
         Task { @MainActor in
-            let outcome = await HotspotJoiner.join(ssid: ssid, passphrase: passphrase, log: self.log, redacted: true)
+            let outcome = await HotspotJoiner.join(ssid: ssid, passphrase: passphrase, log: self.log, redacted: true,
+                                                   source: source)
             if let gateway = outcome?.gateway {
                 self.joinedGateway = gateway
                 self.lastJoinGateway = gateway

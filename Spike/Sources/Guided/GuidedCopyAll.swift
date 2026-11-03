@@ -22,7 +22,7 @@ extension GuidedRunner {
             if !wireless.isConnected || wireless.contentsMode != .wholeCard {
                 // Only PC Remote's whole-card contents transfer has listed the whole card (spike-findings.md).
                 try await ask("Camera on Wi-Fi",
-                              "On the camera: Network › Cnct./PC Remote › PC Remote Function on, with PC Remote Cnct Method set to Wi-Fi Direct (or Wi-Fi Access Point for your home network). That is the mode that lists the whole card; Smartphone Connect doesn't. Then join its network in Settings › Wi-Fi if the phone isn't on it.",
+                              "On the camera: Network › Cnct./PC Remote › PC Remote Function on, with PC Remote Cnct Method set to Wi-Fi Direct (or Wi-Fi Access Point for your home network). That is the mode that lists the whole card; Smartphone Connect doesn't. You don't need to join the camera's network yourself: if no Wi-Fi session is open, the next step asks which network, and on the camera's own network the app joins it over Bluetooth (the QR code or Settings › Wi-Fi only if that doesn't work).",
                               buttons: ["Done"])
             }
             items = try await copyAllWiFiSession()
@@ -158,7 +158,8 @@ extension GuidedRunner {
     }
 
     /// A Wi-Fi session with the card listed, preferably Sony's whole-card contents transfer (the only session that has
-    /// listed the whole card so far). Returns the ARW to copy.
+    /// listed the whole card so far). With none open, the network is asked for and joined first (wifiJoin, through
+    /// ensureWiFiSessionForCopy). Returns the ARW to copy.
     private func copyAllWiFiSession() async throws -> [CopyAllItem] {
         try await ensureWiFiSessionForCopy()
         try await reconnectWiFiIfDropped()

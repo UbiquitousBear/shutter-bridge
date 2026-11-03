@@ -366,14 +366,15 @@ struct BluetoothView: View {
                 Task {
                     // Notifications off first, waiting for the camera's answers; while an operation runs, Disconnect
                     // cancels it at once and turns them off without waiting.
-                    if !handover.busy && handover.isConnected && handover.notifyingCount > 0 {
+                    if !handover.busy && handover.isConnected
+                        && (handover.notifyingCount > 0 || !handover.earlierLinkCodes.isEmpty) {
                         _ = try? await handover.unsubscribeAll()
                     }
                     handover.disconnect()
                 }
             }
             .disabled(!handover.isConnected && !handover.busy)
-            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, on request turns on the camera's notifications (Sony's set: CC09, CC10, CC0F, CC03, CC0E; or every one in 8000CC00; logged masked, turned off on Disconnect; Forget CC09 status byte makes the next run learn which byte of CC09 is the Wi-Fi status again), switches the camera's Wi-Fi on and reads the network name and password. Read details and join connects if needed, reads them (nothing written) and joins that network, then sets the Wi-Fi tab to Camera AP with the join's gateway as Camera IP; the camera's Wi-Fi network must be up (PC Remote). The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
+            Text("Connects to the camera over Bluetooth (the link Creators' App holds, or a scan), lists every characteristic, reads only firmware, model and status, on request turns on the camera's notifications (Sony's set: CC09, CC10, CC0F, CC03, CC0E; or every one in 8000CC00; logged masked, turned off on Disconnect; Forget CC09 status byte makes the next run learn which byte of CC09 is the Wi-Fi status again), switches the camera's Wi-Fi on and reads the network name and password. Read details and join connects if needed, reads them (nothing written), disconnects Bluetooth again if it connected, and joins that network, then sets the Wi-Fi tab to Camera AP with the join's gateway as Camera IP; the camera's Wi-Fi network must be up (PC Remote). The name and password are never shown, logged or saved: only their lengths and yes/no checks, including whether they match what's typed on the Wi-Fi tab.")
                 .font(.footnote)
                 .foregroundStyle(.orange)
         }
@@ -383,27 +384,34 @@ struct BluetoothView: View {
     /// (WirelessLab.joinHandover), then Camera AP and the join's gateway as Camera IP, which is what the Wi-Fi tab's
     /// Join camera Wi-Fi and Use gateway as camera IP set. Returns a one-line outcome with no name or password; the
     /// details exist only in this call, made from the button's Task. Failures are also logged by the handover and
-    /// HotspotJoiner themselves.
+    /// HotspotJoiner themselves. Nothing is recorded under the handover run's ble.handover.* names (`ptpip.ap.join`
+    /// says "Bluetooth tab"), and a Bluetooth link this call connected is dropped once the details are read, as the
+    /// guided join does, so a later run connects on its own; a link that was already up is left as it is.
     private func readDetailsAndJoin() async -> String {
         guard !wireless.joining else { return "Not joined: another join is running" }
+        let ownLink = !handover.isConnected
         let details: HandoverCredentials
         do {
-            if !handover.isConnected {
+            if ownLink {
                 _ = try await handover.connect()
-                _ = try await handover.discover()
+                _ = try await handover.discover(record: nil)
             }
-            details = try await handover.readCredentials()
+            details = try await handover.readCredentials(record: nil)
         } catch {
+            // Not while another operation runs: Disconnect would cancel it.
+            if ownLink && handover.isConnected && !handover.busy { handover.disconnect() }
             if let e = error as? HandoverError, case .readFailed = e {
                 return "Not joined: \(e). Is the camera's Wi-Fi network up (PC Remote)? With none set up the camera refuses the read (ATT error 0x9D)."
             }
             return "Not joined: \(SonyWiFiHandover.errorName(error))"
         }
+        // Bluetooth isn't needed for the join itself.
+        if ownLink { handover.disconnect() }
         guard !details.ssid.isEmpty, HandoverCredentials.isValidPassphrase(details.passphrase) else {
             return "Not joined: the details read aren't usable (\(details.description))"
         }
         let network = "the camera's network (\(HotspotJoiner.ssidSummary(details.ssid)))"
-        wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase)
+        wireless.joinHandover(ssid: details.ssid, passphrase: details.passphrase, source: "Bluetooth tab, Read details and join")
         while wireless.joining {
             try? await Task.sleep(for: .milliseconds(250))
         }

@@ -14,8 +14,9 @@
 //   CC10  battery, CC0F media, CC03 transfer, CC0E initial setting: notify   Sony's app subscribes to these
 //
 // The writes are CC08 = 0x01 and notification subscriptions (the descriptor write iOS makes for setNotifyValue) on
-// characteristics inside 8000CC00, nothing else; unsubscribeAll() turns them off and waits for each answer, and
-// Disconnect turns off any still on without waiting. Never written: EE01 (pairing / power off), FF01 (remote),
+// characteristics inside 8000CC00, nothing else; unsubscribeAll() turns them off and waits for each answer (those
+// turned on over an earlier link are turned on and off again over this one), and Disconnect turns off any still on
+// without waiting, closing the link 2 s later. Never written: EE01 (pairing / power off), FF01 (remote),
 // anything in DD or BB, any CC characteristic's value but CC08's.
 // Every CC value other than CC06, CC07 and CC0C is logged masked (bytes up to 0x0F as hex, larger bytes as "··"),
 // including CC09's tag/length/value reading and its status; CC06, CC07 and CC0C only as lengths. Previous values are
@@ -159,6 +160,9 @@ final class SonyWiFiHandover: NSObject {
     private(set) var lastStatusSequence = "none"
     /// Whether CC09's notifications were on when the latest switchWiFiOn wrote CC08 (nil: it didn't get that far).
     private(set) var lastCC09Notifying: Bool?
+    /// The codes this app had turned notifications on for, on that link, when the latest switchWiFiOn wrote CC08
+    /// (empty: none, or it didn't get that far).
+    private(set) var lastSubscribedAtWrite: [String] = []
     /// Seconds from the timeline mark to the camera dropping the link, kept with the timeline (nil: no drop since).
     private(set) var linkDroppedAt: Double?
 
@@ -169,6 +173,14 @@ final class SonyWiFiHandover: NSObject {
 
     /// How many characteristics of 8000CC00 have notifications on (or were turned on by this app) on this link.
     var notifyingCount: Int { notifyingCharacteristics().count }
+
+    /// Codes this app turned notifications on for over an earlier link since the last Disconnect (the camera dropped
+    /// it and the app reconnected), or asked for without an answer, that aren't on over this link. A bonded camera
+    /// keeps a client's notification switches across connections, so unsubscribeAll() turns each on and off again.
+    var earlierLinkCodes: [String] {
+        let onNow = Set(notifyingCharacteristics().map { $0.0 })
+        return everSubscribed.subtracting(onNow).sorted()
+    }
 
     /// Notifications are on for every characteristic in 8000CC00 that offers them.
     var subscribedToAll: Bool {
@@ -195,6 +207,10 @@ final class SonyWiFiHandover: NSObject {
     @ObservationIgnored private var cc09Updates = 0
     /// Counts Disconnect taps, so a wait can tell a Disconnect from the camera dropping the link.
     @ObservationIgnored private var disconnectRequests = 0
+    /// Every code this app turned notifications on for since the last Disconnect, over any link: unlike
+    /// subscribedCodes it outlives a dropped link (resetLink), so the switches left at the camera can be cleared over
+    /// the next one. Codes leave it when confirmed off.
+    @ObservationIgnored private var everSubscribed: Set<String> = []
     @ObservationIgnored private var waiters: [String: Waiter] = [:]
     /// The last value seen per code (read or notified), in memory only, for diffs. Never CC06, CC07 or CC0C.
     @ObservationIgnored private var previous: [String: Data] = [:]
@@ -357,14 +373,15 @@ final class SonyWiFiHandover: NSObject {
 
     /// Lists every service and characteristic UUID with its properties (no values), keeps every characteristic of
     /// 8000CC00 by its short code, logs which of them can notify or indicate (codes only), and records
-    /// ble.handover.services and ble.handover.cameraControl.
-    func discover() async throws -> HandoverInventory {
+    /// `<record>.services` and `<record>.cameraControl` (ble.handover.* by default; nil records nothing, for callers
+    /// that record their own outcome, such as the Wi-Fi runs' join over Bluetooth).
+    func discover(record: String? = "ble.handover") async throws -> HandoverInventory {
         try await run("Discover") {
-            try await self.doDiscover()
+            try await self.doDiscover(record: record)
         }
     }
 
-    private func doDiscover() async throws -> HandoverInventory {
+    private func doDiscover(record: String? = "ble.handover") async throws -> HandoverInventory {
         let p = try connectedPeripheral()
         let started = clock.now
         status = "discovering services"
@@ -411,12 +428,17 @@ final class SonyWiFiHandover: NSObject {
         let present = Self.codes.filter { inventory.found[$0] == true }
         let absent = Self.codes.filter { inventory.found[$0] != true }
         let seconds = (clock.now - started).inSeconds
-        log.measure("ble.handover.services", Double(services.count), "count",
-                    context: String(format: "%@, discovered in %.2f s", connectedName ?? "camera", seconds))
-        log.flag("ble.handover.cameraControl", inventory.hasCameraControl,
-                 context: inventory.hasCameraControl
-                    ? "8000CC00 present; \(present.isEmpty ? "none" : present.joined(separator: ", ")) found\(absent.isEmpty ? "" : ", \(absent.joined(separator: ", ")) missing")"
-                    : "no 8000CC00 service")
+        if let record {
+            log.measure("\(record).services", Double(services.count), "count",
+                        context: String(format: "%@, discovered in %.2f s", connectedName ?? "camera", seconds))
+            log.flag("\(record).cameraControl", inventory.hasCameraControl,
+                     context: inventory.hasCameraControl
+                        ? "8000CC00 present; \(present.isEmpty ? "none" : present.joined(separator: ", ")) found\(absent.isEmpty ? "" : ", \(absent.joined(separator: ", ")) missing")"
+                        : "no 8000CC00 service")
+        } else {
+            log.note(String(format: "Wi-Fi handover: %ld services discovered in %.2f s; 8000CC00 %@ (not recorded as ble.handover.*)",
+                            services.count, seconds, inventory.hasCameraControl ? "present" : "absent"))
+        }
         status = "discovered \(services.count) services; \(present.count) of \(Self.codes.count) CC characteristics"
         return inventory
     }
@@ -575,12 +597,16 @@ final class SonyWiFiHandover: NSObject {
     private func enableNotifications(_ code: String, _ c: CBCharacteristic, _ p: CBPeripheral) async throws -> String? {
         if c.isNotifying {
             subscribedCodes.insert(code)
+            everSubscribed.insert(code)
             return nil
         }
         status = "subscribing to \(code)"
         // Counted as this app's from the request on, so a first notification that beats the answer isn't marked as
-        // unsolicited; taken back if the subscription fails.
+        // unsolicited; taken back if the subscription fails. everSubscribed keeps it after a timeout or a dropped
+        // link (the request may still have reached the camera), not after a refusal.
+        let wasEver = everSubscribed.contains(code)
         subscribedCodes.insert(code)
+        everSubscribed.insert(code)
         do {
             _ = try await wait("notify:\(c.uuid.uuidString)", timeout: 10, what: "\(code) subscription") {
                 p.setNotifyValue(true, for: c)
@@ -589,6 +615,8 @@ final class SonyWiFiHandover: NSObject {
             throw e
         } catch {
             subscribedCodes.remove(code)
+            let timedOut = (error as? HandoverError)?.isTimeout == true
+            if !timedOut && !wasEver { everSubscribed.remove(code) }
             noteIfPairing(error, during: "\(code) subscription")
             let reason = Self.errorName(error)
             log.warn("Wi-Fi handover: \(code) subscription failed: \(reason)")
@@ -596,6 +624,7 @@ final class SonyWiFiHandover: NSObject {
         }
         guard c.isNotifying else {
             subscribedCodes.remove(code)
+            if !wasEver { everSubscribed.remove(code) }
             log.warn("Wi-Fi handover: \(code) subscription answered, but isNotifying is no")
             return "isNotifying no"
         }
@@ -614,13 +643,20 @@ final class SonyWiFiHandover: NSObject {
 
     private func doUnsubscribeAll() async throws -> [String] {
         let p = try connectedPeripheral()
+        // Switches turned on over an earlier link first: on and off again over this one (CCCD writes only).
+        let earlier = earlierLinkCodes
+        var unconfirmedEarlier: [String] = []
+        if !earlier.isEmpty {
+            if !discovered { _ = try await doDiscover(record: nil) }
+            unconfirmedEarlier = try await clearEarlierLinkCodes(earlier, p)
+        }
         let targets = notifyingCharacteristics()
         guard !targets.isEmpty else {
-            log.note("Wi-Fi handover: no notifications on in 8000CC00; nothing to turn off")
-            return []
+            log.note("Wi-Fi handover: no notifications on in 8000CC00 over this link; nothing more to turn off")
+            return unconfirmedEarlier
         }
         var confirmed: [String] = []
-        var unconfirmed: [String] = []
+        var unconfirmed: [String] = unconfirmedEarlier
         for (code, c) in targets {
             status = "turning off \(code)'s notifications"
             do {
@@ -632,6 +668,7 @@ final class SonyWiFiHandover: NSObject {
                 } else {
                     confirmed.append(code)
                     subscribedCodes.remove(code)
+                    everSubscribed.remove(code)
                 }
             } catch let e as HandoverError where !e.isTimeout {
                 log.warn("Wi-Fi handover: turning notifications off stopped at \(code) (\(e)); off: \(confirmed.isEmpty ? "none" : confirmed.joined(separator: ", "))")
@@ -645,6 +682,46 @@ final class SonyWiFiHandover: NSObject {
             log.warn("Wi-Fi handover: \(unconfirmed.count) notification(s) not confirmed off; the camera may keep them on for this phone (a bonded client) until another app turns them off")
         }
         status = "notifications off for \(confirmed.count) of \(targets.count)"
+        return unconfirmed
+    }
+
+    /// Codes turned on over an earlier link (`codes`, none notifying over this one): each is turned on (10 s for the
+    /// answer) and off again (5 s), descriptor writes inside 8000CC00 only, so the switch the bonded camera keeps
+    /// from the earlier link is cleared; CoreBluetooth sends no "off" for a characteristic it thinks is already off.
+    /// Logs which were cleared and which couldn't be confirmed, and returns the latter. A disconnect throws.
+    private func clearEarlierLinkCodes(_ codes: [String], _ p: CBPeripheral) async throws -> [String] {
+        log.note("Wi-Fi handover: \(codes.count) notification(s) this app turned on over an earlier link, not on over this one: \(codes.joined(separator: ", ")); turning each on and off again so the camera doesn't keep them on")
+        var cleared: [String] = []
+        var unconfirmed: [String] = []
+        for code in codes {
+            guard let c = ccAll[code], Self.canNotify(c) else {
+                unconfirmed.append("\(code) (earlier link; not in 8000CC00 over this link)")
+                continue
+            }
+            if let reason = try await enableNotifications(code, c, p) {
+                unconfirmed.append("\(code) (earlier link; turning it on again failed: \(reason))")
+                continue
+            }
+            status = "turning off \(code)'s notifications (earlier link)"
+            do {
+                _ = try await wait("notify:\(c.uuid.uuidString)", timeout: 5, what: "\(code) notifications off") {
+                    p.setNotifyValue(false, for: c)
+                }
+                if c.isNotifying {
+                    unconfirmed.append("\(code) (earlier link; answered, isNotifying still yes)")
+                } else {
+                    cleared.append(code)
+                    subscribedCodes.remove(code)
+                    everSubscribed.remove(code)
+                }
+            } catch let e as HandoverError where !e.isTimeout {
+                log.warn("Wi-Fi handover: clearing the earlier link's notifications stopped at \(code) (\(e)); cleared: \(cleared.isEmpty ? "none" : cleared.joined(separator: ", "))")
+                throw e
+            } catch {
+                unconfirmed.append("\(code) (earlier link; \(Self.errorName(error)))")
+            }
+        }
+        log.note("Wi-Fi handover: earlier link's notifications cleared, confirmed by the camera, for \(cleared.count) of \(codes.count): \(cleared.isEmpty ? "none" : cleared.joined(separator: ", "))\(unconfirmed.isEmpty ? "" : "; not confirmed: " + unconfirmed.joined(separator: ", "))")
         return unconfirmed
     }
 
@@ -862,6 +939,7 @@ final class SonyWiFiHandover: NSObject {
         if !discovered { _ = try await doDiscover() }
         lastStatusSequence = "none"
         lastCC09Notifying = nil
+        lastSubscribedAtWrite = []
         guard let cc08 = cc["CC08"] else {
             log.flag("ble.handover.wifiOn.reported", false, context: "attempt \(attempt): no CC08 characteristic in 8000CC00; nothing written")
             throw HandoverError.missing("CC08")
@@ -879,6 +957,7 @@ final class SonyWiFiHandover: NSObject {
             notifying = cc09.isNotifying
         }
         lastCC09Notifying = notifying
+        lastSubscribedAtWrite = subscribedCodes.sorted()
         var pollCC09 = readable && !notifying
         var baseline: Data?
         var lastStatus: Int?
@@ -1178,17 +1257,18 @@ final class SonyWiFiHandover: NSObject {
 
     /// Reads CC06 (SSID), CC07 (password) and CC0C (BSSID, if present). Logs and returns only what
     /// `HandoverCredentials.description` shows, yes/no comparisons with the Wi-Fi tab's fields and the values' layout
-    /// as lengths and yes/no (`credentialLayout`). ble.handover.credentials is yes only for a usable pair: an SSID and
-    /// an 8–63 printable ASCII passphrase.
-    func readCredentials() async throws -> HandoverCredentials {
+    /// as lengths and yes/no (`credentialLayout`). `<record>.credentials` (ble.handover.credentials by default; nil
+    /// records nothing, for callers that record their own outcome) is yes only for a usable pair: an SSID and an 8–63
+    /// printable ASCII passphrase.
+    func readCredentials(record: String? = "ble.handover") async throws -> HandoverCredentials {
         try await run("Read Wi-Fi details") {
-            try await self.doReadCredentials()
+            try await self.doReadCredentials(record: record)
         }
     }
 
-    private func doReadCredentials() async throws -> HandoverCredentials {
+    private func doReadCredentials(record: String?) async throws -> HandoverCredentials {
         _ = try connectedPeripheral()
-        if !discovered { _ = try await doDiscover() }
+        if !discovered { _ = try await doDiscover(record: record) }
         status = "reading Wi-Fi details"
         do {
             let (ssid, ssidLayout) = try await readText("CC06", label: "SSID")
@@ -1214,12 +1294,14 @@ final class SonyWiFiHandover: NSObject {
             if bssidPresent { comparisons.append("BSSID present, MAC-shaped \(bssidShaped ? "yes" : "no")") }
             log.note("Wi-Fi handover: Wi-Fi details read: \(credentials.description)\(comparisons.isEmpty ? "" : "; " + comparisons.joined(separator: "; "))")
             let usable = !ssid.isEmpty && HandoverCredentials.isValidPassphrase(passphrase)
-            log.flag("ble.handover.credentials", usable,
-                     context: credentials.description + (usable ? "" : "; not usable: an empty SSID or a passphrase that isn't 8–63 printable ASCII (see the layout line)"))
+            if let record {
+                log.flag("\(record).credentials", usable,
+                         context: credentials.description + (usable ? "" : "; not usable: an empty SSID or a passphrase that isn't 8–63 printable ASCII (see the layout line)"))
+            }
             status = "Wi-Fi details read: \(credentials.description)"
             return credentials
         } catch {
-            log.flag("ble.handover.credentials", false, context: "\(error)")
+            if let record { log.flag("\(record).credentials", false, context: "\(error)") }
             throw error
         }
     }
@@ -1289,26 +1371,44 @@ final class SonyWiFiHandover: NSObject {
     // MARK: - Disconnect
 
     /// Turns off, without waiting, every notification still on (unsubscribeAll() is the way that waits for the
-    /// camera's answers; call it first when there is time), drops this app's connection (if Creators' App holds one
-    /// too, iOS keeps the link for it), ends any operation that is waiting, and forgets the subscriptions, the
-    /// remembered values and the timeline.
+    /// camera's answers and also clears those turned on over an earlier link; call it first when there is time),
+    /// drops this app's connection (if Creators' App holds one too, iOS keeps the link for it), ends any operation that
+    /// is waiting, and forgets the subscriptions, the remembered values and the timeline. When it turned notifications
+    /// off, the connection is cancelled 2 s later rather than at once (CoreBluetooth may drop commands still pending
+    /// when a connection is cancelled), unless a new Connect has taken the same camera by then.
     func disconnect() {
         disconnectRequests += 1
         central?.stopScan()
+        // Switches turned on over an earlier link and not cleared: they can't be cleared without waiting.
+        let leftEarlier = earlierLinkCodes
+        if !leftEarlier.isEmpty {
+            log.warn("Wi-Fi handover: notifications turned on over an earlier link and not cleared: \(leftEarlier.joined(separator: ", ")); the camera may keep them on for this phone (a bonded client) until another app turns them off")
+        }
+        everSubscribed = []
         if let p = peripheral, p.state != .disconnected {
-            // Undo the subscriptions left on (the link may close before the camera sees every descriptor write).
+            // Undo the subscriptions left on; the link stays up 2 s so the camera can see the descriptor writes.
+            var off: [String] = []
             if p.state == .connected {
-                var off: [String] = []
                 for (code, c) in notifyingCharacteristics() {
                     p.setNotifyValue(false, for: c)
                     off.append(code)
                 }
-                if !off.isEmpty {
-                    log.note("Wi-Fi handover: notifications turned off for \(off.joined(separator: ", ")) without waiting for the camera's answers (the link closes now)")
+            }
+            let name = p.name ?? "(no name)"
+            if off.isEmpty {
+                central?.cancelPeripheralConnection(p)
+                log.note("Wi-Fi handover: disconnecting from \(name)")
+            } else {
+                log.note("Wi-Fi handover: notifications turned off for \(off.joined(separator: ", ")) without waiting for the camera's answers; disconnecting from \(name) in 2 s, so the descriptor writes go out first")
+                let closing = central
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(2))
+                    // A Connect since then that took the same camera keeps the link.
+                    if let self, self.peripheral === p { return }
+                    closing?.cancelPeripheralConnection(p)
+                    self?.log.note("Wi-Fi handover: disconnected from \(name) (2 s after turning the notifications off)")
                 }
             }
-            central?.cancelPeripheralConnection(p)
-            log.note("Wi-Fi handover: disconnecting from \(p.name ?? "(no name)")")
         } else {
             log.note("Wi-Fi handover: Disconnect (not connected)")
         }

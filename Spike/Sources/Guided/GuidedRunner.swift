@@ -99,7 +99,7 @@ final class GuidedRunner {
 
     func start(_ script: GuidedScript) {
         guard runningTitle == nil else { return }
-        if usb.isBusy || wireless.busy || continued.isRunning {
+        if usb.isBusy || wireless.busy || continued.isRunning || handover.busy {
             log.warn("Guided run \(script.title): another operation is running; wait for it or stop it first")
             return
         }
