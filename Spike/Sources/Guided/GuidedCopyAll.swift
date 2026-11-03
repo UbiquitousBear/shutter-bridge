@@ -95,6 +95,7 @@ extension GuidedRunner {
                                buttons: ["Start", "Not now"])
         if go != "Start" { throw GuidedStop("not started") }
         let finishedBefore = destination.runsFinished
+        let discardsBefore = destination.discards
         let returns = lifecycle.foregroundReturns
         let entries = lifecycle.backgroundEntries
         var pausesSeen = destination.pausesSaved
@@ -115,6 +116,9 @@ extension GuidedRunner {
             ? "Leave the app in front and don't lock the phone (the screen stays on)"
             : "Lock the phone now if you like"
         var continuing = false
+        // The last Continue: whether its continued task started, and why it didn't (GuidedStop's reason).
+        var continueStarted = false
+        var continueFailure: String?
         while true {
             do {
                 while true {
@@ -136,56 +140,88 @@ extension GuidedRunner {
                 while continued.isRunning && Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
                 throw GuidedCancelled()
             }
-            // Paused (a pause record for this link, and the copy didn't end)?
-            guard destination.runsFinished == finishedBefore, let paused = destination.paused,
+            // Paused (a pause record for this link, and the copy didn't end or wasn't discarded on a tab)?
+            guard destination.runsFinished == finishedBefore, destination.discards == discardsBefore,
+                  let paused = destination.paused,
                   overUSB ? paused.link == "usb" : paused.link.hasPrefix("ptpip") else { break }
             let camera = overUSB ? "Keep the camera on and plugged in." : "Keep the camera on, with its Wi-Fi up and the phone on its network."
             let question: String
-            if destination.pausesSaved != pausesSeen {
-                // A new pause.
+            // iOS ended the Continue's own continued task during its reconnect (an expiry, or Stop in the Live Activity):
+            // no new pause is saved, so it is asked about here.
+            let endedDuringReconnect = continuing && continueStarted && destination.pausesSaved == pausesSeen
+                && continued.state == "expired by system"
+            if destination.pausesSaved != pausesSeen || endedDuringReconnect {
+                let newPause = destination.pausesSaved != pausesSeen
                 pausesSeen = destination.pausesSaved
                 if !lifecycle.isInForeground {
                     try await waitUntil("Copy paused", "iOS ended the copy's continued task at \(paused.done) of \(paused.total). Open the app to continue it.",
                                         timeout: 86_400) { self.lifecycle.isInForeground }
                 }
+                let when = newPause ? "at \(paused.done) of \(paused.total) (pause \(paused.pauses))"
+                    : "again while Continue was getting the session back (the copy is still paused at \(paused.done) of \(paused.total))"
                 // iOS runs the same expiration handler for Stop in the Live Activity as for an expiry: only you can tell.
                 let who = try await ask("Copy paused",
-                                        "iOS ended the copy's continued task at \(paused.done) of \(paused.total) (pause \(paused.pauses)). Did you stop it from the Lock Screen or the Dynamic Island?",
+                                        "iOS ended the copy's continued task \(when). Did you stop it from the Lock Screen or the Dynamic Island?",
                                         buttons: ["No, I didn't", "Yes, I stopped it"])
                 let byTester = who == "Yes, I stopped it"
+                // The lock row's value of this absence, held back until now (LifecycleMonitor.holdNextRecord).
+                lifecycle.resolvePending(stoppedByTester: byTester)
+                let which = newPause ? "this pause's expired flag" : "the expired flag recorded during Continue's reconnect"
                 log.flag("\(paused.link).copyAll.pause.stoppedByTester", byTester,
-                         context: "tester, pause \(paused.pauses) at \(paused.done) of \(paused.total) ARW: " + (byTester ? "Stop in the Live Activity, so this pause's expired flag is the tester's Stop" : "not stopped by the tester, so this pause's expired flag is an iOS expiry"))
+                         context: "tester, \(newPause ? "pause \(paused.pauses)" : "during Continue's reconnect after pause \(paused.pauses), before anything was copied") at \(paused.done) of \(paused.total) ARW: " + (byTester ? "Stop in the Live Activity, so \(which) is the tester's Stop" : "not stopped by the tester, so \(which) is an iOS expiry"))
                 question = "The copy is paused at \(paused.done) of \(paused.total). \(camera) Continue?"
             } else if continuing {
-                // The Continue didn't take: the session didn't come back, or the folder or the free space refused it.
-                question = "Continue didn't get the copy going (the session didn't come back, or the folder or the free space refused it; see the log). The copy is still paused at \(paused.done) of \(paused.total). \(camera) Try again?"
+                // The Continue didn't take: why, if the continued task didn't start; otherwise the session didn't come
+                // back, or the folder or the free space refused it.
+                let cause = continueFailure.map { "Continue didn't get the copy going: \($0)." }
+                    ?? "Continue didn't get the copy going (the session didn't come back, or the folder or the free space refused it; see the log)."
+                question = "\(cause) The copy is still paused at \(paused.done) of \(paused.total). \(camera) Try again?"
             } else {
                 break
             }
             let answer = try await ask("Copy paused", question, buttons: ["Continue", "Stop here"])
+            if destination.discards != discardsBefore {
+                // Discard on a tab while the question was open: the copy is over, with its measurements recorded.
+                log.note("  guided: the paused copy was discarded on the \(tab) tab while this run asked about it")
+                break
+            }
             guard answer == "Continue" else {
                 throw GuidedStop("the copy is paused at \(paused.done) of \(paused.total) and wasn't continued: Continue copy (or Discard) on the \(tab) tab")
             }
             // The answer is a tap, so a new continued task may be asked for.
+            continuing = true
+            continueStarted = false
+            continueFailure = nil
             do {
                 if overUSB {
-                    await usb.continuePausedCopy(using: continued)
+                    // The session may need opening again (a long lock, a replug): about 7 s in MSC, 65 s in MTP.
+                    step("Getting the USB session back")
+                    let reopened = GuidedFlag()
+                    Task {
+                        await self.usb.continuePausedCopy(using: self.continued)
+                        reopened.value = true
+                    }
+                    try await waitUntil("Opening the session",
+                                        "Getting the USB session back if it didn't survive the pause: waiting for ImageCaptureCore's catalogue, about 7 s in MSC, 65 s in MTP (longer for a bigger card).",
+                                        timeout: 900) { reopened.value }
                     try await startContinued("The continued copy") {}
                 } else {
                     try await startContinued("The continued copy") { wireless.continuePausedCopy(recovery: recovery) }
                 }
+                continueStarted = true
+                step("Copying the \(paused.remaining.count) ARW left (\(paused.done) of \(paused.total) done)")
             } catch let stop as GuidedStop {
                 // Not started, or ended before it was seen running: the check above says whether the copy is still paused.
                 log.note("  guided: \(stop.reason)")
+                continueFailure = stop.reason
             }
-            continuing = true
-            step("Copying the \(paused.remaining.count) ARW left (\(paused.done) of \(paused.total) done)")
         }
         if lifecycle.backgroundEntries > entries {
             log.note(String(format: "  guided: the app left the foreground during the copy%@", lifecycle.foregroundReturns > returns ? String(format: " (away %.0f s the last time)", lifecycle.lastAwaySeconds) : ""))
         }
 
-        guard destination.runsFinished != finishedBefore, let outcome = destination.lastOutcome else {
+        guard destination.runsFinished != finishedBefore || destination.discards != discardsBefore,
+              let outcome = destination.lastOutcome else {
             if destination.paused != nil {
                 throw GuidedStop("the paused copy couldn't be continued (see the log); it is still paused: Continue copy or Discard on the \(tab) tab")
             }

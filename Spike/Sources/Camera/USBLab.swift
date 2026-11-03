@@ -85,6 +85,8 @@ final class USBLab {
             log.warn("\(label): no paused USB copy")
             return
         }
+        // A lock-row value held back for the pause (the guided run has resolved it with the tester's answer first).
+        lifecycle.resolvePending(stoppedByTester: nil)
         let tappedAt = Date()
         if let session, session.isOpen, session.catalogComplete, !session.removed, !session.linkStalled {
             session.continuePausedCopy(record, using: continued, tappedAt: tappedAt)

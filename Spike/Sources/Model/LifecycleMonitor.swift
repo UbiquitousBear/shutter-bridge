@@ -33,6 +33,11 @@ final class LifecycleMonitor {
     private(set) var backgroundEntries = 0
     /// Progress this recent when the app is backgrounded means a transfer was running.
     private static let activeWindow: TimeInterval = 60
+    /// Build 14: a copy paused while the app was away (holdNextRecord): iOS runs the same expiration handler for an
+    /// expiry and for Stop in the Live Activity, so the next progressAfterBackground value is held back until the
+    /// cause is known (resolvePending): a time the tester cut short must not land in the go/no-go lock row.
+    @ObservationIgnored private var holdReason: String?
+    @ObservationIgnored private var pendingRecord: (name: String, value: Double, context: String)?
 
     init() {
         let nc = NotificationCenter.default
@@ -106,21 +111,58 @@ final class LifecycleMonitor {
         lockedAt = nil
     }
 
+    /// Build 14: a copy paused while the app is away (its continued task ended: an expiry, or Stop in the Live
+    /// Activity). The progressAfterBackground value of this absence is held back at the return until resolvePending.
+    func holdNextRecord(reason: String) {
+        guard !isInForeground else { return }
+        holdReason = reason
+    }
+
+    /// Build 14: the held value, once the cause is known. `stoppedByTester` true (the tester stopped the copy in the
+    /// Live Activity): not recorded, so the lock row keeps the earlier real value; false (an iOS expiry, the tester
+    /// says): recorded, saying so; nil (asked by no one: the tab's Continue copy, or the next return with a value still
+    /// held): recorded with the cause unknown, so it is never silently clean.
+    func resolvePending(stoppedByTester: Bool?) {
+        guard let held = pendingRecord else { return }
+        pendingRecord = nil
+        switch stoppedByTester {
+        case .some(true):
+            log?.note("\(held.name) not recorded: the tester stopped the copy in the Live Activity (would have been \(String(format: "%.2f", held.value)) s; \(held.context))")
+        case .some(false):
+            log?.measure(held.name, held.value, "s", context: held.context + "; copy paused by an iOS expiry (tester confirmed)")
+        case .none:
+            log?.measure(held.name, held.value, "s",
+                         context: held.context + "; copy paused while away (cause unknown: an expiry or Stop in the Live Activity)")
+        }
+    }
+
     private func enteringForeground() {
         guard let since = backgroundedAt else { return }
         let away = Date().timeIntervalSince(since)
         log?.note(String(format: "app returning to foreground after %.1f s", away))
         lastAwaySeconds = away
         foregroundReturns += 1
+        // A value still held from an earlier absence goes in now, with its cause unknown.
+        resolvePending(stoppedByTester: nil)
+        var value: (name: String, value: Double, context: String)?
         if let last = lastProgressAt, last > since {
-            log?.measure("\(lastProgressLink).lifecycle.progressAfterBackground", last.timeIntervalSince(since), "s",
-                         context: String(format: "away %.0f s; last: %@", away, lastProgressNote))
+            value = ("\(lastProgressLink).lifecycle.progressAfterBackground", last.timeIntervalSince(since),
+                     String(format: "away %.0f s; last: %@", away, lastProgressNote))
         } else if transferWasActive {
-            log?.measure("\(lastProgressLink).lifecycle.progressAfterBackground", 0, "s",
-                         context: String(format: "no progress while away (%.0f s)", away))
+            value = ("\(lastProgressLink).lifecycle.progressAfterBackground", 0,
+                     String(format: "no progress while away (%.0f s)", away))
         } else if lastProgressAt != nil {
             log?.note("no transfer running when the app left; nothing recorded")
         }
+        if let value {
+            if let reason = holdReason {
+                pendingRecord = value
+                log?.note("\(value.name) held back (\(String(format: "%.2f", value.value)) s): \(reason); recorded once the cause is known")
+            } else {
+                log?.measure(value.name, value.value, "s", context: value.context)
+            }
+        }
+        holdReason = nil
         backgroundedAt = nil
         transferWasActive = false
     }

@@ -1970,6 +1970,7 @@ final class WirelessLab {
             lifecycle.operationEnded()
         }
         while keepAliveInFlight { try? await Task.sleep(for: .milliseconds(20)) }
+        dropStaleCopyBluetooth("Copy all RAW to Files")
         // Before begin: a dead link creates no run folder and records nothing.
         if let failure = await c.linkFailure {
             connectionState = "connection lost (\(failure)); tap Reconnect"
@@ -2004,24 +2005,31 @@ final class WirelessLab {
         copyWatch = run
         copyLeft = []
         copySessionLost = false
-        // Build 14: on an expiry the copy finishes nothing more: the file in flight is cut off at its next chunk. During
-        // a recovery the client is also cut off (no CloseSession), so a pending reopen, poll or listing fails at once
-        // and the recovery reaches its stop check: otherwise the pause would wait for them (up to a minute or more)
-        // with the expired task not completed. Between files the loop's own check catches the expiry, and the pause
-        // then closes the session cleanly.
+        // Build 14: on an expiry the copy finishes nothing more: the file in flight is cut off at once (TransferAbort
+        // fails the command channel, so a GetObject waiting for data that doesn't come ends now, not after the 30 s
+        // idle timeout). During a recovery the client is also cut off (no CloseSession), so a pending reopen, poll or
+        // listing fails at once, and a Bluetooth step's wait is ended (cutOffCopyBluetooth), so the recovery reaches
+        // its stop check: otherwise the pause would wait for them (up to a minute or more) with the expired task not
+        // completed. Between files the loop's own check catches the expiry, and the pause then closes the session
+        // cleanly.
         let abort = TransferAbort()
         continued.onExpire = { [weak self] in
             abort.abort()
             guard let self, self.copyRecovering else { return }
             self.log.note("Copy all RAW: iOS ended the continued task during a recovery: the PTP/IP connection is cut off so the recovery stops at once")
+            self.cutOffCopyBluetooth()
             Task { @MainActor in await self.closeClient(closingSession: false) }
         }
         // A continued copy starts with what was done before the pause.
         meter.files(run.copied + run.failed, run.subtitle)
-        let reason = await log.withMemoryPeak(run.prefix, context: "\(items.count) ARW to Files over PTP/IP; \(recovery.conditions)") {
+        // Build 14: sampled per segment, recorded once per copy (FilesDestination.finish or discardPaused), so a copy
+        // that pauses has one memory.peak.
+        let sampled = await log.samplingMemoryPeak {
             await self.copyAllLoop(items, run: run, client: c, link: link, target: target, recovery: recovery,
                                    meter: meter, abort: abort, shouldStop: shouldStop)
         }
+        run.noteMemory(peak: sampled.peak, baseline: sampled.baseline)
+        let reason = sampled.value
         copyWatch = nil
         let left = copyLeft
         copyLeft = []
@@ -2061,6 +2069,8 @@ final class WirelessLab {
         let wifi = target.map { CopyPauseRecord.WiFiSession(net: $0.net, host: $0.host, guid: $0.guid.uuidString,
                                                             contentsMode: contentsMode?.rawValue) }
         let expiry = continued.expiryConditions ?? continued.conditions()
+        // An expiry and a Live Activity Stop look the same here: the lock row's value of this absence waits for the cause.
+        lifecycle.holdNextRecord(reason: "the copy paused while away (iOS ended the continued task: an expiry or Stop in the Live Activity)")
         do {
             try await destination.pause(run, remaining: files, others: others, wifi: wifi,
                                         expiredAt: continued.expiredAt ?? Date(), expiry: expiry)
@@ -2100,6 +2110,8 @@ final class WirelessLab {
             log.warn("\(label): no paused Wi-Fi copy")
             return
         }
+        // A lock-row value held back for the pause (the guided run has resolved it with the tester's answer first).
+        lifecycle.resolvePending(stoppedByTester: nil)
         guard !busy, !continued.isRunning, destination.run == nil else {
             log.warn("\(label): another operation is running; wait for it or stop it first")
             return
@@ -2143,6 +2155,7 @@ final class WirelessLab {
             lifecycle.operationEnded()
         }
         while keepAliveInFlight { try? await Task.sleep(for: .milliseconds(20)) }
+        dropStaleCopyBluetooth("Continue copy")
         let meter = CopyProgress(report: report, totalBytes: record.totalBytes, doneBytes: record.doneBytes)
         meter.files(record.done, "\(record.done) of \(record.total) · reconnecting")
         let steps = CopyRecoverySteps(log: log, number: 0, meter: meter, label: "continuing the paused copy")
@@ -2152,6 +2165,7 @@ final class WirelessLab {
         continued.onExpire = { [weak self] in
             guard let self, self.copyRecovering else { return }
             self.log.note("Continue copy: iOS ended the continued task during the reconnect: the PTP/IP connection is cut off")
+            self.cutOffCopyBluetooth()
             Task { @MainActor in await self.closeClient(closingSession: false) }
         }
         var wantedMode: SonyContentsMode?
@@ -2194,6 +2208,8 @@ final class WirelessLab {
             let why: String
             if continued.expired {
                 why = "iOS ended the continued task again during the reconnect (an expiry, or Stop in the Live Activity)"
+                // As at a pause: the lock row's value of this absence waits for the cause (the guided run asks).
+                lifecycle.holdNextRecord(reason: "Continue copy's continued task ended while away during the reconnect (an expiry or Stop in the Live Activity)")
                 log.flag("\(record.link).copyAll.expired", true,
                          context: "iOS ended the continued task (an expiry, or Stop in the Live Activity; no reason given) while Continue copy was getting the session back, before anything was copied (pause \(record.pauses) at \(record.done) of \(record.total) ARW); \(continued.expiryConditions ?? continued.conditions()); the copy is still paused"
                             + (record.conditions.map { "; \($0)" } ?? ""))
@@ -2218,6 +2234,9 @@ final class WirelessLab {
             run = try destination.resume(record, tappedAt: tappedAt, change: change)
         } catch {
             log.error("Continue copy: couldn't continue: \(CopyAllFormat.describe(error)); the copy is still paused (its pause record is kept)")
+            // The release above may have kept the hold (the camera dropped the link with switches still set): this is
+            // the end of this Continue, so they are cleared now, and no stale hold is left for the next copy.
+            await releaseCopyBluetooth("Continue copy couldn't continue", copyEnded: true)
             return false
         }
         meter.attach(run)
@@ -2538,7 +2557,8 @@ final class WirelessLab {
             meter.files(run.copied + run.failed, "recovering · \(run.subtitle)")
             log.warn("Copy all RAW: recovery \(recoveries) (\(recoveries - recoveriesBefore) of at most \(Self.copyRecoveryLimit) \(recoveriesBefore > 0 ? "since the copy continued" : "in this copy")): \(cut.cause); \(retried) file(s) to try again, \(again.count) in all still to copy [\(lifecycle.stateDescription)]")
             let steps = CopyRecoverySteps(log: log, number: recoveries, meter: meter)
-            // Build 14: an expiry while this runs cuts the client off (runCopy's onExpire), so the recovery stops at once.
+            // Build 14: an expiry while this runs cuts the client off and ends a Bluetooth step's wait (runCopy's
+            // onExpire, cutOffCopyBluetooth), so the recovery stops at once.
             copyRecovering = true
             let outcome = await recoverCopy(c, interruption: cut, steps: steps, addsBefore: addsBefore, target: target, net: net,
                                             recovery: recovery, shouldStop: shouldStop)
@@ -2956,6 +2976,31 @@ final class WirelessLab {
         }
         steps.add(already ? "the join found the phone already on the camera's network" : "joined the camera's network")
         return true
+    }
+
+    /// Build 14: a Bluetooth hold left by an earlier copy (none should be: every end releases it) is dropped at the start
+    /// of a copy or a Continue, with a log line, so a copy the tester gave no Bluetooth permission never acts on it.
+    private func dropStaleCopyBluetooth(_ label: String) {
+        guard copyBluetooth != nil else { return }
+        copyBluetooth = nil
+        log.warn("\(label): a Bluetooth hold left by an earlier copy was dropped without any Bluetooth action; if the camera keeps notifications on for this phone, Connect and then Disconnect on the Bluetooth tab turns them off")
+    }
+
+    /// Build 14: iOS ended the copy's continued task during a recovery or Continue's reconnect. A Bluetooth step that is
+    /// waiting (a connect, discovery, subscription, switchWiFiOn or the network details read) checks the stop only
+    /// once it returns, which can be 30 s or more: on a link the copy connected, Disconnect ends it at once (and turns
+    /// the notifications off without waiting, as releaseCopyBluetooth does after an expiry); on a link the Bluetooth
+    /// tab or the guided run holds, only the waiting operation is cancelled and the link stays up for its owner.
+    private func cutOffCopyBluetooth() {
+        guard let hold = copyBluetooth else { return }
+        let h = hold.handover
+        if hold.ownLink {
+            guard h.isConnected || h.busy else { return }
+            h.disconnect()
+            log.note("Copy all RAW: Bluetooth disconnected at once (the copy's own link), so the recovery's Bluetooth step stops")
+        } else if h.busy {
+            h.cancelWaits("the copy's continued task ended")
+        }
     }
 
     /// The end of a recovery's Bluetooth use: on a link the copy connected, every notification off (waiting for the

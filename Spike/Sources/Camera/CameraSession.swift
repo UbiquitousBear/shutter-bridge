@@ -3160,9 +3160,13 @@ extension CameraSession {
         // On an expiry the copy finishes nothing more: the wait for the requestDownload in flight ends at once (its file,
         // if ImageCaptureCore still writes it, goes with the run's temporary folder).
         continued.onExpire = { [weak self] in self?.abortPending(.stopped) }
-        let outcome = await log.withMemoryPeak(run.prefix, context: "\(selection.count) ARW to Files over USB") {
+        // Build 14: sampled per segment, recorded once per copy (FilesDestination.finish or discardPaused), so a copy
+        // that pauses has one memory.peak.
+        let sampled = await log.samplingMemoryPeak {
             await self.copyAllLoop(selection, run: run, continued: continued, report: report, shouldStop: shouldStop)
         }
+        run.noteMemory(peak: sampled.peak, baseline: sampled.baseline)
+        let outcome = sampled.value
         let reason = outcome.reason
         if reason != nil, continued.expired, !outcome.left.isEmpty {
             let remaining = outcome.left.map { CopyPauseRecord.File(name: $0.name ?? "?", size: UInt64(max(0, Int64($0.fileSize))),
@@ -3175,6 +3179,8 @@ extension CameraSession {
                                             handle: $0.ptpObjectHandle == 0 ? nil : $0.ptpObjectHandle,
                                             folder: $0.parentFolder?.name) }
             let expiry = continued.expiryConditions ?? continued.conditions()
+            // An expiry and a Live Activity Stop look the same here: the lock row's value of this absence waits for the cause.
+            lifecycle.holdNextRecord(reason: "the copy paused while away (iOS ended the continued task: an expiry or Stop in the Live Activity)")
             do {
                 // Awaits the pause notification (about 2 s at most) before the work, and with it the task, ends.
                 try await destination.pause(run, remaining: remaining, others: others, wifi: nil,

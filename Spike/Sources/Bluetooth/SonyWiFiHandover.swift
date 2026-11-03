@@ -228,6 +228,8 @@ final class SonyWiFiHandover: NSObject {
     @ObservationIgnored private var cc09Updates = 0
     /// Counts Disconnect taps, so a wait can tell a Disconnect from the camera dropping the link.
     @ObservationIgnored private var disconnectRequests = 0
+    /// Build 14: counts cancelWaits calls, so switchWiFiOn's wait for the Wi-Fi status (a loop, not a waiter) stops too.
+    @ObservationIgnored private var cancelRequests = 0
     /// Every code this app turned notifications on for, over any link: unlike subscribedCodes it outlives a dropped
     /// link (resetLink), so the switches left at the camera can be cleared over the next one. Codes leave it when
     /// confirmed off, or when Disconnect turns them off over a connected link (build 14: Disconnect keeps the rest).
@@ -1275,6 +1277,7 @@ final class SonyWiFiHandover: NSObject {
         log.warn("Wi-Fi handover: writing 0x01 to CC08 with response (\(props)), confirmed by the tester; attempt \(attempt); CC09 \(notifying ? "notifying" : (pollCC09 ? "polled once a second" : "not observable"))")
         let updatesBeforeWrite = cc09Updates
         let requestsBeforeWrite = disconnectRequests
+        let cancelsBeforeWrite = cancelRequests
         let writeStart = clock.now
         do {
             _ = try await wait("write:\(cc08.uuid.uuidString)", timeout: 15, what: "CC08 write") {
@@ -1424,6 +1427,8 @@ final class SonyWiFiHandover: NSObject {
                     if disconnectRequests != requestsBeforeWrite { throw HandoverError.cancelled("Disconnect") }
                     throw HandoverError.disconnected("the link dropped while waiting for the Wi-Fi status")
                 }
+                // Build 14: cancelWaits (a copy's continued task expired over a link it doesn't own).
+                if cancelRequests != cancelsBeforeWrite { throw HandoverError.cancelled("the wait was cancelled") }
                 if let returned = returnedAt, clock.now >= returned + .seconds(3) {
                     gaveUp = true
                     break waiting
@@ -1706,6 +1711,16 @@ final class SonyWiFiHandover: NSObject {
         connectedName = nil
         resetLink()
         status = "disconnected"
+    }
+
+    /// Build 14: ends the operation that is waiting (a connect, discovery, read, write or subscription answer, or
+    /// switchWiFiOn's wait for the Wi-Fi status) with `.cancelled`, without dropping the link or turning anything off,
+    /// for a copy whose continued task expired while it used a link the Bluetooth tab or the guided run holds. Nothing
+    /// is written; a subscription request already sent stays in everSubscribed, so it is cleared later as usual.
+    func cancelWaits(_ why: String) {
+        cancelRequests += 1
+        log.note("Wi-Fi handover: the operation waiting was cancelled (\(why)); the link stays up")
+        failAll(HandoverError.cancelled(why))
     }
 
     // MARK: - Plumbing
