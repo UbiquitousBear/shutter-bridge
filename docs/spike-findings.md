@@ -103,19 +103,27 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 - **The reference download is repeatable.** DSC02046.ARW gave the same SHA-256 (763d068d7de5…) in two sessions 14 minutes apart.
 - **Evidence for the resume:** guided run *Wi-Fi: resume after Wi-Fi off*, 2 Nov 23:10, build 0.1 (10.1). `ptpip.ap.partial.sonyLarge9211` yes; `ptpip.ap.partial.standard32`, `.sony64` and `.sonyLarge9219` no; `ptpip.ap.resume.verified` yes (DSC02052.ARW, SHA-256 13605b153d9a…).
 
-**A whole card copied to Files over Wi-Fi** (guided run *Copy all RAW to Files*, 3 Nov, build 0.1 (13.1); the camera's network, whole-card contents transfer, inside `BGContinuedProcessingTask`, into the app's Documents folder; Shamil shoots RAW only):
+**A whole card copied to Files over Wi-Fi** (guided run *Copy all RAW to Files*, 3 Nov, build 0.1 (13.1), and at 23:18 build 0.1 (14.1); the camera's network, whole-card contents transfer, inside `BGContinuedProcessingTask`, into the app's Documents folder; Shamil shoots RAW only):
 
 | Run | Creators' App | Phone | Result |
 | --- | --- | --- | --- |
 | 15:13 | open in the background, connected over Bluetooth | locked for most of it | 7 of 267 copied. 28 s in, the camera sent StoreRemoved, refused the next GetObject with StoreNotAvailable, closed both channels and switched its Wi-Fi off. The copy wrongly counted the next 82 files as failed before the link closed. |
 | 15:25 | quit | locked for 217 s of 271 s | 102 of 267 (4.32 GB) at 15.9 MB/s, no failures. iOS expired the continued task at 271 s, when Shamil opened the phone's Camera app. |
 | 15:30 | quit | in the background, phone unlocked and in use (Files) | **267 of 267, 11.53 GB in 11.8 min at 16.3 MB/s, no failures.** The continued task ran 709 s without expiring. Every file opens in Files. |
+| 23:18 (build 14.1) | quit | in front for the first 3.5 min, then locked for about 329 s in all, otherwise in the background with the phone unlocked | **360 of 360, 15.25 GB in 16.4 min at 15.5 MB/s, no failures**, no recoveries and no pause: the continued task ran 983 s without expiring. Every file opens in Files. |
 
 - **A full card copies over Wi-Fi in about 12 minutes, in the background.** Files ran at 13–19 MB/s each; memory peaked at 68 MB (baseline 60 MB).
 - **The camera's Wi-Fi is the limit, not the app or the phone.** Moving each file into place took about 0.01 s and the gap between files was small, so 16.3 MB/s (about 135 Mbit/s of data) is the link itself. The camera was on 5 GHz only; that rate fits a single-antenna camera on 5 GHz. The same card reads at 38–41 MB/s over USB, where the phone's USB 2 port is the limit.
+- **The 23:18 run copied a larger card at up to 18 MB/s, slower at the start.** By phase:
+  - in front for the first 3.5 min: 49 files at 10.2 MB/s, while the camera's Bluetooth signal at the phone read −78 to −80 dBm;
+  - locked: 141 files at 18.1 MB/s, at −60 to −67 dBm;
+  - in the background with the phone unlocked: 170 files at 16.3 MB/s, including 30 files at 13.0 MB/s over 100 s (23:31:45–23:33:28) with a strong signal (−54 and −55 dBm).
+  - The slow start fits the phone being further from the camera, taking the Bluetooth signal as a rough guide to distance; the app was also in front then, so the run can't separate the two. The later dip came with a strong signal, so something else slowed it, perhaps another app in use. Near the camera the copy runs at about 18 MB/s, which would move this card in about 14 minutes.
+  - Phone battery 55 % → 50 % over 15.25 GB; memory peaked at 100 MB (baseline 85 MB). The listing took 7.96 s for 555 handles (14.3 ms each).
+  - The phone was already on the camera's network, so the run reopened the session without a join. After the copy the app sat in the background for 8 minutes and the session was gone on return (POSIX 53), as on 2 Nov.
 - **Creators' App open in the background is the likely cause of the camera dropping its card and Wi-Fi.** It happened in both runs with Creators' App open (also at 11:54 during a Bluetooth switch-on) and in none of the runs with it quit. A later Bluetooth run with Creators' App open (22:43, about 4 minutes with three downloads; *BLE advertisement* below) had no drop, so it happens sometimes rather than every time. Not proven; 1.0 has to recover either way.
 - **iOS can expire the continued task when the phone is busy with something heavy.** The 271 s expiry coincided with the Camera app; the run that kept going for 709 s had only Files in front. iOS gives no reason with an expiry. Apple documents expiry under resource pressure and for tasks that report little progress, and publishes no time limit.
-- **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file.
+- **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file. The 23:18 run needed neither, so neither has been exercised on the camera yet.
 
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
@@ -135,6 +143,7 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 
 **Still to run:**
 - *PC Remote* over an access point (the home LAN).
+- a copy that pauses and continues (Stop in the Live Activity if iOS doesn't end the task by itself), and one that recovers from a drop.
 
 **Dropped (Shamil, 3 Nov):**
 - *Smartphone Connect*: the Bluetooth switch-on (*BLE advertisement* below) is the smartphone connection Creators' App uses, and it lists the whole card, so this row adds nothing.
