@@ -103,19 +103,30 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 - **The reference download is repeatable.** DSC02046.ARW gave the same SHA-256 (763d068d7de5…) in two sessions 14 minutes apart.
 - **Evidence for the resume:** guided run *Wi-Fi: resume after Wi-Fi off*, 2 Nov 23:10, build 0.1 (10.1). `ptpip.ap.partial.sonyLarge9211` yes; `ptpip.ap.partial.standard32`, `.sony64` and `.sonyLarge9219` no; `ptpip.ap.resume.verified` yes (DSC02052.ARW, SHA-256 13605b153d9a…).
 
-**A whole card copied to Files over Wi-Fi** (guided run *Copy all RAW to Files*, 3 Nov, build 0.1 (13.1); the camera's network, whole-card contents transfer, inside `BGContinuedProcessingTask`, into the app's Documents folder; Shamil shoots RAW only):
+**A whole card copied to Files over Wi-Fi** (guided run *Copy all RAW to Files*, 3 Nov, build 0.1 (13.1), and at 23:18 build 0.1 (14.1); the camera's network, whole-card contents transfer, inside `BGContinuedProcessingTask`, into the app's Documents folder; Shamil shoots RAW only):
 
 | Run | Creators' App | Phone | Result |
 | --- | --- | --- | --- |
 | 15:13 | open in the background, connected over Bluetooth | locked for most of it | 7 of 267 copied. 28 s in, the camera sent StoreRemoved, refused the next GetObject with StoreNotAvailable, closed both channels and switched its Wi-Fi off. The copy wrongly counted the next 82 files as failed before the link closed. |
 | 15:25 | quit | locked for 217 s of 271 s | 102 of 267 (4.32 GB) at 15.9 MB/s, no failures. iOS expired the continued task at 271 s, when Shamil opened the phone's Camera app. |
 | 15:30 | quit | in the background, phone unlocked and in use (Files) | **267 of 267, 11.53 GB in 11.8 min at 16.3 MB/s, no failures.** The continued task ran 709 s without expiring. Every file opens in Files. |
+| 23:18 (build 14.1) | quit | in front for the first 3.5 min, then locked for about 329 s in all, otherwise in the background with the phone unlocked | **360 of 360, 15.25 GB in 16.4 min at 15.5 MB/s, no failures**, no recoveries and no pause: the continued task ran 983 s without expiring. Shamil found all 360 in Files, and they open. |
 
-- **A full card copies over Wi-Fi in about 12 minutes, in the background.** Files ran at 13–19 MB/s each; memory peaked at 68 MB (baseline 60 MB).
-- **The camera's Wi-Fi is the limit, not the app or the phone.** Moving each file into place took about 0.01 s and the gap between files was small, so 16.3 MB/s (about 135 Mbit/s of data) is the link itself. The camera was on 5 GHz only; that rate fits a single-antenna camera on 5 GHz. The same card reads at 38–41 MB/s over USB, where the phone's USB 2 port is the limit.
+- **A full card copies over Wi-Fi in 12–16 minutes, in the background.** At 15:30 (267 files, 11.53 GB) files ran at 13–19 MB/s each and memory peaked at 68 MB (baseline 60 MB); the 23:18 run (360 files, 15.25 GB) took 16.4 min, below.
+- **The copy loop isn't the limit; the link's rate depends on conditions.** Moving each file into place took about 0.01 s and the gap between files was small. The 15:30 run's 16.3 MB/s (about 130 Mbit/s of data) wasn't the link's ceiling: locked, the 23:18 run held 18.1 MB/s (about 145 Mbit/s) over 141 files. The camera was on 5 GHz only; that rate fits a single-antenna camera on 5 GHz. The same card reads at 38–41 MB/s over USB, where the phone's USB 2 port is the limit.
+- **The 23:18 run held 18 MB/s once the phone was near the camera.** By phase:
+  - the first 3.5 min, with the app in front: 49 files at 10.2 MB/s, while the camera's Bluetooth signal at the phone read −78 to −80 dBm;
+  - locked: 141 files at 18.1 MB/s (files 55–197: 6.1 GB at 18.4 MB/s), at −60 to −67 dBm;
+  - in the background with the phone unlocked: 170 files at 16.3 MB/s. Files 198–299 ran at 17.9 MB/s, then 30 files (300–329) at 13.0 MB/s over 100 s (23:31:45–23:33:26).
+  - **The slow start was where the phone was, not the app being in front.** It didn't end when the app left the front: files 51–54 ran at 8.0 MB/s together, two of them while locked. It ended with file 55 at 23:22:05, when Shamil moved the phone nearer the camera and locked it (Shamil, 3 Nov); over that minute the Bluetooth signal rose from −79 to −60 dBm.
+  - **The later dip has no known cause.** The Camera app wasn't used (Shamil), and the Bluetooth signal was the strongest of the run (−54 and −55 dBm), so the signal is only a rough guide to the Wi-Fi link.
+  - At the locked rate this card would take about 14 minutes.
+  - Phone battery 55 % → 50 % over 15.25 GB; memory peaked at 100 MB (baseline 85 MB).
+  - The phone was still joined to the camera's network (the log has no join, and how it got there after the 22:43–22:59 runs isn't recorded), so the run reopened the contents-transfer session; the card was ready at the first poll (0.1 s) and listed in 7.96 s. The 16.4 min includes no Bluetooth switch-on or join.
+  - After the copy the app sat in the background for 8 minutes, and the session was gone on return (POSIX 53), as on 2 Nov.
 - **Creators' App open in the background is the likely cause of the camera dropping its card and Wi-Fi.** It happened in both runs with Creators' App open (also at 11:54 during a Bluetooth switch-on) and in none of the runs with it quit. A later Bluetooth run with Creators' App open (22:43, about 4 minutes with three downloads; *BLE advertisement* below) had no drop, so it happens sometimes rather than every time. Not proven; 1.0 has to recover either way.
 - **iOS can expire the continued task when the phone is busy with something heavy.** The 271 s expiry coincided with the Camera app; the run that kept going for 709 s had only Files in front. iOS gives no reason with an expiry. Apple documents expiry under resource pressure and for tasks that report little progress, and publishes no time limit.
-- **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file.
+- **What this means for 1.0:** the copy needs to recover when the camera drops its store or session (wait, reconnect, relist, resume at the file in flight), and to pause cleanly on expiry and carry on into the same folder when the app returns. Build 14 adds both, with progress reported in bytes rather than per file. The 23:18 run needed neither, so neither has been exercised on the camera yet.
 
 (The first run, 12:08, was labelled *Smartphone Connect* in the app, but the camera was in *PC Remote*. Shamil, 2 Nov: Smartphone Connect showed no QR code.)
 
@@ -124,17 +135,18 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 | Items on the card | Wi-Fi, whole-card session | USB, MSC (7.17 s for 391 files, about 18 ms each) | USB, MTP (165 ms per object) |
 | --- | --- | --- | --- |
 | 435 (3 Nov) | 5–7 s | about 8 s | about 72 s |
-| 555 (3 Nov 22:44) | **7.3 s, measured** | about 10 s | about 1½ min |
+| 555 (3 Nov 22:44 and 23:18) | **7.3 s and 8.0 s, measured** | about 10 s | about 1½ min |
 | 2,000 | about 25–35 s | about 37 s | about 5½ min |
 | 5,000 | about 1–1½ min | about 1½ min | about 14 min |
 
-- **A second size point** (3 Nov 22:44, build 0.1 (14.1)): 555 handles (547 objects: 360 ARW, 187 JPG; 8 folders) listed in **7.32 s**, 13.2 ms per handle, inside the 11–17 ms range. The card was ready at the first poll (2.03 s, mostly the sequence's fixed waits), as at 432 handles. The spread at one size (4.97–7.30 s) is still as large as the change, so the projection stands.
+- **A second size point** (3 Nov 22:44, build 0.1 (14.1)): 555 handles (547 objects: 360 ARW, 187 JPG; 8 folders) listed in **7.32 s**, 13.2 ms per handle, inside the 11–17 ms range. The card was ready at the first poll (2.03 s, mostly the sequence's fixed waits), as at 432 handles. A reopen at 23:18 listed the same 555 handles in 7.96 s (14.3 ms per handle), ready at the first poll (0.1 s). The spread at one size (4.97–7.30 s earlier, 7.32–7.96 s at 555) is still as large as the change, so the projection stands.
 - Each Wi-Fi item is one GetObjectInfo round trip, so the growth should be linear. The part not checked at a larger size is the camera indexing the card when the session opens (2 s for 432 handles; 0.1 s on a reopen).
 - **It matters for the first import only.** Handles are stable across sessions (above), so 1.0 can keep what it has listed and ask only for new handles; a day's shooting then adds seconds.
 - Later listings come for free as the card grows; each Wi-Fi run logs `ptpip.ap.enumerate`, and one more MSC listing at a larger size gives USB its second point.
 
 **Still to run:**
 - *PC Remote* over an access point (the home LAN).
+- a copy that pauses and continues (Stop in the Live Activity if iOS doesn't end the task by itself), and one that recovers from a drop.
 
 **Dropped (Shamil, 3 Nov):**
 - *Smartphone Connect*: the Bluetooth switch-on (*BLE advertisement* below) is the smartphone connection Creators' App uses, and it lists the whole card, so this row adds nothing.
@@ -293,7 +305,7 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 | `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` | **yes, through Sony's 0x9211** (SDIO_GetPartialLargeObject: 64-bit offset and length), 12.9 MB/s in 4 MiB chunks; the standard 0x101B (three or four parameters) and 0x9219 answer InvalidObjectHandle in a contents-transfer session |  |
 | Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match | **yes:** Wi-Fi switched off at 54 %, reconnected (same handle), resumed with 0x9211, SHA-256 match (2 Nov 23:10) |  |
 | `ObjectAdded` event received |  | **yes:** Sony ObjectAdded 0xC201 [0xFFFFC001] within a second of a full shutter press, on a plain *PC Remote* session after the init sequence (22:50). The earlier tests (13:48, 22:09) were half-presses. |  |
-| Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. | plain download: no progress in 123 s locked, session lost; in a continued task: 20 ARW at 15.4 MB/s, all while locked (57.4 s of progress) |  |
+| Session survives phone lock (seconds) | **The session survives locks of up to 227 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download keeps going while locked. The export's 0.00 s means "no progress while away", not a lost session. | plain download: no progress in 123 s locked, session lost; in a continued task: 20 ARW at 15.4 MB/s, all while locked (57.4 s of progress); a whole-card copy kept going through 329 s locked (171 s the longest) and 357 s in the background (3 Nov 23:18) |  |
 | Camera battery used per 1 GB |  |  |  |
 | BLE: advertises when on / asleep / off; service UUID | on yes · asleep yes · off yes (Creators' App quit); UUID 1800 (Generic Access, not Sony-specific) |  |  |
 
