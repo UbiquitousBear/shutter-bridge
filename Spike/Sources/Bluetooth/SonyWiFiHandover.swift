@@ -228,9 +228,9 @@ final class SonyWiFiHandover: NSObject {
     @ObservationIgnored private var cc09Updates = 0
     /// Counts Disconnect taps, so a wait can tell a Disconnect from the camera dropping the link.
     @ObservationIgnored private var disconnectRequests = 0
-    /// Every code this app turned notifications on for since the last Disconnect, over any link: unlike
-    /// subscribedCodes it outlives a dropped link (resetLink), so the switches left at the camera can be cleared over
-    /// the next one. Codes leave it when confirmed off.
+    /// Every code this app turned notifications on for, over any link: unlike subscribedCodes it outlives a dropped
+    /// link (resetLink), so the switches left at the camera can be cleared over the next one. Codes leave it when
+    /// confirmed off, or when Disconnect turns them off over a connected link (build 14: Disconnect keeps the rest).
     @ObservationIgnored private var everSubscribed: Set<String> = []
     @ObservationIgnored private var waiters: [String: Waiter] = [:]
     /// The last value seen per code (read or notified), in memory only, for diffs. Never CC06, CC07 or CC0C.
@@ -550,23 +550,40 @@ final class SonyWiFiHandover: NSObject {
     }
 
     private func doReadStatus(_ why: String) async throws -> Int? {
+        try await doReadCC09(why, previous: nil, polling: false).status
+    }
+
+    /// Build 14: one harmless CC09 read for a polling loop (`why` names it in the log). Its log line is written only
+    /// when the value differs from `previous` (the loop's previous value; nil: always), so a poll that sees the same
+    /// value every 2 s doesn't fill the log; a failed read is always logged. Returns the Wi-Fi status, as readStatus
+    /// does, and the value read (nil when CC09 can't be read or the read failed). Never writes; a disconnect throws.
+    func pollWiFiStatus(_ why: String, previous: Data?) async throws -> (status: Int?, value: Data?) {
+        try await run("Read CC09") {
+            try await self.doReadCC09(why, previous: previous, polling: true)
+        }
+    }
+
+    /// readStatus and pollWiFiStatus: `polling` logs the value only when it differs from `previous`.
+    private func doReadCC09(_ why: String, previous: Data?, polling: Bool) async throws -> (status: Int?, value: Data?) {
         _ = try connectedPeripheral()
         if !discovered { _ = try await doDiscover() }
         guard let c = cc["CC09"], c.properties.contains(.read) else {
             log.note("Wi-Fi handover: CC09 isn't readable, so no status read \(why)")
-            return nil
+            return (status: nil, value: nil)
         }
         status = "reading the camera's status"
         switch try await read(c, code: "CC09") {
         case .value(let data):
             let s = currentWiFiStatus() ?? Self.wifiStatus(in: data)
-            log.note("Wi-Fi handover: CC09 \(why) (read): \(Self.describeCC09(data))\(Self.statusByteNote(data))")
+            if !polling || previous != data {
+                log.note("Wi-Fi handover: CC09 \(why) (read): \(Self.describeCC09(data))\(Self.statusByteNote(data))")
+            }
             status = "Wi-Fi status \(s == nil ? "unknown" : Self.shownStatus(s))"
-            return s
+            return (status: s, value: data)
         case .failed(let reason):
             log.warn("Wi-Fi handover: CC09 read \(why) failed: \(reason)")
             status = "CC09 read failed: \(reason)"
-            return nil
+            return (status: nil, value: nil)
         }
     }
 
@@ -993,6 +1010,25 @@ final class SonyWiFiHandover: NSObject {
         return CC09Watch(notifications: total, cc09Notifications: history.count, position: position,
                          positionSource: source, sequence: sequence.joined(separator: " → "),
                          firstChangeAt: firstChangeAt, launchedAt: launchedAt, sawLaunched: sawLaunched, current: current)
+    }
+
+    /// Build 14: CC09's tag changes since the latest mark other than the Wi-Fi status (tag 0x0001), from its
+    /// notifications (reads aren't in the history), masked like `tagChanges` and with times from the mark: "+12.40 s
+    /// tag 0x0003 remote control available 1 → 0". Values that don't parse as the α7C II layout are skipped; with no
+    /// known state at the mark, the first parsed value only sets the baseline. No I/O.
+    func cc09OtherTagChanges() -> [String] {
+        var before = cc09StateAtMark
+        before[0x0001] = nil
+        var out: [String] = []
+        for item in cc09History where !item.state.isEmpty {
+            var state = item.state
+            state[0x0001] = nil
+            if !before.isEmpty, state != before {
+                out.append(String(format: "+%.2f s ", item.at) + Self.tagChanges(old: before, new: state))
+            }
+            before = state
+        }
+        return out
     }
 
     /// A value of a characteristic in 8000CC00 that wasn't the answer to a read: counted on the timeline, logged
@@ -1562,18 +1598,25 @@ final class SonyWiFiHandover: NSObject {
     /// Turns off, without waiting, every notification still on (unsubscribeAll() is the way that waits for the
     /// camera's answers and also clears those turned on over an earlier link; call it first when there is time),
     /// drops this app's connection (if Creators' App holds one too, iOS keeps the link for it), ends any operation that
-    /// is waiting, and forgets the subscriptions, the remembered values and the timeline. When it turned notifications
+    /// is waiting, and forgets the subscriptions, the remembered values and the timeline. Build 14: codes it couldn't
+    /// turn off (on over an earlier link, or every code when no link is up) stay listed in earlierLinkCodes, so the next
+    /// connect's unsubscribeAll() clears them at the camera. When it turned notifications
     /// off, the connection is cancelled 2 s later rather than at once (CoreBluetooth may drop commands still pending
     /// when a connection is cancelled), unless a new Connect has taken the same camera by then.
     func disconnect() {
         disconnectRequests += 1
         central?.stopScan()
-        // Switches turned on over an earlier link and not cleared: they can't be cleared without waiting.
-        let leftEarlier = earlierLinkCodes
+        // Switches turned on over an earlier link (or over the link the camera dropped) and not cleared: they can't be
+        // cleared without waiting. Build 14: they stay in everSubscribed, so the next connect's unsubscribeAll() turns
+        // them on and off again over its link (a guided run's end, or a Disconnect with the link down, would otherwise
+        // forget switches the camera keeps on). Only the codes turned off below, over this link, are forgotten; with no
+        // link up nothing is turned off, so every code is kept.
+        let linkUp = peripheral?.state == .connected
+        let leftEarlier = linkUp ? earlierLinkCodes : everSubscribed.sorted()
         if !leftEarlier.isEmpty {
-            log.warn("Wi-Fi handover: notifications turned on over an earlier link and not cleared: \(leftEarlier.joined(separator: ", ")); the camera may keep them on for this phone (a bonded client) until another app turns them off")
+            log.warn("Wi-Fi handover: notifications turned on over an earlier link and not cleared: \(leftEarlier.joined(separator: ", ")); the camera may keep them on for this phone (a bonded client) until the next Bluetooth connect turns them off (kept in memory for it)")
         }
-        everSubscribed = []
+        everSubscribed = Set(leftEarlier)
         if let p = peripheral, p.state != .disconnected {
             // Undo the subscriptions left on; the link stays up 2 s so the camera can see the descriptor writes.
             var off: [String] = []

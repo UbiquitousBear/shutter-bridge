@@ -138,12 +138,21 @@ enum HotspotJoiner {
         return out
     }
 
-    /// Removes the configuration this app added (so the next join is a fresh one).
-    static func forget(ssid: String, log: SpikeLog) {
+    /// Removes the configuration this app added (so the next join is a fresh one). Apple promises to disassociate only
+    /// for a joinOnce configuration (join uses joinOnce false), and a network saved in Settings keeps the iPhone on it,
+    /// so whether the iPhone left has to be seen on the Wi-Fi path; removeConfiguration gives no result. `redacted`
+    /// (build 14, the Bluetooth handover path, see the type's comment): the SSID shows in the log only as its length
+    /// and whether it starts with "DIRECT-".
+    static func forget(ssid: String, log: SpikeLog, redacted: Bool = false) {
         let trimmed = ssid.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         NEHotspotConfigurationManager.shared.removeConfiguration(forSSID: trimmed)
-        log.note("Join: removed this app's configuration for \"\(trimmed)\"")
+        let left = "iOS gives no result, and the iPhone may still be on the network"
+        if redacted {
+            log.note("Join: asked iOS to remove this app's configuration for the camera's network (\(ssidSummary(trimmed))); \(left)")
+        } else {
+            log.note("Join: asked iOS to remove this app's configuration for \"\(trimmed)\"; \(left)")
+        }
     }
 
     private static func describe(_ error: NSError) -> String {
