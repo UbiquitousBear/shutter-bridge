@@ -9,6 +9,11 @@ Written 1 Nov 2026 after spike build 6, from `docs/spike-plan.md`, `docs/proposa
 - **Scaling is measured, not assumed:** the guided *Scaling* run lists the card cold in MSC (and MTP), adds a burst of about 300 frames, lists again, and projects 2,000 and 5,000 files from the two sizes.
 - **More of the testing runs as guided runs** in the spike's *Guided* tab (build 8), so each evening needs fewer builds and less reading of the runbook.
 
+## Decisions (Shamil, 3 Nov)
+
+- **Dropped:** *Smartphone Connect* (the Bluetooth switch-on is that connection), *Send to Smartphone* (the fallback isn't needed: the camera lists its card over PTP/IP), the RAW+JPEG / RAW+HEIF pairing test (Shamil shoots RAW only; the pairing rule below stands as the default), and the 300-frame *Scaling* burst (projected from the listings already made; see *Wireless browsing in 1.0* in the findings).
+- **Still to run:** PC Remote over the home Wi-Fi, resume in MSC, PC Remote over USB, a real proximity arrival, *Copy all RAW to Files* over USB-C, the build 14 Bluetooth and copy runs, and Photos *Don't Allow* (last, on a fresh install).
+
 ## What I checked against the repo, and what changes the inputs
 
 - **Build 7** (PR #14) adds the requestReadData resume for MSC and fixes two false readings. The phone runs spike build 6 (TestFlight 0.1 (5.1)). Merging build 7 and running *Spike to TestFlight* is the first step.
