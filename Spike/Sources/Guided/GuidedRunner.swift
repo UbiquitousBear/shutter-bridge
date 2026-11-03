@@ -78,6 +78,10 @@ final class GuidedRunner {
     @ObservationIgnored private var pendingAnswer: String?
     /// When the last alert closed: the next one waits until 450 ms after it, so SwiftUI sees the old one go first.
     @ObservationIgnored private var closedAt = Date.distantPast
+    /// Build 13: a Wi-Fi run switched the camera's Wi-Fi on over Bluetooth (joinCameraOverBluetooth), so the Bluetooth
+    /// link and its notifications stay up until the run ends (the Wi-Fi may go off when the link closes); the end of
+    /// the run, however it ends, turns the notifications off and disconnects (releaseKeptBluetooth).
+    @ObservationIgnored var keepsBluetoothUntilRunEnds = false
 
     init(log: SpikeLog, browser: DeviceBrowser, usb: USBLab, wireless: WirelessLab, scanner: AdvertisementScanner,
          continued: ContinuedTask, lifecycle: LifecycleMonitor, proximity: ProximityWatcher,
@@ -122,6 +126,8 @@ final class GuidedRunner {
             } catch {
                 outcome = "failed: \(error)"
             }
+            // Finish, Cancel run or an error alike: a Bluetooth link kept for the run is released here.
+            await releaseKeptBluetooth()
             log.note("◆ Guided run \(outcome): \(script.title)")
             let report = makeReport()
             UIPasteboard.general.string = report
@@ -160,6 +166,32 @@ final class GuidedRunner {
         if continued.isRunning { continued.stop() }
         if scanner.isScanning { scanner.stop() }
         if wireless.busy { log.warn("◆ A Wi-Fi operation is still running; it ends on its own (the Wi-Fi tab has no Stop)") }
+    }
+
+    /// The end of a run that kept the Bluetooth link up (keepsBluetoothUntilRunEnds): every notification turned off,
+    /// waiting for the camera's answers when no other Bluetooth operation is running (Disconnect turns any left off
+    /// without waiting), then Bluetooth disconnects. Shows no alert, so it works after "Cancel run" too.
+    private func releaseKeptBluetooth() async {
+        guard keepsBluetoothUntilRunEnds else { return }
+        keepsBluetoothUntilRunEnds = false
+        guard handover.isConnected || handover.busy else {
+            log.note("◆ The Bluetooth link kept for this run (the camera's Wi-Fi was switched on over it) is already down")
+            // No Disconnect here: it would forget these codes, which the next Bluetooth connect's unsubscribe clears.
+            if !handover.earlierLinkCodes.isEmpty {
+                log.warn("◆ Notifications this app turned on (\(handover.earlierLinkCodes.joined(separator: ", "))) couldn't be turned off: the link dropped; the camera may keep them on for this phone until the next Bluetooth connect turns them off")
+            }
+            return
+        }
+        if handover.isConnected && !handover.busy && (handover.notifyingCount > 0 || !handover.earlierLinkCodes.isEmpty) {
+            do {
+                let left = try await handover.unsubscribeAll()
+                log.note("◆ Notifications off at the end of the run: \(left.isEmpty ? "all confirmed" : "not confirmed: \(left.joined(separator: ", "))")")
+            } catch {
+                log.warn("◆ Turning the notifications off at the end of the run didn't finish (\(SonyWiFiHandover.errorName(error))); Disconnect turns any left off without waiting")
+            }
+        }
+        handover.disconnect()
+        log.note("◆ Bluetooth link kept for this run (the camera's Wi-Fi was switched on over it) disconnected (\(handover.status))")
     }
 
     private func makeReport() -> String {
@@ -305,6 +337,9 @@ final class GuidedRunner {
             return
         }
         step(title)
+        if keepsBluetoothUntilRunEnds {
+            log.note("  guided: \(title): the Bluetooth link with Sony's notifications is still up (the camera's Wi-Fi was switched on over Bluetooth earlier in this run), so this section's Wi-Fi measurements are taken with it up; its notifications can wake this app in the background")
+        }
         do {
             try await body()
         } catch let stop as GuidedStop {
