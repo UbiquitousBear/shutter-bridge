@@ -9,7 +9,7 @@ Template, filled during the spike: the wired sections by day 5, the rest on day 
 | Item | Value |
 | --- | --- |
 | iPhone model and iOS build (from the Log tab's Device section) | `iPhone18,4`, iOS 27.2 (24B119) |
-| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). From 2 Nov 13:47: 0.1 (7.1), from `main` at d6d33a7 (spike build 9: Sony contents transfer over Wi-Fi). From 2 Nov 22:08: 0.1 (9.1), run 9, from `main` at 8e010ff (spike build 9.1: no battery read where the camera won't answer). TestFlight's build number is the workflow run, not the spike build. |
+| Spike app build | 0.1 (1.1), from TestFlight: built by the *Spike to TestFlight* workflow, run 1, with Xcode 27.1 from `main` at 2ca74cf. From 1 Nov 16:20: 0.1 (2.1), run 2, from `main` at d2851a7 (adds the Photos album test). From 1 Nov evening: 0.1 (3.1), run 3, from `main` at bc867a1 (spike builds 3 and 4: handle lookup, PTP and MTP listing, serial kept out of the log). From 1 Nov 23:00: 0.1 (4.1), run 4, from `main` at 39231f1 (spike build 5: stops on a camera that has stopped answering). From 1 Nov 23:33: 0.1 (5.1), run 5, from `main` at 8580535 (spike build 6: per-object MTP listing, stall recovery, copyable log). From 2 Nov 01:38: 0.1 (6.1), from `main` at 9db1515 (spike build 8: the Guided tab). From 2 Nov 13:47: 0.1 (7.1), from `main` at d6d33a7 (spike build 9: Sony contents transfer over Wi-Fi). From 2 Nov 22:08: 0.1 (9.1), run 9, from `main` at 8e010ff (spike build 9.1: no battery read where the camera won't answer). From 3 Nov 00:04: 0.1 (11.1), run 11, from `main` at 7c4909f (spike build 10: the Bluetooth Wi-Fi handover experiment). From 3 Nov 11:33: 0.1 (12.1), run 12, from `main` at 994c3be (spike build 12: notification subscriptions before the Wi-Fi-on write, the Bluetooth join, copy all RAW to Files). TestFlight's build number is the workflow run, not the spike build. |
 | Camera model and firmware (`Fixtures/a7c2/usb/FIRMWARE`) | Sony Corporation ILCE-7CM2 (α7C II), firmware 2.0 (GetDeviceInfo over USB, 1 Nov); over PTP/IP on 2 Nov DeviceInfo says 2.01. The serial number is in DeviceInfo and in `usb/deviceinfo.bin`; it is deliberately not written here. |
 | Card (type, number of files by kind) | _to fill_ |
 | Cable | _to fill_ |
@@ -408,13 +408,57 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
 - **The camera starts its Wi-Fi when asked, then gives up.**
   - CC08 = 0x01 was acknowledged again in 58 ms.
   - The same one byte of CC09 went 0 → 1 → 0 in both runs, at +0.15 s and +2.4 s. The notes' CC09 layout gives the Wi-Fi status values as 0 Terminated, 1 Launching, 2 Launched and 3 Terminating, so this reads as *launching*, then *terminated*. (The spike's CC09 parser guessed the tag layout wrong, so it didn't label the byte.)
-  - Something else has to be in place before the camera brings its Wi-Fi up for a phone. It could be a camera setting (*Smartphone Connect*?) or Sony's app-level registration on EE01, which the spike deliberately doesn't write.
+  - Something else has to be in place before the camera brings its Wi-Fi up for a phone. The third run (below) found it: the app must be subscribed to the camera's status notifications.
 - **The network details depend on the camera's setup.** With PC Remote off, reading CC06 failed with the camera's own ATT error **0x9D**. With PC Remote on (first run) it gave the name and password. So the camera hands over whichever Wi-Fi network is configured, and nothing when none is.
-- **What 1.0 can rely on today:**
-  1. The person switches the camera's Wi-Fi on in its menu (PC Remote, Wi-Fi Direct).
-  2. The app reads the network name and password over Bluetooth: no typing, QR code or Settings.
-  3. The app joins with one iOS prompt.
-- **Starting the camera's Wi-Fi from the phone** is still open. It needs the missing precondition found first.
+- **Reading the details again** (Bluetooth tab, 3 Nov before 00:42, build 0.1 (11.1)), with PC Remote's Wi-Fi Direct network up: two reads, each a 21-character name in the `DIRECT-xxXX:ILCE-7CM2` shape and an 8-character password. The tab only read them, so the join was done in Settings; the camera then answered at 192.168.122.1:15740 at once.
+
+**Joining with the details read over Bluetooth, end to end** (guided run *Bluetooth: join with the camera's Wi-Fi on*, 3 Nov 11:33–11:34, build 0.1 (12.1)). Setup: PC Remote on with its Wi-Fi Direct network up, the camera's network forgotten in Settings first, Creators' App quit. Times are from the Start tap, less the 9.6 s spent answering the app's own question.
+
+| Step | From Start |
+| --- | --- |
+| Bluetooth connect (0.50 s, by the saved identifier), service discovery and the network details read (`ble.join.toDetails`) | 2.45 s |
+| iOS join prompt accepted; `apply` returned after 7.7 s, Wi-Fi path with gateway 192.168.122.1 after 10.6 s (`ptpip.ap.join`) | |
+| The camera answers at 192.168.122.1:15740 (`ble.join.toCameraPort`) | 13.76 s |
+| Whole-card contents transfer ready (2.01 s), 425 objects listed (4.97 s), the newest ARW (46.3 MB) downloaded at 12.8 MB/s (`ble.join.toFirstFile`) | 25.06 s |
+
+- One iOS prompt to join (`ble.join.joinPrompt` yes); no Bluetooth pairing request (`ble.join.pairingPrompt` no).
+- The details read over Bluetooth are the network the camera's PTP/IP server is on: the import worked without any typing, QR code or Settings.
+
+**Third run: the camera switches its Wi-Fi on over Bluetooth** (guided run *Bluetooth: Wi-Fi handover*, 3 Nov 11:35–11:42, build 0.1 (12.1)). Setup: camera on with its Wi-Fi off (PC Remote Function off), Bluetooth Rmt Ctrl on, photos on the card, Creators' App quit.
+- **The missing precondition is the status notifications.** The app first subscribed to notifications on CC09, CC10, CC0F, CC03 and CC0E (the set Sony's app is reported to use; all five confirmed). Then CC08 = 0x01 (acknowledged in 62 ms) took CC09's Wi-Fi status **0 → 1 at +0.09 s → 2 at +2.22 s** (*launching*, then *launched*), and it **stayed at 2**. In the earlier runs, without subscriptions, the same write went 0 → 1 → 0.
+- **The camera's screen shows nothing.** The tester saw no change on the camera although CC09 said *launched*. The run went by the screen, so it never tried to read the details and join; build 13 goes by CC09.
+- **Creators' App used the Wi-Fi the spike had switched on.** With the spike still connected and subscribed, Creators' App imported successfully. CC09 stayed at 2 throughout, so it didn't switch the Wi-Fi on again (Sony's app is reported to skip CC08 when the Wi-Fi is already launched). The Wi-Fi had then been up about 5 minutes.
+- **The camera switches its Wi-Fi off when the importing app leaves.** About 1 s after Creators' App went to the background, CC09 went 2 → 3 (*terminating*), then 3 → 0 4.5 s later. 15 s after Creators' App was quit the status was still 0, and the tester confirmed the Wi-Fi was off.
+- **Notifications seen while Creators' App connected:** one CC09 entry (status still 2) and CCA1 `04 00 00 02 01` (an entry with tag 0x0000; meaning unknown).
+- All 13 subscriptions were turned off at the end and the camera confirmed each one. Creators' App still connected afterwards (`ble.handover.creatorsAppStillWorks` yes). No pairing request.
+- **CC09's layout on the α7C II:** a list of entries, each *length* (1 byte, counting tag and value), *tag* (2 bytes, big-endian), *value*. A read returns all ten tags (43 bytes):
+
+  | Tag | Meaning (from the notes) | Value with the Wi-Fi off |
+  | --- | --- | --- |
+  | 0x0001 | Wi-Fi status: first value byte 0 terminated, 1 launching, 2 launched, 3 terminating (all four seen) | `00 00` |
+  | 0x0002 | Image transfer available | 1 |
+  | 0x0003 | Remote control available | 1 |
+  | 0x0004 | unknown | `00 00 00` |
+  | 0x0005 | Time set | 1 |
+  | 0x0006 | unknown | 0 |
+  | 0x0007 | Live streaming | 0 |
+  | 0x0008 | Movie recording | 0 |
+  | 0x0009 | Streaming mode | 0 |
+  | 0x000A | Background transfer available | 1 |
+
+  A notification carries one entry, for example `04 00 01 02 00` (Wi-Fi status 2). The spike's parser had assumed tag before length.
+- **The 8000CC00 service has 80 characteristics, 13 of them notifiable:** CC03, CC09, CC0E, CC0F, CC10, CC19, CC20, CC21, CC61, CC71, CCA1, CCA5 and CCA9.
+
+**What this means for 1.0:**
+1. The app connects over Bluetooth, subscribes to the camera's status notifications and writes CC08 = 0x01. The camera's Wi-Fi is up about 2.2 s later, with nothing to do on the camera.
+2. The app reads the network name and password over Bluetooth and joins with one iOS prompt the first time.
+3. The camera switches its Wi-Fi off again when the importing app leaves, which suits the camera's battery.
+
+Still open, for build 13's *Bluetooth: switch Wi-Fi on, join and import* run:
+- whether CC06/CC07 can be read once CC08 has switched the Wi-Fi on with PC Remote off (with the Wi-Fi off they fail with 0x9D);
+- the time from Start to the first file on this route;
+- whether the Wi-Fi stays up when the app's Bluetooth link closes;
+- whether the camera switches its Wi-Fi off when the spike's own session ends, as it did for Creators' App.
 
 - **Background discovery worked with Low Power Mode on.** The proximity scan found the camera in the background at 00:08 although the device reported Low Power Mode on, contrary to the app's warning text.
 
