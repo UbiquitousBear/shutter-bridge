@@ -27,10 +27,13 @@ struct CopyAllOutcome {
     let finished: Bool
     /// Why it ended early; nil when it went through the whole list.
     let stopReason: String?
+    /// Build 14: recoveries the Wi-Fi copy attempted (always 0 over USB).
+    let recoveries: Int
 
     var summary: String {
         var text = "Last copy: \(copied) of \(total) ARW"
         if failed > 0 { text += ", \(failed) failed" }
+        if recoveries > 0 { text += ", \(recoveries) \(recoveries == 1 ? "recovery" : "recoveries")" }
         text += ", " + CopyAllFormat.gb(bytes)
         if let seconds, seconds > 0 {
             text += String(format: " in %.1f min (%.1f MB/s)", seconds / 60, Double(bytes) / seconds / 1_000_000)
@@ -296,7 +299,9 @@ final class FilesDestination {
     /// Starts a run inside the continued task: resolves the destination (starting its security scope), creates the run
     /// folder and an empty temporary folder, and starts watching the lock and the battery.
     /// `session`: what kind of session listed the files when that matters (Wi-Fi), for the ▶ line and `finished`.
-    func begin(link: String, items: [CopyAllItem], session: String? = nil) throws -> CopyAllRun {
+    /// `conditions` (build 14, Wi-Fi): what the run was copied under (Creators' App, Bluetooth recovery), added to the
+    /// context of every copy measurement.
+    func begin(link: String, items: [CopyAllItem], session: String? = nil, conditions: String? = nil) throws -> CopyAllRun {
         guard run == nil else { throw CopyAllError.message("a copy is already running") }
         let resolved = try resolve()
         do {
@@ -307,9 +312,9 @@ final class FilesDestination {
             let same = CopyAllFiles.sameVolume(tmp, folder) ?? false
             let started = CopyAllRun(link: link, items: items, root: resolved.root, scoped: resolved.scoped, folder: folder,
                                      temporaryDirectory: tmp, destination: resolved.description, sameVolume: same,
-                                     session: session, log: log)
+                                     session: session, conditions: conditions, log: log)
             run = started
-            log.note("▶ Copy all RAW to Files (\(link)\(session.map { ", \($0)" } ?? "")): \(items.count) ARW, \(CopyAllFormat.gb(started.totalBytes)), oldest first, into \(resolved.description) › \(started.folderName) (\(same ? "same volume: each file is renamed into place" : "another volume: each file is copied, then the temporary copy deleted"))")
+            log.note("▶ Copy all RAW to Files (\(link)\(session.map { ", \($0)" } ?? "")\(conditions.map { "; \($0)" } ?? "")): \(items.count) ARW, \(CopyAllFormat.gb(started.totalBytes)), oldest first, into \(resolved.description) › \(started.folderName) (\(same ? "same volume: each file is renamed into place" : "another volume: each file is copied, then the temporary copy deleted"))")
             return started
         } catch {
             if resolved.scoped { resolved.root.stopAccessingSecurityScopedResource() }
@@ -327,16 +332,23 @@ final class FilesDestination {
         let thermal = CopyAllFormat.thermalState()
         // Measurement contexts go into the pasted table: they say which kind of folder, never its name.
         let label = run.destinationLabel
+        // Build 14: what the run was copied under (Creators' App, Bluetooth recovery), on every copy measurement.
+        let conditions = run.conditions.map { "; \($0)" } ?? ""
 
-        log.measure("\(p).files", Double(run.copied), "count", context: "of \(run.total) ARW listed; into \(label)")
+        log.measure("\(p).files", Double(run.copied), "count", context: "of \(run.total) ARW listed; into \(label)\(conditions)")
         log.measure("\(p).failed", Double(run.failed), "count",
-                    context: run.failures.isEmpty ? "none" : run.failures.prefix(5).joined(separator: "; ") + (run.failures.count > 5 ? "; …" : ""))
-        log.measure("\(p).size", Double(run.bytes) / 1e6, "MB", context: "\(run.copied) ARW, \(CopyAllFormat.gb(run.bytes))")
+                    context: (run.failures.isEmpty ? "none" : run.failures.prefix(5).joined(separator: "; ") + (run.failures.count > 5 ? "; …" : "")) + conditions)
+        log.measure("\(p).size", Double(run.bytes) / 1e6, "MB", context: "\(run.copied) ARW, \(CopyAllFormat.gb(run.bytes))\(conditions)")
+        if run.link.hasPrefix("ptpip") {
+            log.measure("\(p).recoveries", Double(run.recoveries), "count",
+                        context: (run.recoveryCauses.isEmpty ? "none" : run.recoveryCauses.joined(separator: "; ")) + conditions)
+        }
         if let seconds {
-            log.measure("\(p).seconds", seconds, "s", context: String(format: "first request to last move, %.1f min", seconds / 60))
+            log.measure("\(p).seconds", seconds, "s", context: String(format: "first request to last move, %.1f min", seconds / 60) + conditions)
             log.throughput("\(p).throughput", bytes: Int(run.bytes), seconds: seconds,
                            context: String(format: "%ld ARW, %@ in %.1f s (first request to last move, moves included)%@",
-                                           run.copied, CopyAllFormat.gb(run.bytes), seconds, run.failed > 0 ? ", \(run.failed) failed" : ""))
+                                           run.copied, CopyAllFormat.gb(run.bytes), seconds, run.failed > 0 ? ", \(run.failed) failed" : "")
+                            + (run.recoveries > 0 ? ", recovery time included (\(run.recoveries))" : "") + conditions)
         } else {
             log.note("Copy all RAW (\(run.link)): nothing was copied, so no time or throughput")
         }
@@ -347,15 +359,16 @@ final class FilesDestination {
             ending = run.failed > 0 ? "\(run.failed) failed" : "every ARW copied"
         }
         let session = run.session.map { "; listed by \($0)" } ?? ""
-        log.flag("\(p).finished", finished, context: "\(run.copied) of \(run.total) copied; \(ending)\(session); thermal state \(thermal)")
+        let recovered = run.recoveries > 0 ? "; \(run.recoveries) recover\(run.recoveries == 1 ? "y" : "ies")" : ""
+        log.flag("\(p).finished", finished, context: "\(run.copied) of \(run.total) copied; \(ending)\(recovered)\(session); thermal state \(thermal)\(conditions)")
         log.flag("\(p).underLock", run.wasLocked,
                  context: String(format: "locked for about %.0f s of %.0f s (protected-data notifications and checks after each file; a phone without a passcode never reports a lock)",
-                                 run.lockedSeconds, Date().timeIntervalSince(run.startedAt)))
+                                 run.lockedSeconds, Date().timeIntervalSince(run.startedAt)) + conditions)
         if let before = run.batteryBefore, let after = run.batteryAfter {
             log.measure("\(p).phoneBattery", Double(before - after) * 100, "points",
                         context: String(format: "%.0f %% → %.0f %% over %@ (%@ at the start, %@ at the end)",
                                         Double(before) * 100, Double(after) * 100, CopyAllFormat.gb(run.bytes),
-                                        run.batteryStateBefore, run.batteryStateAfter))
+                                        run.batteryStateBefore, run.batteryStateAfter) + conditions)
         } else {
             log.note("Copy all RAW (\(run.link)): the phone's battery level couldn't be read; \(p).phoneBattery not recorded")
         }
@@ -365,14 +378,14 @@ final class FilesDestination {
         let rate = (seconds ?? 0) > 0 ? Double(run.bytes) / (seconds ?? 1) / 1e6 : 0
         log.note(String(format: "◼ Copy all RAW to Files (%@): %ld of %ld ARW copied, %ld failed, %.2f GB in %.1f min = %.1f MB/s, into %@ › %@; %@; thermal state %@",
                         run.link, run.copied, run.total, run.failed, gigabytes, minutes, rate, run.destination, run.folderName,
-                        ending, thermal))
+                        ending, thermal) + recovered + conditions)
 
         try? FileManager.default.removeItem(at: run.temporaryDirectory)
         if run.scoped { run.root.stopAccessingSecurityScopedResource() }
         lastOutcome = CopyAllOutcome(prefix: p, folderName: run.folderName, destination: run.destination,
                                      destinationLabel: label, total: run.total,
                                      copied: run.copied, failed: run.failed, bytes: run.bytes, seconds: seconds,
-                                     finished: finished, stopReason: stopReason)
+                                     finished: finished, stopReason: stopReason, recoveries: run.recoveries)
         runsFinished += 1
         if self.run === run { self.run = nil }
     }
@@ -396,10 +409,16 @@ final class CopyAllRun {
     let sameVolume: Bool
     /// The kind of session that listed the files (Wi-Fi), nil over USB.
     let session: String?
+    /// Build 14, Wi-Fi: what the run was copied under ("Creators' App open in the background; Bluetooth recovery
+    /// allowed"), for every copy measurement's context; nil over USB.
+    let conditions: String?
     let startedAt = Date()
     let batteryBefore: Float?
     let batteryStateBefore: String
 
+    /// Build 14: recoveries the Wi-Fi copy attempted, and the cause of each.
+    private(set) var recoveries = 0
+    private(set) var recoveryCauses: [String] = []
     private(set) var copied = 0
     private(set) var failed = 0
     private(set) var bytes: UInt64 = 0
@@ -423,8 +442,9 @@ final class CopyAllRun {
     @ObservationIgnored private let batteryMonitoringWasEnabled: Bool
 
     init(link: String, items: [CopyAllItem], root: URL, scoped: Bool, folder: URL, temporaryDirectory: URL,
-         destination: String, sameVolume: Bool, session: String?, log: SpikeLog) {
+         destination: String, sameVolume: Bool, session: String?, conditions: String? = nil, log: SpikeLog) {
         self.link = link
+        self.conditions = conditions
         self.total = items.count
         self.totalBytes = items.reduce(UInt64(0)) { $0 + $1.size }
         self.root = root
@@ -526,6 +546,13 @@ final class CopyAllRun {
                         copied + failed, total, cardName, name == cardName ? "" : " → \(name)", Double(received) / 1e6,
                         seconds, rate, moveSeconds, detail.isEmpty ? "" : ", \(detail)", state))
         return name
+    }
+
+    /// Build 14: the Wi-Fi copy stopped for a recovery (`cause` names why); counted for `<link>.copyAll.recoveries`.
+    func recoveryStarted(_ cause: String) {
+        recoveries += 1
+        recoveryCauses.append(cause)
+        current = ""
     }
 
     /// A file that didn't download (or couldn't be moved): counted, logged, and the run goes on unless the caller ends it.

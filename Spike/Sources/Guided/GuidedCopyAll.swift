@@ -54,6 +54,11 @@ extension GuidedRunner {
         }
         log.note("  guided: copying to \(destination.locationDescription)")
 
+        // Build 14, Wi-Fi only: Creators' App (context for every copy measurement) and whether a recovery may use
+        // Bluetooth. Asked before the reconnect check below, since quitting Creators' App takes the tester out of the app.
+        var recovery = CopyAllRecovery()
+        if !overUSB { recovery = try await askCopyRecovery(onCameraNetwork: (wireless.sessionNet ?? wifiTarget().net) == "ap") }
+
         // How much, and the go-ahead from a tap (the continued task needs one).
         // What the spike measured: about 38 MB/s on the cable, 11.7–15.5 MB/s on the camera's Wi-Fi.
         let rate: Double = overUSB ? 38 : 13
@@ -82,7 +87,7 @@ extension GuidedRunner {
             if overUSB {
                 usb.session?.copyAllARW(using: continued)
             } else {
-                wireless.copyAllARW()
+                wireless.copyAllARW(recovery: recovery)
             }
         }
 
@@ -127,6 +132,36 @@ extension GuidedRunner {
                                   buttons: ["All there and they open", "Some missing or won't open", "Couldn't find the folder"])
         log.flag("\(outcome.prefix).verifiedInFiles", check == "All there and they open",
                  context: "tester: \(check); \(outcome.copied) of \(outcome.total) copied into \(outcome.destinationLabel)")
+    }
+
+    /// Build 14, Wi-Fi: whether Creators' App is quit or open in the background, for the context of every copy
+    /// measurement (on 3 Nov, with it open in the background, the camera dropped its card storage 28 s into a copy, then
+    /// its session and its Wi-Fi; at 11:54 it dropped Wi-Fi and Bluetooth 30 s after a Bluetooth switch-on), with the
+    /// suggestion to quit it; then, once, whether the copy may switch the camera's Wi-Fi back on over Bluetooth if it goes
+    /// off. That answer is the confirmation for the one write (CC08 = 01); the Wi-Fi tab's button never allows it. On
+    /// the home LAN the Bluetooth question isn't asked (the recovery uses Bluetooth on the camera's own network only).
+    private func askCopyRecovery(onCameraNetwork: Bool) async throws -> CopyAllRecovery {
+        var app = try await ask("Creators' App",
+                                "Is Creators' App quit, or open in the background? With it open in the background the camera dropped its card, then its session and its Wi-Fi, 28 s into a copy (3 Nov), so quitting it is suggested. Your answer goes with every copy measurement.",
+                                buttons: ["It's quit", "I'll quit it now", "Leave it open"])
+        if app == "I'll quit it now" {
+            let done = try await ask("Quit Creators' App",
+                                     "Swipe up from the bottom of the screen and pause to open the App Switcher, swipe Creators' App up and away, then come back here and tap Done.",
+                                     buttons: ["Done", "Leave it open"])
+            app = done == "Done" ? "It's quit" : done
+        }
+        let creatorsApp = app == "It's quit" ? "Creators' App quit" : "Creators' App open in the background"
+        guard onCameraNetwork else {
+            let note = "Bluetooth recovery not used (home LAN)"
+            log.note("  guided: copy conditions: \(creatorsApp); \(note)")
+            return CopyAllRecovery(bluetooth: nil, creatorsApp: creatorsApp, bluetoothNote: note)
+        }
+        let bluetooth = try await ask("If the camera's Wi-Fi goes off",
+                                      "If the camera's Wi-Fi goes off during the copy, may the app switch it back on over Bluetooth? This writes CC08 = 01 and turns on Sony's five status notifications, turned off afterwards. If the phone then doesn't rejoin the camera's network by itself while the app is open, the app also reads the network details over Bluetooth and asks iOS to join, so a Join prompt may appear. Either way the copy waits for the camera's card and network to come back and carries on (up to three times).",
+                                      buttons: ["Allow", "Don't"])
+        let allowed = bluetooth == "Allow"
+        log.note("  guided: copy conditions: \(creatorsApp); Bluetooth recovery \(allowed ? "allowed (CC08 = 01 only if the camera's Wi-Fi goes off during the copy)" : "not allowed")")
+        return CopyAllRecovery(bluetooth: allowed ? handover : nil, creatorsApp: creatorsApp)
     }
 
     /// An open USB session with ImageCaptureCore's catalogue complete: the one already open, or a new one. Returns the

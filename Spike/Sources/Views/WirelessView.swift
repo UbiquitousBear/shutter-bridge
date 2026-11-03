@@ -397,6 +397,130 @@ enum WiFiLabError: Error, CustomStringConvertible {
     }
 }
 
+/// Build 14: what a Wi-Fi *Copy all RAW to Files* may do to recover, and what it was copied under. The Wi-Fi tab's
+/// button passes the default (no Bluetooth, Creators' App not asked); the guided run asks the tester for both.
+struct CopyAllRecovery {
+    /// The Bluetooth lab when the tester allowed the copy to switch the camera's Wi-Fi back on over Bluetooth if it goes
+    /// off (CC08 = 01 and Sony's five status notifications, turned off afterwards); nil: no Bluetooth.
+    var bluetooth: SonyWiFiHandover? = nil
+    /// "Creators' App quit" or "Creators' App open in the background"; nil when not asked.
+    var creatorsApp: String? = nil
+    /// In place of "Bluetooth recovery off/allowed" when the question wasn't asked for a reason (the home LAN).
+    var bluetoothNote: String? = nil
+
+    /// For the context of every copy measurement.
+    var conditions: String {
+        "\(creatorsApp ?? "Creators' App not asked"); \(bluetoothNote ?? "Bluetooth recovery \(bluetooth == nil ? "off" : "allowed")")"
+    }
+}
+
+/// Build 14: a failure that stops the Wi-Fi copy loop for a recovery instead of counting against a file.
+private struct CopyInterruption {
+    /// For the log, the recovery's measurements and, if the copy gives up, its stop reason.
+    let cause: String
+    /// The camera reported its card gone (StoreRemoved or StoreNotAvailable): the recovery first waits for StoreAdded.
+    let storeGone: Bool
+    /// A file was in flight (it is tried again after the recovery).
+    let inFlight: Bool
+}
+
+/// Build 14: a file that got a non-OK answer and isn't counted yet: counted as failed once a later file copies, tried
+/// again after a recovery otherwise.
+private struct PendingCopyFailure {
+    /// Its place in the copy's queue.
+    let position: Int
+    let name: String
+    let code: PTPResponseCode
+    let why: String
+}
+
+private enum CopyRecoveryOutcome {
+    /// The session is back with the card listed again, on this client.
+    case resumed(PTPIPClient, steps: String)
+    /// The recovery didn't get the session back: why, and the steps it took.
+    case failed(String, steps: String)
+    /// Stop, Cancel run or the continued task's expiry, during the recovery.
+    case stopped(String)
+}
+
+/// Build 14: the Bluetooth link a copy's recovery used, until releaseCopyBluetooth.
+private struct CopyBluetoothHold {
+    let handover: SonyWiFiHandover
+    /// The recovery connected it (rather than the Bluetooth tab or the guided run).
+    let ownLink: Bool
+    /// The recovery turned Sony's notifications on.
+    let subscribedHere: Bool
+    /// Notifications already on over the link before the recovery.
+    let notifyingBefore: Int
+    /// The codes the recovery's subscribe reported notifying (empty: it didn't subscribe).
+    var turnedOn: [String] = []
+}
+
+/// Build 14: the copy's continued-task progress, `unitsPerFile` units per file, so a recovery can move it too (the
+/// system may expire a continued task whose progress stops moving, most likely with the phone locked).
+@MainActor
+private final class CopyProgress {
+    static let unitsPerFile = 1000
+    private let send: ContinuedTask.Report
+    private var fileCount = 0
+    private var stepUnits = 0
+    private var lastTick: ContinuousClock.Instant?
+
+    init(report: @escaping ContinuedTask.Report) {
+        send = report
+    }
+
+    /// Files done (copied + failed), with a new subtitle or nil.
+    func files(_ count: Int, _ subtitle: String?) {
+        if count != fileCount {
+            fileCount = count
+            stepUnits = 0
+        }
+        send(fileCount * Self.unitsPerFile + stepUnits, subtitle)
+    }
+
+    /// One step of a recovery: one unit more, at most one a second and never a whole file's worth.
+    func tick() {
+        let now = ContinuousClock().now
+        if let last = lastTick, (now - last).inSeconds < 1 { return }
+        guard stepUnits < Self.unitsPerFile - 1 else { return }
+        lastTick = now
+        stepUnits += 1
+        send(fileCount * Self.unitsPerFile + stepUnits, nil)
+    }
+}
+
+/// Build 14: one recovery's steps with their times, for the log and the recovery measurement's context. Each step
+/// (and each `tick`) also moves the continued task's progress.
+@MainActor
+private final class CopyRecoverySteps {
+    let log: SpikeLog
+    let number: Int
+    let meter: CopyProgress?
+    private let started = ContinuousClock().now
+    private(set) var lines: [String] = []
+
+    init(log: SpikeLog, number: Int, meter: CopyProgress? = nil) {
+        self.log = log
+        self.number = number
+        self.meter = meter
+    }
+
+    func add(_ text: String) {
+        let line = String(format: "%.1f s: ", (ContinuousClock().now - started).inSeconds) + text
+        lines.append(line)
+        log.note("Copy all RAW: recovery \(number): \(line)")
+        meter?.tick()
+    }
+
+    /// A wait still going on (a port probe, the StoreAdded wait, the join): progress only, nothing logged.
+    func tick() {
+        meter?.tick()
+    }
+
+    var summary: String { lines.joined(separator: "; ") }
+}
+
 /// The Wi-Fi tab's state and actions. Main-actor isolated; the PTP/IP client is an actor of its own.
 @Observable
 @MainActor
@@ -488,6 +612,18 @@ final class WirelessLab {
     @ObservationIgnored private var appObservers: [NSObjectProtocol] = []
     /// True once the Sony init sequence has run to the end on the current client.
     @ObservationIgnored private var initSequenceDone = false
+    /// Build 14: storage IDs the camera reported removed (StoreRemoved) and hasn't added back on this session.
+    @ObservationIgnored private var removedStores: Set<UInt32> = []
+    /// Build 14: StoreRemoved and StoreAdded events since launch, so the copy can tell the first file after a store
+    /// change; and StoreAdded alone, which the copy's recovery waits for.
+    @ObservationIgnored private var storeChanges = 0
+    @ObservationIgnored private var storeAdds = 0
+    @ObservationIgnored private var storeRemovedAt: Date?
+    /// Build 14: the Wi-Fi copy in progress, for the StoreRemoved / StoreAdded lines.
+    @ObservationIgnored private var copyWatch: CopyAllRun?
+    /// Build 14: the Bluetooth link a copy's recovery used to switch the camera's Wi-Fi back on, released (notifications
+    /// off, disconnected if the copy connected it) once the session is back or the copy ends.
+    @ObservationIgnored private var copyBluetooth: CopyBluetoothHold?
 
     /// The session part of the partial read probe's key (PartialReadProbe): the contents-transfer mode, or "plain".
     var partialProbeSession: String { contentsMode?.rawValue ?? "plain" }
@@ -790,6 +926,8 @@ final class WirelessLab {
         batteryLine = nil
         keepAlives = 0
         initSequenceDone = false
+        // A new session lists its storages afresh.
+        removedStores = []
         // Per session: BatteryLevel support depends on the camera mode, and day 6–8 switch modes between connects.
         batteryUnsupported = false
         let c = PTPIPClient(host: t.host, guid: t.guid, log: PTPIPClient.logger(log))
@@ -882,6 +1020,7 @@ final class WirelessLab {
         eventCount += 1
         let params = e.parameters.map { String(format: "0x%08X", $0) }.joined(separator: ", ")
         log.note("PTP/IP event on the \(item.channel) channel: \(e.code) (\(String(format: "0x%04X", e.code.rawValue))) tx \(e.transactionID) params [\(params)]")
+        if e.code == .storeRemoved || e.code == .storeAdded { storeEvent(e) }
         if e.code.signalsNewObject {
             objectAddedCount += 1
             if objectAddedCount == 1 {
@@ -896,6 +1035,37 @@ final class WirelessLab {
             if !savedEventFixtures.contains(name) {
                 savedEventFixtures.insert(name)
                 FixtureStore.save(item.packet, link: .ptpip, name: name, log: log)
+            }
+        }
+    }
+
+    /// Build 14: StoreRemoved / StoreAdded (parameter 1 the storage ID), kept for the Wi-Fi copy's failure classification
+    /// and recovery, with one clear line each while a copy runs. On 3 Nov the camera sent StoreRemoved for 0x00010001
+    /// 28 s into a copy, then answered StoreNotAvailable and InvalidObjectHandle, then dropped its Wi-Fi.
+    private func storeEvent(_ e: PTPIP.Event) {
+        let id = e.parameters.first ?? 0
+        let idText = String(format: "0x%08X", id)
+        storeChanges += 1
+        if e.code == .storeRemoved {
+            removedStores.insert(id)
+            storeRemovedAt = Date()
+            if let run = copyWatch {
+                log.warn("Copy all RAW: the camera removed its card storage (StoreRemoved, storage \(idText)) during the copy, after \(run.copied) files [\(lifecycle.stateDescription)]")
+            }
+        } else {
+            storeAdds += 1
+            // Added back under another ID: take it as the card coming back.
+            if removedStores.remove(id) == nil { removedStores.removeAll() }
+            if let run = copyWatch {
+                // storeRemovedAt is cleared when the copy starts and once used here, so it is a StoreRemoved of this copy.
+                if let removedAt = storeRemovedAt {
+                    storeRemovedAt = nil
+                    log.note(String(format: "Copy all RAW: the camera added its card storage back (StoreAdded, storage %@) %.1f s after it was removed, with %ld files copied [%@]",
+                                    idText, Date().timeIntervalSince(removedAt), run.copied, lifecycle.stateDescription))
+                } else {
+                    // The camera announces its card storage this way whenever a whole-card session opens (a recovery's reopen).
+                    log.note("Copy all RAW: StoreAdded (storage \(idText)) on session open; the card wasn't reported removed during this copy (\(run.copied) files copied) [\(lifecycle.stateDescription)]")
+                }
             }
         }
     }
@@ -1326,8 +1496,9 @@ final class WirelessLab {
     }
 
     /// List card's work: every storage's handles and ObjectInfo, into `objects`. Also used to list again after an
-    /// action reconnected a dropped session (a new session may number the objects differently).
-    private func listObjects(_ c: PTPIPClient, net: String) async throws {
+    /// action reconnected a dropped session (a new session may number the objects differently). `record` false (build 14,
+    /// the copy's recovery listing the card again): no enumerate/objects measurements and no fixtures.
+    private func listObjects(_ c: PTPIPClient, net: String, record: Bool = true) async throws {
             let prefix = "ptpip.\(net)"
             let clock = ContinuousClock()
             let started = clock.now
@@ -1382,6 +1553,12 @@ final class WirelessLab {
             self.objects = listed.sorted(by: CardObject.newestFirst)
             let byKind = Dictionary(grouping: listed, by: { $0.info.fileExtension.isEmpty ? "?" : $0.info.fileExtension })
             let breakdown = byKind.keys.sorted().map { "\($0) \(byKind[$0]?.count ?? 0)" }.joined(separator: ", ")
+            guard record else {
+                self.log.note(String(format: "listed again in %.1f s: %ld objects (%@; %ld folder(s) not counted) over %ld storage ID(s); not recorded as %@.enumerate",
+                                     seconds, listed.count, breakdown, folders, ids.count, prefix))
+                for note in storageNotes { self.log.note("storage \(note)") }
+                return
+            }
             self.log.measure("\(prefix).enumerate", seconds, "s",
                              context: "GetStorageIDs + GetStorageInfo + GetObjectHandles + GetObjectInfo × \(listed.count + folders) over \(ids.count) storage ID(s)")
             self.log.measure("\(prefix).objects", Double(listed.count), "count", context: "\(breakdown); \(folders) folder(s) not counted")
@@ -1623,7 +1800,10 @@ final class WirelessLab {
     /// phone locking), each one GetObject to a temporary file and then moved into a new folder in Files
     /// (FilesDestination). Measurements `ptpip.<net>.copyAll.…`. Must be started from a tap. With nothing listed in a
     /// contents-transfer session it lists the card first and then starts, if the app is still in front.
-    func copyAllARW() {
+    /// Build 14: a camera that drops its card storage, its session or its Wi-Fi stops the loop for a recovery (at most
+    /// three per copy) instead of failing file after file; `recovery` says whether that may use Bluetooth (the guided
+    /// run asks; the Wi-Fi tab's button never does) and what the copy runs under (Creators' App).
+    func copyAllARW(recovery: CopyAllRecovery = CopyAllRecovery()) {
         let label = "Copy all RAW to Files"
         let destination = FilesDestination.shared
         guard client != nil, sessionNet != nil else {
@@ -1633,7 +1813,7 @@ final class WirelessLab {
         guard !busy, !continued.isRunning else { log.warn("\(label): another operation is running; wait for it or stop it first"); return }
         guard destination.run == nil else { log.warn("\(label): a copy is already running"); return }
         guard objects.isEmpty else {
-            startCopyAll(destination)
+            startCopyAll(destination, recovery: recovery)
             return
         }
         guard contentsMode != nil else {
@@ -1654,11 +1834,11 @@ final class WirelessLab {
                 self.log.warn("\(label): the app left the foreground during the listing; tap Copy all RAW to Files again")
                 return
             }
-            self.startCopyAll(destination)
+            self.startCopyAll(destination, recovery: recovery)
         }
     }
 
-    private func startCopyAll(_ destination: FilesDestination) {
+    private func startCopyAll(_ destination: FilesDestination, recovery: CopyAllRecovery) {
         let label = "Copy all RAW to Files"
         guard let c = client, let net = sessionNet else { log.warn("\(label): not connected"); return }
         guard !busy, !continued.isRunning, destination.run == nil else { log.warn("\(label): another operation is running"); return }
@@ -1680,16 +1860,20 @@ final class WirelessLab {
             log.error("\(label): \(CopyAllFormat.describe(error))")
             return
         }
-        log.note("\(label): submitting a continued task for \(items.count) ARW (oldest first) over \(net == "lan" ? "the home LAN" : "the camera's network"); lock the phone once it has started")
-        continued.run(title: "Copying RAW to Files (spike)", subtitle: "0 of \(items.count)", totalUnits: items.count) { [weak self] report, shouldStop in
+        // Where a recovery reconnects to: this session's camera address and GUID.
+        let target = sessionTarget
+        log.note("\(label): submitting a continued task for \(items.count) ARW (oldest first) over \(net == "lan" ? "the home LAN" : "the camera's network"); \(recovery.conditions); lock the phone once it has started")
+        // In thousandths of a file, so a recovery's steps move the progress too.
+        continued.run(title: "Copying RAW to Files (spike)", subtitle: "0 of \(items.count)",
+                      totalUnits: items.count * CopyProgress.unitsPerFile) { [weak self] report, shouldStop in
             guard let self else { return false }
-            return await self.continuedCopyAll(items, files: files, client: c, link: link, session: session,
-                                               destination: destination, report: report, shouldStop: shouldStop)
+            return await self.continuedCopyAll(items, files: files, client: c, link: link, session: session, target: target,
+                                               recovery: recovery, destination: destination, report: report, shouldStop: shouldStop)
         }
     }
 
     private func continuedCopyAll(_ items: [CardObject], files: [CopyAllItem], client c: PTPIPClient, link: String,
-                                  session: String, destination: FilesDestination,
+                                  session: String, target: WiFiTarget?, recovery: CopyAllRecovery, destination: FilesDestination,
                                   report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> Bool {
         busy = true
         activity = "Copy all RAW to Files"
@@ -1711,77 +1895,721 @@ final class WirelessLab {
         }
         let run: CopyAllRun
         do {
-            run = try destination.begin(link: link, items: files, session: session)
+            run = try destination.begin(link: link, items: files, session: session, conditions: recovery.conditions)
         } catch {
             // Not the error itself: a file error's userInfo can hold the chosen folder's full path.
             log.error("Copy all RAW to Files: couldn't start: \(CopyAllFormat.describe(error))")
             return false
         }
-        let reason = await log.withMemoryPeak(run.prefix, context: "\(items.count) ARW to Files over PTP/IP") {
-            await self.copyAllLoop(items, run: run, client: c, link: link, report: report, shouldStop: shouldStop)
+        // A StoreRemoved from before this copy isn't the one its "added back" line measures from.
+        storeRemovedAt = nil
+        copyWatch = run
+        let meter = CopyProgress(report: report)
+        let reason = await log.withMemoryPeak(run.prefix, context: "\(items.count) ARW to Files over PTP/IP; \(recovery.conditions)") {
+            await self.copyAllLoop(items, run: run, client: c, link: link, target: target, recovery: recovery,
+                                   meter: meter, shouldStop: shouldStop)
         }
+        copyWatch = nil
+        // The measurements first: releasing Bluetooth can wait for the camera's answers (or connect once more), and a
+        // continued task the system has expired may be suspended before that ends.
         destination.finish(run, stopReason: reason)
+        // A Bluetooth link a recovery still holds (the session never came back): notifications off, disconnected.
+        await releaseCopyBluetooth("the copy ended", copyEnded: true)
         return reason == nil && run.copied == run.total
     }
 
-    /// The copy itself. Returns why it ended early, or nil once it has been through the list. A non-OK response skips
-    /// the file (counted as failed); a link failure ends the run, and the files copied so far stay.
-    private func copyAllLoop(_ items: [CardObject], run: CopyAllRun, client c: PTPIPClient, link: String,
-                             report: @escaping ContinuedTask.Report, shouldStop: @escaping ContinuedTask.ShouldStop) async -> String? {
-        for (i, o) in items.enumerated() {
+    /// At most this many recoveries per copy; the next interruption ends it.
+    static let copyRecoveryLimit = 3
+    /// Failures of any kind in a row (non-OK answers, size mismatches) that stop the loop for a recovery.
+    static let copyFailuresBeforeRecovery = 3
+
+    /// The copy itself. Returns why it ended early, or nil once it has been through the list. Build 14: failures are
+    /// classified. Session-level, which stop the loop for a recovery (recoverCopy, at most `copyRecoveryLimit` per copy):
+    /// a StoreRemoved since the last file, StoreNotAvailable, InvalidObjectHandle on the first file after a store change
+    /// or on two files in a row, `copyFailuresBeforeRecovery` failures of any kind in a row, and a link failure. The
+    /// file in flight is then not counted as failed: its temporary file is deleted and it is tried again after the
+    /// recovery, with any non-OK answers before it not yet counted. Per-file: any other non-OK answer is counted as
+    /// failed once a later file copies (so a camera that has lost its card can't fail the rest of the list in a second,
+    /// as it did 81 times on 3 Nov). A file a recovery put back that gets such an answer again is counted as failed at
+    /// once, outside the in-a-row rules, so a file the camera always refuses can't use up the recoveries. A size
+    /// mismatch is counted at once; a local file error ends the run.
+    private func copyAllLoop(_ items: [CardObject], run: CopyAllRun, client first: PTPIPClient, link: String,
+                             target: WiFiTarget?, recovery: CopyAllRecovery,
+                             meter: CopyProgress, shouldStop: @escaping ContinuedTask.ShouldStop) async -> String? {
+        let net = target?.net ?? (link == "ptpip.lan" ? "lan" : "ap")
+        let clock = ContinuousClock()
+        var queue = items
+        var position = 0
+        var c = first
+        // Non-OK answers since the last file that copied, not counted yet: files before `position` (normally just
+        // before it; a file a recovery put back and counted at once can sit between them).
+        var pending: [PendingCopyFailure] = []
+        // Files already copied or counted as failed, from queues before a recovery: they claim their match in a new
+        // listing first, so a file of the same name and size still to copy isn't taken for one of them.
+        var done: [CardObject] = []
+        // Name and size of the files recoveries put back to try again.
+        var retriedKeys: Set<String> = []
+        // StoreAdded events before the latest GetObject started: the card counts as back once there are more.
+        var addsBefore = storeAdds
+        // Failures of any kind since the last file that copied.
+        var inARow = 0
+        var recoveries = 0
+        var seenStoreChanges = storeChanges
+        // A recovery that brought the session back: measured when the next file starts.
+        var resumed: (failedAt: ContinuousClock.Instant, cause: String, steps: String)?
+
+        while position < queue.count {
             if shouldStop() {
-                let why = continued.expired ? "the system expired the continued task" : "Stop (or Cancel run)"
-                return "\(why) after \(i) of \(items.count) [\(lifecycle.stateDescription)]"
-            }
-            let name = o.info.filename.isEmpty ? "object-\(o.handle.rawValue).ARW" : o.info.filename
-            activity = "Copy all RAW: \(i + 1) of \(items.count), \(name)"
-            progress = Double(i) / Double(items.count)
-            let tmp = run.temporaryURL("object-\(o.handle.rawValue).download")
-            run.willRequest(name)
-            let r: PTPIPClient.FileDownload
-            do {
-                r = try await c.getObject(o.handle, to: tmp)
-            } catch PTPIPClient.ClientError.response(let op, let code) {
-                try? FileManager.default.removeItem(at: tmp)
-                run.fileFailed(name, "\(op) answered \(code)")
-                report(i + 1, run.subtitle)
-                continue
-            } catch {
-                try? FileManager.default.removeItem(at: tmp)
-                run.fileFailed(name, "\(error)")
-                report(i + 1, run.subtitle)
-                if let failure = await c.linkFailure {
-                    connectionState = "connection lost (\(failure)); tap Reconnect"
-                    return "the link failed at \(name): \(failure) [\(lifecycle.stateDescription)]"
+                countPendingCopyFailures(&pending, run: run)
+                meter.files(run.copied + run.failed, run.subtitle)
+                if let back = resumed {
+                    measureCopyRecovery(run, seconds: (clock.now - back.failedAt).inSeconds, cause: back.cause, steps: back.steps,
+                                        until: "the copy stopping before the next file")
                 }
-                return "GetObject \(name) failed: \(error) [\(lifecycle.stateDescription)]"
+                return "\(copyStopWhy()) after \(run.copied + run.failed) of \(run.total) [\(lifecycle.stateDescription)]"
             }
-            // PTPIPClient only warns when the data phase is short but the response is OK: a short file is failed and
-            // deleted here, never put in the folder under the card's name.
-            let expected: UInt64? = o.info.sizeExceeds32Bits ? nil : UInt64(o.info.objectCompressedSize)
-            let shortOfAnnounced = r.announcedLength.map { $0 != r.bytes } ?? false
-            let shortOfListing = expected.map { $0 > 0 && $0 != r.bytes } ?? false
-            if shortOfAnnounced || shortOfListing {
-                try? FileManager.default.removeItem(at: tmp)
-                let wanted = expected ?? r.announcedLength ?? 0
-                run.fileFailed(name, "size mismatch: \(r.bytes) B received, \(wanted) B expected; the copy was deleted")
-                report(i + 1, run.subtitle)
-                continue
+            var interruption: CopyInterruption?
+            if !removedStores.isEmpty {
+                // Recover before asking for another file: on 3 Nov the next GetObject answered StoreNotAvailable, and 81
+                // InvalidObjectHandle followed within a second.
+                interruption = CopyInterruption(cause: "StoreRemoved (storage \(Self.storeIDs(removedStores))) after \(run.copied) files",
+                                                storeGone: true, inFlight: false)
+            } else {
+                let o = queue[position]
+                let name = Self.copyName(o)
+                activity = "Copy all RAW: \(run.copied + run.failed + pending.count + 1) of \(run.total), \(name)"
+                progress = Double(run.copied + run.failed) / Double(max(run.total, 1))
+                let tmp = run.temporaryURL("object-\(o.handle.rawValue).download")
+                run.willRequest(name)
+                addsBefore = storeAdds
+                if let back = resumed {
+                    resumed = nil
+                    measureCopyRecovery(run, seconds: (clock.now - back.failedAt).inSeconds, cause: back.cause, steps: back.steps,
+                                        until: "\(name) starting")
+                }
+                do {
+                    let r = try await c.getObject(o.handle, to: tmp)
+                    // The camera served a file: the non-OK answers just before it were about those files.
+                    countPendingCopyFailures(&pending, run: run)
+                    seenStoreChanges = storeChanges
+                    position += 1
+                    // PTPIPClient only warns when the data phase is short but the response is OK: a short file is failed
+                    // and deleted here, never put in the folder under the card's name.
+                    let expected: UInt64? = o.info.sizeExceeds32Bits ? nil : UInt64(o.info.objectCompressedSize)
+                    let shortOfAnnounced = r.announcedLength.map { $0 != r.bytes } ?? false
+                    let shortOfListing = expected.map { $0 > 0 && $0 != r.bytes } ?? false
+                    if shortOfAnnounced || shortOfListing {
+                        try? FileManager.default.removeItem(at: tmp)
+                        let wanted = expected ?? r.announcedLength ?? 0
+                        run.fileFailed(name, "size mismatch: \(r.bytes) B received, \(wanted) B expected; the copy was deleted")
+                        meter.files(run.copied + run.failed, run.subtitle)
+                        inARow += 1
+                        if inARow >= Self.copyFailuresBeforeRecovery {
+                            interruption = CopyInterruption(cause: "\(inARow) failures in a row (the last: \(name), size mismatch)",
+                                                            storeGone: false, inFlight: false)
+                        }
+                    } else {
+                        do {
+                            try await run.place(tmp, cardName: name, bytes: r.bytes, seconds: r.seconds,
+                                                detail: "sha256 \(r.sha256.prefix(12))…", state: lifecycle.stateDescription)
+                        } catch {
+                            try? FileManager.default.removeItem(at: tmp)
+                            run.fileFailed(name, "couldn't be moved into the folder: \(error.localizedDescription)")
+                            meter.files(run.copied + run.failed, run.subtitle)
+                            return "couldn't write to \(run.destinationLabel): \(error.localizedDescription)"
+                        }
+                        inARow = 0
+                        progress = Double(run.copied + run.failed) / Double(max(run.total, 1))
+                        meter.files(run.copied + run.failed, run.subtitle)
+                        lifecycle.noteProgress("copy all: \(name) (\(run.copied + run.failed) of \(run.total))", link: link)
+                    }
+                } catch PTPIPClient.ClientError.response(let op, let code) {
+                    try? FileManager.default.removeItem(at: tmp)
+                    // A StoreRemoved sent with this answer may still be on its way through the event stream.
+                    try? await Task.sleep(for: .milliseconds(300))
+                    let answer = "\(op) \(name) answered \(WirelessLab.codeText(code))"
+                    let previousInvalid = pending.last.map { $0.code == .invalidObjectHandle } ?? false
+                    if !removedStores.isEmpty {
+                        interruption = CopyInterruption(cause: "StoreRemoved (storage \(Self.storeIDs(removedStores))) after \(run.copied) files; \(answer)",
+                                                        storeGone: true, inFlight: true)
+                    } else if code == .storeNotAvailable {
+                        interruption = CopyInterruption(cause: "\(answer) after \(run.copied) files", storeGone: true, inFlight: true)
+                    } else if code == .invalidObjectHandle && storeChanges != seenStoreChanges {
+                        interruption = CopyInterruption(cause: "\(answer), the first file after a store change", storeGone: false, inFlight: true)
+                    } else if retriedKeys.contains(Self.copyKey(o)) {
+                        // Put back by a recovery and refused again with a per-file answer: counted as failed at once and
+                        // outside the in-a-row rules, so a file the camera always refuses can't use up the recoveries.
+                        retriedKeys.remove(Self.copyKey(o))
+                        run.fileFailed(name, "\(op) answered \(WirelessLab.codeText(code)), again after a recovery")
+                        meter.files(run.copied + run.failed, run.subtitle)
+                        seenStoreChanges = storeChanges
+                        position += 1
+                        log.note("  copy: \(answer) again after a recovery; counted as failed")
+                        continue
+                    } else if code == .invalidObjectHandle && previousInvalid {
+                        interruption = CopyInterruption(cause: "\(answer), the second file in a row", storeGone: false, inFlight: true)
+                    } else if inARow + 1 >= Self.copyFailuresBeforeRecovery {
+                        interruption = CopyInterruption(cause: "\(inARow + 1) failures in a row (the last: \(answer))", storeGone: false, inFlight: true)
+                    } else {
+                        pending.append(PendingCopyFailure(position: position, name: name, code: code,
+                                                          why: "\(op) answered \(WirelessLab.codeText(code))"))
+                        inARow += 1
+                        seenStoreChanges = storeChanges
+                        position += 1
+                        log.note("  copy: \(answer); counted as failed once a later file copies, tried again after a recovery otherwise")
+                        continue
+                    }
+                } catch {
+                    try? FileManager.default.removeItem(at: tmp)
+                    var localFile = false
+                    if let clientError = error as? PTPIPClient.ClientError, case .fileError = clientError { localFile = true }
+                    if !localFile, let failure = await c.linkFailure {
+                        connectionState = "connection lost (\(failure)); the copy is recovering"
+                        interruption = CopyInterruption(cause: "the link failed at \(name): \(failure)", storeGone: false, inFlight: true)
+                    } else {
+                        // Not the camera (the temporary file couldn't be written, or another local error): ends the run.
+                        countPendingCopyFailures(&pending, run: run)
+                        run.fileFailed(name, "\(error)")
+                        meter.files(run.copied + run.failed, run.subtitle)
+                        return "GetObject \(name) failed: \(error) [\(lifecycle.stateDescription)]"
+                    }
+                }
             }
-            do {
-                try await run.place(tmp, cardName: name, bytes: r.bytes, seconds: r.seconds,
-                                    detail: "sha256 \(r.sha256.prefix(12))…", state: lifecycle.stateDescription)
-            } catch {
-                try? FileManager.default.removeItem(at: tmp)
-                run.fileFailed(name, "couldn't be moved into the folder: \(error.localizedDescription)")
-                report(i + 1, run.subtitle)
-                return "couldn't write to \(run.destinationLabel): \(error.localizedDescription)"
+            guard let cut = interruption else { continue }
+
+            // Session-level: the file in flight, and those whose non-OK answer isn't counted yet, are tried again.
+            let failedAt = clock.now
+            // A Stop or expiry that came during the GetObject or the wait: no recovery is started or counted, and the
+            // non-OK answers held so far count as failed, as on a Stop at the top of the loop.
+            if shouldStop() {
+                countPendingCopyFailures(&pending, run: run)
+                meter.files(run.copied + run.failed, run.subtitle)
+                if let back = resumed {
+                    measureCopyRecovery(run, seconds: (failedAt - back.failedAt).inSeconds, cause: back.cause, steps: back.steps,
+                                        until: "the copy stopping before the next file")
+                }
+                return "\(copyStopWhy()) after \(run.copied + run.failed) of \(run.total) (with \(cut.cause)) [\(lifecycle.stateDescription)]"
             }
-            progress = Double(i + 1) / Double(items.count)
-            report(i + 1, run.subtitle)
-            lifecycle.noteProgress("copy all: \(name) (\(i + 1) of \(items.count))", link: link)
+            // A recovery that brought the session back, with no file started since: measured up to this interruption.
+            if let back = resumed {
+                resumed = nil
+                measureCopyRecovery(run, seconds: (failedAt - back.failedAt).inSeconds, cause: back.cause, steps: back.steps,
+                                    until: "the next interruption, before any file started (\(cut.cause))")
+            }
+            let held = pending
+            let heldPositions = Set(held.map { $0.position })
+            for i in 0..<position where !heldPositions.contains(i) { done.append(queue[i]) }
+            // Still to copy, in order: the held files, then the file in flight (when there is one) and the rest.
+            var again = held.map { queue[$0.position] }
+            if position < queue.count { again += queue[position...] }
+            let retried = held.count + (cut.inFlight ? 1 : 0)
+            pending = []
+            inARow = 0
+            guard recoveries < Self.copyRecoveryLimit else {
+                log.error("Copy all RAW: \(cut.cause); \(recoveries) recoveries already made, so the copy gives up [\(lifecycle.stateDescription)]")
+                return "gave up after \(recoveries) recoveries: \(cut.cause) [\(lifecycle.stateDescription)]"
+            }
+            recoveries += 1
+            run.recoveryStarted(cut.cause)
+            meter.files(run.copied + run.failed, "recovering · \(run.subtitle)")
+            log.warn("Copy all RAW: recovery \(recoveries) of at most \(Self.copyRecoveryLimit): \(cut.cause); \(retried) file(s) to try again, \(again.count) in all still to copy [\(lifecycle.stateDescription)]")
+            let steps = CopyRecoverySteps(log: log, number: recoveries, meter: meter)
+            let outcome = await recoverCopy(c, interruption: cut, steps: steps, addsBefore: addsBefore, target: target, net: net,
+                                            recovery: recovery, shouldStop: shouldStop)
+            switch outcome {
+            case .resumed(let client, let stepsText):
+                c = client
+                let remap = remapForCopy(again, done: done)
+                for missing in remap.missing {
+                    run.fileFailed(missing, "not in the camera's listing after the recovery (no ARW of that name and size)")
+                }
+                // Put back by this recovery: one refused again with a per-file answer counts as failed at once.
+                for o in again.prefix(retried) { retriedKeys.insert(Self.copyKey(o)) }
+                queue = remap.found
+                position = 0
+                // The listing was made after any store change so far.
+                seenStoreChanges = storeChanges
+                addsBefore = storeAdds
+                log.note(String(format: "Copy all RAW: recovery %ld done %.1f s after the failure: %ld file(s) found again in the new listing (%ld under the same handle), %ld not found; the copy goes on [%@]",
+                                recoveries, (clock.now - failedAt).inSeconds, remap.found.count, remap.sameHandle, remap.missing.count,
+                                lifecycle.stateDescription))
+                meter.files(run.copied + run.failed, run.subtitle)
+                resumed = (failedAt: failedAt, cause: cut.cause, steps: stepsText)
+                // Once the session is back, a Bluetooth link the recovery used is released.
+                await releaseCopyBluetooth("the session is back", copyEnded: false)
+            case .failed(let why, let stepsText):
+                log.error(String(format: "Copy all RAW: recovery %ld failed %.1f s after the failure: %@ (%@)",
+                                 recoveries, (clock.now - failedAt).inSeconds, why, stepsText))
+                measureCopyRecovery(run, seconds: (clock.now - failedAt).inSeconds, cause: cut.cause, steps: stepsText,
+                                    until: "the recovery failing (\(why))")
+                if client == nil { connectionState = "not connected (the copy gave up; see the log)" }
+                return "gave up: \(cut.cause); recovery \(recoveries) failed: \(why) [\(lifecycle.stateDescription)]"
+            case .stopped(let why):
+                // As on a Stop at the top of the loop: the held non-OK answers count as failed.
+                for p in held { run.fileFailed(p.name, p.why) }
+                meter.files(run.copied + run.failed, run.subtitle)
+                measureCopyRecovery(run, seconds: (clock.now - failedAt).inSeconds, cause: cut.cause, steps: steps.summary,
+                                    until: "the copy stopping during the recovery (\(why))")
+                return "\(why) during recovery \(recoveries) (\(cut.cause)) after \(run.copied + run.failed) of \(run.total) [\(lifecycle.stateDescription)]"
+            }
+        }
+        // No later file to tell: the non-OK answers at the end of the list count as failed.
+        countPendingCopyFailures(&pending, run: run)
+        if let back = resumed {
+            measureCopyRecovery(run, seconds: (clock.now - back.failedAt).inSeconds, cause: back.cause, steps: back.steps,
+                                until: "the end of the list (no file left to copy)")
+        }
+        meter.files(run.copied + run.failed, run.subtitle)
+        return nil
+    }
+
+    private func copyStopWhy() -> String {
+        continued.expired ? "the system expired the continued task" : "Stop (or Cancel run)"
+    }
+
+    private func countPendingCopyFailures(_ pending: inout [PendingCopyFailure], run: CopyAllRun) {
+        for p in pending { run.fileFailed(p.name, p.why) }
+        pending = []
+    }
+
+    /// `<link>.copyAll.recovery.seconds`, one value per recovery: from the failure to the next file starting, or to
+    /// the next interruption, the recovery failing, the copy stopping or the end of the list (`until` says which), with
+    /// the cause and the steps in the context.
+    private func measureCopyRecovery(_ run: CopyAllRun, seconds: Double, cause: String, steps: String, until: String) {
+        log.measure("\(run.prefix).recovery.seconds", seconds, "s",
+                    context: "\(cause); from the failure to \(until); \(steps)" + (run.conditions.map { "; \($0)" } ?? ""))
+    }
+
+    private static func copyName(_ o: CardObject) -> String {
+        o.info.filename.isEmpty ? "object-\(o.handle.rawValue).ARW" : o.info.filename
+    }
+
+    /// Name (case-insensitive) and size: how a file is found again in a new listing.
+    private static func copyKey(_ o: CardObject) -> String {
+        "\(o.info.filename.lowercased())|\(o.info.objectCompressedSize)"
+    }
+
+    private static func storeIDs(_ ids: Set<UInt32>) -> String {
+        ids.sorted().map { String(format: "0x%08X", $0) }.joined(separator: ", ")
+    }
+
+    /// Build 14: the files still to copy, found again in the new listing: the same handle with the same name and size
+    /// first (handles have been stable across sessions), otherwise the first ARW of that name and size not taken yet.
+    /// The files already `done` claim their matches first (and are then left out), so with two ARW of the same name
+    /// and size (File Number Reset across DCIM folders) a copied one isn't fetched again in place of the other.
+    /// Returns the files found, in the old order, the names not found, and how many kept their handle.
+    private func remapForCopy(_ remaining: [CardObject], done: [CardObject]) -> (found: [CardObject], missing: [String], sameHandle: Int) {
+        var byHandle: [UInt32: CardObject] = [:]
+        var byKey: [String: [CardObject]] = [:]
+        for o in copyAllObjects {
+            byHandle[o.handle.rawValue] = o
+            byKey[Self.copyKey(o), default: []].append(o)
+        }
+        var used: Set<UInt32> = []
+        func match(_ o: CardObject) -> (CardObject, sameHandle: Bool)? {
+            let key = Self.copyKey(o)
+            if let same = byHandle[o.handle.rawValue], Self.copyKey(same) == key, !used.contains(same.handle.rawValue) {
+                used.insert(same.handle.rawValue)
+                return (same, sameHandle: true)
+            }
+            if let other = byKey[key]?.first(where: { !used.contains($0.handle.rawValue) }) {
+                used.insert(other.handle.rawValue)
+                return (other, sameHandle: false)
+            }
+            return nil
+        }
+        for o in done { _ = match(o) }
+        var found: [CardObject] = []
+        var missing: [String] = []
+        var sameHandle = 0
+        for o in remaining {
+            if let hit = match(o) {
+                found.append(hit.0)
+                if hit.sameHandle { sameHandle += 1 }
+            } else {
+                missing.append(Self.copyName(o))
+            }
+        }
+        return (found, missing, sameHandle)
+    }
+
+    /// Build 14: one recovery, inside the copy's continued task (so it also runs with the phone locked).
+    /// a. The session is still up: up to 15 s for StoreAdded (when the card was reported gone, unless StoreAdded has
+    ///    already come), then the card is listed again in the same session.
+    /// b. Otherwise (or if that listing fails or finds no ARW): what is left of the session is closed, up to 30 s for
+    ///    the camera's port to answer (iOS rejoins the saved network by itself, joinOnce false), then the same kind of
+    ///    session is reopened (Sony's whole-card contents transfer for a whole-card copy) and the card listed.
+    /// c. If the port doesn't answer and the tester allowed it: the camera's Wi-Fi switched on over Bluetooth, up to 30 s
+    ///    for iOS to rejoin, one join with the details read over Bluetooth if the app is in the foreground (a join
+    ///    prompt can't show in the background), then as b.
+    /// Every step is logged with its time (in `steps`, which the caller keeps for the measurement), and Stop is honoured
+    /// between steps. `addsBefore`: the StoreAdded count before the GetObject before the interruption started.
+    private func recoverCopy(_ c: PTPIPClient, interruption: CopyInterruption, steps: CopyRecoverySteps, addsBefore: Int,
+                             target: WiFiTarget?, net: String,
+                             recovery: CopyAllRecovery, shouldStop: @escaping ContinuedTask.ShouldStop) async -> CopyRecoveryOutcome {
+        activity = "Copy all RAW: recovering (\(steps.number) of \(Self.copyRecoveryLimit))"
+        progress = nil
+        if shouldStop() { return .stopped(copyStopWhy()) }
+
+        // a. The session is still up.
+        if client === c, await c.linkFailure == nil {
+            if interruption.storeGone || !removedStores.isEmpty {
+                // The card is back once no storage is reported removed and a StoreAdded has come since that GetObject
+                // started: it may have come already (a StoreRemoved and StoreAdded during the GetObject, then
+                // StoreNotAvailable while the camera indexes the card), so the count isn't taken here.
+                let clock = ContinuousClock()
+                let started = clock.now
+                var outcome = "no StoreAdded within 15 s"
+                while (clock.now - started).inSeconds < 15 {
+                    if removedStores.isEmpty && storeAdds > addsBefore {
+                        let waited = (clock.now - started).inSeconds
+                        outcome = waited < 0.1 ? "StoreAdded had already come, so no wait"
+                            : String(format: "StoreAdded after %.1f s", waited)
+                        break
+                    }
+                    if shouldStop() { return .stopped(copyStopWhy()) }
+                    if let failure = await c.linkFailure {
+                        outcome = "the link failed while waiting (\(failure))"
+                        break
+                    }
+                    steps.tick()
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                steps.add("waited for the card to come back: \(outcome)")
+            }
+            if shouldStop() { return .stopped(copyStopWhy()) }
+            if client === c, await c.linkFailure == nil {
+                do {
+                    let arw = try await relistForCopy(c, net: net, poll: true)
+                    if arw > 0 {
+                        if !removedStores.isEmpty {
+                            steps.add("no StoreAdded for \(Self.storeIDs(removedStores)), but the card lists, so it counts as back")
+                            removedStores = []
+                        }
+                        steps.add("listed the card again in the same session: \(arw) ARW")
+                        return .resumed(c, steps: steps.summary)
+                    }
+                    steps.add("listed the card again in the same session: no ARW")
+                } catch {
+                    steps.add("listing the card again in the same session failed: \(error)")
+                }
+            }
+        } else {
+            let failure = await c.linkFailure
+            steps.add("the session is gone (\(failure.map { "\($0)" } ?? "the client was replaced"))")
+        }
+        if shouldStop() { return .stopped(copyStopWhy()) }
+        guard let target else { return .failed("no camera address to reconnect to", steps: steps.summary) }
+
+        // b. Close what is left, wait for the camera's port, reopen.
+        await closeClient(closingSession: true)
+        connectionState = "the copy is reconnecting to \(target.host)"
+        steps.add("closed what was left of the session")
+        if let after = await waitForCameraPort(host: target.host, seconds: 30, steps: steps, shouldStop: shouldStop) {
+            steps.add(String(format: "%@:15740 answered after %.1f s", target.host, after))
+            if let back = await reopenForCopy(target, steps: steps, shouldStop: shouldStop) { return .resumed(back, steps: steps.summary) }
+            if shouldStop() { return .stopped(copyStopWhy()) }
+            return .failed("the camera answered on its port, but the session couldn't be reopened and listed", steps: steps.summary)
+        }
+        if shouldStop() { return .stopped(copyStopWhy()) }
+        steps.add("nothing answered at \(target.host):15740 within 30 s")
+
+        // c. Bluetooth, only if the tester allowed it at the start of the copy.
+        guard let handover = recovery.bluetooth else {
+            return .failed("the camera's port didn't answer within 30 s, and this copy may not switch the camera's Wi-Fi on over Bluetooth",
+                           steps: steps.summary)
+        }
+        guard target.net == "ap" else {
+            return .failed("the camera's port on the home LAN didn't answer within 30 s (Bluetooth recovery is for the camera's own network only)",
+                           steps: steps.summary)
+        }
+        guard await switchWiFiOnForCopy(handover, steps: steps, shouldStop: shouldStop) else {
+            if shouldStop() { return .stopped(copyStopWhy()) }
+            return .failed("the camera's Wi-Fi couldn't be switched back on over Bluetooth", steps: steps.summary)
+        }
+        if let after = await waitForCameraPort(host: target.host, seconds: 30, steps: steps, shouldStop: shouldStop) {
+            steps.add(String(format: "the phone rejoined by itself: %@:15740 answered after %.1f s", target.host, after))
+        } else if shouldStop() {
+            return .stopped(copyStopWhy())
+        } else if !lifecycle.isInForeground {
+            return .failed("the camera's Wi-Fi is on, but the phone didn't rejoin its network within 30 s, and a join needs the app in the foreground",
+                           steps: steps.summary)
+        } else {
+            steps.add("the phone didn't rejoin within 30 s; one join with the details read over Bluetooth (the app is in the foreground)")
+            guard await joinForCopy(handover, steps: steps, shouldStop: shouldStop) else {
+                if shouldStop() { return .stopped(copyStopWhy()) }
+                return .failed("the join with the details read over Bluetooth didn't work", steps: steps.summary)
+            }
+            guard let after = await waitForCameraPort(host: target.host, seconds: 30, steps: steps, shouldStop: shouldStop) else {
+                if shouldStop() { return .stopped(copyStopWhy()) }
+                return .failed("nothing answered at \(target.host):15740 within 30 s of the join", steps: steps.summary)
+            }
+            steps.add(String(format: "%@:15740 answered %.1f s after the join", target.host, after))
+        }
+        if let back = await reopenForCopy(target, steps: steps, shouldStop: shouldStop) { return .resumed(back, steps: steps.summary) }
+        if shouldStop() { return .stopped(copyStopWhy()) }
+        return .failed("the camera's Wi-Fi came back, but the session couldn't be reopened and listed", steps: steps.summary)
+    }
+
+    /// TCP connects to `host`:15740 (2 s each, 1 s apart) until one answers or `seconds` pass; the seconds it took, or
+    /// nil (also when the copy is stopped). Quiet: a refused or timed-out connect is the expected case here.
+    private func waitForCameraPort(host: String, seconds: Double, steps: CopyRecoverySteps,
+                                   shouldStop: ContinuedTask.ShouldStop) async -> Double? {
+        let clock = ContinuousClock()
+        let started = clock.now
+        let quiet: PTPIPClient.Logger = { _, _ in }
+        while (clock.now - started).inSeconds < seconds {
+            if shouldStop() { return nil }
+            steps.tick()
+            if (try? await PTPIPClient.probePort(host: host, timeout: 2, log: quiet)) != nil {
+                return (clock.now - started).inSeconds
+            }
+            try? await Task.sleep(for: .seconds(1))
         }
         return nil
+    }
+
+    /// The card listed again for a recovery, without the enumerate measurements: a poll for handles first when `poll`
+    /// (the same session, which may still be indexing the card), then List card's work. Returns the ARW listed.
+    private func relistForCopy(_ c: PTPIPClient, net: String, poll: Bool) async throws -> Int {
+        if poll, let mode = contentsMode {
+            let clock = ContinuousClock()
+            _ = try await pollForHandles(c, mode: mode, clock: clock, started: clock.now, limit: 30)
+        }
+        try await listObjects(c, net: net, record: false)
+        return copyAllObjects.count
+    }
+
+    /// Recovery b's reopen: the same kind of session as before (reopen: Sony's whole-card contents transfer for a
+    /// whole-card copy, with its poll for handles), then the card listed. Nil when either fails, no ARW is listed or
+    /// the copy is stopped. The recovery has already closed the client, so connectFresh's protection (a 500 ms pause,
+    /// and one retry of a refused connection after 1 s, for a camera that may briefly refuse a new connection straight
+    /// after the old session closes; `unverified` on the α7C II) doesn't apply there: it is applied here.
+    private func reopenForCopy(_ target: WiFiTarget, steps: CopyRecoverySteps, shouldStop: ContinuedTask.ShouldStop) async -> PTPIPClient? {
+        try? await Task.sleep(for: .milliseconds(500))
+        var opened: PTPIPClient?
+        for attempt in 1 ... 2 {
+            if shouldStop() { return nil }
+            do {
+                opened = try await reopen(target)
+                break
+            } catch {
+                guard attempt == 1 else {
+                    steps.add("reopening the session failed again: \(error)")
+                    return nil
+                }
+                // A failed connect or session set-up has closed the client, so the second attempt starts from none (a
+                // failed poll for handles leaves it open, and then connectFresh's own pause and retry apply).
+                steps.add("reopening the session failed: \(error); trying once more in 1 s")
+                if shouldStop() { return nil }
+                try? await Task.sleep(for: .seconds(1))
+                let quiet: PTPIPClient.Logger = { _, _ in }
+                guard (try? await PTPIPClient.probePort(host: target.host, timeout: 2, log: quiet)) != nil else {
+                    steps.add("\(target.host):15740 no longer answers, so the session isn't reopened again")
+                    return nil
+                }
+            }
+        }
+        guard let c = opened else { return nil }
+        steps.add("reopened the session (\(sessionKind))")
+        do {
+            let arw = try await relistForCopy(c, net: target.net, poll: false)
+            guard arw > 0 else {
+                steps.add("listed the card again: no ARW")
+                return nil
+            }
+            steps.add("listed the card again: \(arw) ARW")
+            return c
+        } catch {
+            steps.add("listing the card again failed: \(error)")
+            return nil
+        }
+    }
+
+    /// Recovery c: the camera's Wi-Fi switched on over Bluetooth, as the guided runs do it (joinCameraOverBluetooth):
+    /// connect, discover, a CC09 read; unless that already reports status 2, Sony's five notifications on, then
+    /// switchWiFiOn (the one write, CC08 = 01, allowed by the tester at the start of the copy) until status 2. The link
+    /// is held in `copyBluetooth` from the start, so releaseCopyBluetooth turns the notifications off and disconnects
+    /// once the session is back or the copy ends. True when the camera reports its Wi-Fi on. Stop and Cancel run are
+    /// checked after each Bluetooth step: after one, the notifications aren't turned on and CC08 isn't written.
+    private func switchWiFiOnForCopy(_ h: SonyWiFiHandover, steps: CopyRecoverySteps, shouldStop: ContinuedTask.ShouldStop) async -> Bool {
+        let clock = ContinuousClock()
+        let started = clock.now
+        while h.busy && (clock.now - started).inSeconds < 30 {
+            if shouldStop() { return false }
+            steps.tick()
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard !h.busy else {
+            steps.add("Bluetooth: another Bluetooth operation was still running after 30 s")
+            return false
+        }
+        let ownLink = !h.isConnected
+        let notifyingBefore = h.notifyingCount
+        copyBluetooth = CopyBluetoothHold(handover: h, ownLink: ownLink, subscribedHere: false, notifyingBefore: notifyingBefore)
+        do {
+            _ = try await h.connect()
+            if shouldStop() { return false }
+            _ = try await h.discover(record: nil)
+            if shouldStop() { return false }
+            steps.add(ownLink ? "Bluetooth: connected to the camera and listed its services" : "Bluetooth: using the link already up")
+            let status = try await h.readWiFiStatus("before the copy's recovery switches the camera's Wi-Fi on")
+            if status == 2 {
+                steps.add("the camera already reports its Wi-Fi on (CC09 status 2), so nothing is written")
+                return true
+            }
+            // A stopped copy never turns the notifications on.
+            if shouldStop() { return false }
+            copyBluetooth = CopyBluetoothHold(handover: h, ownLink: ownLink, subscribedHere: true, notifyingBefore: notifyingBefore)
+            let codes = try await h.subscribe(SonyWiFiHandover.sonyNotificationCodes, attempt: "Copy all RAW recovery")
+            copyBluetooth = CopyBluetoothHold(handover: h, ownLink: ownLink, subscribedHere: true, notifyingBefore: notifyingBefore,
+                                              turnedOn: codes)
+            steps.add("Sony's notifications on: \(codes.isEmpty ? "none" : codes.joined(separator: ", "))")
+            // The last point before the one write (CC08 = 01).
+            if shouldStop() {
+                steps.add("stopped before CC08 was written")
+                return false
+            }
+            let on = try await h.switchWiFiOn(timeout: 30, attempt: "Copy all RAW recovery")
+            steps.add("CC08 = 01 written; \(on ? "the camera reports its Wi-Fi on (status 2)" : "no status 2 within 30 s") [\(h.lastStatusSequence)]")
+            return on
+        } catch {
+            steps.add("Bluetooth: \(SonyWiFiHandover.errorName(error))")
+            return false
+        }
+    }
+
+    /// Recovery c's one join (foreground only): the network name and password read over Bluetooth, joined as the
+    /// Bluetooth handover joins (joinHandover: never logged or stored), waiting up to 90 s for it to finish. A stopped
+    /// copy never asks iOS to join, and stops waiting.
+    private func joinForCopy(_ h: SonyWiFiHandover, steps: CopyRecoverySteps, shouldStop: ContinuedTask.ShouldStop) async -> Bool {
+        if shouldStop() { return false }
+        guard h.isConnected, !h.busy else {
+            steps.add("no Bluetooth link to read the network details over")
+            return false
+        }
+        do {
+            // The network name and password: only in this scope.
+            let details = try await h.readCredentials(record: nil)
+            guard !details.ssid.isEmpty, HandoverCredentials.isValidPassphrase(details.passphrase) else {
+                steps.add("the network details read over Bluetooth aren't usable (\(details.description))")
+                return false
+            }
+            steps.add("network details read over Bluetooth (\(details.description))")
+            if shouldStop() { return false }
+            joinHandover(ssid: details.ssid, passphrase: details.passphrase, source: "Copy all RAW recovery")
+        } catch {
+            steps.add("reading the network details over Bluetooth failed: \(SonyWiFiHandover.errorName(error))")
+            return false
+        }
+        let clock = ContinuousClock()
+        let started = clock.now
+        while joining && (clock.now - started).inSeconds < 90 {
+            if shouldStop() { break }
+            steps.tick()
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        if shouldStop() {
+            steps.add("stopped during the join")
+            return false
+        }
+        guard let already = lastJoinAlreadyAssociated else {
+            steps.add(joining ? "the join didn't finish within 90 s" : "the join failed (see the log)")
+            return false
+        }
+        steps.add(already ? "the join found the phone already on the camera's network" : "joined the camera's network")
+        return true
+    }
+
+    /// The end of a recovery's Bluetooth use: on a link the copy connected, every notification off (waiting for the
+    /// camera) and Bluetooth disconnected; on a link the Bluetooth tab or the guided run holds, the notifications the
+    /// copy turned on are turned off only if none were on before (turning off is all or nothing), and the link stays.
+    /// If the camera has dropped the link with notification switches this app turned on still set at the camera (a
+    /// bonded camera keeps them for the next link), they are cleared over one more connect once the copy has ended
+    /// (`copyEnded`); in the middle of the copy the hold is kept until then, so the resumed copy isn't held up.
+    private func releaseCopyBluetooth(_ why: String, copyEnded: Bool) async {
+        guard let hold = copyBluetooth else { return }
+        let h = hold.handover
+        if (hold.ownLink || hold.subscribedHere) && !h.isConnected && !h.busy && !h.earlierLinkCodes.isEmpty {
+            let codes = h.earlierLinkCodes.joined(separator: ", ")
+            guard copyEnded else {
+                log.note("Copy all RAW: the camera dropped the Bluetooth link the recovery used, with notifications this app turned on (\(codes)) still set at the camera; they are turned off over one more connect when the copy ends (\(why))")
+                return
+            }
+            copyBluetooth = nil
+            await clearCopyNotificationsOverNewLink(h, codes: codes, why: why)
+            return
+        }
+        copyBluetooth = nil
+        if hold.ownLink {
+            guard h.isConnected || h.busy else {
+                log.note("Copy all RAW: the Bluetooth link the recovery used is already down, with nothing this app turned on left set at the camera (\(why))")
+                return
+            }
+            if continued.expired {
+                // No time to wait for the camera's answers: Disconnect turns off what is on over this link at once.
+                h.disconnect()
+                log.note("Copy all RAW: Bluetooth disconnected without waiting for the camera's answers, the continued task having expired (\(why))")
+                return
+            }
+            if h.isConnected && !h.busy && (h.notifyingCount > 0 || !h.earlierLinkCodes.isEmpty) {
+                do {
+                    let left = try await h.unsubscribeAll()
+                    log.note("Copy all RAW: Bluetooth notifications off: \(left.isEmpty ? "all confirmed" : "not confirmed: \(left.joined(separator: ", "))")")
+                } catch {
+                    log.warn("Copy all RAW: turning the Bluetooth notifications off didn't finish (\(SonyWiFiHandover.errorName(error))); Disconnect turns any left off without waiting")
+                }
+            }
+            h.disconnect()
+            log.note("Copy all RAW: Bluetooth disconnected (\(why))")
+        } else if hold.subscribedHere && hold.notifyingBefore == 0 && h.isConnected && !h.busy {
+            do {
+                let left = try await h.unsubscribeAll()
+                log.note("Copy all RAW: Bluetooth notifications the recovery turned on are off (\(left.isEmpty ? "all confirmed" : "not confirmed: \(left.joined(separator: ", "))")); the link stays up for the Bluetooth tab or the guided run (\(why))")
+            } catch {
+                log.warn("Copy all RAW: turning the Bluetooth notifications off didn't finish (\(SonyWiFiHandover.errorName(error))); Disconnect on the Bluetooth tab turns them off")
+            }
+        } else if hold.subscribedHere && (h.isConnected || h.busy) {
+            let codes = hold.turnedOn.isEmpty ? SonyWiFiHandover.sonyNotificationCodes.joined(separator: ", ")
+                : hold.turnedOn.joined(separator: ", ")
+            let reason = h.busy ? "the link is busy" : "some were already on before, and turning off is all or nothing"
+            log.warn("Copy all RAW: notifications the recovery turned on (\(codes)) stay on over the link the Bluetooth tab or the guided run holds (\(reason)) (\(why)); Disconnect on the Bluetooth tab, or the end of the guided run that holds the link, turns them off")
+        } else if hold.subscribedHere {
+            log.note("Copy all RAW: the Bluetooth link the recovery used is down, with nothing this app turned on left set at the camera (\(why))")
+        } else {
+            log.note("Copy all RAW: the Bluetooth link the recovery used belongs to the Bluetooth tab or the guided run and stays up with its notifications (\(why)); the recovery turned none on")
+        }
+    }
+
+    /// One more connect to a camera that dropped the link with notification switches this app turned on still set, as
+    /// ble.auto does at its end: unsubscribeAll turns each on and off again over the new link (descriptor writes inside
+    /// 8000CC00 only, no value written), then Bluetooth is disconnected (the connect is the copy's own).
+    private func clearCopyNotificationsOverNewLink(_ h: SonyWiFiHandover, codes: String, why: String) async {
+        guard !continued.expired else {
+            log.warn("Copy all RAW: notifications this app turned on (\(codes)) are still set at the camera, which dropped the Bluetooth link; the continued task has expired, so they aren't turned off now: Connect and then Disconnect on the Bluetooth tab turns them off (\(why))")
+            return
+        }
+        log.note("Copy all RAW: the camera dropped the Bluetooth link the recovery used, with notifications this app turned on (\(codes)) still set; connecting once more to turn them off (\(why))")
+        do {
+            _ = try await h.connect(timeout: 8)
+            let left = try await h.unsubscribeAll()
+            h.disconnect()
+            if left.isEmpty {
+                log.note("Copy all RAW: the notifications left from the dropped link are off, confirmed by the camera; Bluetooth disconnected (\(why))")
+            } else {
+                log.warn("Copy all RAW: notifications not confirmed off: \(left.joined(separator: ", ")); Bluetooth disconnected (\(why))")
+            }
+        } catch {
+            let still = h.earlierLinkCodes.isEmpty ? codes : h.earlierLinkCodes.joined(separator: ", ")
+            if h.isConnected || h.busy {
+                // The connect is the copy's own. Disconnect turns off at once what is on over this link and warns about
+                // any left from the dropped one.
+                h.disconnect()
+                log.warn("Copy all RAW: turning off the notifications left from the dropped link didn't finish (\(SonyWiFiHandover.errorName(error))); Bluetooth disconnected; the camera may keep \(still) on for this phone (\(why))")
+            } else {
+                log.warn("Copy all RAW: couldn't connect to the camera to turn off the notifications left from the dropped link (\(SonyWiFiHandover.errorName(error))); still set at the camera: \(still); Connect and then Disconnect on the Bluetooth tab turns them off (\(why))")
+            }
+        }
     }
 
     // MARK: Battery

@@ -31,9 +31,18 @@ struct CopyAllSection: View {
         } header: {
             Text("Copy all RAW to Files")
         } footer: {
-            Text(verbatim: "Every ARW the session lists (on Wi-Fi, the whole card only in Sony's whole-card contents transfer), oldest first, over \(linkName), into a new folder named by the start time: nothing is overwritten, and every run copies everything. A file whose size doesn't match is deleted and counted as failed. Runs as a continued task, so start it and lock the phone; Stop keeps what has been copied."
-                 + (destination.isPicked ? "" : " " + FilesDestination.defaultCaveat))
+            Text(verbatim: footer)
         }
+    }
+
+    private var footer: String {
+        var text = "Every ARW the session lists (on Wi-Fi, the whole card only in Sony's whole-card contents transfer), oldest first, over \(linkName), into a new folder named by the start time: nothing is overwritten, and every run copies everything. A file whose size doesn't match is deleted and counted as failed. Runs as a continued task, so start it and lock the phone; Stop keeps what has been copied."
+        if linkName == "Wi-Fi" {
+            // Build 14: the recovery; Bluetooth only from the guided run, which asks first.
+            text += " If the camera drops its card, its session or its Wi-Fi, the copy waits for it, reconnects, lists the card again and carries on (up to three times); only the guided run may switch the camera's Wi-Fi back on over Bluetooth."
+        }
+        if !destination.isPicked { text += " " + FilesDestination.defaultCaveat }
+        return text
     }
 }
 
