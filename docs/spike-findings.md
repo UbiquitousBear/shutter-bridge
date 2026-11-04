@@ -349,6 +349,7 @@ The plan's paths use the α7 IV-generation names. Record what the α7C II actual
 | (not in the plan) access authentication | PC Remote over the home network | Turned **off** to enable *Pairing* (Shamil, 4 Nov); while it was on, the camera refused connections on port 15740. Its exact name and path in the menu are not yet recorded. |
 | `Network → Transfer/Remote → Select on Camera & Send` | *Send to Smartphone*, the wireless fallback |  |
 | *Bluetooth Function* (path not given in the plan) | BLE capture | **On** (Shamil, 2 Nov). |
+| (not in the plan) Bluetooth *Pairing* | Pairing the app with the camera (1.0 setup) | A screen titled **Pairing**: "Perform pairing from the device to be connected. Perform pairing from a supported application if connecting a smartphone." with Device Name ILCE-7CM2 and *Cancel* (4 Nov). The camera then asks to accept the pairing (wording not recorded). Its menu path is not yet recorded. |
 | *Remote Power ON/OFF* (path not given in the plan) | BLE capture while powered off | **On** during the 2 Nov Bluetooth run (Shamil). Bluetooth stays on whether the camera is on or off, and the camera can still be woken remotely when switched off. |
 
 ## Measurements
@@ -595,6 +596,24 @@ GATT services (Bluetooth tab › *List services*, 2 Nov 22:59, build 0.1 (9.1); 
   - If 1.0 leaves the camera's network after an import, the camera's Wi-Fi is off within about a minute, which is enough for its battery. A faster switch-off would need a write the spike hasn't made; 1.0 doesn't need one.
 - **CCAB read `04 00 00 02 03` with the camera's menu on 5 GHz** (`ble.handover.wifiBand` 2): one entry, tag 0x0000, value 02 03, the same with the Wi-Fi off, right after status 2 and after the import. One menu setting gives one point, so the notes' mapping is still unverified; 1.0 doesn't need it.
 - No Bluetooth pairing request (`ble.auto.pairingPrompt` no); the camera's screen showed nothing (`ble.auto.cameraShowsWiFi` no).
+
+**Without Creators' App's pairing: refused, then paired by our app** (guided run *Bluetooth: switch Wi-Fi on, join and import*, 4 Nov 13:03 and 13:06, build 0.1 (14.1)). Setup: Shamil removed the camera in Creators' App, in the iPhone's Bluetooth settings and on the camera; Creators' App quit, no other app holding a link to the camera, the camera's Wi-Fi off and its network forgotten in Settings.
+- **Unpaired, the camera refuses the hand-off (13:03).** The connect (0.19 s, by the stored identifier), the service list and Sony's five notification switches all worked, but the CC09 and CCAB reads and the CC08 write were refused (ATT *insufficient encryption*, then *insufficient authentication*), and the camera dropped the link 0.55 s after the refused write. iOS showed no pairing request (Shamil).
+- **With the camera's Bluetooth *Pairing* screen open, the app paired itself (13:06).** The screen reads "Perform pairing from the device to be connected. Perform pairing from a supported application if connecting a smartphone." (Device Name ILCE-7CM2, *Cancel*). The first read of CC09 brought up iOS's Bluetooth pairing request and a confirmation on the camera; Shamil accepted both, and the read returned 12.3 s after it was sent. Then the run went as with Creators' App's pairing:
+
+| Step | Took | From Start |
+| --- | --- | --- |
+| Bluetooth connect by the saved identifier | 0.20 s | |
+| Service discovery (1.27 s), Sony's five notifications on (1.7 s), the pairing during the first CC09 read (12.3 s, two confirmations included), a CCAB read | 16.6 s | |
+| CC08 = 0x01 (acknowledged in 88 ms) → Wi-Fi status 1 at +0.11 s → 2 at +2.28 s (`ble.auto.toWiFiOn`) | 2.5 s | 19.54 s |
+| A CCAB read, then the network details read on the first try, 0.46 s after status 2 (`ble.auto.toDetails`) | 0.92 s | 20.46 s |
+| iOS join prompt accepted; `apply` returned after 8.4 s; the camera answered at once (`ble.auto.toCameraPort`) | 9.0 s | 29.49 s |
+| Whole-card contents transfer ready (2.01 s), 559 objects listed (7.16 s), newest ARW (37.6 MB) at 10.8 MB/s (`ble.auto.toFirstFile`, less 3.7 s on the app's own question) | 13.4 s | 42.86 s |
+
+- **The rest matched the 3 Nov runs.** The Wi-Fi survived the Bluetooth link closing (ARW downloads 12.9 s and 62.8 s later, at 14.8 and 14.7 MB/s). CC09 stayed at 2 for 45 s after CloseSession with the phone joined. After the app removed its configuration, 45.2 s after CloseSession (the phone left 0.1 s later), the Wi-Fi went 2 → 3 at 51.0 s and → 0 at 53.0 s, as at 22:43 (51.2 and 53.2 s), so the leave rule now rests on two runs. The camera's screen showed nothing during the hand-off (`ble.auto.cameraShowsWiFi` no), and all five notifications were confirmed off.
+- The stored peripheral identifier kept working after the pairing was removed and made again.
+- Creators' App didn't work afterwards (`ble.auto.creatorsAppStillWorks` no), as expected, since its own pairing had been removed. Whether its pairing and ours can live together is still to check.
+- **What this means for 1.0:** Creators' App isn't needed. Setup is one pairing: the person opens the camera's Bluetooth *Pairing* screen, the app connects and reads a protected characteristic, and the person accepts iOS's pairing request and the camera's confirmation. After that the hand-off works as with Creators' App's pairing. Unpaired, the camera refuses quietly (no prompt) and drops the link, so the app has to recognise those errors and send the person to the *Pairing* screen.
 
 **How long an unused Wi-Fi stays up** (guided run *Bluetooth: how long an unused Wi-Fi stays up*, 3 Nov 22:55–22:59, build 0.1 (14.1), run twice). Setup: camera on with its Wi-Fi off (PC Remote Function off). The app switched the Wi-Fi on over Bluetooth with a single CC08 = 0x01 (Sony's five notifications on), stayed connected with the notifications on, and nobody was meant to join the camera's network: the iPhone wasn't on it at the start or the end of the watch, the app stayed in front, and no other device was used. Times are from status 2, by the notifications.
 

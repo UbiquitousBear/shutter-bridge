@@ -37,7 +37,7 @@ Every go/no-go row of the plan has an answer. Nothing below is waiting on a run 
 **What the spike learnt that changes 1.0's design** (detail in section 5):
 - A USB import longer than about 30 s needs the app in front; over Wi-Fi a continued task kept a 360-file copy (15.25 GB) going for nearly 13 minutes in the background, 329 s of it locked; the task ran 983 s in all without expiring.
 - The camera sometimes drops its card and Wi-Fi; the copy recovered itself from a restart in 97 s, with the app in front.
-- Bluetooth switches the camera's Wi-Fi on in 0.8–2.7 s and hands over the network details; an unused Wi-Fi goes off after about 50 s, and one with the phone joined stays up (at least 13 minutes, 4 Nov).
+- Bluetooth switches the camera's Wi-Fi on in 0.8–2.7 s and hands over the network details, after a one-time pairing the app can make itself (no Creators' App); an unused Wi-Fi goes off after about 50 s, and one with the phone joined stays up (at least 13 minutes, 4 Nov).
 - Handles are stable across sessions, so only the first import lists everything (5.9–8.3 s at 555 handles).
 - Photos needs read/write access, but *Limited Access* with nothing selected is enough.
 
@@ -66,9 +66,9 @@ Done on 4 Nov (11:30): the copy in MTP, with the app sent to the background. Ima
 
 | Run | Answers | Time | Needed for |
 | --- | --- | --- | --- |
-| *Bluetooth: switch Wi-Fi on, join and import*, after removing the pairing in Creators' App, in Settings › Bluetooth and in the camera's Bluetooth settings, as the advertisement run's *Not paired* step does (Shamil's call; Creators' App will need pairing again afterwards). If the camera keeps its half of the bond, the result isn't a first-time user's. | Can our app connect, subscribe, write CC08 and read CC06/CC07 without Creators' App's bond, with its own pairing or none? Every hand-off so far had that bond on the phone. Watch `ble.auto.pairingPrompt` and what the camera shows. The run doesn't record that the bond was removed, and its last question (`ble.auto.creatorsAppStillWorks`) will say no for that reason: note both by hand. | about 14 min plus re-pairing | 1.0 design (decision 6, onboarding) |
+| By hand, after pairing Creators' App again: Bluetooth tab › *Connect + discover*, then *Safe reads*; then an import in Creators' App | Do our pairing and Creators' App's live together, or does one replace the other? Matters for people who use both apps. | 5 min | Optional (1.0 setup copy) |
 
-Done on 4 Nov (12:39–12:54): the stay-joined test. The camera kept its Wi-Fi up for at least 13 minutes after the session while the phone stayed joined, through background spells and a lock (decision 2). A first attempt at 12:34 failed to join although `apply` returned without an error; nothing had changed before the attempt at 12:39, which joined (decision 3).
+Done on 4 Nov (12:39–12:54): the stay-joined test. The camera kept its Wi-Fi up for at least 13 minutes after the session while the phone stayed joined, through background spells and a lock (decision 2). A first attempt at 12:34 failed to join although `apply` returned without an error; nothing had changed before the attempt at 12:39, which joined (decision 3). At 13:03–13:06 the hand-off without Creators' App's pairing: refused while unpaired, then, with the camera's Bluetooth *Pairing* screen open, the app paired itself and the hand-off ran end to end (decision 6).
 
 **D. Proximity reminder**
 
@@ -111,7 +111,6 @@ Done on 4 Nov (12:39–12:54): the stay-joined test. The camera kept its Wi-Fi u
 
 **Choices for Shamil**
 - Is the Bluetooth trace wanted (section 2)?
-- Is the Bluetooth hand-off to be tested without Creators' App's bond (section 2 C)? If not, decision 6 stays provisional on it.
 - Do the proposed drops in section 7 stand?
 - Decisions 1–9 in section 5.
 
@@ -150,7 +149,7 @@ Done on 4 Nov (12:39–12:54): the stay-joined test. The camera kept its Wi-Fi u
 - *Background strategy:* "the USB session survives suspension" is true, but nothing transfers after 30 s; "the camera keeps the AP up for several minutes" holds while the phone stays joined (at least 13 minutes on 4 Nov, through background spells and a lock, with the Bluetooth link up), but it is about 50 s once the phone leaves.
 - *Permissions:* `.addOnly` becomes read/write with Limited Access allowed.
 - *Iteration 2:* "re-plugging after a pull resumes within 2 s" can't be met, because nothing answers until the catalogue is done (about 65 s in MTP, 7–12 s in MSC). *Iteration 4:* "lock the phone during a 2 GB import and it finishes" is about 50 s at 40 MB/s, so it fails over USB as written.
-- *Iteration 3 and roadmap:* the QR scan is replaced by the Bluetooth hand-off if decision 6 is taken, and 1.1's list (Bluetooth wake and credential hand-off) changes with it.
+- *Iteration 3 and roadmap:* the QR scan is replaced by the Bluetooth hand-off, with a pairing the app makes itself, if decision 6 is taken, and 1.1's list (Bluetooth wake and credential hand-off) changes with it.
 - *Risks and open questions:* tick the USB-mode and GUID open questions now. Answer ObjectAdded over USB: not in MTP; none in PC Remote on a plain session (4 Nov 12:10; Sony's init sequence over USB untried); and the USB 2 throughput one once the card type is recorded; retire the first two risks and the last (the camera keeps advertising when switched off); add the reverse-engineered Sony pieces, ImageCaptureCore's 30 s suspension and the camera dropping its card with Creators' App open.
 
 **Iteration 1 backlog:** it is wired-only and still marked a draft. Finalise it on 13 Nov from the findings (section 6).
@@ -183,9 +182,10 @@ Each is Shamil's. The recommendations are drawn from the findings; "provisional"
 - *Recommendation (provisional):* the camera's own network over Bluetooth stays the 1.0 route; the home network is supported when the camera is already on it, after Iteration 3's core. Decide after group B and the answer on what turning access authentication off costs in security (section 3).
 
 **6. Sony-specific operations and the Bluetooth hand-off.**
-- *Evidence:* a plain PTP/IP session gets StoreNotAvailable; listing needs SDIO_OpenSession (0x9210), Sony's init sequence and 0x9212, and resume needs 0x9211. The Bluetooth hand-off comes from reverse-engineered notes and has worked on this body, always with Creators' App's bond on the phone. The proposal says 1.0 uses neither, for two reasons: fragility against firmware updates and App Store review. Both still apply; the DeviceInfo check and per-firmware fixtures address the first, and nothing yet addresses the second. Without the hand-off the person switches on PC Remote Function and joins in Settings, as on 2 Nov. USB DeviceInfo reported "2.0" in MTP and "2.01" in PC Remote (as over PTP/IP and Bluetooth) on the same body; reading Setup › Version settles it.
+- *Evidence:* a plain PTP/IP session gets StoreNotAvailable; listing needs SDIO_OpenSession (0x9210), Sony's init sequence and 0x9212, and resume needs 0x9211. The Bluetooth hand-off comes from reverse-engineered notes and has worked on this body with Creators' App's pairing and, on 4 Nov, with a pairing the app made itself: with the camera's Bluetooth *Pairing* screen open, iOS's pairing request and a confirmation on the camera, then the full hand-off (13:06). Unpaired, the camera refuses the reads and the switch-on and drops the link (13:03). The proposal says 1.0 uses neither, for two reasons: fragility against firmware updates and App Store review. Both still apply; the DeviceInfo check and per-firmware fixtures address the first, and nothing yet addresses the second. Without the hand-off the person switches on PC Remote Function and joins in Settings, as on 2 Nov. USB DeviceInfo reported "2.0" in MTP and "2.01" in PC Remote (as over PTP/IP and Bluetooth) on the same body; reading Setup › Version settles it.
 - *Recommendation:* accept both. Read the operation list from DeviceInfo before using any Sony operation (as build 9.1 does), keep Sony-specific code in one place, keep fixtures per firmware (as general advice), and move the Bluetooth hand-off from 1.1 into Iteration 3. Shamil's 3 Nov decision already treats the Bluetooth switch-on as the smartphone connection. The trade-off against the two costs above is Shamil's.
-- *Provisional on:* the hand-off test without Creators' App's bond (section 2 C), which decides 1.0's onboarding.
+- *Onboarding:* one pairing from the app, with the camera's Bluetooth *Pairing* screen open; Creators' App isn't needed.
+- *Provisional on:* whether our pairing and Creators' App's live together (the optional check in section 2 C).
 
 **7. Wired mode, identity and resume.**
 - *Evidence:* MSC lists 9 × faster and runs JPG 60 % faster; MTP has stable object identifiers and GetPartialObject. In MSC the PTP flag is misleading. A 40 MB ARW restarts in about 1 s over USB.
