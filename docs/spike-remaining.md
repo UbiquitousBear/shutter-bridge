@@ -40,16 +40,16 @@ Every go/no-go row of the plan has an answer. Nothing below is waiting on a run 
 
 No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sources/Guided/GuidedScripts.swift`). Times are the guided runs' own estimates. "Plan record" means it fills a findings cell the plan asks for and is not needed for the decision; "1.0 design" means it settles a decision in section 5; "Optional" means skipping it costs a blank cell or a provisional decision.
 
-**A. USB: one session, camera on the cable (about 30–45 min)**
+**A. USB: one session, camera on the cable (about 15–20 min)**
 
 | Run | Answers | Time | Needed for |
 | --- | --- | --- | --- |
 | *Camera and Photos checks* | Does Photos › Import show the card's JPGs (187 are on it)? It is the plan's day-1 pass criterion and has no result. (Whether the USB mode can be fixed is answered: yes.) | 3 min | Plan record (optional) |
 | *MSC: resume after a cable pull* | Does `requestReadData` at an offset resume in MSC, and does the file keep its identity after a replug? Decision 7 rests on it. | 3 min | 1.0 design |
-| *PC Remote: DeviceInfo and ObjectAdded* (it opens the session itself) | Does the shutter send ObjectAdded over USB? | 5 min | Optional: transfer-while-shooting is already Go over Wi-Fi |
+| *PC Remote: DeviceInfo and ObjectAdded* (it opens the session itself and waits for the catalogue) | Does ImageCaptureCore list the card in *Remote Shoot (PC Remote)* (`usb.catalog.count`, or the 300 s catalogue limit)? Note what the camera shows on connection (on 4 Nov it went to *Img Dest*). Does the shutter send ObjectAdded over USB? | 5 min | 1.0 design (decision 1: what the app says in PC Remote); the ObjectAdded part is optional |
 | *USB: thumbnail speed-ups* | Thumbnails with 1, 2 and 4 in flight; previews from file headers. Sets the Browse pipeline (USB thumbnails take 145–188 ms against the 50 ms target). | 5 min | Optional |
 
-Done on 4 Nov (11:30): the copy in MTP, with the app sent to the background. ImageCaptureCore suspends 30 s after the app leaves the foreground, as in MSC, and iOS ended the continued task each time (Stop ruled out). The copy in *Remote Shoot (PC Remote)* didn't run: the camera wasn't in MTP or MSC (Shamil; what the app showed is a question in section 3).
+Done on 4 Nov (11:30): the copy in MTP, with the app sent to the background. ImageCaptureCore suspends 30 s after the app leaves the foreground, as in MSC, and iOS ended the continued task each time (Stop ruled out). No copy ran in *Remote Shoot (PC Remote)*: the camera went to a settings page (*Img Dest*) (Shamil). The copy run doesn't refuse that mode, so whether ImageCaptureCore lists the card there is still open; the *PC Remote: DeviceInfo and ObjectAdded* run above answers it.
 
 **B. The camera on the home network** (camera joined to the home Wi-Fi, PC Remote Function on, *PC Remote Cnct Method* = *Wi-Fi Access Point*, access authentication off; what that setting costs in security is a question in section 3).
 
@@ -93,7 +93,6 @@ Done on 4 Nov (11:30): the copy in MTP, with the app sent to the background. Ima
 - What turning access authentication off costs in security, and its exact menu name and path. Check before 1.0 asks anyone to do it.
 
 **Lock and background runs**
-- In *Remote Shoot (PC Remote)*, did the camera appear in the copy run with no files, or did the run stop at its mode question? And did the 11:30 copy run in MTP (the log points to it)?
 - Was Stop tapped in the Live Activity during the USB lock run (03:07; the task ended at about 03:09, with the phone locked)? The log can't tell Stop from an expiry.
 - What was in front during the background spells of the 01:57 USB copy, including its two expiries?
 - What was open during the 424 s and 139 s in the background after the Continue in the 23:51 Wi-Fi copy?
@@ -157,9 +156,9 @@ Done on 4 Nov (11:30): the copy in MTP, with the app sent to the background. Ima
 Each is Shamil's. The recommendations are drawn from the findings; "provisional" means a run or an answer in sections 2 and 3 could change it.
 
 **1. USB: the 30 s foreground limit.**
-- *Evidence:* in MSC, ImageCaptureCore reports *will suspend* when the app leaves the foreground and *did suspend* 30.0–30.1 s later, in the background (four times of four) and under lock (03:07; nothing moved for the remaining 629 s). A continued task doesn't change it. The session survives, and *resumed operations* comes 0.3–0.9 s after the app returns. A full card of 360 ARW takes about 6½ minutes at 40 MB/s. MTP behaves the same (4 Nov 11:30, three of three). In *Remote Shoot (PC Remote)* the copy didn't run.
-- *Recommendation:* the import asks to stay in front and keeps the screen on; the engine pauses on *did suspend* and continues when the app returns. A continued task over USB buys at most 30 s, so it isn't a requirement for wired.
-- *Provisional on:* what the app showed in PC Remote (section 3); if ImageCaptureCore can't list the card there, the app asks for MTP or MSC.
+- *Evidence:* in MSC, ImageCaptureCore reports *will suspend* when the app leaves the foreground and *did suspend* 30.0–30.1 s later, in the background (four times of four) and under lock (03:07; nothing moved for the remaining 629 s). A continued task doesn't change it. The session survives, and *resumed operations* comes 0.3–0.9 s after the app returns. A full card of 360 ARW takes about 6½ minutes at 40 MB/s. MTP behaves the same (4 Nov 11:30, three of three). In *Remote Shoot (PC Remote)* no copy ran, and whether ImageCaptureCore lists the card there is still open.
+- *Recommendation:* the import asks to stay in front and keeps the screen on; the engine pauses on *did suspend* and continues when the app returns. A continued task over USB buys at most 30 s, so it isn't a requirement for wired. If ImageCaptureCore can't list the card in PC Remote, the app asks for MSC or MTP.
+- *Provisional on:* whether ImageCaptureCore lists the card in PC Remote (*PC Remote: DeviceInfo and ObjectAdded*, group A).
 
 **2. Wi-Fi: leave the camera's network after an import, or stay joined.**
 - *Evidence:* in one run, removing the hotspot configuration 46 s after CloseSession made the camera's Wi-Fi start switching off 51.2 s later and be off at 53.2 s, with no write. Removing it brings the iOS join prompt back; re-applying a saved configuration (the 01:12 recovery) didn't prompt. If the phone stays joined, the camera's Wi-Fi stays up (status 2 for 45 s after CloseSession; a longer stay is untested, and option (b) rests on it). Creators' App's Wi-Fi goes off about 1 s after it leaves; how isn't known. The camera's battery cost of a Wi-Fi left on isn't measured.
@@ -172,7 +171,7 @@ Each is Shamil's. The recommendations are drawn from the findings; "provisional"
 - *Provisional on:* the locked-recovery run.
 
 **4. Pause, continue and stalled files.**
-- *Evidence:* both Wi-Fi expiries came as the Camera app was opened. The three USB expiries came 31–74 s after the progress last moved, during ImageCaptureCore's suspension: two in the 01:57 copy, phone unlocked, with what was in front not recorded, and one in the 03:07 run with the phone locked (Stop in the Live Activity not ruled out). Three more in the 11:30 MTP copy came 34–59 s after the progress stopped, phone unlocked, with Stop ruled out by Shamil; yet two spells of 109–114 s in the 01:57 copy didn't end in one. *Continue* started a new task in 0.03 s and copied again 11 s after the tap, 8.3 s of it a relist that stable handles make unnecessary; the file in flight restarted from its start. Over USB the same `requestDownload` survived a 632 s suspension, yet the spike's 60 s limit failed three downloads. Over Wi-Fi a drop made the copy count 82 files as failed before the link closed.
+- *Evidence:* both Wi-Fi expiries came as the Camera app was opened. The three USB expiries came 31–74 s after the progress last moved, during ImageCaptureCore's suspension: two in the 01:57 copy, phone unlocked, with what was in front not recorded, and one in the 03:07 run with the phone locked (Stop in the Live Activity not ruled out). Three more in the 11:30 MTP copy came 34–59 s after the progress stopped, phone unlocked, with Stop ruled out by Shamil; yet in the 01:57 copy three stalls went about 60 s without progress without one (two of them were 109–114 s without a byte, with a failed file moving the progress at 60 s). *Continue* started a new task in 0.03 s and copied again 11 s after the tap, 8.3 s of it a relist that stable handles make unnecessary; the file in flight restarted from its start. Over USB the same `requestDownload` survived a 632 s suspension, yet the spike's 60 s limit failed three downloads. Over Wi-Fi a drop made the copy count 82 files as failed before the link closed.
 - *Recommendation:* treat expiry as normal: pause, notify, and on Continue start a new task, reopen, ask for new handles only, and resume at the file in flight. Report progress in bytes. A stall pauses and retries; "failed" is for real errors, with a limited number of retries.
 
 **5. The home network as a second route.**
@@ -217,7 +216,7 @@ Each is Shamil's. The recommendations are drawn from the findings; "provisional"
 - BLE: all nine power × pairing combinations.
 - The Photos Import RAW-only mystery (not our app's path).
 - Wi-Fi two in flight (one transaction per PTP/IP session).
-- The second MTP lifecycle run as a separate run; it returns as one row in group A, because users will land in either USB mode.
+- The second MTP lifecycle run as a separate run; it came back as the MTP copy in group A, run on 4 Nov 11:30, because users will land in either USB mode.
 
 **Now unnecessary:**
 - The Sony SDIO experiment: the whole-card session uses it.
