@@ -46,8 +46,8 @@ No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sourc
 | --- | --- | --- | --- |
 | *Camera and Photos checks* | Does Photos › Import show the card's JPGs (187 are on it)? It is the plan's day-1 pass criterion and has no result. (Whether the USB mode can be fixed is answered: yes.) | 3 min | Plan record (optional) |
 | *MSC: resume after a cable pull* | Does `requestReadData` at an offset resume in MSC, and does the file keep its identity after a replug? Decision 7 rests on it. | 3 min | 1.0 design |
-| *Copy all RAW to Files*, USB-C, camera in **MTP**; switch to another app once it is copying | Does ImageCaptureCore suspend 30 s after the app leaves the foreground in MTP as it does in MSC? Only MSC is tested. The camera asks for the mode on every plug unless it is fixed, so users will arrive in either. The 65 s catalogue comes first. Stay away about 40 s (past the 30 s), then come back, and stop the copy once *did suspend* is logged: a longer absence makes the download in flight hit the spike's 60 s limit, and two timeouts in a row end the copy. Free space first if earlier copies fill the phone. | 5–12 min; the answer is in once the log shows *did suspend* | 1.0 design |
-| *Copy all RAW to Files*, USB-C, camera in **Remote Shoot (PC Remote)**; switch to another app once it is copying (same care as above) | Does ImageCaptureCore list and download the card in PC Remote at all, and does it suspend after 30 s too? The findings name PC Remote as the mode still to compare with MTP, and it is what a user gets who picks Remote Shoot at the camera's prompt. The 30 s suspension was seen only inside a continued task, so *Long serial download* can't answer it. | 5–12 min | 1.0 design (what the app says in that mode) |
+| *Copy all RAW to Files*, USB-C, camera in **MTP**: unplug and plug in again first, choosing MTP at the camera's prompt (the run reuses an open session without asking for the mode, so straight after the MSC resume run it would copy in MSC); switch to another app once it is copying | Does ImageCaptureCore suspend 30 s after the app leaves the foreground in MTP as it does in MSC? Only MSC is tested. The camera asks for the mode on every plug unless it is fixed, so users will arrive in either. The catalogue comes first: 65 s at 391 files, about 1½ minutes at today's 547. Note the start time and the mode: the log shows MTP and PC Remote alike (`ICTransportTypeUSB`), and the copy's measurements don't name the mode. Stay away about 40 s (past the 30 s), then come back, and stop the copy once *did suspend* is logged: a longer absence makes the download in flight hit the spike's 60 s limit, and two timeouts in a row end the copy. Free space first if earlier copies fill the phone. | 5–12 min; the answer is in once the log shows *did suspend* | 1.0 design |
+| *Copy all RAW to Files*, USB-C, camera in **Remote Shoot (PC Remote)**: replug and choose Remote Shoot, even though the run's prompt names only MSC or MTP; switch to another app once it is copying (same care as above) | Does ImageCaptureCore list and download the card in PC Remote at all, and does it suspend after 30 s too? The findings name PC Remote as the mode still to compare with MTP, and it is what a user gets who picks Remote Shoot at the camera's prompt. The 30 s suspension was seen only inside a continued task, so *Long serial download* can't answer it. | 5–12 min | 1.0 design (what the app says in that mode) |
 | *PC Remote: DeviceInfo and ObjectAdded* (it opens the session itself) | Does the shutter send ObjectAdded over USB? | 5 min | Optional: transfer-while-shooting is already Go over Wi-Fi |
 | *USB: thumbnail speed-ups* | Thumbnails with 1, 2 and 4 in flight; previews from file headers. Sets the Browse pipeline (USB thumbnails take 145–188 ms against the 50 ms target). | 5 min | Optional |
 
@@ -55,31 +55,31 @@ No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sourc
 
 | Run | Answers | Time | Needed for |
 | --- | --- | --- | --- |
-| *Wi-Fi: one camera mode* › *PC Remote (home Wi-Fi)* | Does the first handshake still take 40 s, or is it quick now (the 4 Nov run took 40.2 s, then 6 ms)? Does the first connection after a camera restart take as long? | 15 min | Optional (1.0 design if the home route is kept) |
-| *Copy all RAW to Files* › Wi-Fi › home network | A whole card over the home network. The 03:30 attempt was refused (access authentication was on then), so the only figure is 20 ARW at 10.2 MB/s. | 10–35 min | Optional |
-| *Wi-Fi: GUID after a power cycle*, *Wi-Fi: resume after Wi-Fi off* and *Wi-Fi: lock during a transfer*, on the home network | Does the camera accept the phone again after a restart with no wait? The home-network cells for partial reads, resume and lock are blank. | 5, 5–8 and 8 min | Optional |
+| *Wi-Fi: one camera mode* › *PC Remote (home Wi-Fi)* | Does the first handshake still take 40 s, or is it quick now (the 4 Nov run took 40.2 s, then 6 ms)? | 15 min | Optional (1.0 design if the home route is kept) |
+| *Copy all RAW to Files* › *Wi-Fi* › *Home LAN* | A whole card over the home network. The 03:30 attempt was refused (access authentication was on then), so the only figure is 20 ARW at 10.2 MB/s. | 10–35 min | Optional |
+| *Wi-Fi: GUID after a power cycle*, *Wi-Fi: resume after Wi-Fi off* and *Wi-Fi: lock during a transfer*, on the home network | Does the camera accept the phone again after a restart with no wait, and does that first connection take 40 s again (its handshake time is logged)? The home-network cells for partial reads, resume and lock are blank. | 5, 5–8 and 8 min | Optional |
 
 **C. The camera's own network (the 1.0 route)**
 
 | Run | Answers | Time | Needed for |
 | --- | --- | --- | --- |
 | *Copy all RAW to Files* › Wi-Fi, camera's own network, Bluetooth recovery allowed, phone **locked** while the camera is switched off and on | Does recovery work with the phone locked or the app in the background? The 4 Nov recovery ran with the app in front, and its join is made only in the foreground. | about 20 min (the 01:08 run took 20.1) | 1.0 design |
-| By hand, stay-joined test: switch the Wi-Fi on from the Bluetooth tab, join in Settings, open and close a session on the Wi-Fi tab, then stay joined (not *Bluetooth: switch Wi-Fi on, join and import*, which removes its configuration 46 s after the session). After 2, 5 and 10 minutes read the Wi-Fi status (CC09) on the Bluetooth tab, or try one download. | Does the camera's Wi-Fi stay up for a phone that stays joined, past about 100 s after CloseSession? Option (b) of decision 2 rests on it, and the guided run watches only 45 s. | about 15 min | 1.0 design |
-| *Bluetooth: switch Wi-Fi on, join and import*, after forgetting the camera in Settings › Bluetooth (Shamil's call; Creators' App will need pairing again afterwards) | Can our app connect, subscribe, write CC08 and read CC06/CC07 without Creators' App's bond, with its own pairing or none? Every hand-off so far had that bond on the phone. Watch `ble.auto.pairingPrompt` and what the camera shows. | about 15 min plus re-pairing | 1.0 design (decision 6, onboarding) |
+| By hand, stay-joined test (not *Bluetooth: switch Wi-Fi on, join and import*, which removes its configuration 46 s after the session): on the Bluetooth tab tap *Read details and join*, then confirm *Write 0x01 to CC08, then join*. The camera shows no password after a Bluetooth switch-on, and this join keeps its configuration, as option (b) would. On the Wi-Fi tab open a session (*Contents transfer: whole card*), then tap *Disconnect*. Stay joined, with the app in front and the screen on: on 2 Nov iOS moved the phone to the home Wi-Fi when the app went to the background. After 2, 5 and 10 minutes tap *Safe reads* on the Bluetooth tab, note the Wi-Fi status (CC09), and check the phone is still on the camera's network. Don't download in between: a new session restarts the count. | Does the camera's Wi-Fi stay up for a phone that stays joined, past about 100 s after CloseSession? Option (b) of decision 2 rests on it, and the guided run watches only 45 s. | about 15 min | 1.0 design |
+| *Bluetooth: switch Wi-Fi on, join and import*, after removing the pairing in Creators' App, in Settings › Bluetooth and in the camera's Bluetooth settings, as the advertisement run's *Not paired* step does (Shamil's call; Creators' App will need pairing again afterwards). If the camera keeps its half of the bond, the result isn't a first-time user's. | Can our app connect, subscribe, write CC08 and read CC06/CC07 without Creators' App's bond, with its own pairing or none? Every hand-off so far had that bond on the phone. Watch `ble.auto.pairingPrompt` and what the camera shows. The run doesn't record that the bond was removed, and its last question (`ble.auto.creatorsAppStillWorks`) will say no for that reason: note both by hand. | about 14 min plus re-pairing | 1.0 design (decision 6, onboarding) |
 
 **D. Proximity reminder**
 
 | Run | Answers | Time | Needed for |
 | --- | --- | --- | --- |
-| *Bluetooth: proximity reminder* | The same-room case with the scan started after the lock, which the 2 Nov result (build 6) couldn't show, then the next room. | 10 min | Optional (the "No" is the procedure, not the platform) |
+| *Bluetooth: proximity reminder* | The same-room case with the scan started after the lock, which the 2 Nov result (build 8, TestFlight 0.1 (6.1)) couldn't show, then the next room. | 10 min | Optional (the "No" is the procedure, not the platform) |
 | A real arrival, by hand (no guided run): Bluetooth tab › *Watch in background*, camera away long enough for iOS to forget it (for example in the car), phone locked, camera brought into range. Then the *Creators' App connected*, *quit* and *Kill app to test relaunch* rows. | Does iOS report the camera afresh on arrival, and does a relaunch after a kill work? | 10 min plus the time away | 1.0 design (the reminder's main case; decision 8) |
 
 **E. Photos *Don't Allow*, last, on a fresh install** (Background › *Photos albums, no camera*, runbook steps A1–A4). Deleting the app deletes the log, the fixtures and the default copy folder (move out any copies worth keeping), gives the Wi-Fi tab a new GUID and clears the Bluetooth proximity filter (retype it). Before it: *Export JSON*, *Copy measurements table*, *Share fixtures (zip)* and save them off the phone. About 10 min. Needed for: 1.0 design (the Photos permission flow).
 
 **Not a run: a Bluetooth trace of Creators' App leaving.** Apple's Bluetooth logging profile on the phone and PacketLogger on the Mac, to find the write that switches the camera's Wi-Fi off about 1 s after Creators' App leaves. It decides decision 2 below. It needs the Mac and an evening; optional, but without it decision 2 is made on the measured behaviour alone.
 
-**Not answerable on 14.1; record as open.**
-- A second CC08 write while the status is 2, a write during status 3, and an unused Wi-Fi with Bluetooth off. The idle run writes CC08 once, and its Bluetooth-off phase runs only if the Wi-Fi outlives the 3-minute watch, which it doesn't (off at about 51 s). Answering them needs a new build or a by-hand sequence on the Bluetooth tab.
+**No guided run on 14.1 answers these; record as open unless done by hand.**
+- A second CC08 write while the status is 2, a write during status 3, and an unused Wi-Fi with Bluetooth off. The idle run writes CC08 once, and its Bluetooth-off phase runs only if the Wi-Fi outlives the 3-minute watch, which it doesn't (off at about 51 s). The first and last can be done by hand on the Bluetooth tab. For the second write, tap *Switch camera Wi-Fi on…* again about 30 s after status 2 and watch when the status goes to 3. For Bluetooth off, switch the Wi-Fi on, tap *Disconnect*, wait 60 s, then *Connect + discover* and *Safe reads*. A write during status 3 (1.4–4.5 s long) can't be timed by hand and needs a new build.
 - How often the camera announces on the home network: the runs listen for 5 s.
 - Why the first Bluetooth connect takes 5–6 s (0.4 s otherwise) matters for time-to-camera; the camera seems slow to take the first connection after it has been idle.
 - Whether the Wi-Fi recovery would rejoin with no other known network in range.
@@ -93,8 +93,8 @@ No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sourc
 - What turning access authentication off costs in security, and its exact menu name and path. Check before 1.0 asks anyone to do it.
 
 **Lock and background runs**
-- Was Stop tapped in the Live Activity during the USB lock run at 03:09? The log can't tell Stop from an expiry.
-- What was in front during the background spells of the 01:57 USB copy, and at the 03:07 expiry?
+- Was Stop tapped in the Live Activity during the USB lock run (03:07; the task ended at about 03:09, with the phone locked)? The log can't tell Stop from an expiry.
+- What was in front during the background spells of the 01:57 USB copy, including its two expiries?
 - What was open during the 424 s and 139 s in the background after the Continue in the 23:51 Wi-Fi copy?
 
 **Setup rows:** card type, and the cable.
@@ -117,16 +117,16 @@ No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sourc
 **Fixtures (needs the Mac).** `Fixtures/a7c2/` is empty in the repo.
 1. On the phone: Log › Fixtures › *Share fixtures (zip)*.
 2. On the Mac: unzip it and `ditto` the `a7c2` folder over `Fixtures/a7c2/`.
-3. `make fixtures`, then `make test`. A failure means the codec disagrees with the camera: fix `PTPKit`, never the fixture.
-4. Check that nothing under `Fixtures/` holds a Wi-Fi password, a QR payload, a `.pcap` or an `objectproplist*.bin`, and that the serial and the hardware ID in the SSDP description are zeroed (`scripts/redact-fixtures.py` and the pre-commit hook do this; confirm). The hook doesn't check these three, so check them by eye:
+3. Delete any `objectproplist*.bin` from `Fixtures/a7c2/usb/` first: `make fixtures` copies every `.bin` into the PTPKit test bundle, and the hook refuses one anywhere. Then `make fixtures`, then `make test`. A failure means the codec disagrees with the camera: fix `PTPKit`, never the fixture.
+4. `scripts/redact-fixtures.py` (run by `make fixtures`) zeroes the serial in `deviceinfo.bin`, and the serial and the hardware ID in `ssdp-description.xml`. The pre-commit hook refuses a staged file that still has either, and any staged `.pcap` or `objectproplist*.bin`. Nothing checks for a Wi-Fi password or a QR payload (the app never writes them), or for these three, so check them by eye:
    - the `ble/advert-*.json` snapshots are kept out of the commit, or have their `identifier` and `manufacturerDataHex`/`manufacturerDataVariants` removed (they hold the Bluetooth peripheral identifier and data that may identify the camera);
-   - `ptpip/ssdp-description.xml` doesn't carry the camera's home-network address (it was saved again on the home network on 4 Nov; save it again on the camera's own network if it does);
+   - `ptpip/ssdp-description.xml` doesn't carry the camera's home-network address (it was saved again on the home network on 4 Nov). If it does, save it again on the camera's own network before the export: with the phone on that network, tap Wi-Fi tab › *SSDP M-SEARCH multicast* (the camera doesn't answer the unicast search). Group B saves it from the home network again, so check it in any later export too;
    - `ptpip/sdio-extdeviceinfo.bin`, Sony's private dataset, has been looked at.
 5. Commit on a branch.
 
 **Findings: the blank rows**
 - *Setup:* card (type, files by kind), cable, home LAN (access point model and band; the network is UniFi behind a UniFi Security Gateway). The camera's band is 5 GHz only; its channel isn't known.
-- *Menu wording:* thirteen rows are empty: `Version`, `USB LUN Setting`, `USB Power Supply`, `Wi-Fi Connect`, `Access Point Set.`, `Wi-Fi Frequency Band`, `Smartphone Connect`, `PC Remote Function`, the two *PC Remote Cnct Method* values, *Pairing*, access authentication (its name and path are unrecorded) and `Select on Camera & Send` (mark that one "not used: dropped 3 Nov"). The *Select on Connect* setting's own name is also unrecorded. `Version` also settles the firmware question in decision 6. Read them off the camera: the app's empty-state copy will use these words.
+- *Menu wording:* twelve rows are empty: `Version`, `USB LUN Setting`, `USB Power Supply`, `Wi-Fi Connect`, `Access Point Set.`, `Wi-Fi Frequency Band`, `Smartphone Connect`, `PC Remote Function`, the two *PC Remote Cnct Method* values, *Pairing* and `Select on Camera & Send` (mark that one "not used: dropped 3 Nov"). The names of the *Select on Connect* setting and of access authentication (with its path) are also unrecorded. `Version` also settles the firmware question in decision 6. Read them off the camera: the app's empty-state copy will use these words.
 - *Open questions:* the USB 2 throughput row is blank (the numbers are in *Wired import is viable*; add the card type).
 - *ImageCaptureCore facts:* two blank rows (`deviceDidBecomeReady` on a reopen; `ICCameraDevice.batteryLevel` against PTP BatteryLevel). Run or mark skipped.
 - *Measurements:* paste *Copy measurements table* over the table; mark each dropped cell "skipped (stills-only 1.0)" or "skipped (not a 1.0 decision)" rather than leaving it blank.
@@ -140,14 +140,14 @@ No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sourc
 **Go/no-go decision record** (findings, last section): date, decider, wireless scope, and the six result rows with the numbers in section 1.
 
 **Proposal updates** the plan asks for, and what the findings now contradict:
-- *Transport table:* Bluetooth is "proximity only, no GATT traffic" for 1.0; the 1.0 route now reads and writes Sony's characteristics (decision 6).
+- *Transport table:* Bluetooth is "1.0 for proximity detection (advertisement match only, no GATT traffic)"; the 1.0 route now reads and writes Sony's characteristics (decision 6).
 - *Why we do not use Sony's own protocols:* Wi-Fi listing, resume and ObjectAdded all use Sony's operations (decision 6).
-- *Performance budget:* "camera visible after connect ≤ 5 s on Wi-Fi": the whole card is ready about 2 s after connect and listing takes 4.7–8.3 s; joining the camera's network separately takes 13.8–18.8 s from Start. "≤ 2 s wired" isn't met (7–12 s in MSC, 65 s in MTP), nor is goal 1's "card contents within 5 seconds" on USB. Goal 2's "≥ 30 MB/s wired" holds for ARW (38–42 MB/s) and fails for JPG in MTP (25.6 MB/s); USB 3 stays unmeasured. Update the measured thumbnails, listing and throughput.
+- *Performance budget:* "camera visible after connect ≤ 5 s on Wi-Fi": the whole card is ready 2.0–3.0 s after the session opens and listing takes 4.7–8.3 s; joining the camera's network separately takes 13.8–18.8 s from Start. "≤ 2 s wired" isn't met (7–12 s in MSC, 65 s in MTP), nor is goal 1's "card contents within 5 seconds" on USB. Goal 2's "≥ 30 MB/s wired" holds for ARW (38–42 MB/s) and fails for JPG in MTP (25.6 MB/s); USB 3 stays unmeasured. Update the measured thumbnails, listing and throughput.
 - *Background strategy:* "the USB session survives suspension" is true, but nothing transfers after 30 s; "the camera keeps the AP up for several minutes" is about 50 s after the phone leaves.
 - *Permissions:* `.addOnly` becomes read/write with Limited Access allowed.
 - *Iteration 2:* "re-plugging after a pull resumes within 2 s" can't be met, because nothing answers until the catalogue is done (about 65 s in MTP, 7–12 s in MSC). *Iteration 4:* "lock the phone during a 2 GB import and it finishes" is about 50 s at 40 MB/s, so it fails over USB as written.
 - *Iteration 3 and roadmap:* the QR scan is replaced by the Bluetooth hand-off if decision 6 is taken, and 1.1's list (Bluetooth wake and credential hand-off) changes with it.
-- *Risks and open questions:* tick the four open questions that now have answers; retire the first two risks and the last (the camera keeps advertising when switched off); add the reverse-engineered Sony pieces, ImageCaptureCore's 30 s suspension and the camera dropping its card with Creators' App open.
+- *Risks and open questions:* tick the USB-mode and GUID open questions now. Tick ObjectAdded over USB once PC Remote over USB has run or is marked not run, and the USB 2 throughput one once the card type is recorded; retire the first two risks and the last (the camera keeps advertising when switched off); add the reverse-engineered Sony pieces, ImageCaptureCore's 30 s suspension and the camera dropping its card with Creators' App open.
 
 **Iteration 1 backlog:** it is wired-only and still marked a draft. Finalise it on 13 Nov from the findings (section 6).
 
@@ -171,7 +171,7 @@ Each is Shamil's. The recommendations are drawn from the findings; "provisional"
 - *Provisional on:* the locked-recovery run.
 
 **4. Pause, continue and stalled files.**
-- *Evidence:* both Wi-Fi expiries came as the Camera app was opened. The three USB expiries came 31–74 s after the progress last moved, during ImageCaptureCore's suspension, with what was in front not recorded (and Stop in the Live Activity not ruled out at 03:07). *Continue* started a new task in 0.03 s and copied again 11 s after the tap, 8.3 s of it a relist that stable handles make unnecessary; the file in flight restarted from its start. Over USB the same `requestDownload` survived a 632 s suspension, yet the spike's 60 s limit failed three downloads. Over Wi-Fi a drop made the copy count 82 files as failed before the link closed.
+- *Evidence:* both Wi-Fi expiries came as the Camera app was opened. The three USB expiries came 31–74 s after the progress last moved, during ImageCaptureCore's suspension: two in the 01:57 copy, phone unlocked, with what was in front not recorded, and one in the 03:07 run with the phone locked (Stop in the Live Activity not ruled out). *Continue* started a new task in 0.03 s and copied again 11 s after the tap, 8.3 s of it a relist that stable handles make unnecessary; the file in flight restarted from its start. Over USB the same `requestDownload` survived a 632 s suspension, yet the spike's 60 s limit failed three downloads. Over Wi-Fi a drop made the copy count 82 files as failed before the link closed.
 - *Recommendation:* treat expiry as normal: pause, notify, and on Continue start a new task, reopen, ask for new handles only, and resume at the file in flight. Report progress in bytes. A stall pauses and retries; "failed" is for real errors, with a limited number of retries.
 
 **5. The home network as a second route.**
@@ -188,7 +188,7 @@ Each is Shamil's. The recommendations are drawn from the findings; "provisional"
 - *Recommendation:* support both and recommend MSC in the app's copy; branch on transport type, not `acceptsPTPCommands`; one import path (`requestDownloadFile`, with `requestReadData` at an offset for resume). Identity: `PersistentUniqueObjectIdentifier` in MTP (about 385 ms per object, so read it only for new objects; MTP handles were also stable across a replug); folder, name, capture date and size in MSC. Byte resume is low priority for wired stills and matters for Wi-Fi (0x9211). Show the last-known card at once while ImageCaptureCore lists.
 - *Provisional on:* the MSC resume run.
 
-**8. Proximity reminder requirements.** Record these in the proposal and the Iteration 4 backlog; they need no decision beyond the wording ("nearby", not "switched on"). Confirm the camera after a wake by the stored peripheral identifier or Sony's company ID, because 1800 is a generic service. The trigger is coming into range: the advertisement is identical on, asleep and off. Restart the scan from a wake, not a timer; hold reminders while connected or importing; ask for notification permission when the person switches the reminder on.
+**8. Proximity reminder requirements.** Record these in the proposal and the Iteration 4 backlog; they need no decision beyond the wording ("nearby", not "switched on"). Confirm the camera after a wake by the stored peripheral identifier, or by Sony's company ID together with the name, because 1800 is a generic service. The trigger is coming into range: the advertisement is identical on, asleep and off. Restart the scan from a wake, not a timer; hold reminders while connected or importing; ask for notification permission when the person switches the reminder on.
 
 **9. Photos access.** Ask for read/write and accept Limited Access with nothing selected; stage files as complete-until-first-unlock; find the album by its stored identifier. If *Don't Allow* isn't run, assume it means "import to Files only" and say so in the UI.
 
@@ -211,7 +211,7 @@ Each is Shamil's. The recommendations are drawn from the findings; "provisional"
 **Proposed drops, not yet confirmed by Shamil** (section 3):
 - A 2,000-file card in MTP.
 - More MTP listing experiments (GetObjectPropList variants, PTP listing): the camera sets the pace.
-- Instruments Allocations and the Energy gauge (70 MB against the 150 MB budget).
+- Instruments Allocations and the Energy gauge (the app's own probe peaked at 70 MB over USB and up to 113 MB over Wi-Fi, against the 150 MB budget).
 - Mac gphoto2 and Image Capture probes, and the Mac day-6 probes as a required step: the phone did the same work.
 - BLE: all nine power × pairing combinations.
 - The Photos Import RAW-only mystery (not our app's path).
