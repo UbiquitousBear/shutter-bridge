@@ -179,8 +179,14 @@ The camera reports the storage as "Storage Media 1", read-only without deletion 
 - **It matters for the first import only.** Handles are stable across sessions (above), so 1.0 can keep what it has listed and ask only for new handles; a day's shooting then adds seconds.
 - Later listings come for free as the card grows; each Wi-Fi run logs `ptpip.ap.enumerate`, and one more MSC listing at a larger size gives USB its second point: on 4 Nov ImageCaptureCore catalogued 547 files in 11.61 s in MSC (about 21 ms each, inside the 18–31 ms of the two 391-file listings).
 
-**Still to run:**
-- *PC Remote* over an access point (the home LAN).
+**PC Remote over the home network** (guided runs *Wi-Fi: one camera mode* › *PC Remote (home Wi-Fi)*, 4 Nov 03:23 and 03:38–03:41, and *Copy all RAW to Files* over Home LAN, 03:30, build 0.1 (14.1); the camera joined to the home 5 GHz network with *PC Remote Cnct Method* *Wi-Fi Access Point*; the router model: to fill):
+- **It works after the camera has accepted the phone once.** At 03:23 the camera IP was still the camera network's 192.168.122.1, so nothing connected. At 03:30 and 03:33, at the camera's home-network address, it refused the connection on port 15740 (nothing listening). At 03:38 the port was open (connect in 0.37 s); the first `Init_Command_Ack` took 40.2 s, a time that includes any confirming on the camera, and the next connection, 20 s later, was acknowledged in 6 ms. What Shamil changed on the camera between 03:33 and 03:38, and what it showed during the 40 s, is to confirm (Shamil).
+- **Found without typing an address.** The camera announces itself on the home network as on its own: four SSDP NOTIFYs from its address, 1.91 s (03:23) and 4.65 s (03:39) after the app started listening, with the description at port 64321 (`dd.xml`, friendlyName ILCE-7CM2). It didn't answer a unicast M-SEARCH, and Bonjour found no `_ptp._tcp` service in 5 s.
+- **The same sessions as on the camera's network.** A plain session opened and ran Sony's init sequence, but GetStorageIDs answered StoreNotAvailable, so it lists nothing. The whole-card contents transfer was ready in 2.99 s (558 handles) and listed 549 objects (362 ARW, 187 JPG) in 7.73 s, 13.9 ms per handle.
+- **Shutter events too:** two shots during the 20 s shutter test sent two Sony ObjectAdded events (0xC201 [0xFFFFC001]) on the plain session, with shutter-state events 0xC223 (1, 5, 6) around them.
+- **Slower than the camera's own network:** thumbnails took 48.1 ms each (50, slowest 110 ms) against 35–39 ms, and 20 ARW (792.6 MB) came at 10.18 MB/s against 15.5 MB/s, files at 7.4–11.0 MB/s (the first two, 47.8 MB, at 7.4 and 9.1). Phone and camera both reached the router over Wi-Fi, so each byte crossed the air twice, which may explain it; not measured. Memory peaked at 113 MB (baseline 107 MB).
+- **What this means for 1.0:** the home network is a workable second route, after the camera has accepted the phone once: the phone keeps its internet and no join prompt appears, at about two thirds of the camera network's speed so far, and the app can find the camera by listening for its announcements. The 1.0 route stays the camera's own network over Bluetooth.
+
 - a copy that recovers from a drop with the phone locked or the app in the background (the 01:08 recovery ran with the app in front, and its join is made only in the foreground).
 
 **Dropped (Shamil, 3 Nov):**
@@ -215,8 +221,9 @@ Measurements: `ptpip.<net>.discovery.ssdp` (unicast or multicast, named in its c
 - On the camera's own network, discovery isn't needed: the camera is at 192.168.122.1.
 - On the home network it is. If passive listening works there too, the app can find the camera without waiting for Apple's entitlement.
 
+**On the home network too** (4 Nov, the camera in *PC Remote* over an access point): four NOTIFYs from the camera's address within 1.91 s and 4.65 s of listening, the description fetched from it, no answer to a unicast M-SEARCH, nothing over Bonjour; *Wireless browsing in 1.0* above. So the app can find the camera on the home network without Apple's entitlement.
+
 **Still to run:**
-- the same listen on the home LAN, with the camera in *PC Remote* over an access point;
 - the entitlement request (see *Multicast entitlement*).
 
 **Evidence:** Guided run *Wi-Fi: one camera mode*, 2 Nov 12:13:47–12:13:58: "SSDP unicast to 192.168.122.1: no reply within 5 s"; "SSDP multicast group ready; M-SEARCH sent"; four NOTIFYs from 192.168.122.1, `ptpip.ap.discovery.ssdp` 0.73 s; at 12:13:58 "SSDP multicast M-SEARCH send failed: … Operation canceled" twice. `Spike/Spike.entitlements` has the multicast key commented out. Bonjour: "no _ptp._tcp service within 5 s".
@@ -332,14 +339,14 @@ Paste the output of the Log tab's *Copy measurements table* over this table; it 
 
 | Measurement | USB-C (USB 2 iPhone) | Wi-Fi, camera AP | Wi-Fi, UniFi LAN |
 | --- | --- | --- | --- |
-| Time to enumerate 200 files | 391 files: MTP 64.96 s (ImageCaptureCore), 65.98 s (PTP GetObjectInfo), 152.08 s (MTP GetObjectPropList per object); MSC 7.17 s (12.23 s on the first MSC run) | 391 files in 4.74 s; 419 files in 4.95 s (PC Remote, Sony contents transfer) |  |
-| Thumbnail fetch, average per item | MTP 144.8 and 148.1 ms (ImageCaptureCore, two sessions), 143.3 ms (PTP GetThumb); MSC 187.6 ms | 38.74 ms and 35.35 ms (50 newest, slowest about 100 ms) |  |
-| ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s | 15.50 MB/s (20 ARW, 954 MB, one at a time; 12–17 MB/s per file) |  |
+| Time to enumerate 200 files | 391 files: MTP 64.96 s (ImageCaptureCore), 65.98 s (PTP GetObjectInfo), 152.08 s (MTP GetObjectPropList per object); MSC 7.17 s (12.23 s on the first MSC run) | 391 files in 4.74 s; 419 files in 4.95 s (PC Remote, Sony contents transfer) | 558 handles (549 objects) in 7.73 s (PC Remote over the home network, Sony's whole-card contents transfer, 4 Nov) |
+| Thumbnail fetch, average per item | MTP 144.8 and 148.1 ms (ImageCaptureCore, two sessions), 143.3 ms (PTP GetThumb); MSC 187.6 ms | 38.74 ms and 35.35 ms (50 newest, slowest about 100 ms) | 48.09 ms (50 newest, slowest 110 ms) |
+| ARW throughput, single file | MTP 38.19 MB/s; MSC 39.89 MB/s | 15.50 MB/s (20 ARW, 954 MB, one at a time; 12–17 MB/s per file) | 10.18 MB/s (20 ARW, 792.6 MB; 7.4–11.0 MB/s per file) |
 | ARW throughput, two in flight | MTP 39.05 MB/s; MSC 41.73 MB/s | n/a (one transaction per PTP/IP session) | n/a (one transaction per PTP/IP session) |
 | MP4 throughput (1 GB clip) | skipped for now (Shamil, 1 Nov) | skipped for now | skipped for now |
 | `GetPartialObject` supported | yes: 0x101B (32-bit), 37.29 MB/s in 4 MiB chunks, SHA-256 matches `requestReadData` and `requestDownload` | **yes, through Sony's 0x9211** (SDIO_GetPartialLargeObject: 64-bit offset and length), 12.9 MB/s in 4 MiB chunks; the standard 0x101B (three or four parameters) and 0x9219 answer InvalidObjectHandle in a contents-transfer session |  |
 | Resume after link drop verified | yes: GetPartialObject in MTP, cut at 47 % by a cable pull, resumed after a replug, SHA-256 match | **yes:** Wi-Fi switched off at 54 %, reconnected (same handle), resumed with 0x9211, SHA-256 match (2 Nov 23:10) |  |
-| `ObjectAdded` event received |  | **yes:** Sony ObjectAdded 0xC201 [0xFFFFC001] within a second of a full shutter press, on a plain *PC Remote* session after the init sequence (22:50). The earlier tests (13:48, 22:09) were half-presses. |  |
+| `ObjectAdded` event received |  | **yes:** Sony ObjectAdded 0xC201 [0xFFFFC001] within a second of a full shutter press, on a plain *PC Remote* session after the init sequence (22:50). The earlier tests (13:48, 22:09) were half-presses. | **yes:** Sony ObjectAdded 0xC201 [0xFFFFC001], twice for two shots, on a plain session after the init sequence (4 Nov 03:40) |
 | Session survives phone lock (seconds) | **The session survives locks of up to 652 s (the longest tried) and 144 s in another app, but a plain download pauses within 1–2 s and continues on return.** In a continued task the download kept going while locked for the 15 s tested (2 Nov) and for 22 s on 4 Nov. With the app in the background, ImageCaptureCore suspends it 30 s after the app goes to the background (4 Nov). Under lock (4 Nov 03:07) it stopped the same way, 30 s after the app left the foreground, and carried on at once after the 652 s lock. The export's 0.00 s means "no progress while away", not a lost session. | plain download: no progress in 123 s locked, session lost; in a continued task: 20 ARW at 15.4 MB/s, all while locked (57.4 s of progress); a whole-card copy kept going through 329 s locked (171 s the longest) and 357 s in the background (3 Nov 23:18) |  |
 | Camera battery used per 1 GB |  |  |  |
 | BLE: advertises when on / asleep / off; service UUID | on yes · asleep yes · off yes (Creators' App quit); UUID 1800 (Generic Access, not Sony-specific) |  |  |
@@ -417,7 +424,7 @@ One row per camera mode. Note in the last column when the Mac (`gphoto2`, `nmap`
 | --- | --- | --- | --- | --- | --- |
 | Smartphone Connect | dropped 3 Nov: covered by the Bluetooth switch-on, the smartphone connection Creators' App uses (the camera showed no QR code on 2 Nov) |  |  |  |  |
 | PC Remote over Wi-Fi Direct (camera's own network; method to confirm) | **announces:** NOTIFY to the multicast group, received in 0.73 s without the entitlement; no answer to a unicast M-SEARCH; our multicast M-SEARCH never sent | **yes**, 1.53 s, including allowing the Local Network prompt | **yes**, 0.02 s; Init_Command_Ack after 6 ms, so probably no prompt on the camera | **yes, through Sony's contents transfer:** 391 files in 4.74 s after SDIO_OpenSession [1,1] and 0x9212 [2,0,0] → [2,1,0]; a plain session gets StoreNotAvailable (0x2013) even after the init sequence | iPhone only, no Mac probes. Bonjour `_ptp._tcp`: none. Joined in Settings (no QR code in PC Remote). Build 8 run (12:08) labelled *Smartphone Connect*; build 9 run 13:47 |
-| PC Remote over Access Point |  |  |  |  |  |
+| PC Remote over Access Point | **announces:** four NOTIFYs within 1.91 s and 4.65 s of listening; no answer to a unicast M-SEARCH; nothing over Bonjour | **refused** at 03:30 and 03:33, then **open** at 03:38 (0.37 s) | **yes**: `Init_Command_Ack` after 40.2 s the first time (any confirming on the camera included; what it showed: to confirm), 6 ms the next | **yes, through Sony's whole-card contents transfer** (549 objects in 7.73 s); a plain session answers StoreNotAvailable | 4 Nov 03:23–03:41, build 0.1 (14.1); thumbnails 48 ms, 20 ARW at 10.18 MB/s, ObjectAdded yes |
 
 ## PTP/IP and join facts
 
