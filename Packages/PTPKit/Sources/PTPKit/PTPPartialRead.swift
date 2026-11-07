@@ -11,7 +11,12 @@ public enum PTPPartialRead {
         public let offset: UInt64
         public let length: UInt32
         public init(offset: UInt64, length: UInt32) { self.offset = offset; self.length = length }
-        public var end: UInt64 { offset + UInt64(length) }
+        /// One past the last byte. Saturates at `UInt64.max` rather than trapping when a caller builds a chunk at the
+        /// very top of the address space (the chunk planners never do, but `description` and error values carry chunks).
+        public var end: UInt64 {
+            let (sum, overflow) = offset.addingReportingOverflow(UInt64(length))
+            return overflow ? UInt64.max : sum
+        }
         public var description: String { "[\(offset), \(end))" }
     }
 

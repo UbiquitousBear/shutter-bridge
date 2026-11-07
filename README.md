@@ -52,7 +52,7 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
 - [x] Spike plan
 - [x] Agent directions and owner-only commit attribution (`AGENTS.md`, `CLAUDE.md`, git hooks)
 - [x] PTPKit codec extended for the spike: pass-through replies, partial reads and resume, PTP/IP stream
-      decoding, device property and Sony vendor commands, fixture tests (57 tests pass with Swift 6.4 on Linux)
+      decoding, device property and Sony vendor commands, fixture tests, seeded round trips and a Sony whole-card session plan (133 tests pass with Swift 6.4 on Linux)
 - [x] Spike app complete for days 1–10; compiles with Xcode 27 in CI, not yet run on a phone
 - [x] Spike runbook, findings template and a draft Iteration 1 backlog
 - [ ] Multicast entitlement requested (day 1) and its status noted
