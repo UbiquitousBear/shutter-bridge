@@ -2,7 +2,7 @@
 //
 // Every Sony value here is `unverified` on the α7C II until a fixture captures it. What the spike saw is in each
 // doc comment (Spike/Sources/Views/WirelessView.swift; docs/spike-findings.md "Wireless browsing in 1.0" and
-// "PTP/IP and join facts"; α7C II build 0.1 (7.1), 2–4 Nov 2026).
+// "PTP/IP and join facts"; α7C II builds 0.1 (7.1) to 0.1 (14.1), 2–4 Nov 2026).
 
 import Foundation
 

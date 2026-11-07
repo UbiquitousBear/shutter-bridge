@@ -2,7 +2,7 @@
 // what to do with each answer, the pauses, the listing poll and the timeouts. Pure values, no I/O.
 //
 // Every Sony value here is `unverified` on the α7C II until a fixture captures it. The sequence is Imagedge's
-// (field-tested on a ZV-E10); what the spike saw on the α7C II (build 0.1 (7.1), 2–4 Nov 2026) is in each doc
+// (field-tested on a ZV-E10); what the spike saw on the α7C II (builds 0.1 (7.1) to 0.1 (14.1), 2–4 Nov 2026) is in each doc
 // comment. Source of the facts: Spike/Sources/Views/WirelessView.swift (`openContents`, `sonyInitSequence`,
 // `initStep`, `setTransferMode`, `pollForHandles`, `connectFresh`, `startKeepAlive`) and docs/spike-findings.md
 // "Wireless browsing in 1.0" and "PTP/IP and join facts".
@@ -246,7 +246,7 @@ public struct SonyContentsTransferPlan: Equatable, Sendable {
 /// Walks a plan one answer at a time. The transport sends what `.send` gives (building the command with
 /// `operation.command(using:)` on its counter), waits on `.wait`, then calls `next` again; `.list` and `.stop`
 /// are final and are returned again on every later call. Misuse never traps.
-public struct SonySessionRunner: Sendable {
+public struct SonySessionRunner: Sendable, CustomStringConvertible {
     public enum Outcome: Equatable, Sendable, CustomStringConvertible {
         /// The response, with any data phase discarded or not needed.
         case response(PTPResponseCode)
@@ -303,6 +303,12 @@ public struct SonySessionRunner: Sendable {
             guard let response else { return "\(operation): no usable answer" }
             return accepted ? "\(operation): \(response)" : "\(operation): \(response) (not accepted)"
         }
+    }
+
+    /// For logs: how far the session got, with the camera as its capabilities summary, never with its serial number.
+    public var description: String {
+        let camera = latestDeviceInfo.map { "\(SonyCapabilities(deviceInfo: $0))" } ?? "no DeviceInfo yet"
+        return "SonySessionRunner(\(records.count) answered, \(camera), state \(state))"
     }
 
     private enum State: Equatable, Sendable {

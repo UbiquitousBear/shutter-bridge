@@ -305,7 +305,15 @@ struct SonySessionRunnerTests {
         info.serialNumber = "SERIAL-1234567"
         let caps = SonyCapabilities(deviceInfo: info)
         #expect(caps.description == "Sony ILCE-7CM2 2.0: 0x9210 not listed, 0x9212 not listed")
+        var withSerial = SonyDevices.pcRemote
+        withSerial.serialNumber = "SERIAL-1234567"
+        var runner = SonySessionRunner(plan: .wholeCard())
+        _ = runner.next(nil)
+        _ = runner.next(.response(.ok))
+        _ = runner.next(.deviceInfo(withSerial))
+        #expect(runner.latestDeviceInfo?.serialNumber == "SERIAL-1234567")
         let texts = [
+            "\(runner)",
             "\(caps)",
             "\(SonySessionRunner.Failure.unsupported(caps))",
             "\(SonySessionRunner.Action.stop(.unsupported(caps)))",
