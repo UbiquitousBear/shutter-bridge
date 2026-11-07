@@ -50,7 +50,7 @@ Could change with: the go/no-go itself. Wireless is in 1.0 (Shamil, 2 Nov) and t
 
 ## 1. PTPKit
 
-Done during the spike (`Packages/PTPKit/`; 89 `@Test` functions, counted on 7 Nov and not run for this update, so `make test` has to pass before the first commit that touches `Packages/`). The fixture tests skip until captures exist:
+Done during the spike (`Packages/PTPKit/`; 133 tests pass with Swift 6.4.2 on Linux and macOS, 7 Nov). The fixture tests skip until captures exist:
 
 - PTP containers: encode and decode of command, data, response and event containers, sequences of containers, a transaction counter that wraps.
 - Code tables: operations, responses, events, object formats, device properties, vendor extension, storage IDs, object handles. Sony vendor codes from libgphoto2 are marked unverified.
@@ -59,6 +59,8 @@ Done during the spike (`Packages/PTPKit/`; 89 `@Test` functions, counted on 7 No
 - `PTPPassThrough`: decodes `requestSendPTPCommand` replies in every layout Apple's documentation leaves open, and reports which one it saw.
 - `PTPPartialRead`: chunk planning, 32- or 64-bit variant choice, the resume rule, 16 MiB checkpoints.
 - PTP/IP framing, a stream decoder that never buffers a data phase, a transaction state machine, and responder-side encoders for tests and the simulator.
+- Seeded round trips (7 Nov, PR #64): encode → decode identity for every container type, the datasets, the ID and handle arrays, PTP strings and date-times, PTP/IP packets, MTP property lists and the pass-through layouts, from a SplitMix64 generator with literal seeds. They found and fixed two codec bugs (a long string cut inside a surrogate pair; `PTPPartialRead.Chunk.end` overflowing near `UInt64.max`).
+- A Sony whole-card session plan for Iteration 3 (7 Nov, PR #64): `SonyContentsTransferPlan`, `SonySessionRunner` and `SonyCapabilities`, pure and `unverified` until fixtures (iteration-3-4-backlog.md, section 1).
 - Fixture tests, skipped until captures exist, for the kinds PTPKit decodes (DeviceInfo, ObjectInfo, StorageInfo, storage IDs, object handles, events; the DeviceInfo and ObjectInfo tests also check the round trip as a prefix), and a garbage-input test across every decoder.
 
 Remaining for Iteration 1:
@@ -67,7 +69,6 @@ Remaining for Iteration 1:
 - **Unverified markings settled.** Acceptance: each code or layout a fixture proves loses its `unverified` note; each one it disproves is corrected, with a test. The log already settles some that no fixture will hold (0x9211 takes handle, offset low and high, length low and high, and works in a contents-transfer session; 0x101B with three or four parameters and 0x9219 answer InvalidObjectHandle there; 2 Nov, one camera): record them in the comments as measured, and keep `unverified` until a test is built from a captured exchange.
 - **Pass-through layout pinned.** The layout day 4 observed is `dataThenResponse`: the first value is the bare data phase (8 B for `GetStorageIDs`), the second the 12-byte response container, and transaction IDs are renumbered (801 for our 1; MTP, 1 Nov). Acceptance: `PTPPassThrough` has a test built from that; layouts that `ImageCaptureCore` never produced are either kept behind their tests or removed.
 - **An empty reply is "no answer".** After about 60 s `ImageCaptureCore` completes a pass-through request with two empty values and no error. Acceptance: a test that decodes that as the engine's "no answer", not as a malformed reply.
-- **Round trip for every container type with randomised inputs** (the proposal's property tests). Acceptance: encode → decode is identity for seeded random containers and datasets.
 - **Device property values,** only if the Cameras screen reads battery level over PTP. Over USB that is possible in MTP alone (DeviceInfo lists `BatteryLevel` 0x5001 there, and no read of it is recorded), and only once the catalogue has finished; MSC answers no PTP, and over Wi-Fi the camera lists no properties and never answers `GetDevicePropValue`. Acceptance, if built: a decoder for the reply, tested against a captured one. Decide with section 6.
 - **A firmware check compares like with like.** DeviceInfo's firmware string is "2.0" in MTP (1 and 5 Nov) and 2.01 in PC Remote (over Wi-Fi on 2 Nov, over USB on 4 Nov); Bluetooth's CC0A read 2.01 on 5 Nov, the same day as the second MTP read. Acceptance: any version comparison in `PTPKit` takes strings from the same mode.
 
