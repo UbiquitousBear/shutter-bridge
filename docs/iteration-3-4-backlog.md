@@ -79,6 +79,8 @@ Could change with: decision 6; the fixtures once committed (the `a7c2-ptpip-*` g
 
 **In plain terms:** this camera only shows its card over Wi-Fi once the session is opened Sony's way. The app opens it with Sony's operation instead of the standard one, runs a short handshake Sony's apps use, switches the session into "contents transfer" mode in two steps, then asks for the handle list until the card appears. (Findings: *Wireless browsing in 1.0*; *PTP/IP and join facts*, "Sony SDIO connect".)
 
+Starting point (7 Nov): PTPKit already describes this session as pure values, `SonyContentsTransferPlan.wholeCard()` with `SonySessionRunner` to walk it one answer at a time and `SonyCapabilities` to gate it on DeviceInfo (PR #64). It follows the spike app's sequence and is `unverified` until fixtures prove it; the link's job is to send what the runner says, feed the answers back and run the listing poll.
+
 Acceptance criteria:
 
 - **Open:** SDIO_OpenSession (0x9210) with parameters [1, 1] (session ID 1, and function mode 1, contents transfer), in place of OpenSession. A plain OpenSession gets StoreNotAvailable (0x2013) from GetStorageIDs on both networks: with or without the init sequence on the camera's network, and with it on the home network (without it is untried there).
