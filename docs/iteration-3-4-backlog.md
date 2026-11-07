@@ -1,0 +1,337 @@
+# Iterations 3 and 4 backlog: wireless, background and proximity
+
+> **Draft: finalise on 13 Nov 2026 with the go/no-go.** Written on 7 Nov 2026 from [spike-findings.md](spike-findings.md) and [spike-remaining.md](spike-remaining.md) (spike build 14, TestFlight 0.1 (14.1)). Shamil has decided three things so far that bear on these iterations (the 1 Nov album and RAW+JPEG original defaults are Iteration 1's): wireless is in 1.0 (2 Nov); decision 2 is (d) (4 Nov); and the drops listed under "Decisions (Shamil, …)" in spike-remaining.md. Everything else marked "recommended" comes from spike-remaining.md section 5 and changes if Shamil decides otherwise. Every number is a spike measurement, given with its hedges, and an item says so where nothing was measured. On 13 Nov, edit or strike items to match the decisions, carry the proposal changes in spike-remaining.md section 4 (drafted in Part 3 of [decision-pack.md](decision-pack.md)) into the live proposal (`proposal.md` is an export and isn't edited here), and remove this note.
+
+Iterations 3 and 4 run in parallel in weeks 10–13 (18 Jan – 12 Feb 2027) and end at the external beta on 12 Feb. From [proposal.md](proposal.md), "Development iterations":
+
+- **Iteration 3 · Wireless (Shamil).** *Builds:* `IPLink`, with PTP/IP sessions on two sockets, SSDP discovery and a typed-IP fallback; the QR scan and the `NEHotspotConfiguration` join flow; Local Network permission handling; camera pinning by serial. *Exit criteria:* the same 100-file import over the camera's access point at ≥ 8 MB/s; discovery ≤ 5 s; survives an access point drop and rejoin.
+- **Iteration 4 · Background and polish (the second engineer, from 18 Jan).** *Builds:* the BLE proximity reminder (an alert with *Import now* / *Not now* / *Snooze*, quiet hours, per-camera mute); `BGContinuedProcessingTask` wrapping; the Live Activity and Lock Screen widget; auto-import on connect; a VoiceOver pass; Energy and memory tuning against the budget table. *Exit criteria:* lock the phone during a 2 GB import and it finishes; budget table met on the bench iPhone; zero accessibility audit failures.
+
+**What the spike moves between iterations or changes in the proposal** (each section gives the evidence):
+
+- **The QR scan is out.** The camera showed no QR code in *PC Remote*, and *Smartphone Connect* showed none either (2 Nov). In its place, Bluetooth switches the camera's Wi-Fi on and hands over the network name and password. That hand-off moves from 1.1 into Iteration 3 (decision 6, recommended; sections 6–8). Without it, the person switches on *PC Remote Function* and joins in Settings, as on 2 Nov.
+- **If decision 6 is taken (recommended), Bluetooth is no longer advertisement-only in 1.0.** The hand-off reads and writes Sony's characteristics. Proximity detection itself still reads nothing from the camera (section 11).
+- **The continued task for Wi-Fi moves forward into Iteration 3.** Without a `BGContinuedProcessingTask`, a Wi-Fi session doesn't survive even 4.8 s in the background (5 Nov). With one, a whole card copied in the background and under lock (3 Nov 23:18). So Iteration 3 can't meet "survives a drop" or run a real import without it. Iteration 4 keeps the shared Live Activity, the Lock Screen widget, the USB lock behaviour and the polish (sections 9 and 13). This split is a proposal; Shamil decides.
+- **Wi-Fi runs one download at a time.** The proposal's concurrency limit of 3 on Wi-Fi doesn't apply: a PTP/IP session carries one transaction at a time, and "Wi-Fi two in flight" is a proposed drop (spike-remaining.md section 7).
+- **Handles are stable across Wi-Fi sessions,** against the proposal's "handles are not stable across sessions". The identity stays (camera, folder, filename, capture date, size), as in Iteration 1's catalogue schema (the folder comes from decision 7, recommended), and handles become the fast path (section 2).
+- **The background strategy changes.** "The camera keeps the AP up for several minutes" holds only while the phone stays joined (section 8). Iteration 4's exit criterion "lock the phone during a 2 GB import and it finishes" was met over Wi-Fi in one run (a whole card with about 329 s locked; iOS ended the task in two other runs, both as the Camera app was opened) but can't be met over USB as written (section 13).
+- **The home network becomes a second route after the core,** not equal to the camera's own network (decision 5, recommended; section 10).
+- **Proximity detection worked in Low Power Mode in both runs that had it on,** against the proposal's constraints paragraph. The trigger is "nearby", not "switched on" (decision 8, recommended; section 11).
+
+**Not in these iterations:** video (1.1), transfer-while-shooting (later; ObjectAdded arrives, section 4), the 1.1 differential check on a Bluetooth wake, multiple cameras and other brands. Nothing from `Spike/` is carried in. The spike's sources are named below only as a reference for what was measured.
+
+## Sony-specific pieces in plain terms
+
+The proposal planned on standard PTP only. The spike found that this camera lists its card over Wi-Fi only through Sony's own operations, and that Sony's Bluetooth service can switch its Wi-Fi on. The open-source ZV-E10 code (mvpzac/Imagedge) and reverse-engineered notes on Sony's apps were the starting point, and each piece below has been checked on this α7C II (firmware 2.01). The SDIO operations, ObjectAdded 0xC201 and the 8000CC00 characteristics rest on reverse-engineered behaviour, which is why decision 6 weighs firmware fragility and App Store review. The SSDP announcements and service 1800 are standard (UPnP and Bluetooth's Generic Access).
+
+| Piece | What it is | Proven in (spike-findings.md) |
+| --- | --- | --- |
+| Whole-card contents transfer | A Sony session mode that exposes the whole card over PTP/IP: SDIO_OpenSession 0x9210 in place of OpenSession, Sony's init sequence, then SDIO_SetContentsTransferMode 0x9212 twice. A plain OpenSession lists nothing (GetStorageIDs answers StoreNotAvailable 0x2013). | *Wireless browsing in 1.0*; *PTP/IP and join facts* (the SDIO connect row) |
+| SDIO_GetPartialLargeObject 0x9211 | Sony's byte-range read, with a 64-bit offset and length. The only partial read that works in this session. | *Wireless browsing in 1.0* (after a drop and under lock) |
+| Sony ObjectAdded 0xC201 | The event the camera sends when a shot lands, carrying handle 0xFFFFC001 (the camera's buffer slot). | *Transfer-while-shooting feasible later* |
+| SSDP announcements | The camera announces itself on the network (NOTIFY to the multicast group) with a UPnP description at port 64321. | *SSDP discovery* |
+| Service 8000CC00 | Sony's Bluetooth *Camera Control* service. Writing 0x01 to CC08 switches the camera's Wi-Fi on; CC09 reports its status; CC06 and CC07 hold the network name and password. | *BLE advertisement* (the hand-off runs) |
+| Sony's five notifications | Subscriptions to CC09, CC10, CC0F, CC03 and CC0E. Without them, the camera starts its Wi-Fi and gives up (status 0 → 1 → 0). | *BLE advertisement*, third run |
+| Advertised service 1800 | The only service UUID the camera advertises, on, asleep and off. It is Bluetooth's generic *Generic Access*, not a Sony service. | *Proximity reminder in 1.0*; *BLE advertisement* |
+
+## 0. Shared ground between the two iterations
+
+Two engineers work on `CameraTransport` and `ImportEngine` in parallel, so agree on these in week 10.
+
+Acceptance criteria:
+
+- **The engine's pause, continue, stall and retry rules are transport-neutral and exist before week 10.** spike-remaining.md section 6 asks for this from Iteration 1, because the same rules apply to both links. Iterations 3 and 4 add triggers (expiry, *did suspend*, a lost store), not new rules.
+- **One owner for Core Bluetooth.** The hand-off (Iteration 3) and the proximity scan (Iteration 4) both use a Core Bluetooth central, and state restoration hands back the scan on relaunch (section 11). Decide who owns the central and how the two features share it before either is written.
+- **One owner for the continued task and the Live Activity.** The proposal gives them to Iteration 4, and Iteration 3 needs them for Wi-Fi (sections 9 and 13). Proposed in this backlog (not a section 5 recommendation): the second engineer builds the wrapper and the Live Activity in the first week, and Shamil's Wi-Fi path uses them.
+- **Catalogue fields.** `Camera` gains the stored Bluetooth peripheral identifier (the onboarding stores it; the proximity scan confirms by it) and keeps `wifiSSID?`, which the app needs to remove the hotspot configuration when it leaves. The network password isn't stored by the app (proposed in this backlog, not a section 5 recommendation): it is read over Bluetooth for each join. The schema is versioned from Iteration 1, so this is a planned migration.
+- **Sony code in one place** (decision 6, recommended): the 0x92xx operations, the 8000CC00 characteristics and their parsers sit behind one boundary, used only after DeviceInfo, or the camera's service list, shows they exist.
+- **Open point: where the Bluetooth parsers live.** CC09's entries and the CC06/CC07 layout are pure byte parsing and can be tested on Linux like `PTPKit`. Decide whether they go in `PTPKit` (which is "the PTP codec") or a sibling pure-Swift target.
+
+- **`PTPSimulator` gains the Wi-Fi behaviour** (handed on by iteration-1-backlog.md, section 7): the whole-card session (a plain session answers StoreNotAvailable), 0x9211 for byte ranges (0x101B answers InvalidObjectHandle), Sony's 0xC201 with the buffer-slot handle, and PC Remote's DeviceInfo (81 operations, 48 events, no properties), so the integration suite covers `IPLink` without a camera.
+- **Hotspot Configuration is ticked on the App ID before the first build that joins** (iteration-1-backlog.md, section 8; ci.md): cloud signing won't add it.
+
+Could change with: decision 6 (without the hand-off, Iteration 3 doesn't touch Core Bluetooth, and the identifier comes from Iteration 4's linking step, as in the proposal).
+
+# Iteration 3: wireless (Shamil)
+
+## 1. IPLink: the PTP/IP connection
+
+The `CameraLink` over Wi-Fi, in `CameraTransport`: an actor that owns a command connection and an event connection to TCP port 15740 on `Network.framework`, and answers list, info, thumb, bytes and events like `USBLink`.
+
+Already in `PTPKit` from the spike: PTP/IP framing, a stream decoder that never buffers a data phase, the transaction state machine, and builders for SDIO_OpenSession, SDIO_Connect, SDIO_GetExtDeviceInfo, SDIO_SetContentsTransferMode and SDIO_GetPartialLargeObject, and a `.sonyLarge9211` variant in `PTPPartialRead` that builds the 0x9211 command (still marked `unverified` in the code). `PTPPartialRead.variant(objectSize:device:)` picks 0x101B whenever DeviceInfo lists it, and it does over PTP/IP. In the whole-card session, where 0x101B answers InvalidObjectHandle, the link doesn't use that chooser: it asks `SonyCapabilities.partialReadVariant(objectSize:in: .wholeCardContentsTransfer)` (PR #64, also `unverified`), which returns `.sonyLarge9211` when DeviceInfo lists 0x9211 and never 0x101B. No fixture the spike saves records a 0x9210–0x9212 exchange (the PTP/IP fixtures are DeviceInfo, storage IDs and info, handles, ObjectInfo, events and Sony's ExtDeviceInfo). No fixture will hold a 0x9211 exchange, so, as iteration-1-backlog.md section 1 says, the comment records the 2 Nov results as measured (`ptpip.ap.partial.sonyLarge9211` yes, the 23:10 resume's SHA-256 match) and keeps `unverified` until a test is built from a captured exchange; the PTP/IP DeviceInfo fixture shows only that 0x9210–0x9212 and 0xC201 are listed.
+
+Acceptance criteria:
+
+- **Handshake:** `Init_Command_Request` with a stable GUID and friendly name, `Init_Command_Ack`, then `Init_Event_Request` on the second connection. On the camera's own network the ack came 6 ms after the request (2 Nov). A new GUID connected with no prompt on the camera (ack in 5 ms, `Init_Event_Ack` in 74 ms), and the same GUID reconnected after a power cycle with no prompt. Keep the GUID per camera as the proposal says, but no pairing step is needed. (Findings: *Open questions from the proposal*, the GUID row; *PTP/IP and join facts*.)
+- **The camera's address on its own network is fixed:** 192.168.122.1, where the PTP/IP port and the SSDP announcements both came from.
+- **Local Network permission:** the prompt appears at the first connection to the camera. Until the person allows it, the connection waits with "Network is down" (POSIX 50); the spike's probe succeeded 1.53 s after it started, with the prompt allowed in that time. The link reports a "waiting for permission" state rather than failing, and the copy explains the prompt before the first connection. (Findings: *PTP/IP and join facts*, "When the Local Network prompt appeared".)
+- **Camera pinning by serial:** DeviceInfo over PTP/IP carries the serial (the fixture has it zeroed). The link refuses a session whose serial changes under a known name, as the proposal's security section says. The camera's password is the only gate: anyone who has joined its network can open a session (*Open questions from the proposal*).
+- **Read the operation list before any Sony operation** (decision 6, recommended): over PTP/IP DeviceInfo lists 81 operations, including 0x9201–0x9254 with 0x9210, 0x9211 and 0x9212, 48 events with 0xC201, and **0 device properties**. Send only what DeviceInfo lists. Never send GetDevicePropValue in this session: the camera never answers it. On build 9 a BatteryLevel (0x5001) read waited 30 s, the idle timeout ended the connection, and the first download never started. Build 9.1 reads only what DeviceInfo lists. (Findings: *Wireless browsing in 1.0*, "One trap"; *PTP/IP and join facts*, the DeviceInfo row.)
+- **Battery and free space aren't available over Wi-Fi.** The session lists no device properties, and the storage reports its capacity as 0 ("Storage Media 1", read-only without deletion). The Cameras screen hides both on Wi-Fi rather than showing 0.
+- **Firmware strings are compared within one mode.** DeviceInfo reads "2.01" over PTP/IP and in PC Remote over USB, and Bluetooth's CC0A reads "2.01" too, but DeviceInfo reads "2.0" in USB MTP mode (decision 6).
+- **Every command has a time limit,** and a timeout maps to "retry on reconnect", never a wait forever.
+- **One transaction at a time:** the engine's download limit on Wi-Fi is 1 per session, not the proposal's 3.
+- **No private data in logs, diagnostics or fixtures:** the serial is zeroed, and the camera's hardware ID stays out. The hardware ID is the 12 hex digits at the end of the SSDP description's UDN, also the end of the camera's PTP/IP responder GUID (*SSDP discovery*).
+
+Could change with: decision 6; the fixtures once committed (the `a7c2-ptpip-*` golden tests; they show the codes 0x9210–0x9212 and 0xC201 in DeviceInfo, and the `unverified` notes stay until a test is built from a captured exchange).
+
+## 2. Sony's whole-card session: open, list and stay listed
+
+**In plain terms:** this camera only shows its card over Wi-Fi once the session is opened Sony's way. The app opens it with Sony's operation instead of the standard one, runs a short handshake Sony's apps use, switches the session into "contents transfer" mode in two steps, then asks for the handle list until the card appears. (Findings: *Wireless browsing in 1.0*; *PTP/IP and join facts*, "Sony SDIO connect".)
+
+Starting point (7 Nov): PTPKit already describes this session as pure values, `SonyContentsTransferPlan.wholeCard()` with `SonySessionRunner` to walk it one answer at a time and `SonyCapabilities` to gate it on DeviceInfo (PR #64). It follows the spike app's sequence and is `unverified` until fixtures prove it; the link's job is to send what the runner says, feed the answers back and run the listing poll.
+
+Acceptance criteria:
+
+- **Open:** SDIO_OpenSession (0x9210) with parameters [1, 1] (session ID 1, and function mode 1, contents transfer), in place of OpenSession. A plain OpenSession gets StoreNotAvailable (0x2013) from GetStorageIDs on both networks: with or without the init sequence on the camera's network, and with it on the home network (without it is untried there).
+- **Init sequence, in Imagedge's order:** GetDeviceInfo; GetStorageIDs (StoreNotAvailable at this point is expected); SDIO_Connect phase 1 and phase 2 (OK, 8 zero bytes each); SDIO_GetExtDeviceInfo 0x12C (OK, 970 bytes); SDIO_Connect phase 3; GetExtDeviceInfo again (the same 970 bytes). The SDIO steps all answered OK, and DeviceInfo was the same before and after (81 operations, 48 events, 0 properties).
+- **Contents transfer mode:** SDIO_SetContentsTransferMode (0x9212) [2,0,0], then [2,1,0], each followed by the pause Imagedge makes. The spike's values are in `Spike/Sources/Views/WirelessView.swift` (`SonyContentsMode.transferModeSteps`), and one of them is the fixed 1.5 s wait the findings mention. Whether shorter pauses work is untested.
+- **Poll for the list:** GetStorageIDs and GetObjectHandles until the card is there. The camera announced its card with StoreAdded [0x00010001]. Ready times: 2.55 s and 2.61 s after the switch (2 Nov), 1.97–2.09 s in the Bluetooth runs, 2.99 s on the home network. Both 4 Nov sessions took about 2 s (1.96 s and 2.08 s) from SDIO_OpenSession to the first poll, mostly the fixed waits. The spike polled for up to 120 s. The indexing time at a larger card (2 s at 432 handles) is unchecked.
+- **List:** one GetObjectInfo per handle, newest first: 11–17 ms per handle over nine listings at 397–435 handles; 391 files in 4.74 s; 555 handles in 5.91–8.3 s; 741 handles in 8.42–9.11 s. A 2,000-file card projects to about 25–35 s and 5,000 to about 1–1½ min (upper bounds, projected, not measured).
+- **Handles are stable across sessions, so only the first import lists everything.** DSC02046.ARW kept the same handle in every session on 2 Nov; after the 23:51 *Continue* all 336 remaining files matched; after the 01:08 recovery all 298 did. 1.0 keeps what it has listed, asks GetObjectHandles for the current list, and runs GetObjectInfo only for handles it hasn't seen. The relist after *Continue* took 8.3 s in the spike, and this removes it (the saving isn't measured).
+- **Identity still decides.** Before resuming or skipping a file found by handle, check that its name and size still match (the proposal's resume rule; the fault matrix's "card swapped between sessions"). A handle is a hint, not an identity.
+- The session's storage is read-only without deletion: there is no delete path over Wi-Fi.
+
+Could change with: decision 6; a firmware update (keep fixtures per firmware); a larger card (the indexing time when the session opens).
+
+## 3. Thumbnails, downloads and 0x9211 resume
+
+Acceptance criteria:
+
+- **Thumbnails** with GetThumb, newest first: 38.74 ms and 35.35 ms on average for 50 (slowest about 100 ms) on the camera's network, and 48.09 ms on the home network. At 35–39 ms the proposal's first screen of the newest 60 takes about 2.1–2.3 s, against its 1 s budget (spike-remaining.md section 4), so Browse shows the last-known card while they come.
+- **Downloads** with GetObject, streamed to a file: 20 ARW (954 MB) at 15.5 MB/s and, in a second run (944 MB), 11.7 MB/s, with files at 6–8 MB/s while the link quality dipped. Whole-card copies ran at 12.6–17.4 MB/s, and 18.1 MB/s over 141 files with the phone locked near the camera. The slow stretches: the first 49 files of the 3 Nov 23:18 copy at 10.2 MB/s with the phone further away (camera Bluetooth −78 to −80 dBm at the phone), files 51–54 at 8.0 MB/s, and 5.4–6.1 MB/s for three downloads on 5 Nov 01:09 (cause unknown). The rate depends on where the phone is, so the hardware plan records the Bluetooth signal with each run. The camera's network was 5 GHz only.
+- **Memory** stays inside the 150 MB budget: the Wi-Fi runs peaked at 61–106 MB (113 MB on the home network, baseline 107 MB).
+- **Resume with SDIO_GetPartialLargeObject (0x9211)**, parameters: handle, offset low, offset high, length low, length high (a 64-bit offset and length). Standard GetPartialObject (0x101B, three or four parameters) and 0x9219 answer InvalidObjectHandle in this session, so the link uses 0x9211 for any byte range. On 2 Nov 23:10, a read in 4 MiB chunks was cut at 54 % by switching Wi-Fi off; the app reconnected (in the earlier 22:24 drop test the session reopened in about 2.5 s), found the same handle, resumed at the saved offset, and the SHA-256 matched GetObject's. Chunks ran at 12.9 MB/s before the drop and 7.3 MB/s for the six after it. (Findings: *Wireless browsing in 1.0*; *Byte-range resume on USB*.)
+- **The file in flight resumes from its offset.** The spike's copy restarted it from its start after a pause, and the 0x9211 resume is verified, so 1.0 continues from the saved offset with the proposal's 16 MiB checkpoints. Open choice: chunked 0x9211 reads or a plain GetObject for new files. GetObject is the measured whole-file path (11.7–15.5 MB/s for 20 ARW). The one chunked 0x9211 read ran at 12.9 MB/s in 4 MiB chunks before its drop (one file, a different run), so whether 0x9211 for every file is as fast isn't shown.
+- **The same file downloads the same bytes in different sessions:** DSC02046.ARW gave one SHA-256 in two sessions 14 minutes apart.
+
+Could change with: a measurement of 0x9211 throughput over a whole file; decision 4 (stall handling).
+
+## 4. Keep-alive, the idle drop, and events
+
+**In plain terms:** the Imagedge code, written for a ZV-E10, reports that the camera drops an idle PTP/IP session after about 30 s, and it sends GetDeviceInfo every 10 s to prevent that. On this body, that drop hasn't been separated from iOS closing a suspended app's sockets. (Findings: *PTP/IP and join facts*, "An idle session with the app in the background"; *BLE advertisement*, *With Creators' App paired again*.)
+
+Acceptance criteria:
+
+- **Keep-alive:** GetDeviceInfo every 10 s while a session is open and no other command is running, as the spike did. Its keep-alive answered six times on 5 Nov. With the init sequence, a plain session stayed up past 30 s; without it, on build 8, the connection was gone within 37 s.
+- **A lost session reconnects by itself,** on the app's return or when the next step needs the camera. On 5 Nov, a session idle for under 15 s was lost after 4.8 s in the background (POSIX 53 on both channels). This was inside the reported 30 s, so iOS closing the sockets is the likely cause. The app reconnected and reopened the whole-card session: the first handle listed 2.6 s after the reconnect began, and the card listed again in 8.42 s. With section 2's rule, only new handles need asking for. A session left in the background for 8 minutes after a copy was gone too (3 Nov).
+- **Events:** the event connection decodes StoreAdded, StoreRemoved and Sony ObjectAdded (0xC201). StoreRemoved followed by StoreNotAvailable means the camera has dropped its card (section 9). Two Sony 0xC225 events came on a reopen (meaning unknown): log them, ignore them.
+- **ObjectAdded isn't acted on in 1.0.** A full shutter press sent 0xC201 [0xFFFFC001] about 0.4 s after the capture, on a plain *PC Remote* session after the init sequence, on both networks. The 0xC223 shutter state went 5 → 7 → 1 on the camera's network and 5 → 6 → 1 on the home network. It hasn't been seen on the whole-card session, and fetching the frame from 0xFFFFC001 is untried. Browse can refresh by asking for new handles instead. (Findings: *Transfer-while-shooting feasible later*.)
+
+Could change with: a measurement that separates the camera's idle drop from iOS; ObjectAdded on the whole-card session.
+
+## 5. Finding the camera: fixed address, passive SSDP and a typed address
+
+Acceptance criteria:
+
+- **On the camera's own network no discovery is needed:** the camera is at 192.168.122.1.
+- **On another network, listen passively.** The camera sends SSDP NOTIFYs (`upnp:rootdevice`, `urn:schemas-upnp-org:device:Basic:1`, `urn:schemas-sony-com:service:DigitalImaging:1`) to the multicast group. Without `com.apple.developer.networking.multicast`, the spike's `NWConnectionGroup` still became ready and received them, 0.73 s after joining on the camera's network and 1.91 s and 4.65 s into a 5 s listen on the home network. The description is at port 64321 (`dd.xml`, friendlyName ILCE-7CM2, no serialNumber). (Findings: *SSDP discovery*.)
+- **Don't count on searching.** The app's own multicast M-SEARCH never went out (both sends were still pending when the group closed). The camera didn't answer a unicast M-SEARCH, and advertised no `_ptp._tcp` over Bonjour.
+- **A typed address** is the escape hatch, always offered.
+- **An announcement doesn't mean the camera will accept a session:** it announced with access authentication on and refused connections on port 15740 (section 10).
+- **The multicast entitlement question is open.** Whether the request was submitted, and its status, isn't recorded (spike-remaining.md sections 3 and 4). Shamil chooses between recording SSDP as Go on passive listening and skipping the request, or submitting it anyway to keep active search open. Either way, the proposal's "must be approved before the first TestFlight external build" needs rewording.
+- **The proposal's "discovery ≤ 5 s" isn't shown:** the announcement interval isn't measured, and 4.65 s fell inside a 5 s listen. Listen for longer than 5 s, or until the typed address is used. Set the timeout once the interval is measured.
+
+Could change with: the entitlement; a measured announcement interval; decision 5 (without the home network, only a typed address for unusual setups is left).
+
+## 6. Bluetooth pairing at onboarding (decision 6, recommended)
+
+**In plain terms:** the camera refuses the hand-off to a phone it isn't paired with. Pairing happens once, from the app, with the camera's Bluetooth *Pairing* screen open. Creators' App isn't needed (one run, 4 Nov 13:06). iOS keeps one pairing per device and shares it between apps. (Findings: *BLE advertisement*, *Without Creators' App's pairing* and *With Creators' App paired again*; *α7C II menu wording*, the Bluetooth *Pairing* row.)
+
+Acceptance criteria:
+
+- **The onboarding screen says what is coming before it starts.** Open MENU › Network › Bluetooth › Pairing on the camera. *Bluetooth Function* was on in every run, and *Bluetooth Rmt Ctrl* was on in the hand-off runs that record their settings (3 Nov 00:04 and 11:35). Whether the hand-off needs *Bluetooth Rmt Ctrl* is untested, so the screen names both settings until it is known. The screen reads "Perform pairing from the device to be connected. …" with Device Name ILCE-7CM2 and *Cancel*. Then there are **two prompts**: iOS's Bluetooth pairing request on the phone, and a confirmation on the camera. The person accepts both. The camera's wording, and whether either prompt shows a code to compare, aren't recorded yet: read them off the camera before writing the copy (spike-remaining.md section 4). The Bluetooth permission (`NSBluetoothAlwaysUsageDescription`) is asked at this step.
+- **The read that triggers the pairing gets no short timeout.** The app connects, discovers the services, turns on the five notifications and reads CC09, the first characteristic that needs encryption. On 4 Nov 13:06 that read returned 12.3 s after it was sent (of the spike's 15 s read timeout), with both prompts accepted in that time. The read most likely started the pairing; the log doesn't time the prompts. The read waits for the person, with *Cancel* in the app.
+- **Store the peripheral identifier** with the camera row. It was the same at 13:03, 13:06 and 13:08 on 4 Nov, across removing and redoing the pairing. The pairing held across a reconnect (CC09 read in 0.07 s with no prompt) and across two camera restarts (5 Nov 01:18 and 02:21).
+- **Already paired:** if iOS already holds a pairing (for example Creators' App's), the first protected read succeeds with no prompt, and onboarding skips the explanation. The other way round, Creators' App added after ours reused our pairing with no prompt, and both apps worked (5 Nov 00:58–01:25).
+- **Unpaired errors are recognised.** Unpaired, the camera refused the first CC09 read with ATT *insufficient encryption*, then the CCAB read, a second CC09 read and the CC08 write with *insufficient authentication*. It dropped the link 0.55 s after the refused write (*peripheralDisconnected*), and iOS showed no prompt. The app maps these to "not paired" and sends the person to the *Pairing* screen, without retrying in a loop.
+- **A drop during onboarding is retried once.** Opening the *Pairing* screen may drop an existing link: the camera dropped one around then on 5 Nov (01:19:41).
+- Untested, so handled defensively: a reinstalled app (iOS keeps the pairing, but the app loses its identifier and has to scan), a declined or slow confirmation, and whether the camera asks for its confirmation every time.
+
+Could change with: decision 6 (without it there is no pairing step, and the proposal's "Link Bluetooth" step for proximity stays); the camera's prompt wording.
+
+## 7. Bluetooth hand-off: switch the camera's Wi-Fi on and read its details (decision 6, recommended)
+
+**In plain terms:** the app connects to the camera over Bluetooth, subscribes to Sony's five notifications, and writes 0x01 to CC08. The camera then brings its Wi-Fi up, with nothing shown on its screen, and reports this through CC09. Once CC09 says "launched", the app reads the network name (CC06) and password (CC07) and joins (section 8). (Findings: *BLE advertisement*, the third run and *The 1.0 route, end to end*.)
+
+Acceptance criteria:
+
+- **Connect by the stored identifier,** not by a scan. Measured: 0.19–0.57 s typically; 5.2–5.95 s for the first connect to a camera that has been idle (the cause is open, section 16); 0.00–0.05 s when another app already holds a link. Once (3 Nov 11:53) an 8 s connect timed out before a scan found the camera, so the app falls back to a scan.
+- **Subscribe to the five notifications before the write:** CC09, CC10, CC0F, CC03 and CC0E, each confirmed (1.4–1.7 s for the five). Without them, CC08 took CC09 0 → 1 → 0 and no network appeared (3 Nov 00:04, with *PC Remote Function* on, and 00:20, with it off as far as the setup goes, still to confirm: spike-remaining.md section 3).
+- **Parse CC09 as the α7C II lays it out:** a list of entries, each *length* (1 byte, counting tag and value), *tag* (2 bytes, big-endian; this is Bluetooth, not PTP's little-endian), *value*. A read returns all ten tags (43 bytes); a notification carries one entry, for example `04 00 01 02 00`. **Tag 0x0001 is the Wi-Fi status:** first value byte 0 terminated, 1 launching, 2 launched, 3 terminating (all four seen). The other tags' meanings come from the notes (table in *BLE advertisement*); 1.0 needs only 0x0001. Unit tests use the logged bytes.
+- **Switch on only when needed.** If CC09 already shows status 2, read the details. If the status is 0, write CC08 = 0x01: acknowledged in 55–88 ms, status 1 at +0.09–0.11 s, and status 2 0.8–2.7 s after the write. The status comes from the notification, not from polling. A CC06 read refused with ATT **0x9D** means the Wi-Fi is off (5 Nov 02:21, where the app then switched it on); 0x9D isn't a pairing error.
+- **Read CC06 and CC07 only after status 2.** CC06 is 24 bytes (a 3-byte header, then a 21-character name beginning `DIRECT-`); CC07 is 11 bytes (the 3-byte header, then an 8-character password). Both read on the first try, 0.45–0.47 s after status 2 in the guided runs and 0.51 s in the 5 Nov 02:21 run by hand. The values are never logged, never in diagnostics and never in a fixture.
+- **With *PC Remote Function* on,** the 3 Nov 00:04 write didn't switch the Wi-Fi on, but it was sent without the five notifications. The 4 Nov 01:08 recovery started with the camera in *PC Remote*, and after Shamil's restart CC08 (with the notifications on) switched its Wi-Fi on. Whether *PC Remote Function* was still on after the restart isn't recorded, so whether CC08 works with PC Remote on is unconfirmed. CC06/CC07 gave PC Remote's network when it was already up, and that network joined and imported (3 Nov 11:33). So reading the details first covers both setups.
+- **Don't switch on early.** An unused switch-on gives the camera about 50 s of Wi-Fi (section 8). Switching on before the person decides saves time only if they start within about 40 s, so the write waits for *Import* (or for an allowed recovery). The camera's screen shows nothing during the hand-off, so the app is the only place that says the camera's Wi-Fi is on.
+- **Don't count on the link after the join.** On 5 Nov 02:21 the link dropped by itself 11.2 s after a join (CBInternalErrorDomain 13, cause unknown). With the phone joined, the Wi-Fi outlived the link closing in every run that tested it (downloads 12.9–14 s and 62.8–64 s later). The app reconnects when it next needs CC09.
+- **Turning the notifications off at the end:** with Creators' App sharing the link, only CC0E came back confirmed, and CC03, CC09, CC0F and CC10 returned CoreBluetooth's "unknown" error, though Creators' App worked afterwards. iOS shares one link and one set of notification switches between the apps using a device. Treat that error as harmless when iOS lists another app's link to the camera.
+- **With Creators' App open in the background,** the route works (3 Nov 22:43, 5 Nov 01:09), but the camera sometimes drops its card and Wi-Fi (3 Nov 15:13, during a copy) or its Wi-Fi and the Bluetooth link (11:54, about 30 s after a switch-on nobody joined). It looks likely but isn't proven to be Creators' App's doing; section 9's recovery covers it either way.
+- Fallback when the service or characteristics are missing (a firmware change): the manual route, *PC Remote Function* on and a join in Settings.
+
+Could change with: decision 6; a firmware update; the Bluetooth trace of Creators' App leaving (section 8).
+
+## 8. Join, stay and leave (stay then leave: decision 2 = (d), decided; joining: decision 3, recommended)
+
+Acceptance criteria:
+
+- **Join with `NEHotspotConfiguration`** using the name and password just read. iOS asks the first time (`ble.join.joinPrompt` yes). Re-applying a configuration that was still saved didn't ask (the 4 Nov 01:12 recovery join). After the configuration has been removed, the next join asks again (01:08).
+- **`apply` returning is not a join.** Confirm the join by the camera's gateway 192.168.122.1 appearing on the Wi-Fi path. `apply` returned after 7.3–9.1 s, the gateway was on the path 9.5–10.6 s after the call, and in the 3 Nov 14:56 and 22:43 guided runs the camera's port answered 0.1 s after `apply` returned. On 4 Nov 12:34 `apply` returned without an error after 6.7 s, yet iOS reported that the connection failed. With nothing changed, the attempt at 12:39 joined. So the app waits for the gateway (the spike waits up to 20 s, `HotspotJoiner`) and retries if it doesn't come. The cause of 12:34 is unknown (section 16). (Findings: *BLE advertisement*, *A phone that stays joined*.)
+- **Join as soon as CC09 reports status 2, inside the camera's 50 s.** With nobody joined, the camera starts switching its Wi-Fi off 50.0 s after status 2 (49.98–50.01 s, seven runs of seven, Creators' App quit and open) and is off at 51.4–51.7 s. The count runs from status 2, not from the write. With the Bluetooth link closed, the Wi-Fi was off when read 77 s after status 2 (the moment unknown). Joins took 7.4–10.6 s including the prompt, so there is room. (Findings: *How long an unused Wi-Fi stays up*.)
+- **Watch CC09 during the join prompt.** If the status reaches 3 or 0 before the join is confirmed, reconnect Bluetooth if the link has gone, write CC08 = 0x01 again and retry the join (decision 3, recommended). Whether a second write while the status is 2 restarts the count is untested (one run hints that it does); what a write during status 3 does is unknown.
+- **A join needs the app in front.** Apple's hotspot API has an error for an app that isn't in the foreground (`applicationIsNotInForeground`), and the spike never joins from the background. During the prompt the app goes briefly inactive. On 5 Nov 01:21 it was in the background for 8.9 s while iOS's prompt was up, and still joined.
+- **Then the session:** connect to 192.168.122.1:15740, open the whole-card session (section 2). From *Start* to the camera answering took 13.8–18.8 s in the runs without a pairing (the 18.78 s run included a 5.56 s first Bluetooth connect), and 29.49 s on 4 Nov 13:06 with the pairing's 12.3 s inside it. The first file followed 25–43 s after *Start*.
+- **The phone's internet goes over mobile data while it is joined.** The path showed Wi-Fi present but unused and cellular in use, while traffic to 192.168.122.1 went over Wi-Fi (2 Nov). Say so on the Import screen.
+- **Stay, then leave (decision 2 = (d), Shamil, 4 Nov).** After an import, stay on the camera's network for a few minutes, so that a second import needs no prompt, then leave by removing the hotspot configuration. To settle in this iteration:
+  - **How long to stay.** The camera keeps its Wi-Fi up while the phone stays joined: status 2 at 785 s after CloseSession on 4 Nov, through background spells and a 73 s lock, with the app's Bluetooth link up and the notifications on. With the link closed, only 63–64 s is tested. The camera's battery cost of a Wi-Fi left on isn't measured.
+  - **Leaving with the app in the background.** Removing the configuration needs the app running; doing it from the background is untested. Candidates: leave when the continued task ends, or on the next return to the front.
+  - **Expect the camera's Wi-Fi to stay on for a while after the leave.** After two leaves (3 Nov 22:43, 4 Nov 13:06), the camera's Wi-Fi went to status 3 51.0–51.2 s after the removal and to 0 at 53.0–53.2 s, with no write. After a third (5 Nov 01:13) it was still at status 2 for the 59 s watched. A leave alone doesn't make sure the Wi-Fi goes off soon. Creators' App's goes off about 1 s after it leaves, so it probably sends something; finding that write needs the optional Bluetooth trace (option (c) in decision 2, still open).
+  - CloseSession alone doesn't switch the camera's Wi-Fi off: status 2 for 45 s after CloseSession, with the phone joined, in every run that watched.
+- **A second import inside the stay** reopens the session with no join. Two whole-card copies on 3 Nov started on a phone already joined; the card was ready at the first poll (0.1 s).
+- **iOS moving the phone to another network while the app is away starts the camera's 50 s count** (2 Nov 12:14, where the phone went to the home Wi-Fi). An import resumed more than about 50 s after that needs Bluetooth to switch the Wi-Fi on again before the rejoin (section 9).
+
+Could change with: the Bluetooth trace (a write that switches the Wi-Fi off would allow (c)); a test of leaving from the background; decision 3.
+
+## 9. Recovery, pause and continue over Wi-Fi
+
+The engine's transport-neutral rules (section 0) with the Wi-Fi triggers. Wi-Fi needs the continued task and the Live Activity's *Paused* state from the start of Iteration 3; section 0 proposes that the second engineer builds both in the first week and that this section uses them (see the top of this file). (Findings: *Wireless browsing in 1.0*, the whole-card copies table and the bullets under it; decisions 3 and 4 in spike-remaining.md.)
+
+Acceptance criteria:
+
+- **Every Wi-Fi import runs inside `BGContinuedProcessingTask`.** Locked inside a continued task, 20 ARW (954 MB) downloaded in 62.1 s at 15.4 MB/s, entirely while locked, and the task finished. Whole-card copies ran 709 s, 983 s, 817 s and 1,207 s without expiring. In the 983 s run (3 Nov 23:18) 360 files and 15.25 GB were copied in 16.4 min, with about 329 s of it locked. The task started 0.03 s after the request on the 23:51 *Continue*, the one Wi-Fi start the findings time (0.01–0.04 s across every run, section 13). Without a task: nothing in 123 s locked and the session lost (2 Nov), and a session lost after 4.8 s in the background (5 Nov).
+- **Expiry is normal** (decision 4, recommended). iOS ended the task twice as Shamil opened the Camera app: at 271 s, and 4.8 s after the app went to the background while the download was moving at 16.9 MB/s. iOS gives no reason. On expiry the engine flushes the offset, pauses, posts a notification, and shows *Paused, open to continue* in the Live Activity. On 3 Nov 23:51 Shamil came back through a notification 3.8 s after the pause notification was posted (the log doesn't name which notification).
+- **Continue:** a new continued task (started in 0.03 s), reopen the session (2.9 s on 23:51), ask for new handles only (instead of the spike's 8.3 s relist), resume the file in flight from its offset with 0x9211, and write into the same destination. The spike copied each of the 360 files exactly once across the pause.
+- **Ask for notification permission before a Wi-Fi import can first pause** (for example at the first Wi-Fi import), not only when the person switches the reminder on (section 12): the pause notification needs it, and in the spike a notification failed while permission was undetermined (UNErrorDomain 2003). No section 5 decision covers when to ask; Shamil's call.
+- **Progress in bytes,** published to the Live Activity and the system's continued-task UI.
+- **The Live Activity records Stop separately from an expiry.** The spike's log couldn't tell them apart, which left the 03:07 USB lock run ambiguous and meant Shamil had to rule Stop out by hand for the 11:30 and 11:56 copies.
+- **A stall pauses and retries; "failed" is for real errors,** with a limited number of retries (decision 4, recommended). On 3 Nov 15:13 the camera's drop made the spike's copy count 82 files as failed before the link closed. With the phone locked on 4 Nov 01:08, two files stalled for about 26 s each (25.8 s and 26.8 s), cause unknown, and the copy went on.
+- **Recover from the camera dropping its card, with the app in front.** The camera sends StoreRemoved, refuses the next GetObject with StoreNotAvailable and, about 6 s later, switches its Wi-Fi off. On 4 Nov 01:08 (Shamil switching the camera off and on, as planned) the copy got it back with no action in the app, 97 s after the failure. The 63rd file started at 96.75 s: Bluetooth connect, CC09 status 0, CC08, status 2, join (`apply` 9.1 s, no prompt), the camera answering 40.7 s after status 2, the session reopened, and all 298 remaining files found under the same handles (relist 7.2 s).
+  - **Drop the second fixed 30 s wait** (waiting for iOS to rejoin; decision 3, recommended): join as soon as CC09 reports status 2 (section 8). The two fixed 30 s waits made up 62 of the 97 s.
+  - **Keep a wait before going to Bluetooth** (decision 3, recommended). The camera's Bluetooth answers while it is switched off, and 1.0 shouldn't switch on a camera the person has just switched off. How to tell the two cases apart is open.
+- **With the app away, the copy does only what needs no join** (decision 3, recommended): wait for the card, reconnect, switch the camera's Wi-Fi on over Bluetooth if allowed, and wait for iOS to rejoin. If a join is still needed, it **pauses and notifies**, and joins when the person comes back. This pause is new in 1.0: the spike's copy ended at that point. Left unmeasured: a Bluetooth switch-on from the background, and whether iOS rejoins by itself while the phone is locked. At 01:08, with the home network in range, iOS didn't rejoin by itself in 30 s.
+- **A camera restart alone is no reason to delay the join.** The first join after a restart worked first time on 5 Nov 02:21, with the pairing intact (one run, with CC09's tag 0x0003 at 1; a join while it reads 0 is untested).
+- **Exit criterion, proposed:** the same 100-file import over the camera's network at ≥ 8 MB/s with the phone near the camera (measured 11.7–15.5 MB/s for 20 ARW and 12.6–17.4 MB/s for whole cards, but 5.4–6.1 MB/s once on 5 Nov). "Discovery ≤ 5 s" becomes "the camera answers within [target, Shamil to set] after *Start* once paired; on the home network, if decision 5 keeps it, the camera is found by listening" (measured 13.8–18.8 s; on the camera's own network no discovery is needed, 192.168.122.1; on the home network, which is section 10 and only if decision 5 keeps it, the 5 s discovery target isn't shown, since 4.65 s was inside a 5 s listen). "Survives AP drop and rejoin" becomes the 01:08 recovery with the app in front, plus the pause and notification with the app away. Shamil's call on 13 Nov.
+
+Could change with: decision 3 (the wait before Bluetooth); decision 4; a background Bluetooth switch-on or locked rejoin, if anyone measures them; why iOS expires tasks.
+
+## 10. The home network as a second route (only if decision 5 keeps it)
+
+**Recommended (decision 5, provisional):** the camera's own network over Bluetooth stays the 1.0 route. The home network is supported when the camera is already on it, after this iteration's core (sections 1–9) is done. Decide after spike-remaining.md group B and the answer on what turning access authentication off costs in security. (Findings: *Wireless browsing in 1.0*, "PC Remote over the home network"; *Day-6 mode matrix*.)
+
+Acceptance criteria, if kept:
+
+- **One-time camera setup, explained in the app:** join the home Wi-Fi; *PC Remote Cnct Method* = *Wi-Fi Access Point*; access authentication off. While it was on, the camera refused connections on port 15740 (03:30 and 03:33), although it still announced itself. That the setting closes the port is inferred, not tested by turning it back on. Its exact menu name and path aren't recorded, and what turning it off costs in security is a question for Shamil before 1.0 asks anyone to do it.
+- **Found by passive SSDP** (section 5) or a typed address. No join prompt, because the phone stays on the home Wi-Fi; whether it keeps its internet wasn't checked.
+- **Wait at least 40 s for the first `Init_Command_Ack`.** It took 40.2 s the first time, while the camera mostly showed its transfer screen, and 6 ms for the next connection 20 s later. Whether the first connection after a camera restart takes 40 s again isn't known.
+- **The same whole-card session as section 2:** ready in 2.99 s (558 handles), 549 objects listed in 7.73 s (13.9 ms per handle). A plain session lists nothing.
+- **Slower so far, one run with the app in front:** 20 ARW (792.6 MB) at 10.18 MB/s against 11.7–15.5 MB/s on the camera's network, thumbnails 48.1 ms against 35–39 ms. When a camera is reachable both ways, prefer the camera's own network (the proposal merges descriptors by serial and prefers the faster carrier).
+- Untested on this route: the phone locked, a resume, a recovery, a camera restart, and whether the Bluetooth switch-on works with the camera on the home network.
+
+Could change with: decision 5; group B's runs; the security answer.
+
+# Iteration 4: background, proximity reminder and polish (the second engineer, from 18 Jan)
+
+## 11. Proximity scan, wake and confirm
+
+**In plain terms:** the camera keeps advertising over Bluetooth even when switched off, so the phone can notice it nearby. The only thing it advertises that iOS can filter a background scan on is service 1800, which isn't Sony's (*Generic Access*), so other devices can wake the app too. After each wake the app confirms it is really this camera. (Findings: *Proximity reminder in 1.0*; *BLE advertisement*.)
+
+Acceptance criteria:
+
+- **Background scan for service 1800** with the `bluetooth-central` background mode and a restore identifier. The camera advertised 1800, with Sony's company ID 0x012D in the manufacturer data, on, asleep and switched off (Creators' App quit, *Bluetooth Function* on). *Remote Power ON/OFF* was On per the findings' menu table (Shamil), though the advertisement section says it wasn't recorded (spike-remaining.md section 3). Advertising while off with it Off is untested, so the reminder's setup names the setting. Intervals (the median gap between scan callbacks, so upper bounds) were about 1,024 ms on, 2,037 ms asleep and 1,529 ms off, and about 43 ms while Creators' App was connected. It still advertised after the pairing had been removed (4 Nov 13:03, camera on; asleep and off not run), so the reminder doesn't need the pairing.
+- **Confirm the camera after every wake** (decision 8, recommended): by the stored peripheral identifier (the same identifier in every scan, as iOS assigns it to this app), or by Sony's company ID together with the name. Anything else that advertises 1800 is ignored without a reminder. The manufacturer data isn't logged, because it may identify the camera.
+- **The identifier comes from onboarding** (section 6) if decision 6 is taken; otherwise from the proposal's "Link Bluetooth" step on the Cameras screen.
+- **"Nearby", never "switched on".** The advertisement is identical on, asleep and off, so the trigger is coming into range, for example getting home, whether the camera is on or off. The reminder's wording says "nearby".
+- **Measured latency:** from the next room with the phone locked, iOS reported the camera 11.76 s after the scan started (RSSI −83), and the reminder was accepted 0.02 s later. A camera coming back from its Airplane Mode was reported within about 3 s (a time noted by hand), with the phone locked, and the reminder accepted 0.03 s later. A walk into range, with the signal building up gradually, is untried. The proposal's goal 6 ("within about a minute") is met in the cases tried.
+- **Restart the scan from a wake, not a timer.** Within one scan, iOS mostly reports the camera once while it stays in range. The spike re-armed on a 60 s timer, which doesn't run while the app is suspended, so in the 2 Nov run every restart happened when the app came back to the front. Restart from a discovery, a connection event or a background refresh, without letting a camera that sits in range wake the app over and over. No connection event arrived in any run that armed one, so don't rely on it.
+- **Restart the scan when Bluetooth comes back on.** On 5 Nov 02:17 the app restarted its scan in the background when Bluetooth came back on, and iOS reported the camera 0.03 s later.
+- **Low Power Mode didn't stop it in the two runs that had it on.** Background discovery worked with Low Power Mode on (3 Nov 00:08; and from 4 Nov 14:31 to 5 Nov 00:58, when iOS reported the camera 137 times, with Low Power Mode on at every scan restart from 14:54 to 00:24), contrary to the proposal's constraints paragraph and the spike's own warning text. Correct the copy to "may stop" until it is tested on purpose (decision-pack.md, 3.12).
+- **Core Bluetooth state restoration, with its limits:**
+  - On 5 Nov 22:26, after the app killed itself (SIGKILL, while in front), iOS relaunched it in the background with the phone locked, handed back the scan for 1800 (`willRestoreState`, no peripherals), reported the camera 70 ms after the launch, and the reminder was accepted 0.02 s later. A scene-based app gets no launch options, so the restore path is `willRestoreState`.
+  - That iOS does the same after ending a suspended app to free memory is per Apple's documentation, **untested**.
+  - An app the person swipes away in the app switcher isn't relaunched (per Apple, **untested**), so reminders stop until the person next opens the app. The settings screen says so.
+  - The proposal's "relaunches it after a reboot" is untested too.
+
+Could change with: a walk into range; the Creators' App connected and quit rows (not run); decision 6 (where the identifier comes from).
+
+## 12. Reminder rules: hold, one per arrival, quiet hours
+
+Acceptance criteria:
+
+- **Ask for notification permission when the person switches the reminder on.** In the spike, the first reminder failed (UNErrorDomain 2003, permission not yet asked); permission was granted a second later, and every later reminder was accepted.
+- **Hold reminders while the app is connected to the camera or importing, over USB too** (decision 8, recommended). The camera keeps advertising while our app holds a Bluetooth link to it (5 Nov 02:12:20, a reminder posted then). The spike posted one during a locked Wi-Fi import (2 Nov 22:28), one every minute while the camera was plugged in over USB (5 Nov 22:37–22:40), and two during a USB copy (4 Nov 11:57:35 and 11:58:41.9).
+- **One reminder per arrival, with a long hold for a camera that comes and goes.** In the background from 4 Nov 14:31 to 5 Nov 00:58, iOS reported the camera 137 times, its signal swinging between −48 and −83 dBm, which fits it moving in and out of range (not recorded), and the spike's 60 s debounce let 38 reminders through (31 with the phone locked). The proposal's "one reminder per camera per 30 minutes" is the floor. Pick the hold so that a camera sitting at the edge of range doesn't remind every half hour, and keep it across a relaunch: state restoration relaunches the app, and the spike's debounce outlived a kill and reopen.
+- **From the proposal:** an alert-style local notification with *Import now*, *Not now* and *Snooze today*; swiping it away is *Not now*; quiet hours (default 22:00–08:00); snooze length; per-camera mute; "only when on home Wi-Fi"; a *nearby* badge on the Cameras screen. None of these were measured; they are product rules.
+- **Tapping the reminder opens the app on the right screen.** In the spike, Shamil opened the reminder 6.8 s after it was posted, and *Import now* opened the Wired tab. In 1.0 it opens the camera, and the import goes over whichever link is available (a Wi-Fi import starts with the join in section 8, which needs the app in front).
+- **The count is the last known one.** The proposal's "318 photos not yet imported" can only come from the card as last listed: a wake can't read the card in 1.0, because joining the camera's network from the background isn't allowed. The 1.1 differential check is out of scope.
+- Whether the reminder slowed a USB transfer isn't known: four files dipped to 22–30 MB/s around one (4 Nov 11:57).
+
+Could change with: Shamil's choice of the hold length; the proposal's settings list.
+
+## 13. Continued task, Live Activity and Lock Screen across both links
+
+The lock and background behaviour the spike measured. Wi-Fi uses this from Iteration 3 (section 9). (Findings: *Wired import is viable*; *ImageCaptureCore facts*, the session-survival, `BGContinuedProcessingTask` and `ICDeviceBrowser` rows; *Wireless browsing in 1.0*.)
+
+Acceptance criteria:
+
+- **One continued-task wrapper for both links,** started when the person taps *Import* (0.01–0.04 s start latency in every run). A camera-free timer task ran 675.62 s without expiring (Low Power Mode off), and 136.25 s through a lock with Low Power Mode on.
+- **USB: the app has to be in front for an import longer than about 30 s** (decision 1, recommended). ImageCaptureCore reports *will suspend operations* when the app leaves the foreground and *did suspend operations* 30.0–30.1 s after that (30.0–30.3 s after the app left the foreground), whether the app is in the background or the phone is locked, in MSC and MTP, even inside a continued task. The session survives (a 652 s lock), and *resumed operations* comes 0.26–0.9 s after the app returns. So:
+  - the Import screen asks to stay in front and keeps the screen on (this card's 360 ARW, 15.25 GB, take about 6½ minutes at 40 MB/s);
+  - the engine pauses on *did suspend*, not when iOS ends the task. iOS ended it 31–74 s after the progress last moved in the USB runs;
+  - it continues on the app's return, not on the *resumed operations* callback alone, which ImageCaptureCore also sends with no suspension before it;
+  - a file waiting through a suspension isn't failed: the same `requestDownload` survived 632 s and finished on return. The spike's 60 s limit failed three. After *Continue*, the first file finished about 1 s after the tap (0.97–1.13 s).
+- **A cable pull pauses the copy, without failing the file in flight** (decision 4, recommended). On 4 Nov 11:56 the spike's copy ended instead, with error −9934 on the file in flight.
+- **Wi-Fi:** as section 9. With a continued task, imports keep going in the background and under lock.
+- **Live Activity and Lock Screen widget:** files done and total, bytes and ETA (the proposal's four numbers), plus MB/s (its progress paragraph); a *Paused, open to continue* state for an expiry and for *did suspend*; Stop recorded as Stop. The system showed its own continued-task progress as a Live Activity (1 Nov), so the two carry the same title and progress.
+- **Photos while locked:** staged files use complete-until-first-unlock (the default; decision 9, recommended). A `complete` file fails while locked (PHPhotosErrorDomain 3302); the K1 saves and the album lookup worked while locked (*Photos albums*).
+- **Exit criterion, proposed rewording** of "lock the phone during a 2 GB import and it finishes" (spike-remaining.md section 4: about 50 s at 40 MB/s, so it fails over USB as written):
+  - over Wi-Fi, lock the phone during a 2 GB import and it finishes inside a continued task (measured: a whole card, 360 files, with about 329 s locked, one run; iOS ended the task in two other runs, both as the Camera app was opened, so the engine pauses and continues);
+  - over USB, the import pauses at *did suspend* with no file failed, and finishes after the app returns.
+  
+  Shamil's call on 13 Nov.
+
+Could change with: decision 1; decision 4; why iOS ends tasks (both Wi-Fi expiries came as the Camera app was opened; unknown for the USB ones).
+
+## 14. Auto-import on connect
+
+Acceptance criteria:
+
+- **A setting, off by default** (proposal). Over USB the camera's USB mode can be fixed, so it stops asking *Select USB Connect Mode* on every plug (Shamil, 2 Nov, `usb.mode.fixable` yes); the setting's menu wording isn't recorded yet ("USB Connection Mode" is the plan's name). That makes auto-import on plug-in possible once the person has set it. The empty-state copy uses the camera's mode names (*Image Transfer (MSC)*, *Image Transfer (MTP)*) until the menu path is read off the camera (spike-remaining.md section 4; iteration-1-backlog.md section 6).
+- **Auto-import runs with the app in front:** over USB because of the 30 s suspension (section 13), and over Wi-Fi because the join needs the foreground (section 8). A proximity wake shows the reminder; it doesn't start an import.
+- *Remote Shoot (PC Remote)* over USB lists no files in ImageCaptureCore (4 Nov 12:10), so in that mode the app asks for MSC or MTP rather than auto-importing.
+
+Could change with: decision 1; decision 7 (MSC recommended in the app's copy).
+
+## 15. Accessibility, energy and memory
+
+Acceptance criteria:
+
+- **VoiceOver, Dynamic Type and Reduce Motion** across every screen, including onboarding, the pairing explanation, the join and the paused states: zero accessibility audit failures (proposal). The spike measured nothing here.
+- **Memory under 150 MB:** the spike peaked at 70–71 MB over USB and 61–106 MB over Wi-Fi (113 MB on the home network). Keep these as XCTest memory metrics on the integration suite.
+- **Energy:** not measured in the spike (Instruments' Energy gauge is a proposed drop). One whole-card Wi-Fi copy used 55 % → 50 % of the phone's battery for 15.25 GB (3 Nov 23:18, one run). The phone's thermal state was *serious* at the end of the 01:08 run while it was charging, and the last files were the fastest since the recovery, so heat isn't shown to slow the copy. Measure energy on the bench iPhone in this iteration.
+- **Update the budget table** with the measured numbers from spike-remaining.md section 4 before tuning against it.
+
+Could change with: the proposal's updated budget table (13 Nov).
+
+## 16. Still unmeasured that these iterations depend on
+
+Each item is open in the findings or spike-remaining.md. Build so that the answer can change the behaviour without a redesign.
+
+- **Multicast entitlement:** whether it was requested, and its status (findings, *Multicast entitlement*, all cells to fill; spike-remaining.md section 4). **The camera's announcement interval** on the home network: the runs listened for 5 s (spike-remaining.md section 2).
+- **A Bluetooth switch-on from the background, and whether iOS rejoins the camera's network by itself while the phone is locked,** or with no other known network in range (findings, *Wireless browsing in 1.0*, "Dropped (Shamil, 4 Nov)"; spike-remaining.md decision 3 and section 2).
+- **Leaving the camera's network with the app in the background,** and how long (d)'s stay should be (decision 2).
+- **Why the camera's Wi-Fi stayed up after the 5 Nov 01:13 leave,** and the write Creators' App uses to switch it off in about 1 s (findings, *How long an unused Wi-Fi stays up*, "Still open"; the optional Bluetooth trace, spike-remaining.md section 2).
+- **A second CC08 write while the status is 2, and a write during status 3** (findings, "Still open"; the status-2 test is proposed for dropping in spike-remaining.md section 7, and a write during status 3 needs a new build, section 2).
+- **The cause of the 4 Nov 12:34 failed join,** and whether a join fails while CC09's tag 0x0003 reads 0 (findings, *A phone that stays joined* and *The first join after a camera restart*).
+- **Why the first Bluetooth connect to an idle camera takes 5–6 s** (findings, "Still open"; spike-remaining.md section 2).
+- **The CBInternalErrorDomain 13 link drop** after a join (findings, *The first join after a camera restart*).
+- **The camera dropping its card and Wi-Fi with Creators' App open** (likely, not proven), and Creators' App's automatic transfer during our import (findings, *Wireless browsing in 1.0*; decision 6).
+- **Onboarding edge cases:** a reinstalled app, a declined or slow pairing confirmation, whether the camera asks every time, and the camera's confirmation wording (findings, *Without Creators' App's pairing*; spike-remaining.md section 4, menu wording).
+- **A joined phone with the Bluetooth link closed for more than about a minute,** anything past 15 minutes, and the camera's battery cost of a Wi-Fi left on (decision 2).
+- **Whether the camera itself drops an idle session after about 30 s** (findings, *PTP/IP and join facts*).
+- **ObjectAdded on the whole-card session,** and fetching 0xFFFFC001 (findings, *Transfer-while-shooting feasible later*). Not needed for 1.0.
+- **0x9211 throughput over whole files,** and whether shorter 0x9212 pauses work (not measured).
+- **Listing at 2,000 and 5,000 files:** projected, not measured, and the camera's indexing time at a larger card is unchecked (findings, *Wireless browsing in 1.0*, the listing table).
+- **The slow downloads on 5 Nov 01:09 (5.4–6.1 MB/s) and the two 26 s locked stalls** (findings, *With Creators' App paired again*; the 01:08 recovery).
+- **Why iOS ends a continued task:** both Wi-Fi expiries came as the Camera app was opened; Apple publishes no time limit (findings, *Wireless browsing in 1.0*; decision 4).
+- **Proximity:** a walk into range, the same-room case with the scan started after the lock, the Creators' App connected and quit rows, a relaunch after iOS ends a suspended app, a swipe-away, and a reboot (findings, *Proximity reminder in 1.0*, "Still to run"; spike-remaining.md section 2 D).
+- **The home network:** a second first-handshake time, a whole card, lock, resume, recovery, the Bluetooth switch-on with the camera on the home network, whether the phone keeps its internet, and the security cost of turning access authentication off (spike-remaining.md section 2 B and section 3).
+- **App Store review of Sony's operations and the Bluetooth hand-off:** nothing in the spike addresses it (decision 6).
