@@ -113,7 +113,11 @@ public struct PTPWriter: Sendable {
 
     public mutating func string(_ s: String) {
         if s.isEmpty { u8(0); return }
-        let units = Array(s.utf16) + [0]
+        var units = Array(s.utf16) + [0]
+        // The count byte holds at most 255 units, NUL included. A string cut at that limit must not end inside a
+        // surrogate pair: a lone high surrogate on the wire is ill-formed UTF-16 and reads back as U+FFFD, so
+        // end the string before the pair and keep the NUL instead.
+        if units.count > 255, (0xD800 ... 0xDBFF).contains(units[254]) { units[254] = 0 }
         u8(UInt8(min(units.count, 255)))
         for u in units.prefix(255) { u16(u) }
     }
