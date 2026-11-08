@@ -26,12 +26,40 @@ public struct CatalogueRecord: Sendable, Hashable, Codable {
     public var format: PTPMediaKind
     public var state: ObjectState
     public var location: ImportedLocation?
+    /// Bytes of a `.partial` file already on the phone, to resume from. Always 0 over USB in Iteration 1, where an
+    /// interrupted file is copied again from its start (decision 7); it is for Wi-Fi.
+    public var resumeOffset: UInt64
 
-    public init(identity: ObjectIdentity, format: PTPMediaKind, state: ObjectState, location: ImportedLocation? = nil) {
+    public init(identity: ObjectIdentity, format: PTPMediaKind, state: ObjectState, location: ImportedLocation? = nil,
+                resumeOffset: UInt64 = 0) {
         self.identity = identity
         self.format = format
         self.state = state
         self.location = location
+        self.resumeOffset = resumeOffset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case identity, format, state, location, resumeOffset
+    }
+
+    // Written by hand so a record encoded before `resumeOffset` existed still decodes (as 0).
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        identity = try c.decode(ObjectIdentity.self, forKey: .identity)
+        format = try c.decode(PTPMediaKind.self, forKey: .format)
+        state = try c.decode(ObjectState.self, forKey: .state)
+        location = try c.decodeIfPresent(ImportedLocation.self, forKey: .location)
+        resumeOffset = try c.decodeIfPresent(UInt64.self, forKey: .resumeOffset) ?? 0
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(identity, forKey: .identity)
+        try c.encode(format, forKey: .format)
+        try c.encode(state, forKey: .state)
+        try c.encodeIfPresent(location, forKey: .location)
+        try c.encode(resumeOffset, forKey: .resumeOffset)
     }
 }
 
@@ -59,8 +87,12 @@ public struct CardListing: Sendable, Hashable, Codable {
     }
 }
 
-/// The catalogue as the engine sees it. An actor, so no write ever runs on the main actor (backlog section 4); the
-/// SwiftData implementation will be a `ModelActor`.
+/// The catalogue as the engine sees it. An actor, so no write ever runs on the main actor (backlog section 4). Two
+/// implementations: `InMemoryCatalogue` (tests and previews, any platform) and `SwiftDataCatalogue`, a `ModelActor`
+/// (where SwiftData exists). Both pass the same contract tests (`CatalogueContractTests`).
+///
+/// Identity is unique per store: the store, not the schema, enforces it (a SwiftData schema with a unique attribute
+/// can't sync through CloudKit, which the proposal keeps open for a later opt-in; backlog section 4).
 public protocol CatalogueStore: Actor {
     /// The row for one identity, if there is one.
     func record(for identity: ObjectIdentity) throws -> CatalogueRecord?
