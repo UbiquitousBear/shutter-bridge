@@ -4,8 +4,8 @@ import Foundation
 public enum DestinationKind: String, Sendable, Hashable, Codable, CaseIterable {
     /// The Photos library, one asset per photo, in an album.
     case photos
-    /// A folder in the app's Documents folder, shown in Files under On My iPhone › the app: the path when Photos
-    /// access is denied (decision 9). Whether it can also be chosen when Photos is allowed is open, for Shamil.
+    /// A folder per camera in the app's Documents folder, shown in Files under On My iPhone › the app: chosen in the
+    /// destination setting, or forced when Photos access is denied or restricted (decision 9; Shamil, 8 Nov).
     case filesFolder
 }
 
