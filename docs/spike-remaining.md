@@ -23,7 +23,7 @@ Written Wednesday 4 Nov 2026 on spike build 14 (TestFlight 0.1 (14.1)). It rests
 
 - **Design decisions 1 and 3–9 (section 5) are accepted as recommended, as written.** Decision 2 was made on 4 Nov (d). Decision 5 is accepted as written: the home network is supported when the camera is already on it, after Iteration 3's core, and it stays subject to the group B runs and the check of what turning access authentication off costs in security.
 - **Decision 9 includes a Files-only import path, built in Iteration 1.** When Photos access is denied (*Don't Allow*, or *None* in Settings), imports go to a folder in Files (On My iPhone › the app's folder, as the spike's *Copy all RAW to Files* did), the app says so in the UI, and it offers a link to Settings to grant Photos access. The proposal's 1.0 list has no Files path, so this adds to Iteration 1's scope and changes the proposal. Whether Files is also offered as a chosen destination when Photos is allowed is not decided; it stays an open question for Shamil. The Photos *Don't Allow* run on a fresh install is still to be done (Shamil); its result may refine the wording, not the choice.
-- **Multicast entitlement: submit the request.** Shamil submits it to Apple; nothing waits on the answer. SSDP stays Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route.
+- **Multicast entitlement: submit the request.** Shamil submitted it on 8 Nov (reference 7BDQ7FRVM8); nothing waits on the answer. SSDP stays Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route.
 - **Bluetooth trace of Creators' App leaving: skipped.** Decision 2 rests on the measured behaviour; option (c) ((b) plus a Bluetooth write) is closed for 1.0. The write that makes the camera's Wi-Fi go off at once after a leave stays unknown.
 - **The proposed drops in section 7 are all confirmed as dropped.**
 - The go/no-go is still Fri 13 Nov. The design decisions are made; the production workspace still waits for the go/no-go.
@@ -118,7 +118,7 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 **Earlier items marked "to confirm" in the findings**
 - Was the 3 Nov 00:20 run really with PC Remote Function off?
 - Is "PC Remote over Wi-Fi Direct" the right name for the camera's own network? (The mode matrix says "method to confirm".)
-- The multicast request: Shamil submits it (7 Nov); record when, and under what reference, once it is submitted.
+- The multicast request: submitted on 8 Nov (reference 7BDQ7FRVM8; findings, *Multicast entitlement*). Record Apple's answer, and tick the capability on the App ID once granted.
 - What does the camera show on the first connection from the iPhone? (Not recorded.)
 - Was *Remote Power ON/OFF* on during the 2 Nov advertisement scans? (The advertisement section says not recorded; the menu table says On.)
 
@@ -156,7 +156,7 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 **Multicast entitlement: submit (decision, Shamil, 7 Nov).**
 - Passive listening worked without the key on both networks (TestFlight builds). Our own M-SEARCH never went out, and the camera ignores a unicast one, so whether it answers a multicast search is unknown.
 - The announcement interval isn't measured, and 4.65 s was inside a 5 s listen, so the proposal's 5 s target isn't shown. Active search would help if announcements are infrequent. A typed address is the fallback.
-- Shamil submits the request to Apple (the plan says turnaround is days to weeks), and nothing waits on the answer. Record SSDP as Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route. Fill the findings' entitlement section (with the date and reference once submitted), and reword the proposal's "must be approved before the first TestFlight external build" so that it no longer blocks.
+- Shamil submits the request to Apple (the plan says turnaround is days to weeks), and nothing waits on the answer. Record SSDP as Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route. The request went in on 8 Nov (reference 7BDQ7FRVM8), recorded in the findings' entitlement section; reword the proposal's "must be approved before the first TestFlight external build" so that it no longer blocks.
 
 **Go/no-go decision record** (findings, last section): date, decider, wireless scope, and the six result rows with the numbers in section 1.
 

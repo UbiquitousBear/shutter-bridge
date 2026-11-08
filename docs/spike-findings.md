@@ -759,10 +759,10 @@ Not in the plan; added on 1 Nov because every import should go into an album. St
 
 | Item | Value |
 | --- | --- |
-| Request submitted on | _to fill_ |
-| Reference | _to fill_ |
-| Status on 13 Nov 2026 | _to fill_ |
-| Key enabled in `Spike/Spike.entitlements` | _to fill_ |
+| Request submitted on | 8 Nov 2026 (Shamil, as the team's Account Holder; one request covers the team's App IDs) |
+| Reference | 7BDQ7FRVM8 |
+| Status on 13 Nov 2026 | _to fill_ (pending on 8 Nov) |
+| Key enabled in `Spike/Spike.entitlements` | No: the key stays commented out until Apple grants it and the capability is on the App ID, or signing fails |
 
 ## Go/no-go decision record
 

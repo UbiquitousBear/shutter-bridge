@@ -55,7 +55,7 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
       decoding, device property and Sony vendor commands, fixture tests, seeded round trips and a Sony whole-card session plan (133 tests pass with Swift 6.4 on Linux)
 - [x] Spike app complete for days 1–10; compiles with Xcode 27 in CI, not yet run on a phone
 - [x] Spike runbook, findings template and a draft Iteration 1 backlog
-- [ ] Multicast entitlement requested (day 1) and its status noted
+- [x] Multicast entitlement requested (8 Nov, reference 7BDQ7FRVM8; pending) and its status noted
 - [ ] Spike findings (day 10, 13 Nov 2026)
 - [ ] Go / no-go on wireless scope for 1.0
 - [ ] Production workspace (six packages) — after the go/no-go
