@@ -7,13 +7,16 @@ SWIFT_IMAGE   := swift:6.4-noble
 spike:
 	cd Spike && xcodegen generate
 
-# Run the pure-Swift PTPKit tests; works on macOS and on Linux with a Swift 6.2+ toolchain.
+# Run the pure-Swift tests of PTPKit (the PTP codec) and BLEKit (Sony's Bluetooth parsers); works on macOS and on
+# Linux with a Swift 6.2+ toolchain.
 test:
 	cd Packages/PTPKit && swift test
+	cd Packages/BLEKit && swift test
 
 # The same tests in the official Swift image (Swift 6.4, as in Xcode 27), for machines without a toolchain.
 test-docker:
 	docker run --rm -v "$(CURDIR)":/src -w /src/Packages/PTPKit $(SWIFT_IMAGE) swift test
+	docker run --rm -v "$(CURDIR)":/src -w /src/Packages/BLEKit $(SWIFT_IMAGE) swift test
 
 # Copy captured camera bytes into the PTPKit test bundle under the names its fixture tests look for:
 # Fixtures/a7c2/<link>/<name>.bin -> $(FIXTURE_TESTS)/a7c2-<link>-<name>.bin
@@ -36,4 +39,4 @@ open: spike
 	open Spike/Spike.xcodeproj
 
 clean:
-	rm -rf Spike/Spike.xcodeproj Packages/PTPKit/.build
+	rm -rf Spike/Spike.xcodeproj Packages/PTPKit/.build Packages/BLEKit/.build
