@@ -110,9 +110,14 @@ jobs:
             schemes="$(cd "$dir" && xcodebuild -list -json 2>/dev/null | python3 -c 'import json, sys; s = sys.stdin.read(); i = s.find("{"); d = json.loads(s[i:]) if i >= 0 else {}; print("\n".join((d.get("workspace") or d.get("project") or {}).get("schemes", [])))' || true)"
             if grep -qx "$pkg-Package" <<<"$schemes"; then scheme="$pkg-Package"; else scheme="$pkg"; fi
             echo "scheme: $scheme"
+            raw="$RUNNER_TEMP/$pkg-test.log"
             if ! (cd "$dir" && xcodebuild test -scheme "$scheme" -destination "platform=iOS Simulator,id=$SIM" \
-                    | xcbeautify --renderer github-actions); then
+                    | tee "$raw" | xcbeautify --renderer github-actions); then
               failed+=("$pkg")
+              # xcbeautify shortens Swift Testing failures to "Recorded an issue", so print the raw lines that
+              # name the test and the expectation that failed.
+              echo "--- $pkg: failures from the raw xcodebuild output ---"
+              grep -E 'recorded an issue|Expectation failed|failed after|error:' "$raw" | head -n 80 || true
             fi
             echo "::endgroup::"
           done

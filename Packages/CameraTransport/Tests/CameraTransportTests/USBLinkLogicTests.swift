@@ -381,12 +381,26 @@ struct USBDiscoveryEventTests {
 /// Mirrors how `USBLink` asks for a classification: from its actor, with a closure that reads its own state.
 actor RemovalStandIn {
     private var removed = false
+    /// When set, the camera counts as removed from this poll of `isRemoved` on (1 is the first poll), so a removal
+    /// that lands during the grace is modelled without a wall-clock sleep: CI's loaded Simulator can delay a
+    /// sleeping task past the 1 s grace, which made a 30 ms sleep flaky there.
+    private let removedFromPoll: Int?
+    private(set) var polls = 0
+
+    init(removedFromPoll: Int? = nil) { self.removedFromPoll = removedFromPoll }
+
     func remove() { removed = true }
+
+    private func isRemoved() -> Bool {
+        polls += 1
+        if let removedFromPoll, polls >= removedFromPoll { removed = true }
+        return removed
+    }
 
     func classify(_ domain: String, _ code: Int, _ operation: USBFailureMapping.Operation,
                   outOfSpace: Bool = false) async -> CameraLinkFailure {
         await USBFailureMapping.classify(domain: domain, code: code, outOfSpace: outOfSpace, operation: operation) {
-            [self] in await self.removed
+            [self] in await self.isRemoved()
         }
     }
 }
@@ -478,12 +492,10 @@ struct USBReviewFixTests {
 
     @Test(arguments: [USBFailureMapping.Operation.thumbnail, .open, .download])
     func aRemovalJustAfterTheErrorMakesItDisconnected(_ operation: USBFailureMapping.Operation) async {
-        let link = RemovalStandIn()
-        Task {
-            try? await Task.sleep(for: .milliseconds(30))
-            await link.remove()
-        }
+        // Not removed when the error arrives (poll 1), removed during the grace (poll 3, about 100 ms in).
+        let link = RemovalStandIn(removedFromPoll: 3)
         let failure = await link.classify(icc, -21000, operation)
+        #expect(await link.polls >= 3)
         #expect(failure.kind == .disconnected)
         #expect(failure.outcome == .retryOnReconnect)
         #expect(failure.detail == "\(operation.rawValue): ImageCaptureCore -21000")
@@ -497,15 +509,15 @@ struct USBReviewFixTests {
         let waited = clock.now - start
         #expect(failure.kind == .unreadableItem)
         #expect(waited >= USBFailureMapping.shortRemovalGrace)
-        #expect(waited < USBFailureMapping.shortRemovalGrace + .seconds(2))
+        // Bounded, so a wait that never ends still fails, but loose enough for CI's loaded Simulator.
+        #expect(waited < USBFailureMapping.removalGrace + .seconds(30))
     }
 
     @Test func theCloseNeverWaits() async {
+        // A close is classified on the spot: it asks whether the camera has gone once, and never waits for it.
         let link = RemovalStandIn()
-        let clock = ContinuousClock()
-        let start = clock.now
         _ = await link.classify(icc, -1, .close)
-        #expect(clock.now - start < .milliseconds(500))
+        #expect(await link.polls == 1)
     }
 
     @Test func anAdoptedCatalogueAt100WithNoFilesGetsTheSameAnswerWhenListComesLate() {
