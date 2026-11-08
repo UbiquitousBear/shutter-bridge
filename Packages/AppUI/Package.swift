@@ -28,6 +28,9 @@ let package = Package(
         // Settings screens use PhotosBridge's destination rule and destinations.
         .package(path: "../Catalogue"),
         .package(path: "../PhotosBridge"),
+        // For AppUITests only: the models driven end to end against the simulated camera (`SimulatedCameraLink`).
+        // No product of this package names the simulator; PTPSimulator is a test-only package.
+        .package(path: "../PTPSimulator"),
     ],
     targets: [
         .target(
@@ -39,7 +42,15 @@ let package = Package(
                 .product(name: "PhotosBridge", package: "PhotosBridge"),
             ]
         ),
-        .testTarget(name: "AppUITests", dependencies: ["AppUI"]),
+        .testTarget(
+            name: "AppUITests",
+            dependencies: [
+                "AppUI",
+                .product(name: "SimulatedLink", package: "PTPSimulator"),
+                // The scripted card the simulated link serves.
+                .product(name: "PTPSimulator", package: "PTPSimulator"),
+            ]
+        ),
     ],
     swiftLanguageModes: [.v6]
 )
