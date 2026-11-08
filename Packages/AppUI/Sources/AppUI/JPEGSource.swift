@@ -1,5 +1,6 @@
 import CameraTransport
 import Foundation
+import PhotosBridge
 
 /// What *Copy as JPEG* and *Share as JPEG…* fetch for a file, and what they do with it (backlog section 6, *What
 /// is copied or shared*).
@@ -70,30 +71,36 @@ public enum JPEGPath: String, Sendable, Hashable, CaseIterable {
 /// Picks the source for each file in one listing (backlog section 6). Built once per listing, so pressing a file
 /// costs a dictionary lookup, not a scan of the card.
 ///
-/// The pairing is section 5's rule, as PhotosBridge's `RawPairingRule` states it: a RAW and a JPG in the same folder,
-/// with the same stem (case-insensitively), whose capture dates are within 1 s; a file without a capture date never
-/// pairs (a missed pair costs a render, a wrong pair would copy another photo). When more than one JPG qualifies,
-/// the closest in time wins, then the first in the listing. **Kept in step by hand:** `RawPairingRule` isn't on
-/// this branch's base yet (PR #80); when it is, this can call it instead. Only a JPG pair counts here, as the 8 Nov
-/// decision says: a RAW whose partner is a HIF is rendered from the RAW (an open point for Shamil).
+/// The pairing is section 5's rule itself, PhotosBridge's `RawPairingRule`: a RAW and a JPG in the same folder, with
+/// the same stem (case-insensitively), whose capture dates are within 1 s; a file without a capture date never pairs
+/// (a missed pair costs a render, a wrong pair would copy another photo). When more than one JPG qualifies, the
+/// closest in time wins, then the first in the listing; each JPG pairs with one RAW at most. Only a JPG pair counts
+/// here, as the 8 Nov decision says: the rule is run over the RAWs and JPGs alone, so a RAW whose partner is a HIF is
+/// rendered from the RAW (an open point for Shamil).
 public struct JPEGSourceRule: Sendable {
-    /// How far apart a RAW's and a JPG's capture dates may be, as in `RawPairingRule`.
-    public static let pairTolerance: TimeInterval = 1
+    /// How far apart a RAW's and a JPG's capture dates may be: `RawPairingRule`'s default.
+    public static let pairTolerance: TimeInterval = RawPairingRule().tolerance
 
-    private struct StemKey: Hashable {
-        let folder: String
-        let stem: String
+    /// A camera item as the pairing rule sees it.
+    private struct Candidate: PairableFile {
+        let item: CameraItem
+        var pairingFolder: String { item.folder }
+        var pairingFilename: String { item.name }
+        var pairingCaptureDate: Date? { item.captureDate }
     }
 
-    /// JPGs by folder and upper-cased stem, in listing order.
-    private let jpegs: [StemKey: [CameraItem]]
+    /// Each paired RAW's JPG.
+    private let pairs: [CameraItem.ID: CameraItem]
 
     public init(listing: [CameraItem]) {
-        var jpegs: [StemKey: [CameraItem]] = [:]
-        for item in listing where item.format == .jpeg {
-            jpegs[Self.key(item), default: []].append(item)
+        let candidates = listing.filter { $0.format == .raw || $0.format == .jpeg }.map(Candidate.init)
+        var pairs: [CameraItem.ID: CameraItem] = [:]
+        for unit in RawPairingRule().units(candidates) {
+            guard case let .pair(raw, processed) = unit, raw.item.format == .raw, processed.item.format == .jpeg
+            else { continue }
+            pairs[raw.item.id] = processed.item
         }
-        self.jpegs = jpegs
+        self.pairs = pairs
     }
 
     /// The source for `item`, or nil when it can't be copied as a JPEG (video, sidecars, anything not a still).
@@ -115,25 +122,13 @@ public struct JPEGSourceRule: Sendable {
 
     /// The JPG that pairs with a RAW, if one is on the card.
     public func pairedJPEG(of raw: CameraItem) -> CameraItem? {
-        guard raw.format == .raw, let rawDate = raw.captureDate else { return nil }
-        var best: (item: CameraItem, gap: TimeInterval)?
-        for candidate in jpegs[Self.key(raw)] ?? [] {
-            guard let date = candidate.captureDate else { continue }
-            let gap = abs(date.timeIntervalSince(rawDate))
-            guard gap <= Self.pairTolerance else { continue }
-            if best == nil || gap < best!.gap { best = (candidate, gap) }
-        }
-        return best?.item
-    }
-
-    private static func key(_ item: CameraItem) -> StemKey {
-        StemKey(folder: item.folder, stem: stem(of: item.name).uppercased())
+        guard raw.format == .raw else { return nil }
+        return pairs[raw.id]
     }
 
     /// The name without its last extension: "DSC00001.ARW" → "DSC00001". A name with no extension, or one that starts
-    /// with its only dot, is its own stem (as `RawPairingRule.stem(ofFilename:)`).
+    /// with its only dot, is its own stem (`RawPairingRule.stem(ofFilename:)`).
     public static func stem(of name: String) -> String {
-        guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return name }
-        return String(name[..<dot])
+        RawPairingRule.stem(ofFilename: name)
     }
 }

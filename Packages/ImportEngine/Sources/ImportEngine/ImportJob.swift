@@ -3,8 +3,8 @@ import Catalogue
 import Foundation
 import PhotosBridge
 
-/// Why a file was left out.
-enum SkipReason: Sendable, Hashable {
+/// Why a file was left out. Public for the Import screen's rows (`ImportFileStatus`).
+public enum ImportSkipReason: Sendable, Hashable {
     /// The link's failure has the outcome *skip this file* (or the file wasn't on the card after a replug).
     case link(CameraLinkFailure.Kind)
     /// Picked in Browse but not a still: 1.0 imports stills only.
@@ -13,12 +13,15 @@ enum SkipReason: Sendable, Hashable {
     case noCaptureDate
 }
 
-/// Why a file failed: real errors only, after the retries (decision 4).
-enum FailureReason: Sendable, Hashable {
+/// Why a file failed: real errors only, after the retries (decision 4). Public for the Import screen's rows.
+public enum ImportFailureReason: Sendable, Hashable {
     case link(CameraLinkFailure.Kind)
     case sizeMismatch(expected: UInt64, actual: UInt64)
     case destination(ImportDestinationFailure)
 }
+
+typealias SkipReason = ImportSkipReason
+typealias FailureReason = ImportFailureReason
 
 enum FileOutcome: Sendable, Hashable {
     case imported(ImportedLocation?)

@@ -1,4 +1,5 @@
 import CameraTransport
+import Catalogue
 import Foundation
 import Observation
 
@@ -42,12 +43,26 @@ public struct JPEGShare: Sendable, Hashable, Identifiable {
     public var folder: JPEGScratch.ActionFolder
 }
 
-/// The thin Browse screen's model (backlog section 6, *Order*: the first slice): opens the link, waits for the card
-/// with the measured expectations, shows the card newest first by day, fetches thumbnails through the link, and runs
-/// *Copy as JPEG* and *Share as JPEG…*. No selection, import, filters or last-known card yet.
+/// What Browse reads from the catalogue (backlog section 6): the last-known card and the already-imported badge.
+public struct BrowseCatalogue: Sendable {
+    public var store: any CatalogueStore
+    /// The camera's key, worked out once the link is in hand (`CameraKeys`).
+    public var cameraKey: CameraKeying
+
+    public init(store: any CatalogueStore, cameraKey: @escaping CameraKeying) {
+        self.store = store
+        self.cameraKey = cameraKey
+    }
+}
+
+/// The Browse screen's model (backlog section 6): opens the link, shows the last-known card from the catalogue at
+/// once (marked as last-known) while the card is read with the measured expectations, replaces it with the live
+/// listing and saves that, shows the card newest first by day with the already-imported badge, filters it (new only,
+/// type, date range), selects (one by one, or *Select all new*) with the sticky bar's count and size, hands the
+/// selection to the import, fetches thumbnails through the link, and runs *Copy as JPEG* and *Share as JPEG…*.
 ///
-/// The screen's `.task` calls `run()`, which keeps the link open until the task is cancelled (the screen went away)
-/// and then closes it.
+/// The screen's `.task` calls `run()`, which holds the link (`LinkLeases`) until the task is cancelled (the screen
+/// went away) and then lets go of it; the link closes unless an import still uses it.
 @MainActor
 @Observable
 public final class BrowseModel {
@@ -62,15 +77,56 @@ public final class BrowseModel {
         case gone
     }
 
+    /// Why a file can't be selected.
+    public enum SelectionBlock: Sendable, Hashable {
+        case video
+        case notAPhoto
+        case imported
+        /// No capture date, so no identity: the engine can't import it yet (backlog section 3).
+        case noCaptureDate
+        /// The card isn't read yet (the last-known card, or still reading).
+        case cardNotRead
+    }
+
     public let camera: CameraDescriptor
     public private(set) var phase: Phase
+    /// The card as the grid shows it: filtered, by day, newest first.
     public private(set) var sections: [CardSection] = []
+    /// When the shown card was listed, while it is the catalogue's last-known card rather than the live one; nil
+    /// once the live listing has replaced it (or when there was none).
+    public private(set) var lastKnownListedAt: Date?
+    /// The files the catalogue has as imported (by identity, the engine's rule), for the badge.
+    public private(set) var imported: Set<CameraItem.ID> = []
+    /// The picked files, which the sticky bar counts and Import hands over.
+    public private(set) var selection: Set<CameraItem.ID> = []
+    /// The selecting mode of the grid: taps select instead of opening anything. Leaving it clears the selection.
+    public var isSelecting = false {
+        didSet { if !isSelecting { selection = [] } }
+    }
+    /// What the grid shows of the card.
+    public var filter = BrowseFilter() {
+        didSet { if filter != oldValue { rebuildSections() } }
+    }
+    /// True while Import is handing the selection over (Photos may be asking).
+    public private(set) var isStartingImport = false
+    /// What came of the last Import tap, for a strip at the top; cleared with `dismissImportNotice()`.
+    public private(set) var importNotice: String?
     public private(set) var action: JPEGActionState = .idle
     /// Set when a JPEG is ready to share; the screen presents the share sheet and calls `shareFinished()`.
     public private(set) var share: JPEGShare?
 
     @ObservationIgnored private let openLink: @Sendable () async throws(CameraLinkFailure) -> any CameraLink
     @ObservationIgnored private let services: BrowseServices
+    @ObservationIgnored private let catalogue: BrowseCatalogue?
+    @ObservationIgnored private weak var importer: (any BrowseImporting)?
+    @ObservationIgnored private let leases: LinkLeases
+    /// The card shown: the live listing, or the last-known one while the card is read.
+    @ObservationIgnored private var items: [CameraItem] = []
+    @ObservationIgnored private var itemsByID: [CameraItem.ID: CameraItem] = [:]
+    @ObservationIgnored private var cameraKey: CameraKey?
+    /// The zone identities are made in for this screen (fixed when the link opens, as the engine fixes its own per
+    /// job), so Browse's badges follow the engine's rule.
+    @ObservationIgnored private var zone = TimeZone.current
     @ObservationIgnored private let onGone: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let calendar: Calendar
@@ -84,11 +140,20 @@ public final class BrowseModel {
     /// Said instead of nothing when the action in progress ends as cancelled, because the app cancelled it.
     @ObservationIgnored private var cancelMessage: String?
 
+    /// - Parameters:
+    ///   - catalogue: The last-known card and the already-imported badge; without it Browse shows neither.
+    ///   - importer: Where Import hands the selection (the app's `ImportModel`, held weakly); without it Import does
+    ///     nothing.
+    ///   - leases: Shared with the import, so leaving Browse doesn't close a link a job still uses. A fresh one (the
+    ///     default) closes the link when Browse goes.
     public init(
         camera: CameraDescriptor,
         openLink: @escaping @Sendable () async throws(CameraLinkFailure) -> any CameraLink,
         services: BrowseServices,
         onGone: @escaping @MainActor (CameraDescriptor.ID) -> Void,
+        catalogue: BrowseCatalogue? = nil,
+        importer: (any BrowseImporting)? = nil,
+        leases: LinkLeases = LinkLeases(),
         now: @escaping @Sendable () -> Date = { Date() },
         calendar: Calendar = .current
     ) {
@@ -96,6 +161,9 @@ public final class BrowseModel {
         self.openLink = openLink
         self.services = services
         self.onGone = onGone
+        self.catalogue = catalogue
+        self.importer = importer
+        self.leases = leases
         self.now = now
         self.calendar = calendar
         phase = .reading(since: now())
@@ -103,8 +171,9 @@ public final class BrowseModel {
 
     // MARK: - Lifecycle
 
-    /// Opens the link, lists the card and follows the link's events until the calling task is cancelled, then
-    /// closes the link. A second call while one runs does nothing.
+    /// Opens the link, shows the last-known card, lists the card and follows the link's events until the calling task
+    /// is cancelled, then lets go of the link (closing it unless an import holds it). A second call while one runs
+    /// does nothing.
     public func run() async {
         guard !isRunning, phase != .gone else { return }
         isRunning = true
@@ -118,6 +187,13 @@ public final class BrowseModel {
             return
         }
         self.link = link
+        leases.acquire(link)
+        zone = TimeZone(identifier: TimeZone.current.identifier) ?? TimeZone.current
+        if let catalogue {
+            let key = await catalogue.cameraKey(camera, link)
+            cameraKey = key
+            await showLastKnown(for: key, from: catalogue.store)
+        }
         let events = link.events
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.follow(events) }
@@ -129,7 +205,7 @@ public final class BrowseModel {
         loadTask = nil
         actionTask?.cancel()
         self.link = nil
-        await link.close()
+        await leases.release(link)
     }
 
     /// Lists again after a failure.
@@ -151,10 +227,15 @@ public final class BrowseModel {
             let items = try await link.list()
             guard !Task.isCancelled, phase != .gone else { return }
             rule = JPEGSourceRule(listing: items)
-            sections = CardLayout.sections(items, calendar: calendar)
+            // The last-known card's Imported badges carry over by identity, so the grid, New Only and Select All
+            // New never see the live card without them while the catalogue is asked again.
+            show(items, carryingImported: true)
+            lastKnownListedAt = nil
             phase = .listed
             services.log.note("browse: listed \(items.count) files in \(Self.seconds(since: start)) s "
                 + "(\(CamerasWording.modeLine(camera.mode)) at discovery)")
+            await refreshImportedStates()
+            await saveListing(items)
         } catch {
             guard !Task.isCancelled else { return }
             services.log.note("browse: listing ended after \(Self.seconds(since: start)) s: \(error)")
@@ -209,9 +290,10 @@ public final class BrowseModel {
 
     // MARK: - Copy as JPEG and Share as JPEG…
 
-    /// Whether a file offers the two actions: a still, while the card is listed and no other action runs.
+    /// Whether a file offers the two actions: a still of the live card (not the last-known one, whose files the link
+    /// can't fetch by handle).
     public func offersJPEGActions(_ item: CameraItem) -> Bool {
-        CardLayout.kind(of: item).offersJPEGActions
+        CardLayout.kind(of: item).offersJPEGActions && phase == .listed
     }
 
     public var isBusy: Bool { action.isWorking || share != nil }
@@ -334,6 +416,254 @@ public final class BrowseModel {
                 action = JPEGWording.failed(failure).map(JPEGActionState.failed) ?? .idle
             }
         }
+    }
+
+    // MARK: - The card shown, the last-known card and the catalogue
+
+    /// Whether the card shown has any files at all (as opposed to none matching the filters). Stored, so the screen
+    /// is told when it changes.
+    public private(set) var hasFiles = false
+
+    /// The first and last capture dates on the card, for the date filter's bounds; nil without dated files.
+    public var dateBounds: ClosedRange<Date>? {
+        let dates = items.compactMap(\.captureDate)
+        guard let first = dates.min(), let last = dates.max() else { return nil }
+        return first ... last
+    }
+
+    /// The date filter's pickers' range: the whole days from the card's first capture date to its last.
+    public var dayBounds: ClosedRange<Date>? {
+        dateBounds.map { BrowseFilter.days(from: $0.lowerBound, through: $0.upperBound, calendar: calendar) }
+    }
+
+    /// The date filter's switch: on limits the card to its whole span of days, which the pickers then narrow; off
+    /// shows every date. Turning it on does nothing when no file has a capture date.
+    public var limitsDates: Bool {
+        get { filter.dateRange != nil }
+        set {
+            guard newValue != limitsDates else { return }
+            if newValue, let bounds = dateBounds {
+                filter.limitDates(from: bounds.lowerBound, to: bounds.upperBound, calendar: calendar)
+            } else if !newValue {
+                filter.dateRange = nil
+            }
+        }
+    }
+
+    /// The date filter's first day (its From picker), moving the last day along if it would come first.
+    public var firstDay: Date {
+        get { filter.dateRange?.lowerBound ?? dayBounds?.lowerBound ?? now() }
+        set {
+            guard let bounds = dateBounds else { return }
+            filter.setFirstDay(newValue, bounds: bounds, calendar: calendar)
+        }
+    }
+
+    /// The date filter's last day (its To picker), moving the first day along if it would come after.
+    public var lastDay: Date {
+        get { filter.dateRange?.upperBound ?? dayBounds?.upperBound ?? now() }
+        set {
+            guard let bounds = dateBounds else { return }
+            filter.setLastDay(newValue, bounds: bounds, calendar: calendar)
+        }
+    }
+
+    public func isImported(_ item: CameraItem) -> Bool { imported.contains(item.id) }
+
+    /// Reads the catalogue's states for the card shown: the badge, and selected files that are now imported drop out
+    /// of the selection. Called after each listing, and by the app when an import has imported more files
+    /// (`ImportModel.importedRevision`).
+    public func refreshImportedStates() async {
+        guard let catalogue, let key = cameraKey, !items.isEmpty else { return }
+        let shown = items
+        let zone = self.zone
+        var byIdentity: [ObjectIdentity: CameraItem.ID] = [:]
+        for item in shown {
+            if let identity = item.identity(camera: key, timeZone: zone) { byIdentity[identity] = item.id }
+        }
+        guard !byIdentity.isEmpty else { return }
+        let states: [ObjectIdentity: ObjectState]
+        do {
+            states = try await catalogue.store.states(of: Array(byIdentity.keys))
+        } catch {
+            services.log.note("browse: the catalogue couldn't be read: \(type(of: error))")
+            return
+        }
+        // The card may have been replaced while the catalogue answered.
+        guard shown == items else { return }
+        var now: Set<CameraItem.ID> = []
+        for (identity, id) in byIdentity where states[identity] == .imported { now.insert(id) }
+        if now != imported { imported = now }
+        if !selection.isDisjoint(with: now) { selection.subtract(now) }
+        if filter.newOnly { rebuildSections() }
+    }
+
+    /// The catalogue's last listing of this camera, shown at once while the card is read (decision 7).
+    private func showLastKnown(for key: CameraKey, from store: any CatalogueStore) async {
+        let listing: CardListing?
+        do {
+            listing = try await store.lastListing(for: key)
+        } catch {
+            services.log.note("browse: no last-known card: \(type(of: error))")
+            return
+        }
+        guard let listing, case .reading = phase, items.isEmpty else { return }
+        let zone = self.zone
+        let known = listing.entries.map { entry in
+            let identity = entry.identity
+            return CameraItem(id: .init(rawValue: "last-known:\(identity.folder)/\(identity.filename)"),
+                              folder: identity.folder, name: identity.filename, size: identity.size,
+                              captureDate: identity.captureDate.date(in: zone), format: entry.format)
+        }
+        lastKnownListedAt = listing.listedAt
+        show(known)
+        services.log.note("browse: showing the last-known card (\(known.count) files)")
+        await refreshImportedStates()
+    }
+
+    /// Replaces the card shown, keeping only the selection that is still on it. With `carryingImported`, files of
+    /// the new card whose identity was marked imported on the old one stay marked (the last-known card and the live
+    /// listing have different item IDs), until `refreshImportedStates()` answers from the catalogue.
+    private func show(_ newItems: [CameraItem], carryingImported: Bool = false) {
+        let carried = carryingImported ? importedIdentities() : []
+        items = newItems
+        if hasFiles == newItems.isEmpty { hasFiles = !newItems.isEmpty }
+        itemsByID = Dictionary(newItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let ids = Set(itemsByID.keys)
+        if !selection.isSubset(of: ids) { selection.formIntersection(ids) }
+        if let key = cameraKey, !carried.isEmpty {
+            let zone = self.zone
+            let now = Set(newItems.filter { item in
+                item.identity(camera: key, timeZone: zone).map(carried.contains) ?? false
+            }.map(\.id))
+            if now != imported { imported = now }
+            if !selection.isDisjoint(with: now) { selection.subtract(now) }
+        } else if !imported.isSubset(of: ids) {
+            imported.formIntersection(ids)
+        }
+        rebuildSections()
+    }
+
+    /// The identities of the files shown as imported.
+    private func importedIdentities() -> Set<ObjectIdentity> {
+        guard let key = cameraKey, !imported.isEmpty else { return [] }
+        let zone = self.zone
+        return Set(items.filter { imported.contains($0.id) }.compactMap { $0.identity(camera: key, timeZone: zone) })
+    }
+
+    private func rebuildSections() {
+        let filter = self.filter
+        let shown = filter.isActive ? items.filter { filter.admits($0, isImported: imported.contains($0.id)) } : items
+        sections = CardLayout.sections(shown, calendar: calendar)
+    }
+
+    /// The live listing, saved as the camera's last-known card for next time (names, dates, sizes; files without a
+    /// capture date have no identity and aren't kept).
+    private func saveListing(_ listed: [CameraItem]) async {
+        guard let catalogue, let key = cameraKey else { return }
+        let zone = self.zone
+        let entries = listed.compactMap { item in
+            item.identity(camera: key, timeZone: zone).map { CardListing.Entry(identity: $0, format: item.format) }
+        }
+        do {
+            try await catalogue.store.saveListing(CardListing(camera: key, listedAt: now(), entries: entries))
+        } catch {
+            services.log.note("browse: the listing couldn't be saved: \(type(of: error))")
+        }
+    }
+
+    // MARK: - Selection
+
+    /// Why `item` can't be selected; nil when it can.
+    public func selectionBlock(for item: CameraItem) -> SelectionBlock? {
+        switch CardLayout.kind(of: item) {
+        case .video: return .video
+        case .other: return .notAPhoto
+        case .photo: break
+        }
+        guard phase == .listed, lastKnownListedAt == nil else { return .cardNotRead }
+        if imported.contains(item.id) { return .imported }
+        if item.captureDate == nil { return .noCaptureDate }
+        return nil
+    }
+
+    public func canSelect(_ item: CameraItem) -> Bool { selectionBlock(for: item) == nil }
+
+    public func isSelected(_ item: CameraItem) -> Bool { selection.contains(item.id) }
+
+    /// Selects or deselects one file; files that can't be imported aren't selected.
+    public func toggleSelection(_ item: CameraItem) {
+        if selection.contains(item.id) {
+            selection.remove(item.id)
+        } else if canSelect(item) {
+            selection.insert(item.id)
+        }
+    }
+
+    /// Selects every file the filters show that can be imported: stills not yet imported and with a capture date,
+    /// so video, other files, imported and undated files are skipped (backlog section 6). Enters the selecting mode.
+    public func selectAllNew() {
+        var picked = selection
+        for section in sections {
+            for item in section.items where canSelect(item) { picked.insert(item.id) }
+        }
+        isSelecting = true
+        selection = picked
+    }
+
+    public func clearSelection() { selection = [] }
+
+    /// The selected files in the card's order (newest first), as Import hands them over.
+    public var selectedItems: [CameraItem] {
+        guard !selection.isEmpty else { return [] }
+        return items.newestFirst().filter { selection.contains($0.id) }
+    }
+
+    /// The sticky bar: how many are selected and their total size.
+    public var selectionSummary: SelectionSummary {
+        var bytes: UInt64 = 0
+        var count = 0
+        for id in selection {
+            guard let item = itemsByID[id] else { continue }
+            bytes += item.size
+            count += 1
+        }
+        return SelectionSummary(count: count, bytes: bytes)
+    }
+
+    public var canImport: Bool {
+        !selection.isEmpty && !isStartingImport && importer != nil && link != nil && cameraKey != nil
+            && phase == .listed
+    }
+
+    /// Hands the selection to the import: a new job, or the end of the running one. The selection clears once the
+    /// files are in the job; Photos access may be asked for first (the first Import). Returns what came of it (the
+    /// screen opens the Import screen when a job started), or nil when there was nothing to hand over.
+    @discardableResult
+    public func importSelected() async -> ImportRequestOutcome? {
+        guard canImport, let importer, let link, let key = cameraKey else { return nil }
+        let picked = selectedItems
+        isStartingImport = true
+        defer { isStartingImport = false }
+        let outcome = await importer.importItems(picked, from: ImportCamera(descriptor: camera, key: key), link: link)
+        switch outcome {
+        case .started, .appended, .nothingNew:
+            selection.subtract(picked.map(\.id))
+            if selection.isEmpty { isSelecting = false }
+        case .busyWithAnotherCamera, .stillStarting, .failed:
+            break
+        }
+        importNotice = BrowseWording.importRequested(outcome)
+        return outcome
+    }
+
+    public func dismissImportNotice() { importNotice = nil }
+
+    /// The grid cell's VoiceOver label (`date` formatted by the screen).
+    public func accessibilityLabel(for item: CameraItem, date: String?) -> String {
+        BrowseWording.cellAccessibility(name: item.name, date: date, kind: CardLayout.kind(of: item),
+                                        isImported: isImported(item), isSelected: isSelected(item),
+                                        selectable: isSelecting && canSelect(item))
     }
 
     // MARK: - For tests

@@ -73,7 +73,11 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
       the packages' public shapes and their tests on Linux, the hand-written app project showing a placeholder
       Cameras screen, and CI building the app and testing every package on Linux and in the iOS Simulator
 - [ ] Iteration 1, wired import (16 Nov – 11 Dec): `USBLink`, the engine's happy path, the catalogue, Photos and
-      the Files folder, the Cameras, Browse and Import screens, `PTPSimulator` v1, Xcode Cloud
+      the Files folder, the Cameras, Browse and Import screens, `PTPSimulator` v1, Xcode Cloud. Built ahead of
+      plan (8 Nov) and not yet run on the bench iPhone: `USBLink`, the engine, the catalogue, Photos and the Files
+      folder, and the app wired end to end over them (Cameras, Browse with selection, filters and the last-known
+      card, Import, and the destination setting in Settings); the models are tested on Linux, the screens only
+      compiled by CI
 
 ## Decisions so far
 

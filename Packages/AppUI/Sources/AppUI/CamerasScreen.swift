@@ -3,37 +3,38 @@ import CameraTransport
 import SwiftUI
 import UIKit
 
-/// The live root on iPhone: the Cameras screen in a navigation stack, Browse pushed onto it. Discovery starts when
-/// the app becomes active (and again after a refusal, in case access was turned on in Settings); temporary JPEG
-/// folders left by a crash are removed once per launch.
-struct LiveRoot: View {
-    @State private var cameras = CamerasModel(discovery: USBCameraBrowser(), services: .system())
-    @Environment(\.scenePhase) private var scenePhase
-
-    var body: some View {
-        NavigationStack(path: $cameras.path) {
-            CamerasScreen(model: cameras)
-                .navigationDestination(for: CameraDescriptor.self) { camera in
-                    BrowseScreen(model: cameras.browseModel(for: camera))
-                }
-        }
-        .task { cameras.launch() }
-        .onChange(of: scenePhase, initial: true) { _, phase in
-            guard phase == .active else { return }
-            Task { await cameras.becameActive() }
-        }
-    }
-}
-
 /// The Cameras screen (backlog section 6): the connected cameras with a USB-C badge and the mode in the camera's
-/// wording, the empty state, and a clear message when ImageCaptureCore's access is off.
+/// wording, the empty state, and a clear message when ImageCaptureCore's access is off. Its toolbar opens Settings,
+/// and the Import screen while a job is shown.
 struct CamerasScreen: View {
     let model: CamerasModel
+    var importer: ImportModel?
+    var showSettings: @MainActor () -> Void = {}
+    var showImport: @MainActor () -> Void = {}
     @Environment(\.openURL) private var openURL
 
     var body: some View {
         content
             .navigationTitle(CamerasWording.title)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if let importer, importer.hasJob {
+                        Button {
+                            showImport()
+                        } label: {
+                            Label(CamerasWording.importButton, systemImage: "square.and.arrow.down")
+                        }
+                        .accessibilityValue(importer.statusLine ?? "")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSettings()
+                    } label: {
+                        Label(CamerasWording.settingsButton, systemImage: "gearshape")
+                    }
+                }
+            }
             .safeAreaInset(edge: .top) {
                 if let notice = model.notice {
                     NoticeStrip(text: notice) { model.notice = nil }
