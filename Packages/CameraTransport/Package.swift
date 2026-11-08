@@ -1,9 +1,10 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// The camera links: the `CameraLink` protocol and the values it speaks in. `USBLink` (ImageCaptureCore, section 2
-// of docs/iteration-1-backlog.md) and `IPLink` (Network.framework, Iteration 3) arrive in their own pull requests,
-// each behind `#if canImport(...)`, so the transport-neutral part keeps building and testing on Linux.
+// The camera links: the `CameraLink` protocol and the values it speaks in. `USBLink` and `USBCameraBrowser`
+// (ImageCaptureCore, section 2 of docs/iteration-1-backlog.md) sit behind `#if canImport(ImageCaptureCore) && os(iOS)`
+// with their pure logic outside it; `IPLink` (Network.framework, Iteration 3) follows the same rule, so the
+// transport-neutral part keeps building and testing on Linux.
 let package = Package(
     name: "CameraTransport",
     platforms: [
