@@ -1,36 +1,19 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// The app's first screen. For now a placeholder Cameras screen with the empty state, and nothing that pretends to
-/// find a camera; Cameras, Browse and Import arrive with backlog section 6.
+/// The app's first screen: Cameras, and Browse pushed from it (backlog section 6, the thin slice of 8 Nov). The
+/// live screens need ImageCaptureCore and UIKit, so they exist on iOS only; elsewhere (a Mac running `swift build`)
+/// this shows a line saying so.
 public struct RootView: View {
     public init() {}
 
     public var body: some View {
-        NavigationStack {
-            CamerasPlaceholder()
-                .navigationTitle("Cameras")
-        }
-    }
-}
-
-struct CamerasPlaceholder: View {
-    private let copy = CamerasEmptyState.standard
-
-    var body: some View {
-        ContentUnavailableView {
-            Label(copy.title, systemImage: "cable.connector")
-        } description: {
-            VStack(spacing: 12) {
-                Text(copy.connect)
-                Text(copy.modeAdvice)
-                Text(copy.remoteShootNote)
-            }
-        } actions: {
-            Text(CamerasEmptyState.notYetLookingNotice)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
+        #if canImport(ImageCaptureCore) && canImport(UIKit) && os(iOS)
+        LiveRoot()
+        #else
+        ContentUnavailableView(CamerasWording.title, systemImage: "cable.connector",
+                               description: Text("Shutter Bridge reads cameras on iPhone."))
+        #endif
     }
 }
 #endif

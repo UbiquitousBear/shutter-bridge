@@ -2,7 +2,7 @@ import CameraTransport
 
 /// What the Cameras screen says when no camera is connected (backlog section 6): the cable, the USB mode in the
 /// camera's own wording, MSC recommended (decision 7), and that Remote Shoot (PC Remote) shares no files over USB
-/// (decision 1). Plain strings for now; they move into a String Catalog with the screens.
+/// (decision 1). Plain strings for now; they move into a String Catalog with the full screens.
 public struct CamerasEmptyState: Sendable, Hashable {
     public var title: String
     public var connect: String
@@ -18,9 +18,9 @@ public struct CamerasEmptyState: Sendable, Hashable {
             + "of the Image Transfer modes."
     )
 
-    /// Shown under the empty state until `USBLink` lands: this build doesn't look for cameras, so a connected camera
-    /// would otherwise sit behind "No camera connected" with no explanation.
-    public static let notYetLookingNotice = "This early build doesn't look for cameras yet."
+    /// Under the empty state while the app is looking, so a camera that doesn't appear isn't mistaken for a build
+    /// that doesn't look.
+    public static let lookingNotice = "Looking for a camera on the USB-C port."
 
     /// Every line, in reading order.
     public var lines: [String] { [title, connect, modeAdvice, remoteShootNote] }

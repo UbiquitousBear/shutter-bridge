@@ -43,8 +43,9 @@
 	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Saves the photos you import into an album. Limit Access with no photos selected is enough.</string>
+	<!-- Also what Save Image in the share sheet (Share as JPEG…) asks with, as the share sheet runs in the app. -->
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Saves the photos you import to your library.</string>
+	<string>Saves the photos you import, or a JPEG you share with Save Image, to your library.</string>
 	<!-- No once-per-launch "Select More Photos" alert under Limited Access. -->
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
 	<true/>
