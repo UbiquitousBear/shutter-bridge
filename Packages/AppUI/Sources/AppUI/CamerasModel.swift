@@ -1,4 +1,5 @@
 import CameraTransport
+import Catalogue
 import Foundation
 import Observation
 
@@ -31,10 +32,12 @@ public struct BrowseServices {
 }
 
 /// The Cameras screen's model (backlog section 6): the cameras discovery reports, whether access is allowed, the
-/// navigation into Browse, and the message when a camera goes away while it is browsed.
+/// navigation into Browse, and the message when a camera goes away while it is browsed. It also finds a camera by
+/// its catalogue key for the import (`CameraFinding`), and tells the import when a camera is connected, so a job
+/// paused by a removed cable carries on once the camera is back and listed (decision 7).
 @MainActor
 @Observable
-public final class CamerasModel {
+public final class CamerasModel: CameraFinding {
     public enum Access: Sendable, Hashable {
         /// Not started yet, or started without an answer.
         case unknown
@@ -54,17 +57,31 @@ public final class CamerasModel {
     /// camera is connected again, or when the person closes it.
     public var notice: String?
 
+    /// The import, told when a camera is connected, and handed Browse's selection. Set by the app (`AppModel`).
+    @ObservationIgnored public weak var importModel: ImportModel?
+
     @ObservationIgnored private let discovery: any CameraDiscovery
     @ObservationIgnored private let services: BrowseServices
+    @ObservationIgnored private let catalogue: (any CatalogueStore)?
+    @ObservationIgnored private let cameraKey: CameraKeying
+    @ObservationIgnored private let leases: LinkLeases
     @ObservationIgnored private var watchTask: Task<Void, Never>?
     @ObservationIgnored private var starting = false
     @ObservationIgnored private var launched = false
     /// The camera `notice` is about, if it is about one.
     @ObservationIgnored private var noticeCamera: CameraDescriptor.ID?
 
-    public init(discovery: any CameraDiscovery, services: BrowseServices) {
+    /// - Parameters:
+    ///   - catalogue: For Browse's last-known card and badge; nil shows neither.
+    ///   - cameraKey: The catalogue's key for a camera (`CameraKeys`; the app reads the USB link's key material).
+    ///   - leases: Shared by Browse and the import, so leaving Browse doesn't close a link a job uses.
+    public init(discovery: any CameraDiscovery, services: BrowseServices, catalogue: (any CatalogueStore)? = nil,
+                cameraKey: @escaping CameraKeying = CameraKeys.fromDescriptor, leases: LinkLeases = LinkLeases()) {
         self.discovery = discovery
         self.services = services
+        self.catalogue = catalogue
+        self.cameraKey = cameraKey
+        self.leases = leases
     }
 
     /// Once per launch: removes temporary JPEG folders a crash left behind (backlog section 6).
@@ -79,7 +96,10 @@ public final class CamerasModel {
     /// (the person may have changed it in Settings).
     public func becameActive() async {
         watchDiscoveries()
-        guard !isLooking, !starting else { return }
+        guard !isLooking, !starting else {
+            await importModel?.cameraConnected()
+            return
+        }
         starting = true
         defer { starting = false }
         do throws(CameraLinkFailure) {
@@ -102,8 +122,21 @@ public final class CamerasModel {
                 try await discovery.cameraLink(for: id)
             },
             services: services,
-            onGone: { [weak self] id in self?.cameraWentAway(id) }
+            onGone: { [weak self] id in self?.cameraWentAway(id) },
+            catalogue: catalogue.map { BrowseCatalogue(store: $0, cameraKey: cameraKey) },
+            importer: importModel,
+            leases: leases
         )
+    }
+
+    /// A link to the connected camera whose catalogue key is `key`, for the import to carry on through after a
+    /// removal. Asks discovery for each connected camera's link (cheap: nothing is opened) until one matches.
+    public func link(forCameraWith key: CameraKey) async -> (any CameraLink)? {
+        for camera in cameras {
+            guard let link = try? await discovery.cameraLink(for: camera.id) else { continue }
+            if await cameraKey(camera, link) == key { return link }
+        }
+        return nil
     }
 
     /// The camera went away: if it is being browsed, back to Cameras with a message.
@@ -126,6 +159,10 @@ public final class CamerasModel {
                 cameras[index] = camera
             } else {
                 cameras.append(camera)
+            }
+            // The import checks the engine itself: a job paused by a removal carries on if this is its camera.
+            if let importModel {
+                Task { await importModel.cameraConnected() }
             }
         case let .disappeared(id):
             cameras.removeAll { $0.id == id }

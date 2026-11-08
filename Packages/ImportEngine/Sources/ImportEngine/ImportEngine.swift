@@ -237,6 +237,12 @@ public actor ImportEngine {
         return job
     }
 
+    /// The job `id` once it has ended, while it is still the last job.
+    func endedJob(_ id: UUID) -> Job? {
+        guard let lastJob, lastJob.id == id, lastJob.finished != nil else { return nil }
+        return lastJob
+    }
+
     func trace(_ event: EngineTrace) { traceHook?(event) }
 
     /// Derives the public state and offers a snapshot to the throttle. Called after every change.
@@ -450,7 +456,8 @@ public actor ImportEngine {
             filesDone: filesDone, filesTotal: job.entries.count + job.unkeyed.count, bytesDone: bytesDone,
             bytesTotal: bytesTotal, bytesPerSecond: job.rate.bytesPerSecond, state: job.state,
             destination: job.route.decision, filesSkipped: skipped, filesFailed: failed,
-            isUSBImportRunning: job.isUSBImportRunning
+            isUSBImportRunning: job.isUSBImportRunning,
+            stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled)
         )
     }
 

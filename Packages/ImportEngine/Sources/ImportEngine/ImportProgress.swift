@@ -27,11 +27,14 @@ public struct ImportProgress: Sendable, Hashable {
     public var filesFailed: Int
     /// Whether a USB import is running, so the app keeps the screen on (decision 1).
     public var isUSBImportRunning: Bool
+    /// A file stalled more often than the automatic retries allow, so the stall pause waits for the person's
+    /// Continue rather than lifting itself after 5 s (decision 4). False otherwise.
+    public var stallWaitsForPerson: Bool
 
     public init(
         filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil,
         state: ImportJobState = .idle, destination: DestinationDecision? = nil, filesSkipped: Int = 0,
-        filesFailed: Int = 0, isUSBImportRunning: Bool = false
+        filesFailed: Int = 0, isUSBImportRunning: Bool = false, stallWaitsForPerson: Bool = false
     ) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
@@ -43,6 +46,7 @@ public struct ImportProgress: Sendable, Hashable {
         self.filesSkipped = filesSkipped
         self.filesFailed = filesFailed
         self.isUSBImportRunning = isUSBImportRunning
+        self.stallWaitsForPerson = stallWaitsForPerson
     }
 
     public static let none = ImportProgress(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)

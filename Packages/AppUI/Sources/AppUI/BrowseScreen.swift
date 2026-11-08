@@ -3,24 +3,57 @@ import CameraTransport
 import SwiftUI
 import UIKit
 
-/// The thin Browse screen (backlog section 6, *Order*): the card newest first by day, and press and hold a photo for
-/// *Copy as JPEG* and *Share as JPEG…*. The link opens when the screen appears and closes when it goes.
+/// The Browse screen (backlog section 6): the card newest first by day, with the last-known card from the catalogue
+/// shown at once while the camera reads the live one; RAW, HEIF and *already imported* badges; filters (new only,
+/// type, date); selection with *Select All New* and a sticky bar with the count, size and Import; and press and hold a
+/// photo for *Copy as JPEG* and *Share as JPEG…*. The link is held while the screen is up and let go when it goes (it
+/// closes unless an import still uses it).
 struct BrowseScreen: View {
     @State private var model: BrowseModel
+    private let importer: ImportModel?
+    private let showImport: @MainActor () -> Void
+    @State private var showsFilters = false
 
-    init(model: @autoclosure () -> BrowseModel) {
+    init(model: @autoclosure () -> BrowseModel, importer: ImportModel? = nil,
+         showImport: @escaping @MainActor () -> Void = {}) {
         _model = State(initialValue: model())
+        self.importer = importer
+        self.showImport = showImport
     }
 
     var body: some View {
         content
             .navigationTitle(model.camera.name)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar { toolbar }
             .safeAreaInset(edge: .top) {
-                ActionStrip(model: model)
-                    .padding(.horizontal)
+                VStack(spacing: 8) {
+                    ActionStrip(model: model)
+                    if let notice = model.importNotice {
+                        NoticeStrip(text: notice, systemImage: "square.and.arrow.down") { model.dismissImportNotice() }
+                            .task(id: notice) {
+                                try? await Task.sleep(for: .seconds(5))
+                                if model.importNotice == notice { model.dismissImportNotice() }
+                            }
+                    }
+                    if let importer, importer.hasJob {
+                        ImportStatusStrip(importer: importer, action: showImport)
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if model.isSelecting {
+                    SelectionBar(model: model, importTapped: { importTapped() })
+                }
             }
             .animation(.default, value: model.action)
+            .animation(.default, value: model.importNotice)
+            .animation(.default, value: model.isSelecting)
+            .sheet(isPresented: $showsFilters) {
+                BrowseFilterSheet(model: model)
+                    .presentationDetents([.medium, .large])
+            }
             .task { await model.run() }
             .onChange(of: model.share) { _, share in
                 guard let share else { return }
@@ -29,18 +62,56 @@ struct BrowseScreen: View {
                                        onFinish: { model.shareFinished() },
                                        onFailure: { model.shareFailed() })
             }
+            .onChange(of: importer?.importedRevision) { _, _ in
+                // More files were imported: the badges, and the selection, follow the catalogue.
+                let model = self.model
+                Task { await model.refreshImportedStates() }
+            }
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if model.hasFiles {
+                Button {
+                    showsFilters = true
+                } label: {
+                    Label(BrowseWording.filters,
+                          systemImage: model.filter.isActive ? "line.3.horizontal.decrease.circle.fill"
+                              : "line.3.horizontal.decrease.circle")
+                }
+            }
+            if model.phase == .listed, model.hasFiles {
+                Button(model.isSelecting ? BrowseWording.doneSelecting : BrowseWording.select) {
+                    model.isSelecting.toggle()
+                }
+            }
+        }
+    }
+
+    /// Import in the sticky bar: hands the selection over, and opens the Import screen when a job started.
+    private func importTapped() {
+        let model = self.model
+        let showImport = self.showImport
+        Task {
+            let outcome = await model.importSelected()
+            if case .started? = outcome { showImport() }
+        }
     }
 
     @ViewBuilder private var content: some View {
         switch model.phase {
         case let .reading(since):
-            ReadingCardView(mode: model.camera.mode, since: since)
+            if model.lastKnownListedAt != nil {
+                card(readingSince: since)
+            } else {
+                ReadingCardView(mode: model.camera.mode, since: since)
+            }
         case .listed:
-            if model.sections.isEmpty {
+            if model.hasFiles {
+                card(readingSince: nil)
+            } else {
                 ContentUnavailableView(BrowseWording.emptyCardTitle, systemImage: "photo.on.rectangle",
                                        description: Text(BrowseWording.emptyCardDetail))
-            } else {
-                CardGrid(model: model)
             }
         case .listsNoFiles:
             ContentUnavailableView(BrowseWording.noFilesTitle, systemImage: "cable.connector.slash",
@@ -59,6 +130,198 @@ struct BrowseScreen: View {
         case .gone:
             ContentUnavailableView(BrowseWording.goneTitle, systemImage: "cable.connector.slash",
                                    description: Text(BrowseWording.goneDetail))
+        }
+    }
+
+    /// The card shown (live, or last-known while `readingSince` is set), or, when the filters hide every file, a line
+    /// saying so with Clear Filters.
+    @ViewBuilder private func card(readingSince: Date?) -> some View {
+        if model.sections.isEmpty {
+            VStack(spacing: 0) {
+                if let readingSince, let listedAt = model.lastKnownListedAt {
+                    LastKnownBanner(mode: model.camera.mode, listedAt: listedAt, readingSince: readingSince)
+                        .padding()
+                }
+                ContentUnavailableView {
+                    Label(BrowseWording.noMatchesTitle, systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text(BrowseWording.noMatchesDetail)
+                } actions: {
+                    Button(BrowseWording.clearFilters) { model.filter = .none }
+                        .buttonStyle(.bordered)
+                }
+            }
+        } else {
+            CardGrid(model: model, readingSince: readingSince)
+        }
+    }
+}
+
+/// While a job exists: its state in one line; tapping it opens the Import screen.
+struct ImportStatusStrip: View {
+    let importer: ImportModel
+    let action: @MainActor () -> Void
+
+    var body: some View {
+        Button {
+            action()
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "square.and.arrow.down")
+                    .accessibilityHidden(true)
+                Text(importer.statusLine ?? ImportWording.title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .font(.subheadline)
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(BrowseWording.showImport)
+    }
+}
+
+/// The last-known card's note, above the grid while the camera reads the live card: when it was listed, that it
+/// will be replaced, and the reading's measured times with the seconds so far.
+struct LastKnownBanner: View {
+    let mode: CameraMode
+    let listedAt: Date
+    let readingSince: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label {
+                Text(BrowseWording.lastKnownTitle)
+                    .font(.headline)
+            } icon: {
+                Image(systemName: "clock.arrow.circlepath")
+            }
+            Text(BrowseWording.lastKnownListed(listedAt.formatted(date: .abbreviated, time: .shortened)))
+            Text(BrowseWording.lastKnownDetail)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ProgressView()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(BrowseWording.readingTitle)
+                        .font(.subheadline.weight(.semibold))
+                    Text(BrowseWording.readingDetail(mode))
+                        .foregroundStyle(.secondary)
+                    TimelineView(.periodic(from: readingSince, by: 1)) { context in
+                        Text(BrowseWording.elapsed(seconds: Int(context.date.timeIntervalSince(readingSince))))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .font(.subheadline)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The sticky bar while selecting: *Select All New*, the count and size of the selection, and Import. Stacked at the
+/// accessibility text sizes.
+struct SelectionBar: View {
+    let model: BrowseModel
+    let importTapped: @MainActor () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+        layout {
+            Button(BrowseWording.selectAllNew) { model.selectAllNew() }
+            Text(BrowseWording.selectionSummary(model.selectionSummary))
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .multilineTextAlignment(stacked ? .leading : .center)
+                .frame(maxWidth: .infinity, alignment: stacked ? .leading : .center)
+            Button {
+                importTapped()
+            } label: {
+                if model.isStartingImport {
+                    ProgressView()
+                } else {
+                    Text(BrowseWording.importAction)
+                        .bold()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canImport)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+}
+
+/// The filters (backlog section 6): new only, the types shown, and a range of whole days.
+struct BrowseFilterSheet: View {
+    @Bindable var model: BrowseModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle(BrowseWording.newOnly, isOn: $model.filter.newOnly)
+                }
+                Section(BrowseWording.type) {
+                    ForEach(BrowseFileType.allCases, id: \.self) { type in
+                        let shown = model.filter.types.contains(type)
+                        Button {
+                            model.filter.toggle(type)
+                        } label: {
+                            HStack {
+                                Text(BrowseWording.typeLabel(type))
+                                    .foregroundStyle(.primary)
+                                Spacer(minLength: 8)
+                                if shown {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                        }
+                        .accessibilityAddTraits(shown ? .isSelected : [])
+                    }
+                }
+                Section(BrowseWording.dateRange) {
+                    if let days = model.dayBounds {
+                        Toggle(BrowseWording.limitDates, isOn: $model.limitsDates)
+                        if model.limitsDates {
+                            DatePicker(BrowseWording.from, selection: $model.firstDay, in: days,
+                                       displayedComponents: .date)
+                            DatePicker(BrowseWording.to, selection: $model.lastDay, in: days,
+                                       displayedComponents: .date)
+                        }
+                    } else {
+                        Text(BrowseWording.noDatedFiles)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    Button(BrowseWording.clearFilters, role: .destructive) { model.filter = .none }
+                        .disabled(!model.filter.isActive)
+                }
+            }
+            .navigationTitle(BrowseWording.filters)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(SettingsWording.done) { dismiss() }
+                }
+            }
         }
     }
 }
@@ -89,22 +352,32 @@ struct ReadingCardView: View {
     }
 }
 
-/// The card as a lazy grid with a pinned header per day.
+/// The card as a lazy grid with a pinned header per day, and the last-known note above it while the live card is
+/// read. The cells grow with the text size, so their labels aren't clipped at the largest sizes.
 struct CardGrid: View {
     let model: BrowseModel
-
-    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 180), spacing: 2)]
+    let readingSince: Date?
+    @ScaledMetric(relativeTo: .caption2) private var cellMinimum: CGFloat = 104
 
     var body: some View {
+        let minimum = min(cellMinimum, 240)
+        let columns = [GridItem(.adaptive(minimum: minimum, maximum: minimum * 1.75), spacing: 2)]
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 2, pinnedViews: [.sectionHeaders]) {
-                ForEach(model.sections) { section in
-                    Section {
-                        ForEach(section.items) { item in
-                            CardCell(item: item, model: model)
+            VStack(spacing: 0) {
+                if let readingSince, let listedAt = model.lastKnownListedAt {
+                    LastKnownBanner(mode: model.camera.mode, listedAt: listedAt, readingSince: readingSince)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                }
+                LazyVGrid(columns: columns, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                    ForEach(model.sections) { section in
+                        Section {
+                            ForEach(section.items) { item in
+                                CardCell(item: item, model: model)
+                            }
+                        } header: {
+                            DayHeader(day: section.day)
                         }
-                    } header: {
-                        DayHeader(day: section.day)
                     }
                 }
             }
@@ -132,8 +405,10 @@ struct DayHeader: View {
     }
 }
 
-/// One file: the camera's thumbnail (fetched when the cell appears, given up when it scrolls away), its badge, and
-/// for a still the press-and-hold menu. Video and other files are greyed out with no actions.
+/// One file: the camera's thumbnail (fetched when the cell appears, given up when it scrolls away), its badges (RAW,
+/// HEIF, Imported), and, while selecting, its selection mark; tapping it then selects it. A still of the live card
+/// offers the press-and-hold menu. Video and other files are greyed out with no actions, and while selecting so are
+/// stills that can't be imported (already imported, no capture date).
 struct CardCell: View {
     let item: CameraItem
     let model: BrowseModel
@@ -142,18 +417,44 @@ struct CardCell: View {
     private var kind: CardCellKind { CardLayout.kind(of: item) }
 
     var body: some View {
+        let selecting = model.isSelecting
+        let selected = model.isSelected(item)
+        let block = model.selectionBlock(for: item)
+        let imported = model.isImported(item)
         let cell = thumbnail
             .overlay(alignment: .topTrailing) { badge }
-            .overlay(alignment: .bottomLeading) { label }
-            .opacity(kind.offersJPEGActions ? 1 : 0.45)
+            .overlay(alignment: .bottomLeading) { label(imported: imported) }
+            .overlay(alignment: .bottomTrailing) {
+                if selecting, block == nil || selected {
+                    SelectionMark(selected: selected)
+                }
+            }
+            .overlay {
+                if selected {
+                    Rectangle()
+                        .strokeBorder(Color.accentColor, lineWidth: 3)
+                }
+            }
+            .opacity(opacity(selecting: selecting, selectable: block == nil))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if selecting { model.toggleSelection(item) }
+            }
             .task(id: item.id) {
                 guard image == nil, let data = await model.thumbnail(for: item.id) else { return }
                 image = UIImage(data: data)
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(accessibilityText)
+            .accessibilityLabel(model.accessibilityLabel(
+                for: item, date: item.captureDate?.formatted(date: .abbreviated, time: .shortened)))
+            .accessibilityHint(selecting ? (block.map { BrowseWording.notSelectable($0) } ?? "") : "")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityAddTraits(selecting && block == nil ? .isButton : [])
+            .accessibilityAction {
+                if selecting { model.toggleSelection(item) }
+            }
 
-        if kind.offersJPEGActions {
+        if model.offersJPEGActions(item) {
             cell
                 .contextMenu {
                     Button {
@@ -176,6 +477,12 @@ struct CardCell: View {
         } else {
             cell
         }
+    }
+
+    private func opacity(selecting: Bool, selectable: Bool) -> Double {
+        if !kind.offersJPEGActions { return 0.45 }
+        if selecting && !selectable { return 0.6 }
+        return 1
     }
 
     private var thumbnail: some View {
@@ -206,39 +513,53 @@ struct CardCell: View {
         }
     }
 
-    @ViewBuilder private var label: some View {
+    @ViewBuilder private func label(imported: Bool) -> some View {
         switch kind {
-        case .video: CellLabel(text: BrowseWording.videoLabel)
-        case .other: CellLabel(text: BrowseWording.otherLabel)
-        case .photo: EmptyView()
+        case .video:
+            CellLabel(text: BrowseWording.videoLabel)
+        case .other:
+            CellLabel(text: BrowseWording.otherLabel)
+        case .photo:
+            if imported {
+                CellLabel(text: BrowseWording.importedBadge, systemImage: "checkmark.circle.fill")
+            }
         }
     }
+}
 
-    private var accessibilityText: String {
-        var parts = [item.name]
-        if let date = item.captureDate {
-            parts.append(date.formatted(date: .abbreviated, time: .shortened))
-        }
-        switch kind {
-        case let .photo(badge): if let badge { parts.append(badge) }
-        case .video: parts.append(BrowseWording.videoLabel)
-        case .other: parts.append(BrowseWording.otherLabel)
-        }
-        return parts.joined(separator: ", ")
+/// The selection mark in a cell's corner while selecting.
+struct SelectionMark: View {
+    let selected: Bool
+
+    var body: some View {
+        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+            .font(.title3)
+            .foregroundStyle(selected ? Color.accentColor : Color.white)
+            .background(Circle().fill(selected ? Color.white : Color.black.opacity(0.25)).padding(2))
+            .padding(6)
+            .accessibilityHidden(true)
     }
 }
 
 struct CellLabel: View {
     let text: String
+    var systemImage: String?
 
     var body: some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .lineLimit(1)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-            .padding(4)
+        HStack(spacing: 3) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .accessibilityHidden(true)
+            }
+            Text(text)
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+        }
+        .font(.caption2.weight(.semibold))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .padding(4)
     }
 }
 

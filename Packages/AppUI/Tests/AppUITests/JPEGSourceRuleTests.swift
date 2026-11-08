@@ -69,6 +69,17 @@ struct JPEGSourceRuleTests {
         #expect(JPEGSourceRule(listing: [raw, hif]).source(for: raw)?.kind == .rawRender)
     }
 
+    @Test func eachJPGPairsWithOneRAWAtMostAsRawPairingRuleSays() {
+        // PhotosBridge's rule pairs one to one: the closer RAW takes the JPG; the other is rendered.
+        let near = item("DSC00010.ARW", at: 50, id: "near")
+        let far = item("DSC00010.ARW", at: 50.8, id: "far")
+        let jpg = item("DSC00010.JPG", at: 50.1)
+        let rule = JPEGSourceRule(listing: [far, near, jpg])
+        #expect(rule.source(for: near)?.kind == .pairedJPEG)
+        #expect(rule.source(for: far)?.kind == .rawRender)
+        #expect(JPEGSourceRule.pairTolerance == 1)
+    }
+
     @Test func aHEIFIsReencoded() throws {
         let hif = item("DSC00009.HIF")
         let source = try #require(JPEGSourceRule(listing: [hif]).source(for: hif))

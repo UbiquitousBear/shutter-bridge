@@ -130,8 +130,14 @@ extension ImportEngine {
         case let .failed(failure):
             return await commitFailed(failure, identity: identity, of: id, download: download, name: item.name)
         case let .committed(location, kind, written):
-            guard let job = current(id), let entry = job.entries[identity] else { return false }
+            // A commit that finishes after its job ended (cancelled, stopped) still resolves its file on the ended
+            // job, so the finished Import screen's row and counts show it as imported.
+            guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
             resolve(entry, .imported(location), into: kind)
+            guard current(id) != nil else {
+                refreshState()
+                return false
+            }
             if !entry.interrupted {
                 job.rate.record(start: download.startedAt, end: clock.now, bytes: item.size)
             }
@@ -210,6 +216,13 @@ extension ImportEngine {
     func commitFailed(_ failure: ImportDestinationFailure, identity: ObjectIdentity, of id: UUID,
                       download: Download, name: String) async -> Bool {
         try? FileManager.default.removeItem(at: download.attempt.directory)
+        if current(id) == nil, let ended = endedJob(id), let entry = ended.entries[identity] {
+            // The job ended while this file was being committed: no retry and no stop, but its row says it failed
+            // rather than staying at "committing".
+            resolve(entry, .failed(.destination(failure)))
+            refreshState()
+            return false
+        }
         guard let job = current(id), let entry = job.entries[identity] else { return false }
         switch failure {
         case .notEnoughSpace:
