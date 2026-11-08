@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy manifest for Shutter Bridge. No tracking and nothing collected: photos go from the camera to this iPhone
+  and nowhere else. The "required reason" APIs Iteration 1 is expected to call, declared now so the first TestFlight
+  upload doesn't draw an ITMS-91053 warning:
+  - UserDefaults (import settings, such as downloads in flight): CA92.1, read and written only by the app itself.
+  - Disk space (checking there is room before a large import): E174.1. Only add 85F4.1 if the free space is ever
+    shown to the person.
+  - File timestamps of files in the app's container (sizes and dates of staged downloads and of imports to the
+    Files folder): C617.1.
+  Keep this in step with the code: remove an entry the app stops using and add one for each new required-reason API
+  (developer.apple.com, "Describing use of required reason API").
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

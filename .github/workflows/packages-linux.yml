@@ -1,0 +1,52 @@
+# Every package's tests on Linux, in the Swift image whose compiler is Xcode 27's. Replaces ptpkit.yml, which ran
+# PTPKit alone. Apple-only code sits behind `#if canImport(...)`, so what builds here is the transport-neutral part
+# of each package; the Apple parts are compiled and tested in the iOS Simulator by app.yml.
+name: Packages on Linux
+
+on:
+  pull_request:
+    paths:
+      - "Packages/**"
+      - ".github/workflows/packages-linux.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Packages/**"
+      - ".github/workflows/packages-linux.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    container: swift:6.4-noble   # Swift 6.4, the compiler in Xcode 27
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - PTPKit
+          - CameraTransport
+          - Catalogue
+          - PhotosBridge
+          - ImportEngine
+          - AppUI
+          - PTPSimulator
+          - BLEKit
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: swift build
+        working-directory: Packages/${{ matrix.package }}
+        run: swift build
+
+      - name: swift test
+        working-directory: Packages/${{ matrix.package }}
+        run: swift test

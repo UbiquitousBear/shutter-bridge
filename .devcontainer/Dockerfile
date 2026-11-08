@@ -1,7 +1,8 @@
-# Linux development container for Shutter Bridge: PTPKit's tests, the docs and the fixture scripts. It can't build
-# the spike app or reach a camera; those need Xcode 27 on a Mac and a physical iPhone.
+# Linux development container for Shutter Bridge: every package's tests (the code outside `#if canImport(...)`), the
+# docs and the fixture scripts. It can't build the app or the spike, or reach a camera; those need Xcode 27 on a Mac
+# and a physical iPhone.
 #
-# The base image is the one CI's Linux job (.github/workflows/ptpkit.yml) and `make test-docker` use: Swift 6.4,
+# The base image is the one CI's Linux job (.github/workflows/packages-linux.yml) and `make test-docker` use: Swift 6.4,
 # the compiler in Xcode 27. Change it there, in the Makefile and in docs/ci.md too (AGENTS.md).
 FROM swift:6.4-noble
 
