@@ -18,6 +18,8 @@ public enum JobOutcome: Sendable, Hashable {
     case cancelled
     /// A failure with the outcome `.stopJob`, such as the phone's storage being full.
     case stopped(CameraLinkFailure.Kind)
+    /// The catalogue couldn't be read or written: going on would import files again later, so the job stopped.
+    case catalogueUnavailable
 }
 
 /// The engine's single job, as the UI sees it.
@@ -40,10 +42,15 @@ public enum ImportJobState: Sendable, Hashable {
 public enum ImportEngineError: Error, Sendable, Hashable {
     /// A job is already running or paused; add to it with `append(_:)` instead.
     case jobInProgress
-    /// There is no job to pause, resume or append to.
+    /// There is no job to pause, resume, reconnect or append to.
     case noJob
     /// An explicit selection with nothing in it.
     case emptySelection
-    /// The import stages aren't built yet (backlog section 3). Thrown rather than pretending to import.
-    case notBuilt
+    /// `reconnect(_:to:)` while the job isn't waiting for the camera to come back.
+    case cameraNotRemoved
+    /// The catalogue couldn't say which of the appended files are already imported.
+    case catalogueUnavailable
+    /// An `ImportRoute` built from `DestinationDecision.askForPhotosAccess`: the app asks for Photos access before
+    /// a job starts (`PhotosAccessGate.decision(for:)` never returns it) and builds the route from the answer.
+    case photosAccessNotAsked
 }

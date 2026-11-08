@@ -12,6 +12,18 @@ struct PhotosAccessTests {
         #expect(PhotosAuthorisation.authorised.destination == .photos)
     }
 
+    /// The rule with the setting agrees with the access-only rule: on Files it never offers the Settings link
+    /// whatever the access; on Photos it gives the same destination wherever the access alone has an answer.
+    @Test func destinationFollowsTheSettingAndAccess() {
+        for access in PhotosAuthorisation.allCases {
+            let files = DestinationDecision.resolve(setting: DestinationSetting(preferred: .filesFolder),
+                                                    authorisation: access)
+            #expect(files == .files(.chosen))
+            #expect(files.filesReason?.offersSettingsLink == false)
+            #expect(DestinationDecision.resolve(setting: .default, authorisation: access).kind == access.destination)
+        }
+    }
+
     @Test func defaultsAreShamilsFirstOfNovember() {
         let o = PhotosImportOptions()
         #expect(o.albums == .perCamera)

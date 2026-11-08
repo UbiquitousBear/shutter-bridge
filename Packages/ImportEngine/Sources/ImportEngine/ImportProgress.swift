@@ -1,20 +1,48 @@
+import PhotosBridge
+
 /// Where a job is, counted in bytes (decision 4): what the Import screen and, later, the Live Activity show. The
 /// engine publishes it at most four times a second (backlog section 3).
 public struct ImportProgress: Sendable, Hashable {
+    /// Files resolved one way or another: imported, skipped or failed.
     public var filesDone: Int
+    /// Every file in the job, including files appended while it runs.
     public var filesTotal: Int
+    /// The bytes of resolved files, plus the full size of files being committed, plus what each download in flight
+    /// has written so far (never more than its size). Counting resolved files in full keeps the bar and the ETA
+    /// consistent when a file is skipped or fails. Never goes backwards: a file whose download restarts (a stall, a
+    /// removal, a retry) keeps the most it had shown until the new attempt passes it.
     public var bytesDone: UInt64
+    /// The sum of the listed sizes of every file in the job.
     public var bytesTotal: UInt64
     /// Measured throughput, nil until there is a measurement. It leaves out a file that was in flight across a
     /// suspension or a pause, whose rate isn't throughput (the spike logged 1745 MB/s for one such file).
     public var bytesPerSecond: Double?
+    /// The job's state when this was taken.
+    public var state: ImportJobState
+    /// Where the files are going and why, so the Import screen can name it from the first file (backlog section 5).
+    public var destination: DestinationDecision?
+    /// Files left out (part of `filesDone`).
+    public var filesSkipped: Int
+    /// Files that failed after their retries (part of `filesDone`).
+    public var filesFailed: Int
+    /// Whether a USB import is running, so the app keeps the screen on (decision 1).
+    public var isUSBImportRunning: Bool
 
-    public init(filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil) {
+    public init(
+        filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil,
+        state: ImportJobState = .idle, destination: DestinationDecision? = nil, filesSkipped: Int = 0,
+        filesFailed: Int = 0, isUSBImportRunning: Bool = false
+    ) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
         self.bytesDone = bytesDone
         self.bytesTotal = bytesTotal
         self.bytesPerSecond = bytesPerSecond
+        self.state = state
+        self.destination = destination
+        self.filesSkipped = filesSkipped
+        self.filesFailed = filesFailed
+        self.isUSBImportRunning = isUSBImportRunning
     }
 
     public static let none = ImportProgress(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)

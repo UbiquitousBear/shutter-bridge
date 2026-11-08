@@ -1,10 +1,10 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// The actor that runs an import job: its public surface, progress and selection. The five stages (discover, open,
-// enumerate and diff, download, commit) and the pause, continue and retry rules (section 3 of
-// docs/iteration-1-backlog.md) arrive in their own pull request. They are transport-neutral, so the engine has no
-// Apple-only code and its tests run on Linux with fake links, stores and destinations.
+// The actor that runs an import job: open, enumerate and diff, download and commit, with the pause, continue, stall
+// and retry rules (section 3 of docs/iteration-1-backlog.md); discovery is the app's, which hands the engine a link.
+// It is transport-neutral, so it has no Apple-only code (Foundation and the toolchain's Synchronization module only)
+// and its tests run on Linux with fake links, stores and destinations on a manual clock.
 let package = Package(
     name: "ImportEngine",
     platforms: [

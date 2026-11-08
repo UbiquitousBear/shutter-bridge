@@ -81,23 +81,36 @@ struct NoDestination: ImportDestination {
     }
 }
 
-@Suite("The engine's surface, before the stages exist")
+@Suite("The engine's surface", .timeLimit(.minutes(1)))
 struct ImportEngineSurfaceTests {
+    let camera = CameraKey(rawValue: "test-camera")
+    var route: ImportRoute { .photos(NoDestination(), filesFolder: NoDestination(), authorisation: { .authorised }) }
+
     @Test func startsIdleWithDefaultSettings() async {
         let engine = ImportEngine(catalogue: InMemoryCatalogue())
         #expect(await engine.state == .idle)
         #expect(await engine.settings.downloadsInFlight == 1)
+        #expect(await engine.currentProgress == ImportProgress.none)
+        #expect(await !engine.isUSBImportRunning)
     }
 
-    @Test func refusesRatherThanPretending() async {
+    @Test func refusesAnEmptySelection() async {
         let engine = ImportEngine(catalogue: InMemoryCatalogue())
         await #expect(throws: ImportEngineError.emptySelection) {
-            try await engine.start(.items([]), from: NoLink(), to: NoDestination())
-        }
-        await #expect(throws: ImportEngineError.notBuilt) {
-            try await engine.start(.allNew, from: NoLink(), to: NoDestination())
+            try await engine.start(.items([]), from: NoLink(), camera: camera, to: route)
         }
         #expect(await engine.state == .idle)
+    }
+
+    @Test func oneJobAtATime() async throws {
+        let h = Harness()
+        let link = h.link(h.singles(["A.JPG"]))
+        await link.setDefaultStep(.hold)
+        try await h.start(.allNew, from: link)
+        await #expect(throws: ImportEngineError.jobInProgress) {
+            try await h.engine.start(.allNew, from: link, camera: h.camera, to: h.photosRoute)
+        }
+        await h.cleanup()
     }
 
     @Test func controlsNeedAJob() async {
@@ -105,6 +118,7 @@ struct ImportEngineSurfaceTests {
         await #expect(throws: ImportEngineError.noJob) { try await engine.pause() }
         await #expect(throws: ImportEngineError.noJob) { try await engine.resume() }
         await #expect(throws: ImportEngineError.noJob) { try await engine.append([]) }
+        await #expect(throws: ImportEngineError.noJob) { try await engine.reconnect(NoLink()) }
         await engine.cancel()
         #expect(await engine.state == .idle)
     }
@@ -114,5 +128,115 @@ struct ImportEngineSurfaceTests {
         #expect(ImportJobState.paused(.appInBackground).isActive)
         #expect(!ImportJobState.idle.isActive)
         #expect(!ImportJobState.finished(.stopped(.phoneStorageFull)).isActive)
+        #expect(!ImportJobState.finished(.catalogueUnavailable).isActive)
+    }
+
+    @Test func settingsApplyFromTheNextJob() async throws {
+        let h = Harness(downloadsInFlight: 1)
+        let card = h.singles(["A.JPG", "B.JPG", "C.JPG"])
+        let link = h.link(card)
+        await link.setDefaultStep(.hold)
+        try await h.start(.items(card), from: link)
+        let a = await link.nextHeldCall()
+        await h.engine.updateSettings(ImportSettings(downloadsInFlight: 2))
+        #expect(await h.engine.settings.downloadsInFlight == 2)
+        _ = try await h.engine.append([])
+        a.release()
+        let b = await link.nextHeldCall()
+        b.release()
+        let c = await link.nextHeldCall()
+        c.release()
+        #expect(await h.waitFinished() == .completed)
+        #expect(await link.maxConcurrentBytes == 1)
+
+        let mark = h.trace.count
+        let card2 = h.singles(["D.JPG", "E.JPG"], prefix: "s2")
+        let link2 = h.link(card2)
+        await link2.setDefaultStep(.hold)
+        try await h.start(.items(card2), from: link2)
+        let d = await link2.nextHeldCall()
+        let e = await link2.nextHeldCall()
+        #expect(await link2.maxConcurrentBytes == 2)
+        d.release()
+        e.release()
+        #expect(await h.waitFinished(after: mark) == .completed)
+        await h.cleanup()
+    }
+
+    @Test func routeFollowsTheDecision() throws {
+        let folder = URL(fileURLWithPath: "/nonexistent")
+        let photos = FakeDestination(kind: .photos, folder: folder)
+        let files = FakeDestination(kind: .filesFolder, folder: folder)
+        let access: @Sendable () async -> PhotosAuthorisation = { .authorised }
+        let forced = try ImportRoute(.files(.photosRestricted), photos: photos, filesFolder: files,
+                                     authorisation: access)
+        #expect(forced.decision == .files(.photosRestricted))
+        #expect(forced.destination.kind == .filesFolder)
+        let chosen = try ImportRoute(.photos, photos: photos, filesFolder: files, authorisation: access)
+        #expect(chosen.decision == .photos)
+        #expect(chosen.destination.kind == .photos)
+        #expect(chosen.filesFolder.kind == .filesFolder)
+        #expect(ImportRoute.photos(photos, filesFolder: files, authorisation: access).decision == chosen.decision)
+        #expect(ImportRoute.filesFolder(files, reason: .photosDenied).decision == .files(.photosDenied))
+    }
+
+    /// The app asks for Photos access before a job starts; a route can't be built from "ask first", and saying so is
+    /// an error the app can handle, not a trap.
+    @Test func aRouteNeedsPhotosAccessAskedFirst() {
+        let folder = URL(fileURLWithPath: "/nonexistent")
+        #expect(throws: ImportEngineError.photosAccessNotAsked) {
+            try ImportRoute(.askForPhotosAccess, photos: FakeDestination(kind: .photos, folder: folder),
+                            filesFolder: FakeDestination(kind: .filesFolder, folder: folder),
+                            authorisation: { .notDetermined })
+        }
+    }
+
+    /// After a refused save the reason comes from the access read then: a restriction gets no Settings link.
+    @Test func afterADeniedSaveTheReasonFollowsTheAccess() {
+        let folder = URL(fileURLWithPath: "/nonexistent")
+        let route = ImportRoute.photos(FakeDestination(kind: .photos, folder: folder),
+                                       filesFolder: FakeDestination(kind: .filesFolder, folder: folder),
+                                       authorisation: { .denied })
+        for access in PhotosAuthorisation.allCases {
+            let after = route.afterDeniedSave(access)
+            #expect(after.decision == .afterDeniedSave(authorisation: access))
+            #expect(after.destination.kind == .filesFolder)
+        }
+        #expect(route.afterDeniedSave(.restricted).decision == .files(.photosRestricted))
+        #expect(route.afterDeniedSave(.denied).decision == .files(.photosDenied))
+    }
+
+    /// A copy of `.autoupdatingCurrent` keeps following the system zone; the job's zone is fixed at the start, so a
+    /// change of zone mid-job can't give Browse's items new identities (and import them twice).
+    @Test func anAutoupdatingZoneIsFixedForTheJob() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("zone-\(UUID().uuidString)")
+        let engine = ImportEngine(catalogue: InMemoryCatalogue(), settings: ImportSettings(),
+                                  stagingDirectory: root, clock: ManualClock(), timeZone: .autoupdatingCurrent,
+                                  policy: .standard, trace: nil)
+        let item = CameraItem(id: .init(rawValue: "a"), folder: "DCIM", name: "A.JPG", size: 10, captureDate: Harness.t0)
+        let link = FakeCameraLink(card: [item])
+        await link.setDefaultStep(.hold)
+        let files = FakeDestination(kind: .filesFolder, folder: root)
+        try await engine.start(.items([item]), from: link, camera: camera, to: .filesFolder(files, reason: .chosen))
+        let zone = try #require(await engine.jobTimeZone())
+        #expect(zone != TimeZone.autoupdatingCurrent) // an autoupdating zone equals only another autoupdating one
+        #expect(zone == TimeZone(identifier: TimeZone.current.identifier))
+        await engine.cancel()
+        await link.shutdown()
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    @Test func identityIsWallClockInTheJobsZone() {
+        let item = CameraItem(id: .init(rawValue: "x"), folder: "DCIM/100MSDCF", name: "DSC00001.ARW", size: 10,
+                              captureDate: Harness.t0)
+        let utc = item.identity(camera: camera, timeZone: TimeZone(identifier: "UTC")!)
+        #expect(utc?.captureDate.rawValue == "20261026T073320")
+        #expect(utc?.folder == "DCIM/100MSDCF")
+        #expect(utc?.size == 10)
+        let tokyo = item.identity(camera: camera, timeZone: TimeZone(identifier: "Asia/Tokyo")!)
+        #expect(tokyo?.captureDate.rawValue == "20261026T163320")
+        var undated = item
+        undated.captureDate = nil
+        #expect(undated.identity(camera: camera, timeZone: TimeZone(identifier: "UTC")!) == nil)
     }
 }

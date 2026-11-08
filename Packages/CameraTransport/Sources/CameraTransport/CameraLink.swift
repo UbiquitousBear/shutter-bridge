@@ -10,7 +10,11 @@ public protocol CameraLink: Actor {
     /// The camera this link talks to.
     nonisolated var descriptor: CameraDescriptor { get }
 
-    /// Removal and the session's lifecycle. One consumer, the engine; the stream finishes when the link closes.
+    /// Removal and the session's lifecycle, live: each read returns a new stream that gets only the events that
+    /// happen after it was read, never one from before (a link must not buffer events for a consumer that isn't
+    /// there yet, or a suspension during Browse would pause an import started later). The engine reads it once per
+    /// link and keeps reading; every stream finishes when the link closes, or straight after `.removed` for a link
+    /// that can't be used again (`USBLink`). `EventFanOut` gives a link these semantics.
     nonisolated var events: AsyncStream<CameraLinkEvent> { get }
 
     /// Opens the session. Over USB in MTP no PTP command is sent until ImageCaptureCore's catalogue has finished,
