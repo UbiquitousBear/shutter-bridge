@@ -92,6 +92,8 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 
 **E. Photos *Don't Allow*, last, on a fresh install** (Background › *Photos albums, no camera*, runbook steps A1–A4). Deleting the app deletes the log, the fixtures and the default copy folder (move out any copies worth keeping), gives the Wi-Fi tab a new GUID and clears the Bluetooth proximity filter (retype it). Before it: *Export JSON*, *Copy measurements table*, *Share fixtures (zip)* and save them off the phone. About 10 min. Needed for: 1.0 design (the Photos permission flow).
 
+Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh install. Every save then failed at once with PHPhotosErrorDomain 3311, and asking again showed no prompt, so a denied app reaches Photos only through Settings: decision 9's Files-only path stands as decided. Untested: add-only allowed with read/write declined. Whether the log and the fixtures were exported before the reinstall is to confirm (Shamil).
+
 **Not a run: a Bluetooth trace of Creators' App leaving (skipped, Shamil, 7 Nov).** It would have used Apple's Bluetooth logging profile on the phone and PacketLogger on the Mac, to find the write that switches the camera's Wi-Fi off about 1 s after Creators' App leaves. Decision 2 rests on the measured behaviour, and option (c) is closed for 1.0. The 5 Nov 01:13 leave left the camera's Wi-Fi on for at least 59 s, so the write, which stays unknown, was also the only known way to make sure the Wi-Fi goes off after (d)'s leave.
 
 **No guided run on 14.1 answers these; record as open unless done by hand.**
@@ -222,7 +224,7 @@ Each was decided by Shamil: decision 2 on 4 Nov, the rest on 7 Nov, as recommend
 
 **9. Photos access.** Ask for read/write and accept Limited Access with nothing selected; stage files as complete-until-first-unlock; find the album by its stored identifier.
 - *Files-only path:* Iteration 1 builds one. When Photos access is denied (*Don't Allow*, or *None* in Settings), imports go to a folder in Files (On My iPhone › the app's folder, as the spike's *Copy all RAW to Files* did), the app says so in the UI, and it offers a link to Settings to grant Photos access. The proposal's 1.0 list has no Files path, so this is a scope addition to Iteration 1 and a proposal change. Whether Files is also offered as a chosen destination when Photos is allowed is not decided: open, for Shamil.
-- *Provisional on:* the Photos *Don't Allow* run on a fresh install (section 2, E; Shamil is doing it). Its result may refine the wording, not the choice.
+- *Provisional on:* nothing pending. The *Don't Allow* run (8 Nov, section 2 E) found that with both levels declined every save fails at once (PHPhotosErrorDomain 3311) and iOS doesn't ask again, so the app checks the authorisation status before an import and sends a denied import to Files with a link to Settings. Untested: add-only allowed with read/write declined.
 - *Decision (Shamil, 7 Nov):* accepted as recommended, with the Files-only import path built in Iteration 1.
 
 ## 6. After the go/no-go
