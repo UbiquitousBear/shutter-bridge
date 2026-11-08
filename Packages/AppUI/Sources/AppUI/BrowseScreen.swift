@@ -62,11 +62,6 @@ struct BrowseScreen: View {
                                        onFinish: { model.shareFinished() },
                                        onFailure: { model.shareFailed() })
             }
-            .onChange(of: importer?.importedRevision) { _, _ in
-                // More files were imported: the badges, and the selection, follow the catalogue.
-                let model = self.model
-                Task { await model.refreshImportedStates() }
-            }
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {

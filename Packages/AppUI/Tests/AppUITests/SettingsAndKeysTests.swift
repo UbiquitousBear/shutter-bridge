@@ -101,4 +101,43 @@ struct CameraKeysTests {
         #expect(CameraKeys.key(for: msc, material: "") == CameraKeys.key(for: msc, material: nil))
         #expect(!CameraKeys.key(for: msc, material: nil).rawValue.contains("Untitled"))
     }
+
+    /// The app's keying (`LiveRoot`): every link to one device in MTP gives the same key, whatever the link, and
+    /// links without material fall back to the mode and name.
+    @Test func keyingGivesOneKeyPerDeviceOnEveryLink() async {
+        let material = "00000000-0000-0000-0000-00000000ABCD"   // made up, not a device's
+        let keying = CameraKeys.keying(material: { link in
+            link.descriptor.mode == .usb(.mtp) ? material : nil
+        })
+        let mtp = CameraDescriptor(id: .init(rawValue: "a"), name: "ILCE-7CM2", mode: .usb(.mtp))
+        let first = await keying(mtp, FakeLink(items: [], mode: .usb(.mtp), id: "one"))
+        let second = await keying(mtp, FakeLink(items: [], mode: .usb(.mtp), id: "two"))
+        #expect(first == second)
+        #expect(first == CameraKeys.key(for: mtp, material: material))
+        let msc = CameraDescriptor(id: .init(rawValue: "b"), name: "Untitled", mode: .usb(.massStorage))
+        let mscLink = FakeLink(items: [], mode: .usb(.massStorage), id: "three")
+        #expect(await keying(msc, mscLink) == CameraKeys.key(for: msc, material: nil))
+        #expect(await CameraKeys.keying(material: { _ in nil })(mtp, FakeLink(items: [], id: "four"))
+            == CameraKeys.key(for: mtp, material: nil))
+    }
+
+    @Test func tagsNameKeysWithoutTheirValue() {
+        let tags = CameraKeyTags()
+        let mtp = CameraKeys.key(for: CameraDescriptor(id: .init(rawValue: "a"), name: "ILCE-7CM2", mode: .usb(.mtp)),
+                                 material: "00000000-0000-0000-0000-00000000ABCD")
+        let msc = CameraKeys.key(for: CameraDescriptor(id: .init(rawValue: "b"), name: "Untitled",
+                                                       mode: .usb(.massStorage)), material: nil)
+        let odd = CameraKey(rawValue: "serial-0001:something")
+        #expect(tags.tag(for: mtp) == "k1 (usb-device)")
+        #expect(tags.tag(for: msc) == "k2 (usb-msc-name)")
+        #expect(tags.tag(for: mtp) == "k1 (usb-device)")   // stable within the launch
+        #expect(tags.tag(for: odd) == "k3 (other)")
+        #expect(tags.tag(for: CameraKey(rawValue: "")) == "k4 (other)")
+        for key in [mtp, msc, odd] {
+            let tag = tags.tag(for: key)
+            let value = String(key.rawValue.drop { $0 != ":" }.dropFirst())
+            #expect(!tag.contains(value.prefix(4)), "\(tag)")
+            #expect(!tag.contains("serial"))
+        }
+    }
 }

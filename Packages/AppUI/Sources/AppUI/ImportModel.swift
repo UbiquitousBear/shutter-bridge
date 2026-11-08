@@ -67,7 +67,7 @@ public final class ImportModel: BrowseImporting {
     public private(set) var filesFolderName: String?
     /// True while the Photos prompt is up, at the first Import.
     public private(set) var isAskingForPhotosAccess = false
-    /// Goes up each time more files are imported, so Browse can refresh its badges (`refreshImportedStates()`).
+    /// Goes up each time more files are imported. Browse follows it through `importedUpdates()`.
     public private(set) var importedRevision = 0
     /// A refusal or failure to start, for the screen that asked; cleared by the next request.
     public private(set) var message: String?
@@ -93,6 +93,11 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private var refreshesStarted = 0
     @ObservationIgnored private var refreshesApplied = 0
     @ObservationIgnored private var importedSoFar = 0
+    @ObservationIgnored private let importedFanOut = LatestValueFanOut<Int>()
+    /// The files of the job shown whose import is in the bench log already.
+    @ObservationIgnored private var loggedImports: Set<ObjectIdentity> = []
+    @ObservationIgnored private var loggedEnd = false
+    @ObservationIgnored private let keyTags: CameraKeyTags
 
     public init(
         engine: ImportEngine,
@@ -101,8 +106,10 @@ public final class ImportModel: BrowseImporting {
         destinations: any ImportDestinationMaking,
         leases: LinkLeases = LinkLeases(),
         log: any BenchLog = SilentBenchLog(),
+        keyTags: CameraKeyTags = .shared,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.keyTags = keyTags
         self.engine = engine
         self.settings = settings
         self.photos = photos
@@ -120,6 +127,15 @@ public final class ImportModel: BrowseImporting {
             }
         }
     }
+
+    deinit {
+        importedFanOut.finish()
+    }
+
+    /// The new `importedRevision` each time more files have been imported, for as long as the caller reads: one
+    /// stream per caller, which gets only what happens after it subscribed and, if it falls behind, only the latest
+    /// revision. Browse refreshes its badges on each (`BrowseModel.run()`).
+    public func importedUpdates() -> AsyncStream<Int> { importedFanOut.subscribe() }
 
     // MARK: - What the screen shows
 
@@ -243,6 +259,8 @@ public final class ImportModel: BrowseImporting {
         jobDestinations = made
         filesFolderName = made.filesFolderName
         importedSoFar = 0
+        loggedImports = []
+        loggedEnd = false
         do {
             try await engine.start(.items(items), from: link, camera: camera.key, to: route)
         } catch {
@@ -393,9 +411,41 @@ public final class ImportModel: BrowseImporting {
         let imported = s.files.reduce(0) { n, f in
             if case .imported = f.phase { n + 1 } else { n }
         }
+        logImports(s)
         if imported != importedSoFar {
             importedSoFar = imported
             importedRevision += 1
+            importedFanOut.send(importedRevision)
+        }
+    }
+
+    /// The bench log: each file once it is imported, with the identity its row was written under (the key by its
+    /// tag only), and the job's end once. What the 17.1 bench run lacked to tell why a badge didn't show.
+    private func logImports(_ s: ImportSnapshot) {
+        for file in s.files {
+            guard case let .imported(location) = file.phase, case let .file(identity) = file.id,
+                  loggedImports.insert(identity).inserted else { continue }
+            let destination: String
+            switch location {
+            case .file?: destination = "Files"
+            case .photosAsset?: destination = "Photos"
+            case nil: destination = s.progress.destination?.kind == .photos ? "Photos" : "Files"
+            }
+            log.note("import: imported \(identity.filename) \(identity.captureDate) \(identity.size) B folder "
+                + "\"\(identity.folder)\" key \(keyTags.tag(for: identity.camera)) → \(destination)")
+        }
+        guard case let .finished(outcome) = s.progress.state, !loggedEnd, let camera else { return }
+        loggedEnd = true
+        log.note("import: job ended \(Self.describe(outcome)): \(loggedImports.count) imported, key "
+            + keyTags.tag(for: camera.key))
+    }
+
+    private static func describe(_ outcome: JobOutcome) -> String {
+        switch outcome {
+        case .completed: "completed"
+        case .cancelled: "cancelled"
+        case let .stopped(kind): "stopped (\(kind))"
+        case .catalogueUnavailable: "catalogue unavailable"
         }
     }
 

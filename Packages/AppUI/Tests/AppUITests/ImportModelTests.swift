@@ -55,21 +55,70 @@ struct ImportModelTests {
     }
 
     func harness(setting: DestinationKind = .photos, photos: FakePhotosAccess = FakePhotosAccess(),
-                 hangs: Bool = false, catalogue: InMemoryCatalogue = InMemoryCatalogue()) async -> Harness {
+                 hangs: Bool = false, catalogue: InMemoryCatalogue = InMemoryCatalogue(),
+                 log: any BenchLog = SilentBenchLog()) async -> Harness {
         let link = FakeLink(items: card)
         await link.set(writesListedSize: true)
         await link.set(bytesHangs: hangs)
-        let engine = ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
+        // A hung download is looked at in flight: on a frozen clock the engine's 30 s stall limit can't turn it into a
+        // retry before the checks run on a slow runner. Harnesses without a hang keep the real clock.
+        let engine = hangs
+            ? ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging(), clock: FrozenClock())
+            : ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
         let settings = InMemoryDestinationSettingStore(DestinationSetting(preferred: setting))
         let destinations = FakeDestinations()
         let leases = LinkLeases()
         let finder = FakeFinder()
         let model = ImportModel(engine: engine, settings: settings, photos: photos, destinations: destinations,
-                                leases: leases)
+                                leases: leases, log: log)
         model.cameraFinder = finder
         let camera = ImportCamera(descriptor: link.descriptor, key: CameraKeys.key(for: link.descriptor, material: nil))
         return Harness(model: model, engine: engine, catalogue: catalogue, settings: settings, photos: photos,
                        destinations: destinations, leases: leases, finder: finder, link: link, camera: camera)
+    }
+
+    // MARK: - More files imported
+
+    @Test func importedUpdatesFireOncePerIncrease() async {
+        final class Seen: @unchecked Sendable {
+            var revisions: [Int] = []
+        }
+        let h = await harness(setting: .filesFolder)
+        let seen = Seen()
+        let updates = h.model.importedUpdates()
+        let reader = Task { @MainActor in
+            for await revision in updates { seen.revisions.append(revision) }
+        }
+        #expect(await h.importAll(card) == .started(3))
+        #expect(await h.finished())
+        #expect(h.model.importedRevision > 0)
+        #expect(await eventually { seen.revisions.last == h.model.importedRevision })
+        // Never more than once per increase, in order; a slow reader may skip to the newest.
+        #expect(seen.revisions == seen.revisions.sorted() && Set(seen.revisions).count == seen.revisions.count)
+        // Reading the engine again with nothing new imported says nothing.
+        let count = seen.revisions.count
+        await h.model.refresh()
+        await h.model.refresh()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(seen.revisions.count == count)
+        reader.cancel()
+        await reader.value
+    }
+
+    @Test func eachImportedFileIsLoggedWithItsIdentityAndNoKey() async {
+        let log = RecordingLog()
+        let h = await harness(setting: .filesFolder, log: log)
+        #expect(await h.importAll(card) == .started(3))
+        #expect(await h.finished())
+        let tag = CameraKeyTags.shared.tag(for: h.camera.key)
+        let imported = log.lines.filter { $0.hasPrefix("import: imported ") }
+        #expect(imported.count == 3)
+        let date = CaptureDate(card[2].captureDate!, in: .current)!.rawValue
+        #expect(imported.contains(
+            "import: imported DSC00002.JPG \(date) 3000 B folder \"DCIM/100MSDCF\" key \(tag) → Files"))
+        #expect(log.lines.filter { $0.hasPrefix("import: job ended ") }
+            == ["import: job ended completed: 3 imported, key \(tag)"])
+        for line in log.lines { #expect(!line.contains(h.camera.key.rawValue.suffix(16)), "\(line)") }
     }
 
     // MARK: - Destination and the Photos ask

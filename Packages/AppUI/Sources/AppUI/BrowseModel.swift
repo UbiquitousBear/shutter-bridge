@@ -95,7 +95,10 @@ public final class BrowseModel {
     /// When the shown card was listed, while it is the catalogue's last-known card rather than the live one; nil
     /// once the live listing has replaced it (or when there was none).
     public private(set) var lastKnownListedAt: Date?
-    /// The files the catalogue has as imported (by identity, the engine's rule), for the badge.
+    /// The files the catalogue has as imported, for the badge: by name, capture time (to the second) and size, from
+    /// either USB mode and under any camera key or folder (Shamil's rule of 8 Nov, `ObjectIdentity.ContentKey`), as
+    /// the engine skips them. Read after each listing, on the last-known card, and each time the import imports more
+    /// files while Browse is shown (`BrowseImporting.importedUpdates()`).
     public private(set) var imported: Set<CameraItem.ID> = []
     /// The picked files, which the sticky bar counts and Import hands over.
     public private(set) var selection: Set<CameraItem.ID> = []
@@ -139,6 +142,10 @@ public final class BrowseModel {
     @ObservationIgnored private var actionCount = 0
     /// Said instead of nothing when the action in progress ends as cancelled, because the app cancelled it.
     @ObservationIgnored private var cancelMessage: String?
+    /// Badge reads started and applied, so a read that answers after a newer one is dropped.
+    @ObservationIgnored private var badgeReadsStarted = 0
+    @ObservationIgnored private var badgeReadsApplied = 0
+    @ObservationIgnored private let keyTags: CameraKeyTags
 
     /// - Parameters:
     ///   - catalogue: The last-known card and the already-imported badge; without it Browse shows neither.
@@ -154,9 +161,11 @@ public final class BrowseModel {
         catalogue: BrowseCatalogue? = nil,
         importer: (any BrowseImporting)? = nil,
         leases: LinkLeases = LinkLeases(),
+        keyTags: CameraKeyTags = .shared,
         now: @escaping @Sendable () -> Date = { Date() },
         calendar: Calendar = .current
     ) {
+        self.keyTags = keyTags
         self.camera = camera
         self.openLink = openLink
         self.services = services
@@ -171,9 +180,10 @@ public final class BrowseModel {
 
     // MARK: - Lifecycle
 
-    /// Opens the link, shows the last-known card, lists the card and follows the link's events until the calling task
-    /// is cancelled, then lets go of the link (closing it unless an import holds it). A second call while one runs
-    /// does nothing.
+    /// Opens the link, shows the last-known card, lists the card, and follows the link's events and the import's
+    /// "more files imported" (refreshing the badges on each) until the calling task is cancelled or the link's events
+    /// end, then lets go of the link (closing it unless an import holds it). A second call while one runs does
+    /// nothing.
     public func run() async {
         guard !isRunning, phase != .gone else { return }
         isRunning = true
@@ -195,8 +205,21 @@ public final class BrowseModel {
             await showLastKnown(for: key, from: catalogue.store)
         }
         let events = link.events
+        // Subscribed before the listing, so an import that finishes while the card is read is still noticed.
+        let imports = importer?.importedUpdates()
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.follow(events) }
+            group.addTask {
+                // The import's updates never end by themselves: they stop with the link's events.
+                await withTaskGroup(of: Bool.self) { followers in
+                    followers.addTask { await self.follow(events); return true }
+                    if let imports {
+                        followers.addTask { await self.followImports(imports); return false }
+                    }
+                    while let eventsEnded = await followers.next() {
+                        if eventsEnded { followers.cancelAll() }
+                    }
+                }
+            }
             group.addTask { await self.load(link) }
             await group.waitForAll()
         }
@@ -227,19 +250,26 @@ public final class BrowseModel {
             let items = try await link.list()
             guard !Task.isCancelled, phase != .gone else { return }
             rule = JPEGSourceRule(listing: items)
-            // The last-known card's Imported badges carry over by identity, so the grid, New Only and Select All
+            // The last-known card's Imported badges carry over by content, so the grid, New Only and Select All
             // New never see the live card without them while the catalogue is asked again.
             show(items, carryingImported: true)
             lastKnownListedAt = nil
             phase = .listed
-            services.log.note("browse: listed \(items.count) files in \(Self.seconds(since: start)) s "
-                + "(\(CamerasWording.modeLine(camera.mode)) at discovery)")
-            await refreshImportedStates()
+            services.log.note(listingLine(items, seconds: Self.seconds(since: start)))
+            await refreshImportedStates(.listing)
             await saveListing(items)
         } catch {
             guard !Task.isCancelled else { return }
             services.log.note("browse: listing ended after \(Self.seconds(since: start)) s: \(error)")
             listingFailed(error)
+        }
+    }
+
+    /// Refreshes the badges each time the import says more files were imported, so they show without leaving
+    /// Browse (the 17.1 bench run: in MTP, where listing again takes 65–123 s, nothing else would show them).
+    private func followImports(_ updates: AsyncStream<Int>) async {
+        for await revision in updates {
+            await refreshImportedStates(.importedMore(revision: revision))
         }
     }
 
@@ -470,11 +500,36 @@ public final class BrowseModel {
 
     public func isImported(_ item: CameraItem) -> Bool { imported.contains(item.id) }
 
+    /// Why the badges are read, for the bench log.
+    enum BadgeRead: Sendable, Hashable, CustomStringConvertible {
+        case listing
+        case lastKnown
+        case importedMore(revision: Int)
+        case asked
+
+        var description: String {
+            switch self {
+            case .listing: "after listing"
+            case .lastKnown: "on the last-known card"
+            case let .importedMore(revision): "after import (rev \(revision))"
+            case .asked: "on request"
+            }
+        }
+    }
+
     /// Reads the catalogue's states for the card shown: the badge, and selected files that are now imported drop out
-    /// of the selection. Called after each listing, and by the app when an import has imported more files
-    /// (`ImportModel.importedRevision`).
+    /// of the selection. Browse calls it itself after each listing, on the last-known card and each time the import
+    /// imports more files; callers may also ask.
     public func refreshImportedStates() async {
-        guard let catalogue, let key = cameraKey, !items.isEmpty else { return }
+        await refreshImportedStates(.asked)
+    }
+
+    func refreshImportedStates(_ why: BadgeRead) async {
+        guard let catalogue, !items.isEmpty else { return }
+        guard let key = cameraKey else {
+            services.log.note("browse: badges not refreshed: no key")
+            return
+        }
         let shown = items
         let zone = self.zone
         var byIdentity: [ObjectIdentity: CameraItem.ID] = [:]
@@ -482,20 +537,45 @@ public final class BrowseModel {
             if let identity = item.identity(camera: key, timeZone: zone) { byIdentity[identity] = item.id }
         }
         guard !byIdentity.isEmpty else { return }
+        badgeReadsStarted += 1
+        let mine = badgeReadsStarted
         let states: [ObjectIdentity: ObjectState]
         do {
             states = try await catalogue.store.states(of: Array(byIdentity.keys))
         } catch {
-            services.log.note("browse: the catalogue couldn't be read: \(type(of: error))")
+            services.log.note("browse: badges not refreshed: catalogue error (\(type(of: error)))")
             return
         }
         // The card may have been replaced while the catalogue answered.
-        guard shown == items else { return }
+        guard shown == items else {
+            services.log.note("browse: badges not refreshed: card replaced")
+            return
+        }
+        // A newer read has answered already, and knows more.
+        guard mine > badgeReadsApplied else { return }
+        badgeReadsApplied = mine
         var now: Set<CameraItem.ID> = []
         for (identity, id) in byIdentity where states[identity] == .imported { now.insert(id) }
         if now != imported { imported = now }
         if !selection.isDisjoint(with: now) { selection.subtract(now) }
         if filter.newOnly { rebuildSections() }
+        services.log.note("browse: badges refreshed \(why): \(shown.count) shown, \(byIdentity.count) dated, "
+            + "\(now.count) imported, key \(keyTags.tag(for: key))")
+    }
+
+    /// The bench log's line for a listing: how long it took, the key by its tag, how many files came without a folder
+    /// and the three newest files' names, capture times and sizes (what Shamil's rule matches on), so the same file
+    /// can be compared between MSC and MTP. No handle, no key.
+    private func listingLine(_ listed: [CameraItem], seconds: String) -> String {
+        let keyText = cameraKey.map { ", key \(keyTags.tag(for: $0))" } ?? ""
+        let unfiled = listed.filter(\.folder.isEmpty).count
+        let newest = listed.filter { $0.captureDate != nil }.newestFirst().prefix(3).map { item in
+            let date = item.captureDate.flatMap { CaptureDate($0, in: zone) }?.rawValue ?? "undated"
+            return "\(item.name) \(date) \(item.size) B"
+        }
+        return "browse: listed \(listed.count) files in \(seconds) s\(keyText), \(unfiled) with no folder "
+            + "(\(CamerasWording.modeLine(camera.mode)) at discovery); newest: "
+            + (newest.isEmpty ? "none" : newest.joined(separator: ", "))
     }
 
     /// The catalogue's last listing of this camera, shown at once while the card is read (decision 7).
@@ -518,12 +598,13 @@ public final class BrowseModel {
         lastKnownListedAt = listing.listedAt
         show(known)
         services.log.note("browse: showing the last-known card (\(known.count) files)")
-        await refreshImportedStates()
+        await refreshImportedStates(.lastKnown)
     }
 
     /// Replaces the card shown, keeping only the selection that is still on it. With `carryingImported`, files of
-    /// the new card whose identity was marked imported on the old one stay marked (the last-known card and the live
-    /// listing have different item IDs), until `refreshImportedStates()` answers from the catalogue.
+    /// the new card whose content (name, capture time, size: the catalogue's rule) was marked imported on the old one
+    /// stay marked (the last-known card and the live listing have different item IDs, and MTP may list a file in
+    /// another folder), until `refreshImportedStates()` answers from the catalogue.
     private func show(_ newItems: [CameraItem], carryingImported: Bool = false) {
         let carried = carryingImported ? importedIdentities() : []
         items = newItems
@@ -534,7 +615,7 @@ public final class BrowseModel {
         if let key = cameraKey, !carried.isEmpty {
             let zone = self.zone
             let now = Set(newItems.filter { item in
-                item.identity(camera: key, timeZone: zone).map(carried.contains) ?? false
+                item.identity(camera: key, timeZone: zone).map { carried.contains($0.contentKey) } ?? false
             }.map(\.id))
             if now != imported { imported = now }
             if !selection.isDisjoint(with: now) { selection.subtract(now) }
@@ -544,11 +625,13 @@ public final class BrowseModel {
         rebuildSections()
     }
 
-    /// The identities of the files shown as imported.
-    private func importedIdentities() -> Set<ObjectIdentity> {
+    /// The content keys of the files shown as imported.
+    private func importedIdentities() -> Set<ObjectIdentity.ContentKey> {
         guard let key = cameraKey, !imported.isEmpty else { return [] }
         let zone = self.zone
-        return Set(items.filter { imported.contains($0.id) }.compactMap { $0.identity(camera: key, timeZone: zone) })
+        return Set(items.filter { imported.contains($0.id) }.compactMap {
+            $0.identity(camera: key, timeZone: zone)?.contentKey
+        })
     }
 
     private func rebuildSections() {

@@ -32,8 +32,10 @@ extension AppModel {
     ///   Files folder under Documents, one folder per camera (`FilesFolderDestination`), which the Info.plist shows in
     ///   Files as On My iPhone › Shutter Bridge;
     /// - the destination setting and the album identifiers in `UserDefaults`;
-    /// - discovery through `USBCameraBrowser`, and the camera key from the USB link's key material (`CameraKeys`:
-    ///   hashed device UUID in MTP, mode and volume name in MSC; unverified, backlog sections 2 and 4).
+    /// - discovery through `USBCameraBrowser`, and the camera key from the USB link's key material
+    ///   (`CameraKeys.keying(material:)`: hashed device UUID in MTP, mode and volume name in MSC; unverified, backlog
+    ///   sections 2 and 4). The key groups imports (album, Camera row, last-known card, reconnecting); whether a file
+    ///   is already imported doesn't depend on it (Shamil, 8 Nov).
     static func live(catalogue: any CatalogueStore) -> AppModel {
         let library = SystemPhotoLibrary()
         let engine = ImportEngine(catalogue: catalogue)
@@ -51,11 +53,10 @@ extension AppModel {
             settingsStore: UserDefaultsDestinationSettingStore(),
             photos: LibraryPhotosAuthorisation(library: library),
             destinations: destinations,
-            cameraKey: { descriptor, link in
-                guard let usb = link as? USBLink else { return CameraKeys.key(for: descriptor, material: nil) }
-                let material = await usb.cameraKeyMaterial()
-                return CameraKeys.key(for: descriptor, material: material?.rawValue)
-            }
+            cameraKey: CameraKeys.keying(material: { link in
+                guard let usb = link as? USBLink else { return nil }
+                return await usb.cameraKeyMaterial()?.rawValue
+            })
         )
     }
 }

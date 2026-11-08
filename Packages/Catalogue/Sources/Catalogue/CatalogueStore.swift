@@ -91,16 +91,25 @@ public struct CardListing: Sendable, Hashable, Codable {
 /// implementations: `InMemoryCatalogue` (tests and previews, any platform) and `SwiftDataCatalogue`, a `ModelActor`
 /// (where SwiftData exists). Both pass the same contract tests (`CatalogueContractTests`).
 ///
-/// Identity is unique per store: the store, not the schema, enforces it (a SwiftData schema with a unique attribute
-/// can't sync through CloudKit, which the proposal keeps open for a later opt-in; backlog section 4).
+/// Rows are unique per store by their full identity (camera, folder, name, capture date, size): the store, not the
+/// schema, enforces it (a SwiftData schema with a unique attribute can't sync through CloudKit, which the proposal
+/// keeps open for a later opt-in; backlog section 4).
+///
+/// **"Already imported" is answered by content** (Shamil, 8 Nov): `states(of:)` matches rows by file name (ignoring
+/// ASCII case), capture time to the second and size (`ObjectIdentity.ContentKey`), ignoring the camera key and the
+/// folder, so a file imported in MSC reads as imported in MTP. Rows of the same content under several cameras or
+/// folders are allowed, and all count; nothing asserts that content is unique.
 public protocol CatalogueStore: Actor {
-    /// The row for one identity, if there is one.
+    /// The row for exactly this identity (camera and folder included), if there is one: where that copy went.
     func record(for identity: ObjectIdentity) throws -> CatalogueRecord?
 
-    /// The state of each identity; `.new` for those never seen. This is the diff the engine runs (stage 3).
+    /// The state of each identity: the furthest along (imported, partial, skipped, new) of every row with the same
+    /// content, whatever its camera key or folder; `.new` when no row matches. This is the diff the engine runs
+    /// (stage 3), and Browse's Imported badge.
     func states(of identities: [ObjectIdentity]) throws -> [ObjectIdentity: ObjectState]
 
-    /// Inserts the row, or updates the one with the same identity: a second insert never duplicates.
+    /// Inserts the row, or updates the one with the same full identity: a second insert never duplicates. A row of
+    /// the same content under another camera or folder is a row of its own and is left alone.
     func upsert(_ record: CatalogueRecord) throws
 
     /// Replaces the stored listing for the listing's camera.

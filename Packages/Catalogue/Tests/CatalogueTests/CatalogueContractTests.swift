@@ -98,11 +98,131 @@ struct CatalogueContractTests {
             == [first: .imported, sameSizeOtherDate: .imported, sameFolder: .new])
     }
 
+    // MARK: - Shamil's rule of 8 Nov: already imported by file name, capture time (to the second) and size
+
+    static let mscCamera = CameraKey(rawValue: "usb-msc-name:hashed-volume-name")
+    static let mtpCamera = CameraKey(rawValue: "usb-device:hashed-device-uuid")
+
+    /// Was `identityIncludesTheCamera`, which expected another camera's file of the same name, date and size to read
+    /// as new. Shamil reversed that on 8 Nov: it reads as imported, while each camera's row stays its own.
     @Test(arguments: StoreKind.available)
-    func identityIncludesTheCamera(_ kind: StoreKind) async throws {
-        let s = try await kind.make(records: [CatalogueRecord(identity: first, format: .raw, state: .imported)])
+    func alreadyImportedIgnoresTheCameraButEachCameraKeepsItsRow(_ kind: StoreKind) async throws {
+        let mine = CatalogueRecord(identity: first, format: .raw, state: .imported,
+                                   location: .photosAsset(localIdentifier: "A/L0/001"))
+        let s = try await kind.make(records: [mine])
         let onOtherCamera = Self.id("DSC00001.ARW", "20261101T143005", 44_000_000, camera: Self.otherCamera)
-        #expect(try await s.store.states(of: [first, onOtherCamera]) == [first: .imported, onOtherCamera: .new])
+        #expect(try await s.store.states(of: [first, onOtherCamera]) == [first: .imported, onOtherCamera: .imported])
+        // The lookup by identity is still exact: the other camera has no row of its own.
+        #expect(try await s.store.record(for: onOtherCamera) == nil)
+        #expect(try await s.store.record(for: first) == mine)
+    }
+
+    @Test(arguments: StoreKind.available)
+    func aFileImportedInOneModeIsImportedInTheOther(_ kind: StoreKind) async throws {
+        // Imported in MSC (keyed by the volume name, in DCIM/100MSDCF); listed again in MTP (keyed by the device, with
+        // no folder, as ImageCaptureCore gave on 1 Nov).
+        let inMSC = Self.id("DSC04512.ARW", "20261108T101530", 40_329_216, camera: Self.mscCamera)
+        let inMTP = Self.id("DSC04512.ARW", "20261108T101530", 40_329_216, folder: "", camera: Self.mtpCamera)
+        let s = try await kind.make(records: [CatalogueRecord(identity: inMSC, format: .raw, state: .imported,
+                                                              location: .file(relativePath: "Untitled/DSC04512.ARW"))])
+        #expect(try await s.store.states(of: [inMTP]) == [inMTP: .imported])
+        // And the other way round.
+        let s2 = try await kind.make(records: [CatalogueRecord(identity: inMTP, format: .raw, state: .imported)])
+        #expect(try await s2.store.states(of: [inMSC]) == [inMSC: .imported])
+    }
+
+    @Test(arguments: StoreKind.available)
+    func aFileImportedFromAnotherFolderIsImported(_ kind: StoreKind) async throws {
+        let s = try await kind.make(records: [CatalogueRecord(identity: first, format: .raw, state: .imported)])
+        let elsewhere = Self.id("DSC00001.ARW", "20261101T143005", 44_000_000, folder: "DCIM/101MSDCF")
+        let unfiled = Self.id("DSC00001.ARW", "20261101T143005", 44_000_000, folder: "")
+        #expect(try await s.store.states(of: [elsewhere, unfiled]) == [elsewhere: .imported, unfiled: .imported])
+    }
+
+    @Test(arguments: StoreKind.available)
+    func aDifferentSecondSizeOrNameIsANewFile(_ kind: StoreKind) async throws {
+        let imported = Self.id("DSC04512.ARW", "20261108T101530", 40_329_216, camera: Self.mscCamera)
+        let s = try await kind.make(records: [CatalogueRecord(identity: imported, format: .raw, state: .imported)])
+        let nextSecond = Self.id("DSC04512.ARW", "20261108T101531", 40_329_216, folder: "", camera: Self.mtpCamera)
+        let secondBefore = Self.id("DSC04512.ARW", "20261108T101529", 40_329_216, folder: "", camera: Self.mtpCamera)
+        let byteMore = Self.id("DSC04512.ARW", "20261108T101530", 40_329_217, folder: "", camera: Self.mtpCamera)
+        let byteLess = Self.id("DSC04512.ARW", "20261108T101530", 40_329_215, folder: "", camera: Self.mtpCamera)
+        let otherName = Self.id("DSC04513.ARW", "20261108T101530", 40_329_216, folder: "", camera: Self.mtpCamera)
+        let otherExtension = Self.id("DSC04512.JPG", "20261108T101530", 40_329_216, camera: Self.mscCamera)
+        let asked = [nextSecond, secondBefore, byteMore, byteLess, otherName, otherExtension]
+        #expect(try await s.store.states(of: asked) == Dictionary(uniqueKeysWithValues: asked.map { ($0, .new) }))
+    }
+
+    @Test(arguments: StoreKind.available)
+    func namesMatchIgnoringASCIICaseOnly(_ kind: StoreKind) async throws {
+        let upper = Self.id("DSC04512.ARW", "20261108T101530", 40_329_216, camera: Self.mscCamera)
+        let accented = Self.id("\u{C9}T\u{C9}.JPG", "20261108T101530", 1_000)   // "ÉTÉ.JPG", precomposed
+        let s = try await kind.make(records: [CatalogueRecord(identity: upper, format: .raw, state: .imported),
+                                              CatalogueRecord(identity: accented, format: .jpeg, state: .imported)])
+        let lower = Self.id("dsc04512.arw", "20261108T101530", 40_329_216, folder: "", camera: Self.mtpCamera)
+        let mixed = Self.id("Dsc04512.Arw", "20261108T101530", 40_329_216, folder: "", camera: Self.mtpCamera)
+        let accentedLower = Self.id("\u{E9}t\u{E9}.jpg", "20261108T101530", 1_000)   // "été.jpg": É isn't ASCII
+        let accentedOnlyASCIILower = Self.id("\u{C9}t\u{C9}.jpg", "20261108T101530", 1_000)   // "ÉtÉ.jpg"
+        // "ÉTÉ.JPG" decomposed (E and a combining acute): canonically equivalent, so the same name as a Swift string.
+        let accentedDecomposed = Self.id("E\u{301}TE\u{301}.JPG", "20261108T101530", 1_000, folder: "",
+                                         camera: Self.mtpCamera)
+        #expect(try await s.store.states(of: [lower, mixed, accentedLower, accentedOnlyASCIILower, accentedDecomposed])
+            == [lower: .imported, mixed: .imported, accentedLower: .new, accentedOnlyASCIILower: .imported,
+                accentedDecomposed: .imported])
+    }
+
+    @Test(arguments: StoreKind.available)
+    func theFurthestAlongStateWinsAcrossCameras(_ kind: StoreKind) async throws {
+        // One file: skipped under one camera, partial under another, imported under a third.
+        let skipped = Self.id("DSC00009.ARW", "20261101T150000", 44_000_009, camera: Self.otherCamera)
+        let partial = Self.id("DSC00009.ARW", "20261101T150000", 44_000_009, folder: "", camera: Self.mtpCamera)
+        let imported = Self.id("DSC00009.ARW", "20261101T150000", 44_000_009, camera: Self.mscCamera)
+        let s = try await kind.make(records: [
+            CatalogueRecord(identity: skipped, format: .raw, state: .skipped),
+            CatalogueRecord(identity: partial, format: .raw, state: .partial, resumeOffset: 4096),
+        ])
+        let asked = Self.id("DSC00009.ARW", "20261101T150000", 44_000_009, camera: Self.camera)
+        #expect(try await s.store.states(of: [asked, skipped]) == [asked: .partial, skipped: .partial])
+        try await s.store.upsert(CatalogueRecord(identity: imported, format: .raw, state: .imported))
+        #expect(try await s.store.states(of: [asked, skipped, partial])
+            == [asked: .imported, skipped: .imported, partial: .imported])
+        // Each row keeps its own state.
+        #expect(try await s.store.record(for: skipped)?.state == .skipped)
+        #expect(try await s.store.record(for: partial)?.state == .partial)
+    }
+
+    /// Build 17.1 matched per camera, so a file imported in MSC and again in MTP has two rows with different keys and
+    /// the same content. Both count; neither is merged into the other, since each records a real copy.
+    @Test(arguments: StoreKind.available)
+    func rowsOfOneFileUnderTwoCamerasBothCountAndNeitherIsLost(_ kind: StoreKind) async throws {
+        let inMSC = CatalogueRecord(identity: Self.id("DSC04512.ARW", "20261108T101530", 40_329_216,
+                                                      camera: Self.mscCamera),
+                                    format: .raw, state: .imported,
+                                    location: .file(relativePath: "Untitled/DSC04512.ARW"))
+        let inMTP = CatalogueRecord(identity: Self.id("DSC04512.ARW", "20261108T101530", 40_329_216, folder: "",
+                                                      camera: Self.mtpCamera),
+                                    format: .raw, state: .imported, location: .photosAsset(localIdentifier: "B/L0/001"))
+        let s = try await kind.make(records: [inMSC, inMTP])
+        #expect(Set(try await s.rows()) == [inMSC, inMTP])
+        #expect(try await s.store.states(of: [inMSC.identity, inMTP.identity])
+            == [inMSC.identity: .imported, inMTP.identity: .imported])
+        #expect(try await s.store.record(for: inMSC.identity) == inMSC)
+        #expect(try await s.store.record(for: inMTP.identity) == inMTP)
+        // Writing one of them again still leaves both.
+        try await s.store.upsert(inMTP)
+        #expect(Set(try await s.rows()) == [inMSC, inMTP])
+        #expect(try await s.store.record(for: inMSC.identity)?.location == .file(relativePath: "Untitled/DSC04512.ARW"))
+    }
+
+    /// The risk Shamil accepted: two cameras writing the same name in the same second at the same size count as one.
+    @Test(arguments: StoreKind.available)
+    func twoCamerasWithTheSameNameSecondAndSizeCountAsOne(_ kind: StoreKind) async throws {
+        let bodyA = CameraKey(rawValue: "usb-device:hashed-body-a")
+        let bodyB = CameraKey(rawValue: "usb-device:hashed-body-b")
+        let fromA = Self.id("DSC00001.JPG", "20261101T143005", 9_100_000, camera: bodyA)
+        let fromB = Self.id("DSC00001.JPG", "20261101T143005", 9_100_000, camera: bodyB)
+        let s = try await kind.make(records: [CatalogueRecord(identity: fromA, format: .jpeg, state: .imported)])
+        #expect(try await s.store.states(of: [fromB]) == [fromB: .imported])
     }
 
     @Test(arguments: StoreKind.available)
