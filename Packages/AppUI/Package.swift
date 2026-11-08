@@ -1,9 +1,11 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// The app's screens. SwiftUI code sits behind `#if canImport(SwiftUI)`; the copy and any view-model logic stay
-// outside it, so they build and test on Linux. Cameras, Browse and Import (section 6 of
-// docs/iteration-1-backlog.md) arrive in their own pull request.
+// The app's screens. The view models (`@Observable`, main actor), the copy, the Copy as JPEG source rule and its
+// temporary folders are plain Swift and Foundation, so they build and test on Linux against fake links. The SwiftUI
+// screens, the pasteboard, the share sheet, Core Image and ImageIO, OSLog and the `USBCameraBrowser` conformance sit
+// behind `#if canImport(...)`. Section 6 of docs/iteration-1-backlog.md: the thin Browse slice with Copy as JPEG
+// and Share as JPEG… (8 Nov) is here; the full Browse, Import and Settings follow.
 let package = Package(
     name: "AppUI",
     platforms: [

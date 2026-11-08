@@ -1,0 +1,169 @@
+import CameraTransport
+import Foundation
+@testable import AppUI
+
+/// A card for tests: name, folder, seconds after a fixed instant (nil: no date), size.
+func item(_ name: String, folder: String = "DCIM/100MSDCF", at seconds: TimeInterval? = 0, size: UInt64 = 1_000,
+          id: String? = nil) -> CameraItem {
+    CameraItem(id: .init(rawValue: id ?? "\(folder)/\(name)"), folder: folder, name: name, size: size,
+               captureDate: seconds.map { Date(timeIntervalSince1970: 1_793_000_000 + $0) })
+}
+
+/// A camera link over a scripted card. `bytes` writes a small file named after the item (its contents are the
+/// item's name, so a test can tell which file was fetched); it can be made to hang until cancelled or closed, or to
+/// fail. Like `USBLink`, a closed link fails its calls as `disconnected`, and a cancelled fetch fails as `busy`.
+actor FakeLink: CameraLink {
+    nonisolated let descriptor: CameraDescriptor
+    nonisolated let events: AsyncStream<CameraLinkEvent>
+    private let eventSink: AsyncStream<CameraLinkEvent>.Continuation
+
+    var items: [CameraItem]
+    var listFailure: CameraLinkFailure?
+    var bytesFailure: CameraLinkFailure?
+    var bytesHangs = false
+    private(set) var fetched: [CameraItem.ID] = []
+    private(set) var bytesStarted = 0
+    private(set) var isOpen = false
+    private(set) var closed = false
+    private var hang: CheckedContinuation<Void, Never>?
+
+    init(items: [CameraItem], mode: CameraMode = .usb(.massStorage)) {
+        descriptor = CameraDescriptor(id: .init(rawValue: "fake-camera"), name: "Untitled", mode: mode)
+        self.items = items
+        (events, eventSink) = AsyncStream.makeStream()
+    }
+
+    func set(listFailure: CameraLinkFailure?) { self.listFailure = listFailure }
+    func set(bytesFailure: CameraLinkFailure?) { self.bytesFailure = bytesFailure }
+    func set(bytesHangs: Bool) { self.bytesHangs = bytesHangs }
+
+    func remove() { eventSink.yield(.removed) }
+    func send(_ event: CameraLinkEvent) { eventSink.yield(event) }
+
+    func open() throws(CameraLinkFailure) { isOpen = true }
+
+    func list() throws(CameraLinkFailure) -> [CameraItem] {
+        if let listFailure { throw listFailure }
+        return items.newestFirst()
+    }
+
+    func info(of item: CameraItem.ID) throws(CameraLinkFailure) -> CameraItem {
+        guard let found = items.first(where: { $0.id == item }) else { throw CameraLinkFailure(.itemNotFound) }
+        return found
+    }
+
+    func thumbnail(of item: CameraItem.ID) throws(CameraLinkFailure) -> Data { Data("thumb \(item)".utf8) }
+
+    func bytes(of item: CameraItem.ID, into directory: URL,
+               progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL {
+        bytesStarted += 1
+        if closed { throw CameraLinkFailure(.disconnected, detail: "bytes: the link is closed") }
+        if bytesHangs {
+            // Parked until the calling task is cancelled or the link closes, whichever comes first: no timeout, so
+            // a missed cancel shows up at once as a `disconnected` failure rather than as a slow pass.
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    if Task.isCancelled || closed { continuation.resume() } else { hang = continuation }
+                }
+            } onCancel: {
+                Task { await self.releaseHang() }
+            }
+            if Task.isCancelled { throw CameraLinkFailure(.busy, detail: "bytes: cancelled") }
+            if closed { throw CameraLinkFailure(.disconnected, detail: "bytes: the link is closed") }
+        }
+        if let bytesFailure { throw bytesFailure }
+        guard let found = items.first(where: { $0.id == item }) else { throw CameraLinkFailure(.itemNotFound) }
+        let url = directory.appendingPathComponent(found.name)
+        let data = Data(found.name.utf8)
+        do { try data.write(to: url) } catch { throw CameraLinkFailure(.phoneStorageFull) }
+        fetched.append(item)
+        progress(UInt64(data.count))
+        return url
+    }
+
+    private func releaseHang() {
+        hang?.resume()
+        hang = nil
+    }
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        releaseHang()
+        eventSink.finish()
+    }
+}
+
+/// Writes "JPEG from <input name>" as the JPEG, or fails, or reports the embedded-preview fallback.
+struct FakeMaker: JPEGMaking {
+    var fallback = false
+    var fails = false
+    /// Cancels the calling task while reading a JPG's pixel size: a cancel that lands after the pipeline's last
+    /// cancellation check.
+    var cancelsWhileMeasuring = false
+
+    func makeJPEG(from input: URL, conversion: JPEGConversion, to output: URL) async throws(JPEGMakingFailure)
+        -> JPEGMakingReport
+    {
+        if fails { throw JPEGMakingFailure("fake: can't decode") }
+        do {
+            try Data("JPEG from \(input.lastPathComponent) by \(conversion.rawValue)".utf8).write(to: output)
+        } catch {
+            throw JPEGMakingFailure("fake: write")
+        }
+        return JPEGMakingReport(
+            usedEmbeddedPreview: fallback,
+            outputPixelSize: fallback ? PixelSize(width: 1616, height: 1080) : PixelSize(width: 7008, height: 4672),
+            seconds: 1.5, largestPreviewPixelSize: fallback ? PixelSize(width: 1616, height: 1080) : nil,
+            notes: fallback ? ["CIRAWFilter(imageURL:) returned nil"] : [])
+    }
+
+    func pixelSize(ofImageAt url: URL) -> PixelSize? {
+        if cancelsWhileMeasuring { withUnsafeCurrentTask { $0?.cancel() } }
+        return PixelSize(width: 7008, height: 4672)
+    }
+}
+
+@MainActor
+final class FakeClipboard: JPEGClipboard {
+    var copied: [Data] = []
+    var refuses = false
+
+    struct Refused: Error {}
+
+    func copyJPEG(at url: URL) throws {
+        if refuses { throw Refused() }
+        copied.append(try Data(contentsOf: url))
+    }
+}
+
+final class RecordingLog: BenchLog, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+
+    var lines: [String] { lock.withLock { stored } }
+
+    func note(_ line: String) { lock.withLock { stored.append(line) } }
+}
+
+/// A scratch area in a fresh temporary folder.
+func temporaryScratch() -> JPEGScratch {
+    JPEGScratch(root: FileManager.default.temporaryDirectory
+        .appendingPathComponent("AppUITests-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent(JPEGScratch.folderName, isDirectory: true))
+}
+
+/// The folders currently under a scratch root.
+func actionFolders(in scratch: JPEGScratch) -> [URL] {
+    (try? FileManager.default.contentsOfDirectory(at: scratch.root, includingPropertiesForKeys: nil)) ?? []
+}
+
+/// Polls `condition` on the main actor until it holds or about two seconds pass.
+@MainActor
+func eventually(_ condition: @MainActor () async -> Bool) async -> Bool {
+    for _ in 0..<400 {
+        if await condition() { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return await condition()
+}
