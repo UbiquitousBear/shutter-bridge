@@ -19,6 +19,8 @@ final class Harness {
     let catalogue: any CatalogueStore
     let photos: FakeDestination
     let files: FakeDestination
+    /// The Photos access the Photos route reads after a refused save; full access unless a test changes it.
+    let photosAccess = FakePhotosAccess()
     let engine: ImportEngine
     private var links: [FakeCameraLink] = []
 
@@ -39,7 +41,12 @@ final class Harness {
         )
     }
 
-    var photosRoute: ImportRoute { .photos(photos, filesFolder: files) }
+    var photosRoute: ImportRoute { photosRoute(to: photos) }
+
+    /// Into `destination` as Photos, with this harness's Files folder and Photos access.
+    func photosRoute(to destination: any ImportDestination) -> ImportRoute {
+        .photos(destination, filesFolder: files, authorisation: photosAccess.read)
+    }
     var filesRoute: ImportRoute { .filesFolder(files, reason: .chosen) }
 
     func route(_ kind: DestinationKind) -> ImportRoute { kind == .photos ? photosRoute : filesRoute }

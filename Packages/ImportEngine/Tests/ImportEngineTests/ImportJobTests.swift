@@ -64,7 +64,7 @@ struct ImportJobTests {
         #expect(p.filesFailed == 0)
         #expect(p.filesSkipped == 0)
         #expect(p.state == .finished(.completed))
-        #expect(p.destination == DestinationDecision(kind: kind, reason: .chosen))
+        #expect(p.destination == (kind == .photos ? .photos : .files(.chosen)))
         #expect(await h.engine.state == .finished(.completed))
         await h.cleanup()
     }
@@ -281,7 +281,7 @@ struct ImportJobTests {
         a.release()
         await h.trace.next(.imported("A.JPG", .photos))
         if let b { b.release() } else { await link.nextHeldCall("B.JPG").release() }
-        let files = DestinationDecision(kind: .filesFolder, reason: .photosDenied)
+        let files = DestinationDecision.files(.photosDenied)
         await h.trace.next(.destinationChanged(files))
         await h.trace.next(.imported("B.JPG", .filesFolder))
         await link.nextHeldCall("C.JPG").release()
@@ -294,12 +294,35 @@ struct ImportJobTests {
         let p = await h.engine.currentProgress
         #expect(p.filesFailed == 0)
         #expect(p.destination == files)
-        #expect(p.destination?.offersSettingsLink == true)
+        #expect(p.destination?.filesReason?.offersSettingsLink == true)
+        #expect(h.photosAccess.reads == 1) // read once, after the refusal, for the reason
         let rows = await h.records()
         #expect(rows.count { if case .photosAsset = $0.location { true } else { false } } == 1)
         #expect(rows.count { if case .file = $0.location { true } else { false } } == 3)
         #expect(h.trace.count { $0.isDestinationChanged } == 1)
         #expect(h.stagedFiles == 0)
+        await h.cleanup()
+    }
+
+    /// A save refused while Photos is restricted (3310, or the authorisation reads restricted after a 3311): Files
+    /// for the rest, saying so without the Settings link the person couldn't use (decision 9, 8 Nov).
+    @Test func photosRestrictedMidImportSwitchesWithoutTheSettingsLink() async throws {
+        let h = Harness()
+        let card = h.singles(["A.JPG", "B.JPG", "C.JPG"])
+        let link = h.link(card)
+        await h.photos.deny(from: 2)
+        h.photosAccess.set(.restricted)
+        try await h.start(.items(card), from: link)
+        #expect(await h.waitFinished() == .completed)
+        let restricted = DestinationDecision.files(.photosRestricted)
+        #expect(h.trace.log.contains(.destinationChanged(restricted)))
+        #expect(h.trace.count { $0.isDestinationChanged } == 1)
+        #expect(await h.photos.committedNames == ["A.JPG"])
+        #expect(await h.files.committedNames == ["B.JPG", "C.JPG"])
+        let p = await h.engine.currentProgress
+        #expect(p.filesFailed == 0)
+        #expect(p.destination == restricted)
+        #expect(p.destination?.filesReason?.offersSettingsLink == false)
         await h.cleanup()
     }
 
@@ -309,13 +332,33 @@ struct ImportJobTests {
         let link = h.link(card)
         // Both commits reach Photos before either is refused, so the second denial comes after the switch.
         let photos = DenyAllTogether(n: 2)
-        try await h.engine.start(.items(card), from: link, camera: h.camera, to: .photos(photos, filesFolder: h.files))
+        try await h.engine.start(.items(card), from: link, camera: h.camera, to: h.photosRoute(to: photos))
         #expect(await h.waitFinished() == .completed)
         #expect(await photos.attempts == 2)
         #expect(Set(await h.files.committedNames) == ["A.JPG", "B.JPG", "C.JPG"])
         #expect(await h.engine.currentProgress.filesFailed == 0)
         #expect(h.trace.count { $0.isDestinationChanged } == 1)
         #expect(await h.records().count == 3)
+        #expect(h.stagedFiles == 0)
+        await h.cleanup()
+    }
+
+    /// Both refused files read access at the same time and get different answers: the switch still happens once,
+    /// because the decision is checked again after the read.
+    @Test func bothFilesReadAccessTogetherSwitchOnce() async throws {
+        let h = Harness(downloadsInFlight: 2)
+        let card = h.singles(["A.JPG", "B.JPG", "C.JPG"])
+        let link = h.link(card)
+        let photos = DenyAllTogether(n: 2)
+        let access = HeldPhotosAccess(n: 2, answers: [.denied, .restricted])
+        let route = ImportRoute.photos(photos, filesFolder: h.files, authorisation: { await access.read() })
+        try await h.engine.start(.items(card), from: link, camera: h.camera, to: route)
+        #expect(await h.waitFinished() == .completed)
+        #expect(await photos.attempts == 2)
+        #expect(await access.reads == 2)
+        #expect(h.trace.count { $0.isDestinationChanged } == 1)
+        #expect(Set(await h.files.committedNames) == ["A.JPG", "B.JPG", "C.JPG"])
+        #expect(await h.engine.currentProgress.filesFailed == 0)
         #expect(h.stagedFiles == 0)
         await h.cleanup()
     }
@@ -331,7 +374,7 @@ struct ImportJobTests {
         a.release()
         await h.trace.next(.imported("A.JPG", .photos))
         await h.trace.next(.idle(queued: 2, inFlight: 0))
-        let restricted = DestinationDecision(kind: .filesFolder, reason: .photosRestricted)
+        let restricted = DestinationDecision.files(.photosRestricted)
         try await h.engine.resume(to: .filesFolder(h.files, reason: .photosRestricted))
         #expect(await h.waitFinished() == .completed)
         #expect(await h.photos.committedNames == ["A.JPG"])
@@ -339,7 +382,7 @@ struct ImportJobTests {
         #expect(h.trace.log.contains(.destinationChanged(restricted)))
         let p = await h.engine.currentProgress
         #expect(p.destination == restricted)
-        #expect(p.destination?.offersSettingsLink == false)
+        #expect(p.destination?.filesReason?.offersSettingsLink == false)
         await h.cleanup()
     }
 
@@ -382,7 +425,7 @@ struct ImportJobTests {
         let h = Harness()
         let link = h.link(h.singles(["A.JPG"]))
         let dest = HoldingDestination()
-        let route = ImportRoute.photos(dest, filesFolder: h.files)
+        let route = h.photosRoute(to: dest)
         try await h.engine.start(.allNew, from: link, camera: h.camera, to: route)
         await dest.waitArrived()
         await h.engine.cancel()
@@ -406,7 +449,7 @@ struct ImportJobTests {
         let card = h.singles(["A.JPG"])
         let link = h.link(card)
         let dest = HoldingDestination(failsIfCancelled: true)
-        try await h.engine.start(.items(card), from: link, camera: h.camera, to: .photos(dest, filesFolder: h.files))
+        try await h.engine.start(.items(card), from: link, camera: h.camera, to: h.photosRoute(to: dest))
         await dest.waitArrived()
         await h.engine.cancel()
         await dest.release()

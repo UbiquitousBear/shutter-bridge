@@ -84,7 +84,7 @@ struct NoDestination: ImportDestination {
 @Suite("The engine's surface", .timeLimit(.minutes(1)))
 struct ImportEngineSurfaceTests {
     let camera = CameraKey(rawValue: "test-camera")
-    var route: ImportRoute { .photos(NoDestination(), filesFolder: NoDestination()) }
+    var route: ImportRoute { .photos(NoDestination(), filesFolder: NoDestination(), authorisation: { .authorised }) }
 
     @Test func startsIdleWithDefaultSettings() async {
         let engine = ImportEngine(catalogue: InMemoryCatalogue())
@@ -163,20 +163,47 @@ struct ImportEngineSurfaceTests {
         await h.cleanup()
     }
 
-    @Test func routeFollowsTheDecision() {
+    @Test func routeFollowsTheDecision() throws {
         let folder = URL(fileURLWithPath: "/nonexistent")
         let photos = FakeDestination(kind: .photos, folder: folder)
         let files = FakeDestination(kind: .filesFolder, folder: folder)
-        let forced = ImportRoute(DestinationDecision(kind: .filesFolder, reason: .photosRestricted), photos: photos,
-                                 filesFolder: files)
-        #expect(forced.decision == DestinationDecision(kind: .filesFolder, reason: .photosRestricted))
+        let access: @Sendable () async -> PhotosAuthorisation = { .authorised }
+        let forced = try ImportRoute(.files(.photosRestricted), photos: photos, filesFolder: files,
+                                     authorisation: access)
+        #expect(forced.decision == .files(.photosRestricted))
         #expect(forced.destination.kind == .filesFolder)
-        let chosen = ImportRoute(DestinationDecision(kind: .photos, reason: .chosen), photos: photos, filesFolder: files)
-        #expect(chosen.decision == DestinationDecision(kind: .photos, reason: .chosen))
+        let chosen = try ImportRoute(.photos, photos: photos, filesFolder: files, authorisation: access)
+        #expect(chosen.decision == .photos)
+        #expect(chosen.destination.kind == .photos)
         #expect(chosen.filesFolder.kind == .filesFolder)
-        #expect(ImportRoute.photos(photos, filesFolder: files).decision == chosen.decision)
-        #expect(ImportRoute.filesFolder(files, reason: .photosDenied).decision
-            == DestinationDecision(kind: .filesFolder, reason: .photosDenied))
+        #expect(ImportRoute.photos(photos, filesFolder: files, authorisation: access).decision == chosen.decision)
+        #expect(ImportRoute.filesFolder(files, reason: .photosDenied).decision == .files(.photosDenied))
+    }
+
+    /// The app asks for Photos access before a job starts; a route can't be built from "ask first", and saying so is
+    /// an error the app can handle, not a trap.
+    @Test func aRouteNeedsPhotosAccessAskedFirst() {
+        let folder = URL(fileURLWithPath: "/nonexistent")
+        #expect(throws: ImportEngineError.photosAccessNotAsked) {
+            try ImportRoute(.askForPhotosAccess, photos: FakeDestination(kind: .photos, folder: folder),
+                            filesFolder: FakeDestination(kind: .filesFolder, folder: folder),
+                            authorisation: { .notDetermined })
+        }
+    }
+
+    /// After a refused save the reason comes from the access read then: a restriction gets no Settings link.
+    @Test func afterADeniedSaveTheReasonFollowsTheAccess() {
+        let folder = URL(fileURLWithPath: "/nonexistent")
+        let route = ImportRoute.photos(FakeDestination(kind: .photos, folder: folder),
+                                       filesFolder: FakeDestination(kind: .filesFolder, folder: folder),
+                                       authorisation: { .denied })
+        for access in PhotosAuthorisation.allCases {
+            let after = route.afterDeniedSave(access)
+            #expect(after.decision == .afterDeniedSave(authorisation: access))
+            #expect(after.destination.kind == .filesFolder)
+        }
+        #expect(route.afterDeniedSave(.restricted).decision == .files(.photosRestricted))
+        #expect(route.afterDeniedSave(.denied).decision == .files(.photosDenied))
     }
 
     /// A copy of `.autoupdatingCurrent` keeps following the system zone; the job's zone is fixed at the start, so a

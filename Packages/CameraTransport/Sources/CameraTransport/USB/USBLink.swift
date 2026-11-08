@@ -29,13 +29,17 @@ public actor USBLink: CameraLink {
 
     /// As discovery saw it. For `ICTransportTypeUSB` its mode is MTP until the catalogue says otherwise: see `mode`.
     public nonisolated let descriptor: CameraDescriptor
-    public nonisolated let events: AsyncStream<CameraLinkEvent>
+
+    /// Live, as `CameraLink` requires: each read is a new stream that gets only the events after it (`EventFanOut`).
+    /// Every stream finishes after `.removed` (the link can't be used again: the browser hands out a fresh one) and
+    /// on `close()`; a read after either gets a finished stream.
+    public nonisolated var events: AsyncStream<CameraLinkEvent> { eventFanOut.subscribe() }
 
     private enum State { case idle, opening, open, closed }
 
     private let device: ICCameraDevice
     private let deviceUUID: String?
-    private let eventSink: AsyncStream<CameraLinkEvent>.Continuation
+    private let eventFanOut = EventFanOut<CameraLinkEvent>()
     private let delegate: USBDeviceDelegate
     private let signals: AsyncStream<USBDeviceSignal>
     private let signalSink: AsyncStream<USBDeviceSignal>.Continuation
@@ -75,7 +79,6 @@ public actor USBLink: CameraLink {
         self.descriptor = descriptor
         self.deviceUUID = deviceUUID
         if case let .usb(usbMode) = descriptor.mode { mode = usbMode } else { mode = .mtp }
-        (events, eventSink) = AsyncStream.makeStream()
         let (signals, signalSink) = AsyncStream<USBDeviceSignal>.makeStream()
         self.signals = signals
         self.signalSink = signalSink
@@ -252,7 +255,7 @@ public actor USBLink: CameraLink {
         signalSink.finish()
         signalTask?.cancel()
         signalTask = nil
-        eventSink.finish()
+        eventFanOut.finish()
         files.removeAll()
         items.removeAll()
         itemIDs.removeAll()
@@ -266,8 +269,8 @@ public actor USBLink: CameraLink {
 
     /// The browser's lifecycle callbacks, passed on to the engine (backlog section 2, *Lifecycle*).
     func forward(_ event: CameraLinkEvent) {
-        guard state != .closed else { return }
-        eventSink.yield(event)
+        guard state != .closed, !removed else { return }
+        eventFanOut.send(event)
     }
 
     // MARK: - Device signals
@@ -313,7 +316,8 @@ public actor USBLink: CameraLink {
         removed = true
         pending.finishAll(with: .failed(CameraLinkFailure(.disconnected, detail: detail)))
         stopRequestTasks()
-        eventSink.yield(.removed)
+        eventFanOut.send(.removed)
+        eventFanOut.finish() // nothing more can happen on this link
     }
 
     // MARK: - Catalogue

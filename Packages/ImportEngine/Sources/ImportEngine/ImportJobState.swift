@@ -50,4 +50,7 @@ public enum ImportEngineError: Error, Sendable, Hashable {
     case cameraNotRemoved
     /// The catalogue couldn't say which of the appended files are already imported.
     case catalogueUnavailable
+    /// An `ImportRoute` built from `DestinationDecision.askForPhotosAccess`: the app asks for Photos access before
+    /// a job starts (`PhotosAccessGate.decision(for:)` never returns it) and builds the route from the answer.
+    case photosAccessNotAsked
 }

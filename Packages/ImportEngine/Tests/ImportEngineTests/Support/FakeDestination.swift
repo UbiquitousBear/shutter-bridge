@@ -1,5 +1,6 @@
 import Foundation
 import PhotosBridge
+import Synchronization
 
 /// A destination that records what it was given. As Photos it notes each file's size and leaves the file for the
 /// engine to delete; as the Files folder it moves each file into its folder, never overwriting. It can fail a given
@@ -65,5 +66,53 @@ actor FakeDestination: ImportDestination {
             }
             return .files(locations)
         }
+    }
+}
+
+/// The Photos authorisation as a route reads it after a refused save: settable by the test, and counting reads.
+final class FakePhotosAccess: Sendable {
+    private let state: Mutex<(authorisation: PhotosAuthorisation, reads: Int)>
+
+    init(_ authorisation: PhotosAuthorisation = .authorised) { state = Mutex((authorisation, 0)) }
+
+    func set(_ authorisation: PhotosAuthorisation) { state.withLock { $0.authorisation = authorisation } }
+    var reads: Int { state.withLock { $0.reads } }
+
+    /// What `ImportRoute.photos(_:filesFolder:authorisation:)` takes.
+    var read: @Sendable () async -> PhotosAuthorisation {
+        { [self] in
+            state.withLock { s in
+                s.reads += 1
+                return s.authorisation
+            }
+        }
+    }
+}
+
+/// Photos access that holds each read until `n` have arrived, then answers them in arrival order from `answers`
+/// (the last answer repeats): two in-flight refusals read access at once and get different answers, so a second
+/// switch would show as a second `destinationChanged`.
+actor HeldPhotosAccess {
+    let n: Int
+    let answers: [PhotosAuthorisation]
+    private(set) var reads = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(n: Int, answers: [PhotosAuthorisation]) {
+        self.n = n
+        self.answers = answers
+    }
+
+    func read() async -> PhotosAuthorisation {
+        let i = reads
+        reads += 1
+        await withCheckedContinuation { c in
+            waiting.append(c)
+            if waiting.count == n {
+                for w in waiting { w.resume() }
+                waiting = []
+            }
+        }
+        return answers[min(i, answers.count - 1)]
     }
 }

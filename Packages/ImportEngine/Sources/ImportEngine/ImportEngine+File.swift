@@ -165,18 +165,18 @@ extension ImportEngine {
         }
 
         // Photos refused the save (3311): not a failed file. This file and the rest go to the Files folder, and the
-        // Import screen says why (backlog section 5). Switched once, however many files are in flight.
+        // Import screen says why (backlog section 5): a denial links to Settings, a restriction doesn't, so access is
+        // read again now (`DestinationDecision.afterDeniedSave(authorisation:)`). Switched once, however many files
+        // are in flight: another file's refusal may switch it while this one reads access, so it's checked again.
         if failure == .photosAccessDenied, used.kind == .photos {
-            if let job = current(id) {
-                if job.route.destination.kind == .photos {
-                    job.route = .filesFolder(job.route.filesFolder, reason: .photosDenied)
-                    trace(.destinationChanged(job.route.decision))
+            if let job = current(id), job.route.decision == .photos {
+                let authorisation = await job.route.authorisation()
+                if let job = current(id), job.route.decision == .photos {
+                    change(job, to: job.route.afterDeniedSave(authorisation))
                     refreshState()
                 }
-                used = job.route.destination
-            } else {
-                used = route.filesFolder
             }
+            used = (current(id)?.route ?? route).filesFolder
             failure = nil
             do throws(ImportDestinationFailure) {
                 result = try await used.commit(unit)

@@ -12,31 +12,16 @@ struct PhotosAccessTests {
         #expect(PhotosAuthorisation.authorised.destination == .photos)
     }
 
+    /// The rule with the setting agrees with the access-only rule: on Files it never offers the Settings link
+    /// whatever the access; on Photos it gives the same destination wherever the access alone has an answer.
     @Test func destinationFollowsTheSettingAndAccess() {
-        let files = DestinationDecision(kind: .filesFolder, reason: .chosen)
-        let photos = DestinationDecision(kind: .photos, reason: .chosen)
-        #expect(PhotosAuthorisation.notDetermined.destination(setting: .photos) == nil)
-        #expect(PhotosAuthorisation.restricted.destination(setting: .photos)
-            == DestinationDecision(kind: .filesFolder, reason: .photosRestricted))
-        #expect(PhotosAuthorisation.denied.destination(setting: .photos)
-            == DestinationDecision(kind: .filesFolder, reason: .photosDenied))
-        #expect(PhotosAuthorisation.limited.destination(setting: .photos) == photos)
-        #expect(PhotosAuthorisation.authorised.destination(setting: .photos) == photos)
-        // A chosen Files folder is the person's choice whatever the access, so it never offers the Settings link.
         for access in PhotosAuthorisation.allCases {
-            #expect(access.destination(setting: .filesFolder) == files)
+            let files = DestinationDecision.resolve(setting: DestinationSetting(preferred: .filesFolder),
+                                                    authorisation: access)
+            #expect(files == .files(.chosen))
+            #expect(files.filesReason?.offersSettingsLink == false)
+            #expect(DestinationDecision.resolve(setting: .default, authorisation: access).kind == access.destination)
         }
-        // The setting on Photos agrees with the access-only rule wherever that rule has an answer.
-        for access in PhotosAuthorisation.allCases {
-            #expect(access.destination(setting: .photos)?.kind == access.destination)
-        }
-    }
-
-    @Test func onlyADenialOffersTheSettingsLink() {
-        #expect(DestinationDecision(kind: .filesFolder, reason: .photosDenied).offersSettingsLink)
-        #expect(!DestinationDecision(kind: .filesFolder, reason: .photosRestricted).offersSettingsLink)
-        #expect(!DestinationDecision(kind: .filesFolder, reason: .chosen).offersSettingsLink)
-        #expect(!DestinationDecision(kind: .photos, reason: .chosen).offersSettingsLink)
     }
 
     @Test func defaultsAreShamilsFirstOfNovember() {

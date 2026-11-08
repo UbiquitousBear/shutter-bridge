@@ -1,6 +1,5 @@
 import Foundation
 import PTPKit
-import Synchronization
 import Testing
 @testable import CameraTransport
 
@@ -92,7 +91,7 @@ struct CameraLinkFailureTests {
 /// A link over a fixed list, to show the protocol can be met in Swift 6 strict mode with no Apple framework.
 actor ListLink: CameraLink {
     nonisolated let descriptor = CameraDescriptor(id: .init(rawValue: "fake"), name: "Fake", mode: .usb(.mtp))
-    private let subscribers = Mutex<[UUID: AsyncStream<CameraLinkEvent>.Continuation]?>([:])
+    private let fanOut = EventFanOut<CameraLinkEvent>()
     private let items: [CameraItem]
     private(set) var isOpen = false
 
@@ -101,21 +100,7 @@ actor ListLink: CameraLink {
     }
 
     /// A new stream per read, which gets only what happens from now on.
-    nonisolated var events: AsyncStream<CameraLinkEvent> {
-        let (stream, continuation) = AsyncStream.makeStream(of: CameraLinkEvent.self)
-        let key = UUID()
-        let added = subscribers.withLock { s -> Bool in
-            guard s != nil else { return false }
-            s?[key] = continuation
-            return true
-        }
-        if added {
-            continuation.onTermination = { [weak self] _ in self?.dropSubscriber(key) }
-        } else {
-            continuation.finish() // closed
-        }
-        return stream
-    }
+    nonisolated var events: AsyncStream<CameraLinkEvent> { fanOut.subscribe() }
 
     func open() throws(CameraLinkFailure) { isOpen = true }
 
@@ -138,20 +123,11 @@ actor ListLink: CameraLink {
         return directory.appendingPathComponent(found.name)
     }
 
-    private nonisolated func dropSubscriber(_ key: UUID) {
-        subscribers.withLock { _ = $0?.removeValue(forKey: key) }
-    }
-
-    func send(_ event: CameraLinkEvent) {
-        for c in subscribers.withLock({ Array(($0 ?? [:]).values) }) { c.yield(event) }
-    }
+    func send(_ event: CameraLinkEvent) { fanOut.send(event) }
 
     func close() {
         isOpen = false
-        for c in subscribers.withLock({ s -> [AsyncStream<CameraLinkEvent>.Continuation] in
-            defer { s = nil }
-            return Array((s ?? [:]).values)
-        }) { c.finish() }
+        fanOut.finish()
     }
 }
 
