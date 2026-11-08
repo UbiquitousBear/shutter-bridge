@@ -1,6 +1,6 @@
-# Rest of the spike: what remains before the product build (from 4 Nov)
+# Rest of the spike: what remains before the product build (from 4 Nov, updated 8 Nov)
 
-Written Wednesday 4 Nov 2026 on spike build 14 (TestFlight 0.1 (14.1)). It rests on `docs/spike-findings.md`, including the home-network runs of 4 Nov 03:23–03:41 (PR #52), `docs/spike-plan.md`, `docs/spike-runbook.md` and `docs/proposal.md`. It proposed; Shamil made the design decisions in section 5 on 7 Nov (see below), and the go/no-go on 13 Nov is still to come.
+Written Wednesday 4 Nov 2026 on spike build 14 (TestFlight 0.1 (14.1)). It rests on `docs/spike-findings.md`, including the home-network runs of 4 Nov 03:23–03:41 (PR #52), `docs/spike-plan.md`, `docs/spike-runbook.md` and `docs/proposal.md`. It proposed; Shamil made the design decisions in section 5 on 7 Nov (see below), and the go/no-go on 13 Nov is still to come. Updated 8 Nov: the fixtures are committed, the decision pack is corrected and has recommendations for the open questions, and Iteration 1 has started on Shamil's decision, ahead of signing the go/no-go record (see *Decisions (Shamil, 8 Nov)*).
 
 ## Decisions (Shamil, 2 Nov)
 
@@ -26,7 +26,14 @@ Written Wednesday 4 Nov 2026 on spike build 14 (TestFlight 0.1 (14.1)). It rests
 - **Multicast entitlement: submit the request.** Shamil submitted it on 8 Nov (reference 7BDQ7FRVM8); nothing waits on the answer. SSDP stays Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route.
 - **Bluetooth trace of Creators' App leaving: skipped.** Decision 2 rests on the measured behaviour; option (c) ((b) plus a Bluetooth write) is closed for 1.0. The write that makes the camera's Wi-Fi go off at once after a leave stays unknown.
 - **The proposed drops in section 7 are all confirmed as dropped.**
-- The go/no-go is still Fri 13 Nov. The design decisions are made; the production workspace still waits for the go/no-go.
+- The go/no-go is still Fri 13 Nov. The design decisions are made; the production workspace still waited for the go/no-go (superseded on 8 Nov: Iteration 1, and with it the workspace, has started; see below).
+
+## Decisions (Shamil, 8 Nov)
+
+- **Iteration 1 starts now, ahead of signing the go/no-go record.** Shamil decided on 8 Nov to start Iteration 1 rather than wait for Fri 13 Nov. The record is still signed on 13 Nov, and applying Part 3 of the decision pack to the live proposal is still to do.
+- **The Bluetooth parsers live in a small sibling package, not in `PTPKit`** (planned as `Packages/BLEKit`). `PTPKit` stays PTP only: pure Swift and Foundation, no Apple-only frameworks.
+- **Done since 7 Nov:** the fixtures are committed from Shamil's zip, with no Mac (PR #69, section 4); the decision pack's route correction (PR #72: the 1.0 Wi-Fi route runs with PC Remote Function off and has its own numbers); a dev container for Linux-side work (PR #71: `.devcontainer/`, the same Swift image as CI); and a personal "shutter-bridge" cloud environment with Swift preinstalled.
+- **Recommendations for the open questions** are in the decision pack, Part 2 (*Recommendations for the open questions (8 Nov)*). They are for Shamil to accept or change; none is decided.
 
 ---
 
@@ -39,7 +46,7 @@ Every go/no-go row of the plan has an answer. Nothing below is waiting on a run 
 | Wired import is viable | **Go.** MSC lists 391 files in 7.2 s (547 in 11.6 s) and downloads ARW at 39.9–41.7 MB/s. MTP downloads at 38–39 MB/s but takes 65 s to list 391 files (123 s for 825, 5 Nov), and JPG runs at 25.6 MB/s against 41.7 in MSC. The goal is ≥ 25 MB/s. A USB import stops 30 s after the app leaves the foreground (MSC and MTP tested). | *Wired import is viable* |
 | Byte-range resume on USB | **Go.** GetPartialObject in MTP, cable pulled at 47 %, resumed after the replug, SHA-256 match. MSC (`requestReadData` at an offset) is untested and not needed for 1.0: an ARW restarts in about 1 s over USB (decision 7). | *Byte-range resume on USB* |
 | Wireless browsing in 1.0 | **Go.** On the camera's own network the whole card is listed and downloaded: in PC Remote (2 Nov) 391–419 files in 4.7–5.0 s and ARW at 11.7–15.5 MB/s; on the 1.0 route, where Bluetooth switches the Wi-Fi on (PC Remote Function off), 425–731 objects in 6.1–9.1 s and ARW at 9.1–14.8 MB/s in three runs (3–4 Nov) and 5.4–6.1 MB/s in a fourth (5 Nov, cause unknown), against the 8 MB/s criterion. On the home network, after the camera's access authentication was turned off: 549 objects in 7.7 s and 10.2 MB/s (one run, app in front). Both need Sony's whole-card contents transfer; a plain session lists nothing. | *Wireless browsing in 1.0* |
-| SSDP discovery | **The camera announces and the phone hears it without the multicast entitlement**, on its own network (0.73 s) and on the home network (1.9 s and 4.65 s into a 5 s listen). How often it announces isn't measured. It doesn't answer a unicast M-SEARCH. The plan's literal criterion (entitlement granted) can't be shown unless Apple has granted it; Shamil is to submit the request (7 Nov); nothing waits on the answer. | *SSDP discovery* |
+| SSDP discovery | **The camera announces and the phone hears it without the multicast entitlement**, on its own network (0.73 s) and on the home network (1.9 s and 4.65 s into a 5 s listen). How often it announces isn't measured. It doesn't answer a unicast M-SEARCH. The plan's literal criterion (entitlement granted) can't be shown unless Apple has granted it; Shamil submitted the request on 8 Nov (reference 7BDQ7FRVM8); nothing waits on the answer. | *SSDP discovery* |
 | Transfer-while-shooting | **Go over Wi-Fi.** Sony's ObjectAdded (0xC201) arrives in PC Remote on both networks. Not shown over USB: not advertised in MTP; in PC Remote it is advertised, but none arrived on a plain ImageCaptureCore session without Sony's init sequence (4 Nov 12:10). | *Transfer-while-shooting feasible later* |
 | Proximity reminder in 1.0 | **Go.** The camera advertises service UUID 1800 on, asleep and off; a background scan woke the locked phone from the next room in 11.76 s and the reminder posted 0.02 s later. On 5 Nov a camera coming back from its Airplane Mode was reported within about 3 s with the phone locked, and iOS relaunched a killed app to report it; a walk into range is untried. | *Proximity reminder in 1.0* |
 
@@ -102,9 +109,15 @@ Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh i
 - Why the first Bluetooth connect takes 5–6 s (0.4 s otherwise) matters for time-to-camera; the camera seems slow to take the first connection after it has been idle. After a restart it varied: 5.95 s at 5 Nov 01:18, where the connect started before iOS reported the camera again and finished 0.46 s after it did, and 0.50 s at 02:21, where the tap came 2.8 s after such a report. So a slow first connect may be a wait for the camera to advertise again.
 - Whether the Wi-Fi recovery would rejoin with no other known network in range.
 
-**Suggested order** (Shamil's call): A was done on 5 Nov and E on 8 Nov, and the fixtures on 8 Nov (section 4); next B if wanted (C has no runs left); the weekend or Mon 9 Nov D. E's reinstall cleared the Bluetooth proximity filter (retype it before D) and gave the Wi-Fi tab a new GUID. Wed 11 – Fri 13 Nov for paperwork and the decision. Skip any optional row that runs late: its cell becomes "not run" in the findings.
+**Suggested order** (Shamil's call): A was done on 5 Nov and E on 8 Nov, and the fixtures on 8 Nov (section 4); next B if wanted (C has no runs left); the weekend or Mon 9 Nov D. E's reinstall cleared the Bluetooth proximity filter (retype it before D) and gave the Wi-Fi tab a new GUID. Wed 11 – Fri 13 Nov for paperwork and the decision (sign the go/no-go record, apply decision-pack Part 3 to the live proposal). Skip any optional row that runs late: its cell becomes "not run" in the findings.
 
 ## 3. Questions waiting on Shamil
+
+**What is left for Shamil as of 8 Nov** (the fixtures and the Photos *Don't Allow* run are done, and Iteration 1 has started):
+- The optional runs: the home-network group B runs (section 2 B), a walk into range (section 2 D) and the menu wording rows (section 4, *Findings: the blank rows*).
+- Apple's answer to the multicast request (submitted 8 Nov); then tick the capability on the App ID.
+- Signing the go/no-go record on Fri 13 Nov, and applying decision-pack Part 3 to the live proposal.
+- The questions and open choices below (the decision pack now has a recommendation for each open choice).
 
 **The home network (4 Nov, 03:23–03:41)**
 - Access point model and band. The network is UniFi behind an older UniFi Security Gateway, so the measurements table's "UniFi LAN" column name stands.
@@ -124,7 +137,7 @@ Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh i
 - What does the camera show on the first connection from the iPhone? (Not recorded.)
 - Was *Remote Power ON/OFF* on during the 2 Nov advertisement scans? (The advertisement section says not recorded; the menu table says On.)
 
-**Still open for Shamil** (the design decisions, the trace and the drops were settled on 7 Nov)
+**Still open for Shamil** (the design decisions, the trace and the drops were settled on 7 Nov; the decision pack, Part 2, gives a recommendation for each of the first seven, except the continued-task split, which the backlog already recommends)
 - How long to stay joined after an import, and leaving with the app in the background (decision 2; Iteration 3).
 - When to ask notification permission for the pause notifications.
 - Whether Files is also offered as a chosen destination when Photos is allowed (decision 9).
@@ -141,8 +154,8 @@ Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh i
 - **Kept out, on purpose:** the MTP property lists (`objectproplist*`: their object IDs may carry the serial, and the pre-commit hook refuses them), the Bluetooth advertisement JSONs (`ble/advert-*.json`: they carry the peripheral identifier and manufacturer data that may identify the camera, and AGENTS.md permits no edits to a fixture beyond zeroing the serial and the hardware ID), and any `.pcap`. `ble/` holds only its `.gitkeep`.
 - **Checked by eye:** `sdio-extdeviceinfo.bin` is the structural dataset (version 0x12C, then 421 and 59 u16 codes, 970 B consumed exactly) and holds no identifier that the redaction check looks for; `ssdp-description.xml` has no address, no serial and an all-zero UDN ID.
 - **Result:** every decodable fixture round-trips byte for byte (iteration-1-backlog.md, section 1). One recorded fact could not be checked: the findings' SSDP note lists `X_ScalarWebAPI_DefaultFunction` and a live-view URL from the 2 Nov camera-network fetch, and the committed description is a later home-network fetch whose `X_ScalarWebAPI_DeviceInfo` element is empty, so it lacks them and neither confirms nor disproves the 2 Nov record (docs/spike-findings.md, "SSDP discovery").
-For a later export (the phone's Log › Fixtures › *Share fixtures (zip)*, then on a Mac or here), the steps are unchanged:
-1. Unzip it and `ditto` the `a7c2` folder over `Fixtures/a7c2/`.
+For a later export (the phone's Log › Fixtures › *Share fixtures (zip)*, then on a Mac, in the dev container (`.devcontainer/`, PR #71) or in the personal "shutter-bridge" cloud environment, which has Swift preinstalled), the steps are unchanged:
+1. Unzip it and copy the `a7c2` folder over `Fixtures/a7c2/` (`ditto` on a Mac, `cp -R` in the dev container or the cloud environment).
 2. Delete any `objectproplist*.bin` from `Fixtures/a7c2/usb/` first (advice: `make fixtures` skips them with a message, and the hook refuses one anywhere). Then `make fixtures`, then `make test`. A failure in `PTPFixtureTests` means the codec disagrees with the camera: fix `PTPKit`, never the fixture. `PTPFixtureContentTests` pins the 8 Nov export's values (397 and 741 handles, DSC02018.ARW, DSC01779.ARW and .JPG, the event parameters), so a file the new export replaces fails there: update those expectations from the new bytes in the same commit.
 3. `scripts/redact-fixtures.py` (run by `make fixtures`) zeroes the serial in `deviceinfo.bin`, and the serial and the hardware ID in `ssdp-description.xml`. The pre-commit hook refuses a staged file that still has either, and any staged `.pcap` or `objectproplist*.bin`. Nothing checks for a Wi-Fi password or a QR payload (the app never writes them), or for the first three below, so check them by eye:
    - the `ble/advert-*.json` snapshots are kept out of the commit, or have their `identifier` and `manufacturerDataHex`/`manufacturerDataVariants` removed;
@@ -161,7 +174,7 @@ For a later export (the phone's Log › Fixtures › *Share fixtures (zip)*, the
 **Multicast entitlement: submit (decision, Shamil, 7 Nov).**
 - Passive listening worked without the key on both networks (TestFlight builds). Our own M-SEARCH never went out, and the camera ignores a unicast one, so whether it answers a multicast search is unknown.
 - The announcement interval isn't measured, and 4.65 s was inside a 5 s listen, so the proposal's 5 s target isn't shown. Active search would help if announcements are infrequent. A typed address is the fallback.
-- Shamil submits the request to Apple (the plan says turnaround is days to weeks), and nothing waits on the answer. Record SSDP as Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route. The request went in on 8 Nov (reference 7BDQ7FRVM8), recorded in the findings' entitlement section; reword the proposal's "must be approved before the first TestFlight external build" so that it no longer blocks.
+- Shamil submitted the request to Apple on 8 Nov (the plan says turnaround is days to weeks), and nothing waits on the answer. Record SSDP as Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route. The request went in on 8 Nov (reference 7BDQ7FRVM8), recorded in the findings' entitlement section; reword the proposal's "must be approved before the first TestFlight external build" so that it no longer blocks.
 
 **Go/no-go decision record** (findings, last section): date, decider, wireless scope, and the six result rows with the numbers in section 1.
 
@@ -176,7 +189,7 @@ For a later export (the phone's Log › Fixtures › *Share fixtures (zip)*, the
 - *Iteration 3 and roadmap:* the QR scan is replaced by the Bluetooth hand-off, with a pairing the app makes itself (decision 6), and 1.1's list (Bluetooth wake and credential hand-off) changes with it.
 - *Risks and open questions:* tick the USB-mode and GUID open questions now. Note that Photos' own Import listed this camera's whole card over USB on 5 Nov (MTP; RAW+JPEG pairs as one item, photos already imported marked, many RAW+JPG tiles a grey placeholder rather than a picture; once, a few minutes after the spike had listed the card on the same plug-in; no import recorded; on 1 Nov it listed nothing, cause unknown), so the proposal should say what 1.0's wired import adds. Answer ObjectAdded over USB: not in MTP; none in PC Remote on a plain session (4 Nov 12:10; Sony's init sequence over USB untried); and the USB 2 throughput one once the card type is recorded; retire the first two risks and the last (the camera keeps advertising when switched off); add the reverse-engineered Sony pieces, ImageCaptureCore's 30 s suspension and the camera dropping its card with Creators' App open.
 
-**Iteration 1 backlog:** it is wired-only and was updated on 7 Nov with the design decisions, the Files-only import path of decision 9 included. Finalise it on 13 Nov from the findings and with the go/no-go (section 6).
+**Iteration 1 backlog:** it is wired-only and was updated on 7 Nov with the design decisions, the Files-only import path of decision 9 included. Iteration 1 started on 8 Nov (Shamil's decision, ahead of signing the go/no-go record); finalise the backlog from the findings and with the go/no-go on 13 Nov (section 6).
 
 ## 5. Design decisions for 1.0
 
@@ -233,10 +246,10 @@ Each was decided by Shamil: decision 2 on 4 Nov, the rest on 7 Nov, as recommend
 ## 6. After the go/no-go
 
 1. Fri 13 Nov: fill the decision record in the findings and update the proposal (section 4).
-2. Create the production workspace, as in the backlog's section 0. `PTPKit` moves in unchanged; nothing from `Spike/` is carried in. Until the decision, the workspace stays unstarted.
-3. Iteration 1 starts Mon 16 Nov (weeks 3–6, Shamil alone). Its backlog covers wired import only, but wireless is in 1.0, so on 13 Nov:
+2. The production workspace is created as in the backlog's section 0, now as part of Iteration 1 (started 8 Nov, on Shamil's decision, before the record is signed). `PTPKit` moves in unchanged; nothing from `Spike/` is carried in. The Bluetooth parsers go in a small sibling package (Shamil, 8 Nov), planned as `Packages/BLEKit`.
+3. Iteration 1 started on 8 Nov, earlier than the planned Mon 16 Nov (weeks 3–6, Shamil alone). Its backlog covers wired import only, but wireless is in 1.0, so on 13 Nov:
    - finalise the wired items from the findings (MSC alongside MTP, pause on *did suspend*, no resume-within-2 s criterion);
-   - add Iteration 3 and 4 sections or files: the Wi-Fi link (Sony's whole-card session, 0x9211 resume, passive SSDP, typed address), the Bluetooth hand-off and join flow, recovery, pause and continue with notifications, the continued task and Live Activity for Wi-Fi, the proximity reminder, and the home network after Iteration 3's core (decision 5). The second engineer starts 18 Jan and needs these in the onboarding pack;
+   - finalise iteration-3-4-backlog.md (written 7 Nov), which covers the Wi-Fi link (Sony's whole-card session, 0x9211 resume, passive SSDP, typed address), the Bluetooth hand-off and join flow, recovery, pause and continue with notifications, the continued task and Live Activity for Wi-Fi, the proximity reminder, and the home network after Iteration 3's core (decision 5). The second engineer starts 18 Jan and needs these in the onboarding pack;
    - keep the Files-only import path (decision 9), already in the Iteration 1 backlog since 7 Nov;
    - keep the open point in backlog section 7: Iteration 1 has no wireless link, so the engine needs a test-only way to reach `PTPSimulator`.
 4. Make the engine transport-neutral from Iteration 1 (pause, continue, stall and retry), because those rules apply to both links.
