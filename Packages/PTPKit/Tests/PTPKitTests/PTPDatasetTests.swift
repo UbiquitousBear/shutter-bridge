@@ -24,6 +24,22 @@ struct PTPDatasetTests {
         serialNumber: "00000000000000001234567"
     )
 
+    /// MTP mode's DeviceInfo as the spike logged it (1 and 5 Nov): 247 B, vendor extension 0xFFFFFFFF, 24 operations,
+    /// 3 events, 5 properties, 10 image formats, firmware "2.0". The description, serial and extension version are
+    /// placeholders chosen to give the logged size, not captured values.
+    static let syntheticMTPDeviceInfo = PTPDeviceInfo(
+        standardVersion: 100, vendorExtensionID: 0xFFFF_FFFF, vendorExtensionVersion: 100,
+        vendorExtensionDescription: "", functionalMode: 0,
+        operationsSupported: [0x1001, 0x1002, 0x1003, 0x1004, 0x1005, 0x1006, 0x1007, 0x1008, 0x1009, 0x100A,
+                              0x1014, 0x1015, 0x1016, 0x101B, 0x9801, 0x9802, 0x9803, 0x9805,
+                              0x9280, 0x9281, 0x9282, 0x9283, 0x9284, 0x9285],
+        eventsSupported: [0x4004, 0x4005, 0x4006],
+        devicePropertiesSupported: [0x5001, 0xD402, 0xD406, 0xD407, 0xD303],
+        captureFormats: [],
+        imageFormats: [0x3001, 0x300B, 0x3801, 0xB982, 0xB301, 0x3000, 0xB101, 0xB310, 0x3008, 0xB110],
+        manufacturer: "Sony Corporation", model: "ILCE-7CM2", deviceVersion: "2.0",
+        serialNumber: String(repeating: "0", count: 32))
+
     @Test("DeviceInfo survives encode → decode and answers capability questions")
     func deviceInfoRoundTrip() throws {
         let info = Self.syntheticSonyDeviceInfo
