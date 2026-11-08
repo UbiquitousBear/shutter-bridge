@@ -5,7 +5,7 @@
 // it sent. A DeviceInfo lists a code; it shows neither the parameters nor what the camera does with it, so a note
 // that says "listed" settles the number only and the behaviour stays `unverified`, with what the spike saw. Vendor
 // codes in the 0x9000, 0xB000 and 0xC000 ranges only mean what they say here when the device is Sony
-// (`PTPDeviceInfo.isSony`): vendorExtensionID 0x11 (what the α7C II reports over PTP/IP in PC Remote), or an MTP ID
+// (`PTPDeviceInfo.isSony`): vendorExtensionID 0x11 (what the α7C II reports over PTP/IP), or an MTP ID
 // (0xFFFFFFFF, which it reports over USB in MTP mode, or 0x6) with a Sony manufacturer. libgphoto2 treats
 // 0xFFFFFFFF from "Sony Corporation" as Sony.
 
@@ -38,7 +38,7 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     public static let getPartialObject64 = PTPOperationCode(rawValue: 0x95C1)
 
     // MTP object-property operations (libmtp/libgphoto2 `PTP_OC_MTP_*`). The α7C II lists all four in its MTP-mode
-    // DeviceInfo over USB (Fixtures/a7c2/usb/deviceinfo.bin) and in its PC Remote DeviceInfo over PTP/IP. What they
+    // DeviceInfo over USB (Fixtures/a7c2/usb/deviceinfo.bin) and in its PTP/IP DeviceInfo. What they
     // answer is `unverified` here: no reply is committed, because an MTP property list's object IDs may carry the
     // serial (the spike's log: 0x9805 answered one object at a time, 385 ms on average; docs/spike-findings.md).
     public static let getObjectPropsSupported = PTPOperationCode(rawValue: 0x9801)
@@ -47,8 +47,8 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     /// Properties of many objects in one data phase (see `MTPObjectPropList`).
     public static let getObjectPropList       = PTPOperationCode(rawValue: 0x9805)
 
-    // Sony SDIO extension (libgphoto2 names). Every code in this group is listed in the α7C II's PC Remote DeviceInfo
-    // over PTP/IP (Fixtures/a7c2/ptpip/deviceinfo.bin), which settles the number; the names and parameters stay
+    // Sony SDIO extension (libgphoto2 names). Every code in this group is listed in the α7C II's PTP/IP DeviceInfo
+    // (Fixtures/a7c2/ptpip/deviceinfo.bin), which settles the number; the names and parameters stay
     // `unverified` on the α7C II unless a note says otherwise, with what the spike's log saw.
     /// Three-phase handshake (param 1 = phase 1, 2, 3) that PC Remote mode needs before vendor ops work. The spike saw
     /// phases 1 to 3 answer OK.
@@ -63,7 +63,8 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     public static let sonySDIOOpenSession = PTPOperationCode(rawValue: 0x9210)
     /// Sony's own 64-bit partial read. Parameter layout `unverified`: the spike's five-parameter form (handle, offset
     /// low and high, length low and high) read byte ranges that matched a GetObject download by SHA-256
-    /// (Fixtures/a7c2/ptpip/getpartialobject.sha256 holds the hashes, not the bytes, so no test replays it).
+    /// (2 Nov 23:10, DSC02052.ARW: the spike's log; Fixtures/a7c2/ptpip/getpartialobject.sha256 holds that read's hash,
+    /// not the bytes, and getobject.sha256 is a later GetObject of another file, so no fixture shows the match).
     public static let sonySDIOGetPartialLargeObject = PTPOperationCode(rawValue: 0x9211)
     /// Switches the camera into its contents-transfer (card browsing) mode. Parameters `unverified`: the spike's
     /// [2, 0, 0] then [2, 1, 0] answered OK and StoreAdded 0x4004 [0x00010001] followed (the event is a fixture).
@@ -185,12 +186,12 @@ public struct PTPEventCode: RawRepresentable, Hashable, Sendable, CustomStringCo
     public static let storageInfoChanged = PTPEventCode(rawValue: 0x400C)
     public static let captureComplete    = PTPEventCode(rawValue: 0x400D)
     /// Sony vendor ObjectAdded (libgphoto2 `PTP_EC_Sony_ObjectAdded`). Captured from the α7C II over PTP/IP with one
-    /// parameter, 0xFFFFC001 (Fixtures/a7c2/ptpip/event-objectadded.bin), and listed in its PC Remote DeviceInfo, so the
+    /// parameter, 0xFFFFC001 (Fixtures/a7c2/ptpip/event-objectadded.bin), and listed in its PTP/IP DeviceInfo, so the
     /// code and the layout are settled. That it is the event a shutter press sends, about 0.4 s after the capture, is
     /// the spike's log (2 Nov, Wi-Fi in PC Remote only; none over USB) and stays `unverified`: the file holds the event,
     /// not what caused it.
     public static let sonyObjectAdded    = PTPEventCode(rawValue: 0xC201)
-    /// Listed in the α7C II's PC Remote DeviceInfo; never seen on the wire, so its parameters are unknown.
+    /// Listed in the α7C II's PTP/IP DeviceInfo; never seen on the wire, so its parameters are unknown.
     public static let sonyObjectRemoved  = PTPEventCode(rawValue: 0xC202)
 
     /// True for the standard and the Sony vendor ObjectAdded: the event transfer-while-shooting would act on.
@@ -242,7 +243,7 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
     /// image formats; no .HIF ObjectInfo is captured, so that the camera gives a .HIF file this code is `unverified`.
     public static let sonyHEIF    = PTPObjectFormat(rawValue: 0xB110)
     /// Sony vendor format for MPO (libgphoto2 `PTP_OFC_SONY_MPO`). Listed in the MTP-mode DeviceInfo's image formats,
-    /// not in PC Remote's; no MPO object is captured.
+    /// not in the PTP/IP one's; no MPO object is captured.
     public static let sonyMPO     = PTPObjectFormat(rawValue: 0xB301)
 
     public var description: String {
@@ -267,7 +268,7 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
 }
 
 /// PTP vendor extension IDs (DeviceInfo.vendorExtensionID), as in libgphoto2's ptp.h. The α7C II reports Sony's 0x11
-/// over PTP/IP in PC Remote, and `mtp` (0xFFFFFFFF) over USB in MTP mode, with "Sony Corporation" as the
+/// over PTP/IP, and `mtp` (0xFFFFFFFF) over USB in MTP mode, with "Sony Corporation" as the
 /// manufacturer; see `PTPDeviceInfo.isSony`.
 public enum PTPVendorExtension: UInt32, Sendable {
     case none = 0x0000

@@ -255,8 +255,8 @@ Pass: the resumed file is byte-identical; the join flow completes end to end wit
    ditto /tmp/a7c2-fixtures/a7c2 Fixtures/a7c2
    ```
 
-4. `make fixtures` copies every `Fixtures/a7c2/<link>/<name>.bin` to `Packages/PTPKit/Tests/PTPKitTests/Fixtures/a7c2-<link>-<name>.bin` and lists each copy.
-5. `make test` (or `make test-docker`). The fixture tests now run against the camera's bytes. A failure means the codec disagrees with the camera: fix `PTPKit`, never the fixture.
+4. `make fixtures` copies every `Fixtures/a7c2/<link>/<name>.bin` to `Packages/PTPKit/Tests/PTPKitTests/Fixtures/a7c2-<link>-<name>.bin` and lists each copy (it skips `objectproplist*` property lists with a message).
+5. `make test` (or `make test-docker`). The fixture tests now run against the camera's bytes. A failure in `PTPFixtureTests` means the codec disagrees with the camera: fix `PTPKit`, never the fixture. `PTPFixtureContentTests` pins the 8 Nov export's values (397 and 741 handles, DSC02018.ARW, DSC01779.ARW and .JPG, the event parameters), so a file the new export replaces fails there: update those expectations from the new bytes in the same commit.
 6. Check that nothing under `Fixtures/` holds a Wi-Fi password or a QR payload (the app never writes one), and that no `.pcap` is anywhere in the checkout (`git status --ignored` lists any; move it to `~/spike-captures/`): the Mac's captures carry the camera's serial and the Mac's name, `.gitignore` drops them under `Fixtures/` and the pre-commit hook refuses any staged one. Then commit `Fixtures/a7c2/` and the copies in `Packages/PTPKit/Tests/PTPKitTests/Fixtures/`.
 7. Fill [spike-findings.md](spike-findings.md): each go/no-go section, the menu wording, the mode matrix, the BLE tables, the `ImageCaptureCore` facts, the entitlement status and the decision record.
 8. The rest of the plan's day 10: record the decision in the proposal with the numbers behind it (transport table, performance budget, roadmap), and finalise [iteration-1-backlog.md](iteration-1-backlog.md).

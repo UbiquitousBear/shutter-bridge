@@ -4,8 +4,9 @@ import Foundation
 
 /// Bytes captured from the real α7C II, copied in by `make fixtures` as `a7c2-<link>-<name>.bin`, where link is
 /// `usb` or `ptpip` and name is what the spike app saved (see Fixtures/README.md). Each test here is skipped
-/// until a fixture of its kind exists, and then checks every one of them: it decodes and re-encodes to exactly the
-/// camera's bytes. What each fixture says is asserted in `PTPFixtureContentTests`.
+/// until a fixture of its kind exists, and then checks every one of them: most decode and re-encode to exactly the
+/// camera's bytes; `passThroughGolden` decodes the USB data phases in ImageCaptureCore's layout and `firmwareModes`
+/// compares the two DeviceInfos' firmware strings. What each fixture says is asserted in `PTPFixtureContentTests`.
 enum CapturedFixtures {
     static var directory: URL? { Bundle.module.url(forResource: "Fixtures", withExtension: nil) }
 
@@ -46,7 +47,7 @@ struct PTPFixtureTests {
             let data = try Data(contentsOf: f.url)
             let info = try PTPDeviceInfo.decode(data)
             #expect(info.manufacturer.lowercased().contains("sony"), "\(f.url.lastPathComponent)")
-            // The α7C II reports Sony's 0x11 over PTP/IP in PC Remote and the MTP ID 0xFFFFFFFF over USB in MTP mode
+            // The α7C II reports Sony's 0x11 over PTP/IP and the MTP ID 0xFFFFFFFF over USB in MTP mode
             // (libgphoto2 maps the latter to Sony by the manufacturer).
             #expect(info.isSony, "\(f.url.lastPathComponent): vendor extension 0x\(String(info.vendorExtensionID, radix: 16))")
             #expect(info.model.uppercased().contains("ILCE"), "\(f.url.lastPathComponent)")

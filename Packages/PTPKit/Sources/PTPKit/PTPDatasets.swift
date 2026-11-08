@@ -54,7 +54,7 @@ public struct PTPDeviceInfo: Equatable, Sendable {
     public var vendorExtension: PTPVendorExtension? { PTPVendorExtension(rawValue: vendorExtensionID) }
 
     /// Whether Sony's vendor codes apply. libgphoto2's rule (camlibs/ptp2/library.c): the ID is Sony's 0x11, or
-    /// an MTP ID (0xFFFFFFFF, or 0x6) while the manufacturer is Sony. The α7C II sends 0x11 over PTP/IP in PC Remote and
+    /// an MTP ID (0xFFFFFFFF, or 0x6) while the manufacturer is Sony. The α7C II sends 0x11 over PTP/IP and
     /// 0xFFFFFFFF over USB in MTP mode (Fixtures/a7c2/*/deviceinfo.bin).
     public var isSony: Bool {
         switch vendorExtension {

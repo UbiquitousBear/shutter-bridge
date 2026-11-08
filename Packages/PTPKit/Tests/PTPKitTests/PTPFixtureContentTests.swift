@@ -5,8 +5,13 @@ import Foundation
 /// What the α7C II's own bytes say, field by field (Fixtures/a7c2/, copied in by `make fixtures`). The golden tests in
 /// `PTPFixtureTests` prove every fixture decodes and re-encodes to the same bytes; these pin the values, so a codec
 /// change that kept the round trip but shifted a field still fails, and so each fact the findings recorded is held
-/// against the camera's bytes. The USB fixtures are *Image Transfer (MTP)* mode (firmware string "2.0"); the PTP/IP
-/// ones are *PC Remote* over Wi-Fi (firmware 2.01; the four 4 Nov 03:40 events c223, c206, c234 and objectadded and the SSDP description were saved on the home network through an access point, the rest on the camera's own network). The serials in both DeviceInfo files are zeroed.
+/// against the camera's bytes. The USB fixtures are *Image Transfer (MTP)* mode (firmware string "2.0"). The PTP/IP
+/// ones (firmware 2.01) come from several runs, by the export's file times (UTC+1): the SSDP description (4 Nov 03:23)
+/// and the events c223, c206, c234 and objectadded (03:39:54–03:40:02) from *PC Remote* on the home network through an
+/// access point; the rest from the camera's own network: deviceinfo, sdio-extdeviceinfo, the storage IDs, StorageInfo,
+/// handles, both ObjectInfo files and event c225 from the 5 Nov 01:09–01:14 run *Bluetooth: switch Wi-Fi on, join and
+/// import* (Wi-Fi switched on over Bluetooth; that guided run's setup has PC Remote Function off), events 4004 and c203
+/// from the 4 Nov 12:39 join over Bluetooth, and event 4005 from the 4 Nov 01:08 *Copy all RAW to Files* run. The serials in both DeviceInfo files are zeroed.
 ///
 /// Values come from docs/spike-findings.md where it recorded them, and from the bytes where it didn't; the findings'
 /// rows are named in each test. Nothing here says what a code *means* beyond what the bytes show.
@@ -75,7 +80,7 @@ struct PTPFixtureDeviceInfoTests {
         #expect(info.imageFormats.contains(PTPObjectFormat.mp4.rawValue))
     }
 
-    @Test("PTP/IP, PC Remote: Sony's own extension (0x11, v100, \"Sony PTP Extensions\"), firmware string 2.01")
+    @Test("PTP/IP: Sony's own extension (0x11, v100, \"Sony PTP Extensions\"), firmware string 2.01")
     func ptpipIdentity() throws {
         let info = try deviceInfo("a7c2-ptpip-deviceinfo.bin")
         #expect(info.standardVersion == 100)
@@ -90,7 +95,7 @@ struct PTPFixtureDeviceInfoTests {
         #expect(info.isSony)
     }
 
-    @Test("PTP/IP, PC Remote: 81 operations, 48 events, no device properties, 6 image formats")
+    @Test("PTP/IP: 81 operations, 48 events, no device properties, 6 image formats")
     func ptpipLists() throws {
         let info = try deviceInfo("a7c2-ptpip-deviceinfo.bin")
         #expect(info.operationsSupported == codes("""
@@ -114,7 +119,7 @@ struct PTPFixtureDeviceInfoTests {
         #expect(info.imageFormats == codes("3001 3801 B101 300B B982 B110"))
     }
 
-    @Test("PTP/IP, PC Remote: the Sony codes PTPKit names are listed; the standard property reads and 0x95C1 are not")
+    @Test("PTP/IP: the Sony codes PTPKit names are listed; the standard property reads and 0x95C1 are not")
     func ptpipNamedCodes() throws {
         let info = try deviceInfo("a7c2-ptpip-deviceinfo.bin")
         // Listed (the spike's findings: "Operations listed in DeviceInfo over PTP/IP, compared with USB").
@@ -266,7 +271,7 @@ struct PTPFixtureObjectInfoTests {
         }
     }
 
-    @Test("Identity of the PC Remote ARW is its filename, capture string and size (serial only as a length in logs)")
+    @Test("Identity of the PTP/IP ARW is its filename, capture string and size (serial only as a length in logs)")
     func identity() throws {
         let arw = try objectInfo("a7c2-ptpip-objectinfo-arw.bin")
         let identity = arw.identity(cameraSerial: "tag")
@@ -336,8 +341,8 @@ struct PTPFixtureEventTests {
 @Suite("Captured α7C II fixtures: Sony ExtDeviceInfo and capability gating")
 struct PTPFixtureSonyTests {
 
-    /// There is no ExtDeviceInfo parser in Iteration 1. This reads the layout the one capture shows (970 B, from
-    /// *PC Remote* over PTP/IP on firmware 2.01): a u16 version, then two lists, each a u32 count and that many u16
+    /// There is no ExtDeviceInfo parser in Iteration 1. This reads the layout the one capture shows (970 B, over PTP/IP on firmware 2.01, from the 5 Nov Bluetooth hand-off run; the findings recorded
+    /// the same size, version and counts in PC Remote on 2 Nov): a u16 version, then two lists, each a u32 count and that many u16
     /// codes, consumed exactly. Seen in one capture, so the layout may differ on another firmware or body; what the
     /// codes mean is not known.
     @Test("sdio-extdeviceinfo.bin: version 0x12C, then 421 and 59 u16 codes, consumed exactly (one capture)")
@@ -366,7 +371,7 @@ struct PTPFixtureSonyTests {
         #expect(caps.description == "Sony ILCE-7CM2 2.0: 0x9210 not listed, 0x9212 not listed")
     }
 
-    @Test("PC Remote DeviceInfo: every Sony feature, 0x9211 for a byte range, and no property reads")
+    @Test("PTP/IP DeviceInfo: every Sony feature, 0x9211 for a byte range, and no property reads")
     func ptpipCapabilities() throws {
         let caps = SonyCapabilities(deviceInfo: try deviceInfo("a7c2-ptpip-deviceinfo.bin"))
         #expect(caps.isSony)
@@ -378,7 +383,7 @@ struct PTPFixtureSonyTests {
         #expect(!caps.description.contains("00000000"))
     }
 
-    @Test("The whole-card plan's gate accepts the PC Remote DeviceInfo and stops on the MTP one")
+    @Test("The whole-card plan's gate accepts the PTP/IP DeviceInfo and stops on the MTP one")
     func planGate() throws {
         func atGate(_ info: PTPDeviceInfo) -> SonySessionRunner.Action {
             var runner = SonySessionRunner(plan: .wholeCard())
@@ -386,7 +391,7 @@ struct PTPFixtureSonyTests {
             _ = runner.next(.response(.ok))
             return runner.next(.deviceInfo(info))        // GetDeviceInfo, the step that verifies capabilities
         }
-        if case .stop = atGate(try deviceInfo("a7c2-ptpip-deviceinfo.bin")) { Issue.record("the PC Remote DeviceInfo was refused") }
+        if case .stop = atGate(try deviceInfo("a7c2-ptpip-deviceinfo.bin")) { Issue.record("the PTP/IP DeviceInfo was refused") }
         guard case .stop(.unsupported(let caps)) = atGate(try deviceInfo("a7c2-usb-deviceinfo.bin")) else {
             Issue.record("the MTP DeviceInfo passed the whole-card gate"); return
         }

@@ -139,7 +139,7 @@ public enum PTPCommand {
     }
 
     /// Sony SDIO_Connect (libgphoto2's three-phase handshake for PC Remote mode): phase 1, 2, 3. The code is listed in
-    /// the α7C II's PC Remote DeviceInfo; the parameters are `unverified` (a fixture holds replies, not requests), though
+    /// the α7C II's PTP/IP DeviceInfo; the parameters are `unverified` (a fixture holds replies, not requests), though
     /// the spike saw all three phases answer OK. Has a data phase (responder → initiator) that libgphoto2 discards.
     public static func sonySDIOConnect(phase: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOConnect.rawValue, transactionID: tx, parameters: [phase, 0, 0])
@@ -153,7 +153,7 @@ public enum PTPCommand {
     }
 
     /// Sony SDIO_OpenSession (0x9210), sent instead of OpenSession (0x1002). `functionMode` 1 = contents transfer
-    /// (whole card), 0 = remote control. No data phase. The code is listed in the α7C II's PC Remote DeviceInfo; the
+    /// (whole card), 0 = remote control. No data phase. The code is listed in the α7C II's PTP/IP DeviceInfo; the
     /// parameters are `unverified` there (the spike's [1, 1] answered OK); source: mvpzac/Imagedge (field-tested on a ZV-E10).
     public static func sonySDIOOpenSession(sessionID: UInt32 = 1, functionMode: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOOpenSession.rawValue, transactionID: tx, parameters: [sessionID, functionMode])
@@ -161,7 +161,7 @@ public enum PTPCommand {
 
     /// Sony SDIO_SetContentsTransferMode (0x9212), three parameters, no data phase. Known sets: `[2, 0, 0]` then
     /// `[2, 1, 0]` (with a 200 ms pause between) for the whole card; `[1, 0, 0]` for the set of photos selected on
-    /// the camera. The code is listed in the α7C II's PC Remote DeviceInfo; the parameters are `unverified` there (the
+    /// the camera. The code is listed in the α7C II's PTP/IP DeviceInfo; the parameters are `unverified` there (the
     /// spike's [2, 0, 0] then [2, 1, 0] answered OK); source: mvpzac/Imagedge (ZV-E10).
     public static func sonySetContentsTransferMode(_ p1: UInt32, _ p2: UInt32, _ p3: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOSetContentsTransferMode.rawValue, transactionID: tx, parameters: [p1, p2, p3])
