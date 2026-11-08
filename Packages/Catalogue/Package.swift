@@ -1,9 +1,11 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// The import ledger: object identity, the store protocol and an in-memory store. The SwiftData models and their
-// `ModelActor` (section 4 of docs/iteration-1-backlog.md) arrive in their own pull request, behind
-// `#if canImport(SwiftData)`, so identity and the store's rules keep building and testing on Linux.
+// The import ledger (section 4 of docs/iteration-1-backlog.md): object identity, the store protocol, an in-memory
+// store, and the SwiftData schema (`CatalogueSchemaV1`, `CatalogueMigrationPlan`) with its `ModelActor` store
+// (`SwiftDataCatalogue`). The SwiftData part sits behind `#if canImport(SwiftData)`, so identity, the storage mapping
+// and the store contract (run against the in-memory store) keep building and testing on Linux; CI runs the same
+// contract against the SwiftData store in the iOS Simulator.
 let package = Package(
     name: "Catalogue",
     platforms: [
