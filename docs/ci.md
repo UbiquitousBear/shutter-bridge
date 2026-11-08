@@ -1,6 +1,6 @@
 # CI and TestFlight
 
-Nov 1, 2026 · How the spike app gets built, tested and onto the iPhone. Researched against Apple's and GitHub's
+Nov 1, 2026 (updated 8 Nov for the production app) · How the apps get built, tested and onto the iPhone. Researched against Apple's and GitHub's
 documentation on this date; the claims that rest only on forum reports are marked.
 
 ## Summary
@@ -10,13 +10,14 @@ documentation on this date; the claims that rest only on forum reports are marke
 | Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov) | PRs touching `Packages/` | none |
 | App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
 | Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`), kept until the spike is retired | PRs touching `Spike/` or `Packages/PTPKit` | none |
-| Archive → TestFlight (internal testing), **now** | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`) | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
+| Archive → TestFlight (internal testing), **now**: the production app by default, or the spike | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`, "App to TestFlight") | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
 | Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
 
 **Why GitHub for TestFlight first.** Shamil has no Mac until Thu 5 Nov, and Xcode Cloud's onboarding needs Xcode
 on a Mac, while the spike's wired days need the app on the iPhone from day 1. Everything the GitHub route needs
-can be set up from a phone's browser (below). Once Xcode Cloud is set up, revoke the API key and delete the
-`testflight` environment.
+can be set up from a phone's browser (below). On 8 Nov Shamil pointed the same route at the production app, so
+TestFlight builds of Shutter Bridge start in Iteration 1 rather than waiting for Xcode Cloud. Once Xcode Cloud is
+set up for the app it uploads, revoke the API key and delete the `testflight` environment.
 
 **Why Xcode Cloud for TestFlight later.** It is the proposal's CI decision, it signs with Apple-managed certificates
 so no signing key or App Store Connect API key ever sits in this **public** repository, and the Apple Developer
@@ -29,6 +30,8 @@ candidate, and it gives every PR a real Xcode 27 compile of the spike, which not
 The image is still marked *preview*: no SLA, occasional queueing, weekly changes.
 
 ## What the repo already does for TestFlight
+
+For the spike:
 
 - **App icon:** `Spike/Resources/Assets.xcassets/AppIcon.appiconset` (one opaque 1024 px PNG, no Sony marks).
   Uploads without one fail validation (ITMS-90713, missing `CFBundleIconName`).
@@ -46,6 +49,20 @@ The image is still marked *preview*: no SLA, occasional queueing, weekly changes
   hashing, WPA2 via NEHotspotConfiguration), so TestFlight skips the questionnaire.
 - **Project generation in CI:** `Spike/ci_scripts/ci_post_clone.sh` installs XcodeGen and generates the git-ignored
   project. Xcode Cloud only runs scripts from a `ci_scripts` folder next to the project, hence `Spike/ci_scripts/`.
+
+For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is generated in CI):
+
+- **App icon:** `App/ShutterBridge/Assets.xcassets/AppIcon.appiconset` (one 1024 px PNG), named by
+  `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`; `testflight.yml` fails before the upload if the archived app has
+  no `CFBundleIconName` (ITMS-90713; on iOS it sits under `CFBundleIcons` › `CFBundlePrimaryIcon`) or no compiled
+  asset catalogue.
+- **Privacy manifest:** `App/ShutterBridge/PrivacyInfo.xcprivacy` (UserDefaults, disk space, file timestamps).
+- **Export compliance:** `ITSAppUsesNonExemptEncryption = false` in `App/Info.plist`.
+- **Versions:** `MARKETING_VERSION` 0.1 and `CURRENT_PROJECT_VERSION` 1 in the project; `Info.plist` reads both from
+  build settings, so CI sets the build number.
+- **No entitlements in Iteration 1:** the app has no entitlements file, so nothing checks for one. Hotspot
+  Configuration (Iteration 3) and Multicast Networking get one, and a check like the spike's, when a build first
+  signs with them.
 
 ## Xcode Cloud: one-time setup (Shamil; about 30 minutes, needs the Mac)
 
@@ -135,17 +152,32 @@ If a ruleset on `main` requires status checks by name, replace the old `ptpkit.y
 **Bundle ID and app record.** The project sets `PRODUCT_BUNDLE_IDENTIFIER` to `net.shamil.shutter-bridge`, with
 `DEVELOPMENT_TEAM` empty and automatic signing, as Shamil decided on 8 Nov for the production app (a new App ID and
 app record named "Shutter Bridge", because the spike's are named for the spike). Shamil creates both on the Mac before
-the first upload; the bundle ID can't change after it. Nothing uploads the production app yet: `testflight.yml` still archives the spike.
+the first upload; the bundle ID can't change after it. From 8 Nov `testflight.yml` uploads the production app by
+default (below).
 
 ## TestFlight from GitHub Actions (no Mac needed)
 
-`.github/workflows/testflight.yml` archives the spike on the `xcode-27` runner, signs it at export with
-Apple-managed certificates and uploads it to TestFlight for internal testing. It runs only when started by hand
-and approved, and only from `main`.
+`.github/workflows/testflight.yml` ("App to TestFlight") archives an app on the `xcode-27` runner, signs it at
+export with Apple-managed certificates and uploads it to TestFlight for internal testing. It runs only when started
+by hand and approved, and only from `main`. Its `app` input picks which:
+
+| `app` | Project and scheme | Bundle ID | App Store Connect record |
+| --- | --- | --- | --- |
+| `production` (default; Shamil, 8 Nov) | `App/ShutterBridge.xcodeproj`, `ShutterBridge` | `net.shamil.shutter-bridge` | "Shutter Bridge" |
+| `spike` | `Spike/Spike.xcodeproj` (generated with XcodeGen in the job), `Spike` | `net.shamil.shutter-bridge.spike` | "Shutter Bridge Spike" |
+
+The workflow was called "Spike to TestFlight" until 8 Nov. Its file is still `testflight.yml`, on purpose: the
+`testflight` environment, any ruleset or required check that names the file, and the run numbers (the build
+numbers, below) all follow the file, not the display name. Both apps use the same team API key.
+
+Iteration 1 uploads the production app for Shamil's bench iPhone (the thin Browse grid with *Copy as JPEG* first;
+backlog, section 6). Xcode Cloud stays the long-term route, and Iteration 2's internal TestFlight date (15 Jan
+2027) stands for the wider tester group.
 
 ### One-time setup from a phone or any browser (about 45 minutes)
 
-Use Safari's "Request Desktop Website" for the Apple pages.
+Use Safari's "Request Desktop Website" for the Apple pages. Steps 1–7 are the spike's and are already done; the
+production app needs only the short list after them.
 
 1. **Agreements.** App Store Connect → Business: accept any pending agreements (Account Holder).
 2. **App ID.** developer.apple.com → Account → Certificates, IDs & Profiles → Identifiers → + → App IDs → App:
@@ -172,17 +204,47 @@ Use Safari's "Request Desktop Website" for the Apple pages.
      Membership details).
 7. **Merge PR #1.** A manually started workflow only shows under Actions once it is on the default branch.
 
+### The production app: one-time setup (Shamil, before its first run)
+
+The API key, the `testflight` environment and the agreements above are reused as they are. On the Mac or in a
+browser:
+
+1. **App ID.** Certificates, IDs & Profiles → Identifiers → + → App IDs → App: description "Shutter Bridge",
+   Bundle ID **Explicit** `net.shamil.shutter-bridge`, and under Capabilities tick **Hotspot Configuration** and
+   **Access Wi-Fi Information**. Iteration 1 signs with neither (the app has no entitlements yet), but cloud signing
+   won't add a capability to an App ID later, so they're ticked now for Iteration 3. Tick **Multicast Networking**
+   too when Apple grants the request (reference 7BDQ7FRVM8, submitted 8 Nov); it has to be on the App ID before any
+   build that signs with it.
+2. **App record.** App Store Connect → Apps → + → New App: iOS, name **"Shutter Bridge"**, primary language
+   **English (UK)**, bundle ID `net.shamil.shutter-bridge`, SKU e.g. `shutterbridge`, Full Access. If the name is
+   taken on the App Store, use a variant for the record (a short suffix; no Sony marks): the name under the icon is
+   `CFBundleDisplayName`, which stays "Shutter Bridge". The bundle ID can't change after the first upload.
+3. **Internal testers.** The app → TestFlight → Internal Testing → + a group (e.g. "Bench"), add yourself, and turn
+   on automatic distribution.
+
 ### Running it
 
-Actions → **Spike to TestFlight** → Run workflow (branch `main`, Xcode 27.1, archive signing `adhoc`) → approve
-the `testflight` deployment when GitHub asks. The job checks the environment is complete, generates the project, archives with
-an ad-hoc signature, fails if the archive lost the Hotspot Configuration entitlement, then exports and uploads.
-Build numbers are the workflow's run number and attempt (`12.1`, or `12.2` after a re-run), so a re-run never
-collides with an upload that already happened. After a few minutes of processing on Apple's side the build
-appears in the TestFlight app.
+Actions → **App to TestFlight** → Run workflow (branch `main`, app `production` or `spike`, Xcode 27.1, archive
+signing `adhoc`) → approve the `testflight` deployment when GitHub asks. The job checks the environment is complete,
+then:
 
-If you later use Xcode Cloud for the same app, set its next build number above the last GitHub run number (App
-Store Connect → the app → Xcode Cloud → Settings → Build Number), since Xcode Cloud counts from 1.
+- **`production`:** reads the `ShutterBridge` target's bundle ID and `MARKETING_VERSION` from `xcodebuild
+  -showBuildSettings` and stops unless the bundle ID is `net.shamil.shutter-bridge` (before the signing step, the only
+  one given the secrets); archives with an ad-hoc signature; and stops before the upload unless the archived app has that bundle ID,
+  that version, the run's build number and a `CFBundleIconName` with a compiled asset catalogue. No entitlement is
+  required. No Homebrew or XcodeGen step runs.
+- **`spike`:** as before 8 Nov: installs XcodeGen, generates the project, archives with an ad-hoc signature and
+  fails if the archive lost the Hotspot Configuration entitlement.
+
+Then it exports and uploads. After a few minutes of processing on Apple's side the build appears in the TestFlight
+app.
+
+**Build numbers.** `CFBundleVersion` is the workflow's run number and attempt (`12.1`, or `12.2` after a re-run), so
+a re-run never collides with an upload that already happened. The two apps share the run counter, so each app's
+numbers rise with gaps where the other app ran; App Store Connect only needs each number to be new and higher
+within the app and version. When Xcode Cloud later builds either app, set its next build number above the last
+GitHub run number (App Store Connect → the app → Xcode Cloud → Settings → Build Number), since Xcode
+Cloud counts from 1.
 
 ### If the first run fails
 
@@ -198,7 +260,11 @@ Store Connect → the app → Xcode Cloud → Settings → Build Number), since 
     profile in the developer portal, and store them as two more environment secrets. The workflow needs a third
     mode for this; ask for it if the ad-hoc run fails.
 - **Export fails with a permission or "cloud signing" error:** the key must be a Team key with the Admin role.
-- **Export fails over a capability or profile:** check step 2 (Hotspot Configuration ticked on the App ID).
+- **Export fails over a capability or profile:** check the App ID (spike: step 2, Hotspot Configuration ticked;
+  production: its step 1, the App ID `net.shamil.shutter-bridge` exists).
+- **Export fails with no app record found (production):** create the "Shutter Bridge" record (its step 2) first.
+- **"CFBundleIconName is missing" (production):** the archive has no app icon, which App Store Connect would
+  reject (ITMS-90713); check `ASSETCATALOG_COMPILER_APPICON_NAME` and the AppIcon set in the asset catalogue.
 - **Upload rejected as a duplicate:** a build with that number already exists; start a new run.
 
 ### Security
@@ -215,11 +281,13 @@ Two residual risks:
   workflow and branch but shows no diff. Add a ruleset on `main` (Settings → Rules → Rulesets → New branch
   ruleset, target the default branch) that requires a pull request and blocks force pushes and deletion, and
   before approving a run check its commit is one you merged.
-- **`brew install xcodegen` runs unpinned third-party code** in the same job before the signing step. Homebrew
-  checks the bottle against its formula's checksum, so the exposure is a compromise of Homebrew itself; pinning a
-  checksummed XcodeGen release, or generating the project in a separate job without the environment, would close
-  it. Revoke it in App Store Connect when Xcode Cloud takes over, or at once if it might have
-leaked.
+- **`brew install xcodegen` runs unpinned third-party code** in the same job before the signing step, now only
+  in `spike` runs: the production app's project is committed, so a `production` run has no Homebrew or XcodeGen
+  step. Homebrew checks the bottle against its formula's checksum, so the exposure is a compromise of Homebrew
+  itself; pinning a checksummed XcodeGen release, or generating the project in a separate job without the
+  environment, would close it.
+
+Revoke the key in App Store Connect when Xcode Cloud takes over, or at once if it might have leaked.
 
 ## Sources
 
