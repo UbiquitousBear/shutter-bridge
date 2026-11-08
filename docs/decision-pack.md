@@ -65,7 +65,7 @@ Source: spike-remaining.md, section 5. Shamil decided on 7 Nov: decisions 1 and 
 
 **Further choices decided by Shamil on 8 Nov** (Shamil, 8 Nov; they settle open points in the backlogs, and are not among decisions 1–9):
 - **Files folder layout:** one folder per camera, named for the camera (for example its model name), matching the album default. A name already present is never overwritten.
-- **Production App ID:** a new App ID and App Store Connect record, bundle ID `net.shamil.shutter-bridge`, record named "Shutter Bridge". Shamil creates them on the Mac before the first upload (Iteration 2's TestFlight). The spike keeps its own.
+- **Production App ID:** a new App ID and App Store Connect record, bundle ID `net.shamil.shutter-bridge`, record named "Shutter Bridge". Shamil creates them on the Mac before the first upload (Iteration 2's TestFlight). The spike keeps its own. *Update, Shamil, 8 Nov: the first upload is now an Iteration 1 build through `testflight.yml` ([ci.md](ci.md), "The production app: one-time setup"), so they are needed before that.*
 - **Video files in Browse:** shown greyed out with a "Video: from 1.1" label, not importable in 1.0.
 - **Photos `.restricted`** (parental controls or device management): treated as denied. Imports go to Files and the app says why, without the Settings link. After someone grants Photos access, the next import follows the destination setting, and files already in Files stay where they are, still marked imported. Files written to Files get the camera's capture date as their modification date (the bytes stay the originals).
 
