@@ -22,7 +22,7 @@ Written Wednesday 4 Nov 2026 on spike build 14 (TestFlight 0.1 (14.1)). It rests
 ## Decisions (Shamil, 7 Nov)
 
 - **Design decisions 1 and 3–9 (section 5) are accepted as recommended, as written.** Decision 2 was made on 4 Nov (d). Decision 5 is accepted as written: the home network is supported when the camera is already on it, after Iteration 3's core, and it stays subject to the group B runs and the check of what turning access authentication off costs in security.
-- **Decision 9 includes a Files-only import path, built in Iteration 1.** When Photos access is denied (*Don't Allow*, or *None* in Settings), imports go to a folder in Files (On My iPhone › the app's folder, as the spike's *Copy all RAW to Files* did), the app says so in the UI, and it offers a link to Settings to grant Photos access. The proposal's 1.0 list has no Files path, so this adds to Iteration 1's scope and changes the proposal. Whether Files is also offered as a chosen destination when Photos is allowed is not decided; it stays an open question for Shamil. The Photos *Don't Allow* run on a fresh install is still to be done (Shamil); its result may refine the wording, not the choice.
+- **Decision 9 includes a Files-only import path, built in Iteration 1.** When Photos access is denied (*Don't Allow*, or *None* in Settings), imports go to a folder in Files (On My iPhone › the app's folder, as the spike's *Copy all RAW to Files* did), the app says so in the UI, and it offers a link to Settings to grant Photos access. The proposal's 1.0 list has no Files path, so this adds to Iteration 1's scope and changes the proposal. Whether Files is also offered as a chosen destination when Photos is allowed is not decided; it stays an open question for Shamil. The Photos *Don't Allow* run (8 Nov) confirmed it: with access denied nothing reaches Photos and iOS doesn't ask again.
 - **Multicast entitlement: submit the request.** Shamil submitted it on 8 Nov (reference 7BDQ7FRVM8); nothing waits on the answer. SSDP stays Go on passive listening, with a typed address as the fallback; active search (M-SEARCH) stays open pending the entitlement, for the home-network route.
 - **Bluetooth trace of Creators' App leaving: skipped.** Decision 2 rests on the measured behaviour; option (c) ((b) plus a Bluetooth write) is closed for 1.0. The write that makes the camera's Wi-Fi go off at once after a leave stays unknown.
 - **The proposed drops in section 7 are all confirmed as dropped.**
@@ -52,7 +52,7 @@ Every go/no-go row of the plan has an answer. Nothing below is waiting on a run 
 
 ## 2. Still to run on build 14.1
 
-No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sources/Guided/GuidedScripts.swift`). Times are the guided runs' own estimates. "Plan record" means it fills a findings cell the plan asks for and is not needed for the decision; "1.0 design" means it can still refine a decision in section 5 (all were made by 7 Nov: the *Don't Allow* run may change decision 9's wording, not its choice, and decision 5 stays subject to group B); "Optional" means skipping it costs a blank cell or a provisional decision.
+No new build is planned. Every run below exists on 14.1 (checked in `Spike/Sources/Guided/GuidedScripts.swift`). Times are the guided runs' own estimates. "Plan record" means it fills a findings cell the plan asks for and is not needed for the decision; "1.0 design" means it can still refine a decision in section 5 (all were made by 7 Nov: decision 5 stays subject to group B; the *Don't Allow* run, done on 8 Nov, left decision 9 as decided); "Optional" means skipping it costs a blank cell or a provisional decision.
 
 **A. USB: one session, camera on the cable** (nothing left)
 
@@ -92,6 +92,8 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 
 **E. Photos *Don't Allow*, last, on a fresh install** (Background › *Photos albums, no camera*, runbook steps A1–A4). Deleting the app deletes the log, the fixtures and the default copy folder (move out any copies worth keeping), gives the Wi-Fi tab a new GUID and clears the Bluetooth proximity filter (retype it). Before it: *Export JSON*, *Copy measurements table*, *Share fixtures (zip)* and save them off the phone. About 10 min. Needed for: 1.0 design (the Photos permission flow).
 
+Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh install. Every save then failed at once with PHPhotosErrorDomain 3311, and asking again showed no prompt, so a denied app reaches Photos only through Settings: decision 9's Files-only path stands as decided. Add-only was asked first rather than read/write as the steps said, so read/write declined with add-only not yet asked (the product's own case) is untested, as is add-only allowed with read/write declined. Whether the log and the fixtures were exported before the reinstall is still to be confirmed (Shamil); if not, section 4's fixtures have to be captured again.
+
 **Not a run: a Bluetooth trace of Creators' App leaving (skipped, Shamil, 7 Nov).** It would have used Apple's Bluetooth logging profile on the phone and PacketLogger on the Mac, to find the write that switches the camera's Wi-Fi off about 1 s after Creators' App leaves. Decision 2 rests on the measured behaviour, and option (c) is closed for 1.0. The 5 Nov 01:13 leave left the camera's Wi-Fi on for at least 59 s, so the write, which stays unknown, was also the only known way to make sure the Wi-Fi goes off after (d)'s leave.
 
 **No guided run on 14.1 answers these; record as open unless done by hand.**
@@ -100,7 +102,7 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 - Why the first Bluetooth connect takes 5–6 s (0.4 s otherwise) matters for time-to-camera; the camera seems slow to take the first connection after it has been idle. After a restart it varied: 5.95 s at 5 Nov 01:18, where the connect started before iOS reported the camera again and finished 0.46 s after it did, and 0.50 s at 02:21, where the tap came 2.8 s after such a report. So a slow first connect may be a wait for the camera to advertise again.
 - Whether the Wi-Fi recovery would rejoin with no other known network in range.
 
-**Suggested order** (Shamil's call): A was done on 5 Nov; next the Mac (section 4, fixtures); B if wanted (C has no runs left); the weekend or Mon 9 Nov D; Tue 10 Nov E, last. Wed 11 – Fri 13 Nov for paperwork and the decision. Skip any optional row that runs late: its cell becomes "not run" in the findings.
+**Suggested order** (Shamil's call): A was done on 5 Nov and E on 8 Nov; next the Mac (section 4, fixtures); B if wanted (C has no runs left); the weekend or Mon 9 Nov D. E's reinstall cleared the Bluetooth proximity filter (retype it before D) and gave the Wi-Fi tab a new GUID. Wed 11 – Fri 13 Nov for paperwork and the decision. Skip any optional row that runs late: its cell becomes "not run" in the findings.
 
 ## 3. Questions waiting on Shamil
 
@@ -134,7 +136,7 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 
 ## 4. Paperwork before 13 Nov
 
-**Fixtures (needs the Mac).** `Fixtures/a7c2/` is empty in the repo.
+**Fixtures (needs the Mac).** `Fixtures/a7c2/` is empty in the repo. The 8 Nov fresh install (section 2 E) deleted the phone's fixtures and log: use the zip shared before it, if there is one (Shamil to confirm); otherwise the fixtures have to be captured again before step 1.
 1. On the phone: Log › Fixtures › *Share fixtures (zip)*.
 2. On the Mac: unzip it and `ditto` the `a7c2` folder over `Fixtures/a7c2/`.
 3. Delete any `objectproplist*.bin` from `Fixtures/a7c2/usb/` first: `make fixtures` copies every `.bin` into the PTPKit test bundle, and the hook refuses one anywhere. Then `make fixtures`, then `make test`. A failure means the codec disagrees with the camera: fix `PTPKit`, never the fixture.
@@ -222,7 +224,7 @@ Each was decided by Shamil: decision 2 on 4 Nov, the rest on 7 Nov, as recommend
 
 **9. Photos access.** Ask for read/write and accept Limited Access with nothing selected; stage files as complete-until-first-unlock; find the album by its stored identifier.
 - *Files-only path:* Iteration 1 builds one. When Photos access is denied (*Don't Allow*, or *None* in Settings), imports go to a folder in Files (On My iPhone › the app's folder, as the spike's *Copy all RAW to Files* did), the app says so in the UI, and it offers a link to Settings to grant Photos access. The proposal's 1.0 list has no Files path, so this is a scope addition to Iteration 1 and a proposal change. Whether Files is also offered as a chosen destination when Photos is allowed is not decided: open, for Shamil.
-- *Provisional on:* the Photos *Don't Allow* run on a fresh install (section 2, E; Shamil is doing it). Its result may refine the wording, not the choice.
+- *Provisional on:* nothing pending. The *Don't Allow* run (8 Nov, section 2 E) found that with both levels declined every save fails at once (PHPhotosErrorDomain 3311) and iOS doesn't ask again, so the app checks the authorisation status before an import and sends a denied import to Files with a link to Settings. Untested: read/write declined with add-only not yet asked (the product's own case), and add-only allowed with read/write declined.
 - *Decision (Shamil, 7 Nov):* accepted as recommended, with the Files-only import path built in Iteration 1.
 
 ## 6. After the go/no-go
