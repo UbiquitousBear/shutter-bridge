@@ -1,0 +1,32 @@
+// Linux development container: PTPKit's tests, the docs and the fixture scripts, in GitHub Codespaces, VS Code
+// Dev Containers or any tool that reads devcontainer.json. The spike app can't be built here (it needs Xcode 27
+// on a Mac), and no camera reaches a container.
+{
+  "name": "Shutter Bridge (PTPKit on Linux)",
+  "build": { "dockerfile": "Dockerfile" },
+  // The swift image's non-root user (UID 1000); on Linux, Dev Containers gives it the UID of whoever runs the tool,
+  // unless that is root.
+  "remoteUser": "ubuntu",
+  // LLDB turns ASLR off with personality(), which Docker's default seccomp profile refuses ("personality set
+  // failed"), so the Swift extension can't launch a program under the debugger without seccomp=unconfined.
+  // SYS_PTRACE is only for attaching to a process that is already running.
+  "capAdd": ["SYS_PTRACE"],
+  "securityOpt": ["seccomp=unconfined"],
+  // The repo's git hooks: owner-only commit attribution and the fixture checks (AGENTS.md). This runs first, and in
+  // Codespaces prebuilds, so a failed build below can't leave the hooks off. The checkout can be owned by a
+  // different UID from the container's user, and git refuses such a repository without safe.directory.
+  "onCreateCommand": "git config --global --add safe.directory \"${containerWorkspaceFolder}\" && make hooks",
+  // Runs at creation and in Codespaces prebuilds, so the first `make test` doesn't start from a cold build.
+  "updateContentCommand": "cd Packages/PTPKit && swift build --build-tests",
+  "customizations": {
+    "vscode": {
+      "extensions": ["swiftlang.swift-vscode"],
+      "settings": {
+        // PTPKit is in Packages/PTPKit, not at the repository root. The extension skips folders named Packages
+        // by default, so the second setting is its default list without "Packages".
+        "swift.searchSubfoldersForPackages": true,
+        "swift.ignoreSearchingForPackagesInSubfolders": [".", ".build", "out", "bazel-out", "bazel-bin"]
+      }
+    }
+  }
+}

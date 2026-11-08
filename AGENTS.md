@@ -59,6 +59,11 @@ make hooks      # enable the repo's git hooks for this clone
 Run `make test` before every commit that touches `Packages/`. The spike app needs Xcode 27 and a physical
 iPhone (cameras never reach the Simulator); say so rather than claiming it was built when it wasn't.
 
+`.devcontainer/` is a Linux container on CI's Swift image (`swift:6.4-noble`) with `make`, `python3` and the git
+hooks enabled: `make test` and `make fixtures` work in it, and the spike doesn't build there. If you change the
+Swift image, change it in `.devcontainer/Dockerfile`, `.github/workflows/ptpkit.yml`, the `Makefile` and
+`docs/ci.md` together.
+
 ## Conventions
 
 - Apple frameworks only in anything that ships; no third-party dependencies.
