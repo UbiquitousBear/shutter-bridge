@@ -1,10 +1,11 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// Where imported files end up: the import destination protocol, its result and the Photos access rule. The Photos
-// library destination (`PHAssetCreationRequest`) and the Files folder destination (section 5 of
-// docs/iteration-1-backlog.md, decision 9) arrive in their own pull request, the first behind
-// `#if canImport(Photos)`, so the shapes and rules keep building and testing on Linux.
+// Where imported files end up (section 5 of docs/iteration-1-backlog.md, decision 9): the import destination
+// protocol, the RAW+JPEG pairing rule, the destination setting and the rule that picks Photos or Files, the Files
+// folder destination (pure Foundation) and the Photos destination's logic over a `PhotoLibraryClient` protocol. The
+// real Photos library (`SystemPhotoLibrary`, `PHAssetCreationRequest`) and ImageIO's metadata reader sit behind
+// `#if canImport(...)`, so everything else builds and tests on Linux.
 let package = Package(
     name: "PhotosBridge",
     platforms: [
