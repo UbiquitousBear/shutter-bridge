@@ -92,7 +92,7 @@ Done on 5 Nov (02:17): Bluetooth off and on in Settings. The app restarted its s
 
 **E. Photos *Don't Allow*, last, on a fresh install** (Background › *Photos albums, no camera*, runbook steps A1–A4). Deleting the app deletes the log, the fixtures and the default copy folder (move out any copies worth keeping), gives the Wi-Fi tab a new GUID and clears the Bluetooth proximity filter (retype it). Before it: *Export JSON*, *Copy measurements table*, *Share fixtures (zip)* and save them off the phone. About 10 min. Needed for: 1.0 design (the Photos permission flow).
 
-Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh install. Every save then failed at once with PHPhotosErrorDomain 3311, and asking again showed no prompt, so a denied app reaches Photos only through Settings: decision 9's Files-only path stands as decided. Add-only was asked first rather than read/write as the steps said, so read/write declined with add-only not yet asked (the product's own case) is untested, as is add-only allowed with read/write declined. Whether the log and the fixtures were exported before the reinstall is still to be confirmed (Shamil); if not, section 4's fixtures have to be captured again.
+Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh install. Every save then failed at once with PHPhotosErrorDomain 3311, and asking again showed no prompt, so a denied app reaches Photos only through Settings: decision 9's Files-only path stands as decided. Add-only was asked first rather than read/write as the steps said, so read/write declined with add-only not yet asked (the product's own case) is untested, as is add-only allowed with read/write declined. The fixtures were exported before the reinstall (Shamil, 8 Nov), so section 4's fixtures come from that zip.
 
 **Not a run: a Bluetooth trace of Creators' App leaving (skipped, Shamil, 7 Nov).** It would have used Apple's Bluetooth logging profile on the phone and PacketLogger on the Mac, to find the write that switches the camera's Wi-Fi off about 1 s after Creators' App leaves. Decision 2 rests on the measured behaviour, and option (c) is closed for 1.0. The 5 Nov 01:13 leave left the camera's Wi-Fi on for at least 59 s, so the write, which stays unknown, was also the only known way to make sure the Wi-Fi goes off after (d)'s leave.
 
@@ -136,7 +136,7 @@ Done on 8 Nov (02:06–02:08, iOS 27.3 beta): both prompts declined on a fresh i
 
 ## 4. Paperwork before 13 Nov
 
-**Fixtures (needs the Mac).** `Fixtures/a7c2/` is empty in the repo. The 8 Nov fresh install (section 2 E) deleted the phone's fixtures and log: use the zip shared before it, if there is one (Shamil to confirm); otherwise the fixtures have to be captured again before step 1.
+**Fixtures (needs the Mac).** `Fixtures/a7c2/` is empty in the repo. The 8 Nov fresh install (section 2 E) deleted the phone's fixtures and log, but Shamil exported the fixtures zip first (8 Nov), after MTP's DeviceInfo had been captured again on 5 Nov: step 1 uses that zip instead of a new *Share fixtures (zip)* from the phone.
 1. On the phone: Log › Fixtures › *Share fixtures (zip)*.
 2. On the Mac: unzip it and `ditto` the `a7c2` folder over `Fixtures/a7c2/`.
 3. Delete any `objectproplist*.bin` from `Fixtures/a7c2/usb/` first: `make fixtures` copies every `.bin` into the PTPKit test bundle, and the hook refuses one anywhere. Then `make fixtures`, then `make test`. A failure means the codec disagrees with the camera: fix `PTPKit`, never the fixture.
