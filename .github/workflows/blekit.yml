@@ -1,0 +1,27 @@
+# BLEKit is pure Swift with no Apple-only frameworks (no CoreBluetooth), so its tests also run on Linux. This check gives
+# every parser change a test run on the PR. App builds and the hardware plan stay on Xcode Cloud (decision record).
+name: BLEKit tests
+
+on:
+  pull_request:
+    paths:
+      - "Packages/BLEKit/**"
+      - ".github/workflows/blekit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Packages/BLEKit/**"
+      - ".github/workflows/blekit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: swift:6.4-noble   # Swift 6.4, the compiler in Xcode 27
+    steps:
+      - uses: actions/checkout@v6
+      - name: swift test
+        working-directory: Packages/BLEKit
+        run: swift test
