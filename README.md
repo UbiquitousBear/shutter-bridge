@@ -38,6 +38,15 @@ make test-docker      # the same tests in the official Swift 6.4 image, for mach
 make fixtures         # copies captured fixtures into the PTPKit test bundle under their test names
 ```
 
+**Without a Mac:** the repository has a dev container (`.devcontainer/`) for GitHub Codespaces, VS Code Dev
+Containers or any tool that reads `devcontainer.json`. It is Linux with the same Swift 6.4 image as CI, plus
+`make` and `python3`, the Swift extension and the git hooks enabled, so `make test`, `make fixtures` and the docs
+work there. It can't build the spike or reach a camera: those need Xcode 27 on a Mac and a physical iPhone. It
+runs as the image's `ubuntu` user; on Linux, Dev Containers gives that user your UID, unless you run it as root.
+If the checkout belongs to root, set `"remoteUser": "root"` in `devcontainer.json`; if `make test-docker` has left
+a root-owned `Packages/PTPKit/.build`, delete it (`sudo rm -rf Packages/PTPKit/.build`). Otherwise the build can't
+write `.build`.
+
 Then follow `docs/spike-plan.md`, with `docs/spike-runbook.md` for what to tap and run at each step. The first
 thing to do on day 1 needs no code at all: set the camera's USB Connection Mode to each candidate in turn (the
 candidates are in `docs/spike-plan.md`; their α7C II menu wording is unverified until checked on the camera),
