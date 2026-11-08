@@ -92,12 +92,17 @@ public struct StandardImportDestinations: ImportDestinationMaking {
     }
 }
 
-/// What Browse asks of the Import screen's model when the person taps Import: start a job with the picked files, or
-/// add them to the running one (they land at the end).
+/// What Browse asks of the Import screen's model: when the person taps Import, start a job with the picked files,
+/// or add them to the running one (they land at the end); and while Browse is shown, say when more files have been
+/// imported, so its badges follow.
 @MainActor
 public protocol BrowseImporting: AnyObject {
     func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink) async
         -> ImportRequestOutcome
+
+    /// The import's revision each time more files have been imported, from now on, for as long as the caller reads
+    /// (`ImportModel.importedUpdates()`).
+    func importedUpdates() -> AsyncStream<Int>
 }
 
 /// What came of an Import tap in Browse.

@@ -183,12 +183,26 @@ final class FakeImporter: BrowseImporting {
     var outcome: ImportRequestOutcome = .started(0)
     private(set) var calls: [(items: [CameraItem], camera: ImportCamera)] = []
 
+    private let updates = LatestValueFanOut<Int>()
+    private var revision = 0
+
     func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink) async
         -> ImportRequestOutcome {
         calls.append((items, camera))
         if case .started = outcome { return .started(items.count) }
         return outcome
     }
+
+    func importedUpdates() -> AsyncStream<Int> { updates.subscribe() }
+
+    /// Says more files were imported, as `ImportModel` does when a file's row has been written.
+    func announceImported() {
+        revision += 1
+        updates.send(revision)
+    }
+
+    /// Readers of `importedUpdates()` still reading.
+    var updateReaders: Int { updates.subscriberCount }
 }
 
 /// Photos access as scripted: what reading gives, and what asking answers (and turns the status into).

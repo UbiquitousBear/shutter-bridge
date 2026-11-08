@@ -129,7 +129,11 @@ final class Job {
     var stallResumeAt: Duration?
     /// A file stalled more often than the automatic retries allow: the stall waits for the person.
     var stallHold = false
-    var entries: [ObjectIdentity: FileEntry] = [:]
+    /// The job's files by the identity each was picked or listed under, which its row is written with.
+    private(set) var entries: [ObjectIdentity: FileEntry] = [:]
+    /// Each file's identity by its content key (name, capture time, size: Shamil's rule of 8 Nov), so a file a later
+    /// listing or a pick reports in another folder is found as the one already in the job.
+    private var byContent: [ObjectIdentity.ContentKey: ObjectIdentity] = [:]
     /// Picked files without an identity (no capture date), skipped and counted.
     var unkeyed: [CameraItem] = []
     /// Pending files, kept sorted by `FileEntry.index`.
@@ -152,6 +156,21 @@ final class Job {
     }
 
     var sortedEntries: [FileEntry] { entries.values.sorted { $0.index < $1.index } }
+
+    /// The job's file with the same content as `identity` (whatever its folder or camera key), if any.
+    func entry(sameContentAs identity: ObjectIdentity) -> FileEntry? {
+        byContent[identity.contentKey].flatMap { entries[$0] }
+    }
+
+    /// Adds a file, replacing any with the same content (and taking it out of the queue).
+    func add(_ entry: FileEntry) {
+        if let existing = byContent[entry.identity.contentKey] {
+            queue.removeAll { $0 == existing }
+            entries[existing] = nil
+        }
+        entries[entry.identity] = entry
+        byContent[entry.identity.contentKey] = entry.identity
+    }
 
     var hasActiveFiles: Bool { entries.values.contains { $0.isActive } }
 

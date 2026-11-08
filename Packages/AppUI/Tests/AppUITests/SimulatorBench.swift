@@ -15,11 +15,14 @@ import Testing
 /// - 1 Nov: a RAW+JPEG pair (DSC00001) and a lone RAW (DSC00002), 2 s later.
 /// - 2 Nov: a lone JPG (DSC00003), a video clip (C0001.MP4) and a HIF (DSC00005).
 /// - A RAW with no capture date (DSC00004).
-func standInCard() -> ScriptedCard {
+///
+/// `folder` puts every file in that folder instead, as a link that reports another one would: "" for MTP when
+/// ImageCaptureCore gives no parent folder (as on the bench, 1 Nov).
+func standInCard(folder: String? = nil) -> ScriptedCard {
     func object(_ handle: UInt32, _ name: String, _ date: String, _ format: PTPObjectFormat, _ size: UInt64,
-                folder: String = "DCIM/100MSDCF") -> ScriptedCard.Object {
-        ScriptedCard.Object(handle: PTPObjectHandle(rawValue: handle), folder: folder, filename: name, size: size,
-                            captureDateRaw: date, format: format)
+                folder defaultFolder: String = "DCIM/100MSDCF") -> ScriptedCard.Object {
+        ScriptedCard.Object(handle: PTPObjectHandle(rawValue: handle), folder: folder ?? defaultFolder,
+                            filename: name, size: size, captureDateRaw: date, format: format)
     }
     return ScriptedCard(objects: [
         object(1, "DSC00001.ARW", "20261101T090000", .sonyARW, 40_000),
@@ -119,25 +122,43 @@ final class SimulatorBench {
     let scratch: JPEGScratch
     let log = RecordingLog()
     let app: AppModel
-    /// The camera as it is plugged in now (`replug()` swaps it).
+    /// What an MTP link gives as its key material (the device's UUID string on the bench), as the app's keying reads
+    /// it; nil keys every camera from its descriptor (`CameraKeys.fromDescriptor`).
+    let keyMaterial: String?
+    /// The camera as it is plugged in now (`replug()` and `plug(_:)` swap it).
     private(set) var link: SimulatedCameraLink
     private var runs: [Task<Void, Never>] = []
 
     var camera: CameraDescriptor { link.descriptor }
-    var key: CameraKey { CameraKeys.key(for: camera, material: nil) }
+    /// The key the app gives the camera plugged in now.
+    var key: CameraKey { CameraKeys.key(for: camera, material: Self.material(keyMaterial, for: camera)) }
     var importer: ImportModel { app.importer }
 
     /// A bench with the camera connected and discovery started, as after launch.
-    static func make(card: ScriptedCard = standInCard(), setting: DestinationKind = .filesFolder,
-                     photos: FakePhotosAccess = FakePhotosAccess()) async throws -> SimulatorBench {
-        let bench = SimulatorBench(card: card, setting: setting, photos: photos)
+    ///
+    /// - Parameters:
+    ///   - link: The camera plugged in first; an MTP link over `card` by default.
+    ///   - keyMaterial: Keys cameras as the app does (`LiveRoot`): an MTP link by this material, any other mode by
+    ///     its mode and name. Nil keys every camera by its descriptor.
+    static func make(card: ScriptedCard = standInCard(), link: SimulatedCameraLink? = nil,
+                     setting: DestinationKind = .filesFolder, photos: FakePhotosAccess = FakePhotosAccess(),
+                     keyMaterial: String? = nil) async throws -> SimulatorBench {
+        let bench = SimulatorBench(link: link ?? SimulatedCameraLink(card: card, chunkSize: 4096), setting: setting,
+                                   photos: photos, keyMaterial: keyMaterial)
         await bench.app.scenePhaseChanged(.active)
         await bench.discovery.send(.appeared(bench.camera))
         try await bench.until("the camera to be listed") { bench.app.cameras.cameras == [bench.camera] }
         return bench
     }
 
-    private init(card: ScriptedCard, setting: DestinationKind, photos: FakePhotosAccess) {
+    /// The material the app's keying would read from a link to `camera`: only an MTP link has any, as
+    /// `USBCameraKeyMaterial.material(mode:deviceUUID:)` says.
+    nonisolated static func material(_ material: String?, for camera: CameraDescriptor) -> String? {
+        camera.mode == .usb(.mtp) ? material : nil
+    }
+
+    private init(link: SimulatedCameraLink, setting: DestinationKind, photos: FakePhotosAccess,
+                 keyMaterial: String?) {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("AppUITests-sim-\(UUID().uuidString)", isDirectory: true)
         documents = root.appendingPathComponent("Documents", isDirectory: true)
@@ -147,12 +168,19 @@ final class SimulatorBench {
         settingsStore = InMemoryDestinationSettingStore(DestinationSetting(preferred: setting))
         self.photos = photos
         destinations = SimulatorDestinations(documents: documents)
-        link = SimulatedCameraLink(card: card, chunkSize: 4096)
+        self.link = link
+        self.keyMaterial = keyMaterial
         discovery = SimulatedDiscovery(link: link)
+        // The app's keying itself (`CameraKeys.keying(material:)`), over the material a link to this camera gives.
+        let keying: CameraKeying = if let keyMaterial {
+            CameraKeys.keying(material: { link in SimulatorBench.material(keyMaterial, for: link.descriptor) })
+        } else {
+            CameraKeys.fromDescriptor
+        }
         app = AppModel(discovery: discovery,
                        services: BrowseServices(maker: maker, clipboard: clipboard, scratch: scratch, log: log),
                        catalogue: catalogue, engine: engine, settingsStore: settingsStore, photos: photos,
-                       destinations: destinations, cameraKey: CameraKeys.fromDescriptor)
+                       destinations: destinations, cameraKey: keying)
     }
 
     /// Opens Browse on the camera, as navigating to it does: the screen's task runs the model until `stopBrowsing()`.
@@ -169,14 +197,34 @@ final class SimulatorBench {
         runs = []
     }
 
-    /// The camera plugged in again: a new link over the card as it is now (new item IDs), which discovery hands out
-    /// from now on. Says nothing to the app; send `.appeared` for that.
+    /// The camera plugged in again: a new link over the card as it is now (new item IDs), or over `card` (the same
+    /// camera listing its files differently, say in another folder), which discovery hands out from now on. Says
+    /// nothing to the app; send `.appeared` for that.
     @discardableResult
-    func replug() async -> SimulatedCameraLink {
-        let again = await link.replugged()
+    func replug(listing card: ScriptedCard? = nil) async -> SimulatedCameraLink {
+        let again: SimulatedCameraLink
+        if let card {
+            again = SimulatedCameraLink(card: card, mode: camera.mode, name: camera.name,
+                                        descriptorID: camera.id.rawValue, timeZone: link.timeZone,
+                                        generation: link.generation + 1, chunkSize: link.chunkSize)
+        } else {
+            again = await link.replugged()
+        }
         await discovery.plug(again)
         link = again
         return again
+    }
+
+    /// Another camera plugged in instead (the same body in another USB mode, say): discovery reports the old one gone
+    /// and this one appeared, and hands out `newLink` from now on. Leave Browse first.
+    func plug(_ newLink: SimulatedCameraLink) async throws {
+        let old = camera
+        await link.remove()
+        await discovery.send(.disappeared(old.id))
+        await discovery.plug(newLink)
+        link = newLink
+        await discovery.send(.appeared(newLink.descriptor))
+        try await until("the new camera to be listed") { app.cameras.cameras == [newLink.descriptor] }
     }
 
     /// Cancels any job, leaves Browse and removes the temporary folders.
@@ -189,10 +237,11 @@ final class SimulatorBench {
     /// Polls `condition` every 10 ms until it holds, for up to 5 minutes (generous: the iOS Simulator on a loaded CI
     /// runner takes tens of seconds over steps that take milliseconds on Linux); throws if it never does, so a test
     /// stops at the first missed step.
-    func until(_ what: String, sourceLocation: SourceLocation = #_sourceLocation,
+    func until(_ what: String, within limit: Duration = .seconds(300),
+               sourceLocation: SourceLocation = #_sourceLocation,
                _ condition: @MainActor () async -> Bool) async throws {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(300))
+        let deadline = clock.now.advanced(by: limit)
         while clock.now < deadline {
             if await condition() { return }
             try? await Task.sleep(for: .milliseconds(10))
@@ -207,6 +256,14 @@ final class SimulatorBench {
         try await until("the import to be \(state)", sourceLocation: sourceLocation) {
             await importer.refresh()
             return importer.state == state
+        }
+    }
+
+    /// Waits for the engine's job to be in `state`, reading the engine alone: nothing here calls into `ImportModel`,
+    /// so the import model learns of the job only through its own trigger (the engine's progress), as in the app.
+    func untilEngine(_ state: ImportJobState, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        try await until("the engine's job to be \(state)", sourceLocation: sourceLocation) {
+            await engine.currentProgress.state == state
         }
     }
 

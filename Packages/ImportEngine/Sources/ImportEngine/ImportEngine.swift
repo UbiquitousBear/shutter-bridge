@@ -134,17 +134,20 @@ public actor ImportEngine {
         job.driver = Task { await self.runJob(id) }
     }
 
-    /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job, already imported
-    /// or without a capture date (no identity) aren't added, and nor are non-stills. Returns how many were added.
+    /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job or already imported
+    /// (both by content: name, capture time and size, whatever the folder or camera key), files without a capture
+    /// date (no identity) and non-stills aren't added. Returns how many were added.
     @discardableResult
     public func append(_ items: [CameraItem]) async throws(ImportEngineError) -> Int {
         guard let job else { throw .noJob }
         let id = job.id
-        var seen = Set<ObjectIdentity>()
+        // "Already in this job" and "already imported" are by content (name, capture time, size; Shamil, 8 Nov), so a
+        // file Browse lists in another folder than the job's listing did is never added twice.
+        var seen = Set<ObjectIdentity.ContentKey>()
         var candidates: [(item: CameraItem, identity: ObjectIdentity)] = []
         for item in items where item.format.isStill {
             guard let identity = item.identity(camera: job.camera, timeZone: job.timeZone),
-                  job.entries[identity] == nil, seen.insert(identity).inserted else { continue }
+                  job.entry(sameContentAs: identity) == nil, seen.insert(identity.contentKey).inserted else { continue }
             candidates.append((item, identity))
         }
         guard !candidates.isEmpty else { return 0 }
@@ -157,10 +160,10 @@ public actor ImportEngine {
         }
         guard let current = self.job, current.id == id else { throw .noJob }
         var added = 0
-        for c in candidates where current.entries[c.identity] == nil && states[c.identity] != .imported {
+        for c in candidates where current.entry(sameContentAs: c.identity) == nil && states[c.identity] != .imported {
             let entry = FileEntry(identity: c.identity, index: current.nextIndex, item: c.item)
             current.nextIndex += 1
-            current.entries[c.identity] = entry
+            current.add(entry)
             current.queue.append(c.identity)
             added += 1
         }

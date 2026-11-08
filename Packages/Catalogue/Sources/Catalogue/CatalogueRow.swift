@@ -22,8 +22,9 @@ extension ObjectIdentity {
 }
 
 extension ObjectState {
-    /// How far along a file is, to pick one row when a store holds two for an identity (which the store never writes
-    /// itself, but a sync or a second store on the same file could): imported, then partial, skipped, new.
+    /// How far along a file is, to pick one state when several rows hold one file: two rows for an identity (which
+    /// the store never writes itself, but a sync or a second store on the same file could), or rows of the same
+    /// content under several cameras or folders (Shamil's rule of 8 Nov). Imported, then partial, skipped, new.
     var progressRank: Int {
         switch self {
         case .new: 0
@@ -31,6 +32,11 @@ extension ObjectState {
         case .partial: 2
         case .imported: 3
         }
+    }
+
+    /// The further along of two states; `self` when they are equal.
+    func furthestAlong(_ other: ObjectState) -> ObjectState {
+        other.progressRank > progressRank ? other : self
     }
 }
 
@@ -90,6 +96,36 @@ extension CatalogueRow {
     }
 
     var objectState: ObjectState { ObjectState(rawValue: state) ?? .new }
+
+    /// What "already imported" matches this row on (`ObjectIdentity.ContentKey`), from the columns every row has had
+    /// since build 17.1, so rows written before the rule match with nothing recomputed. Nil when the stored date
+    /// isn't one (a row no version of this code writes).
+    var contentKey: ObjectIdentity.ContentKey? {
+        guard let date = CaptureDate(rawValue: captureDate) else { return nil }
+        return ObjectIdentity.ContentKey(filename: filename, captureDate: date, size: UInt64(bitPattern: size))
+    }
+}
+
+/// Shamil's rule of 8 Nov in one place, for both stores: a file is as far along as the furthest-along row with the
+/// same content (file name ignoring ASCII case, capture time to the second, size), whatever the row's camera key or
+/// folder. Rows don't have to be unique by content: two rows of one file under two cameras (build 17.1 wrote them
+/// for a file imported in MSC and again in MTP) both count, and neither is lost.
+enum ContentMatch {
+    /// The state of each identity among `rows`, which must include every row that could match (more is fine);
+    /// `.new` for identities no row matches. Rows whose date doesn't parse match nothing.
+    static func states(of identities: [ObjectIdentity], among rows: some Sequence<CatalogueRow>)
+        -> [ObjectIdentity: ObjectState] {
+        var known: [ObjectIdentity.ContentKey: ObjectState] = [:]
+        for row in rows {
+            guard let key = row.contentKey else { continue }
+            known[key] = known[key].map { $0.furthestAlong(row.objectState) } ?? row.objectState
+        }
+        var out: [ObjectIdentity: ObjectState] = [:]
+        for identity in identities {
+            out[identity] = known[identity.contentKey] ?? .new
+        }
+        return out
+    }
 }
 
 /// A card listing as the store keeps it: one blob per camera (the entries without the camera key each would repeat),

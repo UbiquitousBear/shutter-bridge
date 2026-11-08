@@ -4,7 +4,7 @@ import Foundation
 
 extension ImportEngine {
     /// One job from start to finish: list and diff, download, and on a removal wait for the camera, relist and find
-    /// the files left by identity. Removes the job's staging folder when it ends.
+    /// the files left by content (name, capture time, size). Removes the job's staging folder when it ends.
     func runJob(_ id: UUID) async {
         guard let directory = current(id)?.jobDirectory else { return }
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -78,7 +78,9 @@ extension ImportEngine {
         }
     }
 
-    /// The first listing: what to import, by identity against the catalogue (stage 3).
+    /// The first listing: what to import, against the catalogue (stage 3), which answers by content (Shamil, 8 Nov).
+    /// A picked file is found on this listing by content too, since Browse's catalogue and this one may report its
+    /// folder differently; its row keeps the pick's identity.
     func diff(_ listed: [CameraItem], id: UUID, generation: Int) async {
         guard let job = currentListing(id, generation) else { return }
         let camera = job.camera
@@ -93,18 +95,21 @@ extension ImportEngine {
             keepSkippedRows = false
             var range: ClosedRange<Date>?
             if case let .dateRange(r) = job.selection { range = r }
+            var listedContent = Set<ObjectIdentity.ContentKey>()
             for item in listed.newestFirst() where item.format.isStill {
                 guard let identity = item.identity(camera: camera, timeZone: zone) else { continue }
                 if let range, let date = item.captureDate, !range.contains(date) { continue }
+                // One file listed in two folders is one file.
+                guard listedContent.insert(identity.contentKey).inserted else {
+                    trace(.sameFileListedTwice(item.name))
+                    continue
+                }
                 planned.append((item, identity, .queue))
             }
         case let .items(picked):
-            // An explicit pick: in the order picked, matched by identity against this listing for current handles.
+            // An explicit pick: in the order picked, matched by content against this listing for current handles.
             keepSkippedRows = true
-            var onCard: [ObjectIdentity: CameraItem] = [:]
-            for item in listed {
-                if let identity = item.identity(camera: camera, timeZone: zone) { onCard[identity] = item }
-            }
+            let onCard = Self.byContent(listed, camera: camera, timeZone: zone)
             for item in picked {
                 guard let identity = item.identity(camera: camera, timeZone: zone) else {
                     unkeyed.append(item)
@@ -112,7 +117,7 @@ extension ImportEngine {
                 }
                 if !item.format.isStill {
                     planned.append((item, identity, .skip(.notAStill)))
-                } else if let current = onCard[identity] {
+                } else if let current = onCard[identity.contentKey] {
                     planned.append((current, identity, .queue))
                 } else {
                     planned.append((item, identity, .skip(.link(.itemNotFound))))
@@ -137,17 +142,19 @@ extension ImportEngine {
         // listing's place.
         var index = -planned.count
         var queued: [ObjectIdentity] = []
-        var seen = Set<ObjectIdentity>()
+        var seen = Set<ObjectIdentity.ContentKey>()
         for p in planned {
             defer { index += 1 }
             let state = states[p.identity] ?? .new
             let wanted = keepSkippedRows ? state != .imported : (state == .new || state == .partial)
-            guard wanted, seen.insert(p.identity).inserted else { continue }
-            if job.entries[p.identity] != nil {
-                job.queue.removeAll { $0 == p.identity }
+            guard wanted else { continue }
+            // Picked twice (one file in two folders): one file, imported once.
+            guard seen.insert(p.identity.contentKey).inserted else {
+                trace(.sameFileListedTwice(p.item.name))
+                continue
             }
             let entry = FileEntry(identity: p.identity, index: index, item: p.item)
-            job.entries[p.identity] = entry
+            job.add(entry)   // replaces a file of the same content appended during the listing
             switch p.plan {
             case .queue:
                 queued.append(p.identity)
@@ -167,16 +174,14 @@ extension ImportEngine {
         refreshState()
     }
 
-    /// A listing after a replug: every file left is found again by identity and takes its new handle; one that
-    /// isn't on the card any more is skipped. Files on the card that aren't in the job are ignored (decision 7).
+    /// A listing after a replug: every file left is found again by content (name, capture time, size, so a listing
+    /// that reports another folder still finds it) and takes its new handle; one that isn't on the card any more is
+    /// skipped. Files on the card that aren't in the job are ignored (decision 7).
     func remap(_ job: Job, _ listed: [CameraItem]) {
-        var onCard: [ObjectIdentity: CameraItem] = [:]
-        for item in listed {
-            if let identity = item.identity(camera: job.camera, timeZone: job.timeZone) { onCard[identity] = item }
-        }
+        let onCard = Self.byContent(listed, camera: job.camera, timeZone: job.timeZone)
         for entry in job.sortedEntries {
             guard case .queued = entry.phase else { continue }
-            if let item = onCard[entry.identity] {
+            if let item = onCard[entry.identity.contentKey] {
                 entry.item = item
             } else {
                 job.queue.removeAll { $0 == entry.identity }
@@ -187,6 +192,18 @@ extension ImportEngine {
         job.phase = .downloading
         trace(.listed(onCard: listed.count, queued: job.queue.count))
         refreshState()
+    }
+
+    /// A listing's dated files by content key; the first listed wins when one file is listed twice.
+    static func byContent(_ listed: [CameraItem], camera: CameraKey, timeZone: TimeZone)
+        -> [ObjectIdentity.ContentKey: CameraItem] {
+        var out: [ObjectIdentity.ContentKey: CameraItem] = [:]
+        for item in listed {
+            guard let key = item.identity(camera: camera, timeZone: timeZone)?.contentKey, out[key] == nil
+            else { continue }
+            out[key] = item
+        }
+        return out
     }
 
     // MARK: - Downloading

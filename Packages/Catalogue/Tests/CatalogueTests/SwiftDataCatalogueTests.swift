@@ -30,6 +30,95 @@ struct SwiftDataCatalogueTests {
         }
     }
 
+    /// The schema build 17.1 shipped, which every later build has to open as it is: changing a version-1 model
+    /// without a new version and a stage would leave the store unopenable ("Shutter Bridge couldn't start"). Shamil's
+    /// rule of 8 Nov needed no change (it reads the name, date and size columns every row has). This pins the version,
+    /// the plan and the **names** of V1's attributes and relationships only: an in-place edit that keeps the names
+    /// (a type, optionality or attribute options) changes the model's version hash and isn't caught here.
+    @Test func theShippedSchemaIsUnchanged() {
+        #expect(CatalogueSchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
+        #expect(CatalogueMigrationPlan.schemas.map { ObjectIdentifier($0) }
+            == [ObjectIdentifier(CatalogueSchemaV1.self)])
+        #expect(CatalogueMigrationPlan.stages.isEmpty)
+        let schema = Schema(versionedSchema: CatalogueSchemaV1.self)
+        let attributes = Set(schema.entities.map { Set($0.attributes.map(\.name)) })
+        #expect(attributes == [
+            // Camera
+            ["serial", "model", "friendlyName", "lastSeen", "preferredCarrier", "autoImport", "wifiSSID", "lastIP",
+             "ptpipGUID", "lastListedAt", "lastListing"],
+            // CameraObject
+            ["cameraKey", "identityKey", "folder", "filename", "captureDate", "size", "format", "state",
+             "resumeOffset", "tempURL", "assetLocalID", "fileRelativePath", "pairStem"],
+            // ImportJob
+            ["jobID", "startedAt", "finishedAt", "selection", "bytesTotal", "bytesDone", "outcome"],
+        ])
+        let relationships = Set(schema.entities.map { Set($0.relationships.map(\.name)) })
+        #expect(relationships == [["objects", "jobs"], ["camera"]])
+    }
+
+    /// Rows as build 17.1 wrote them (it matched per camera): a file imported in MSC and again in MTP has two rows,
+    /// and another file only an MSC row. The new build opens that store as it is and finds them by content.
+    @Test func rowsWrittenByBuild17_1AreFoundByContent() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "catalogue-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "Catalogue.store", directoryHint: .notDirectory)
+        let msc = C.mscCamera
+        let mtp = C.mtpCamera
+        let bothInMSC = CatalogueRecord(identity: C.id("DSC04512.ARW", "20261108T101530", 40_329_216, camera: msc),
+                                        format: .raw, state: .imported,
+                                        location: .file(relativePath: "Untitled/DSC04512.ARW"))
+        let bothInMTP = CatalogueRecord(identity: C.id("DSC04512.ARW", "20261108T101530", 40_329_216, folder: "",
+                                                       camera: mtp),
+                                        format: .raw, state: .imported,
+                                        location: .file(relativePath: "ILCE-7CM2/DSC04512.ARW"))
+        let onlyInMSC = CatalogueRecord(identity: C.id("DSC04513.JPG", "20261108T101602", 9_400_123, camera: msc),
+                                        format: .jpeg, state: .imported,
+                                        location: .photosAsset(localIdentifier: "E/L0/001"))
+        do {
+            let container = try SwiftDataCatalogue.makeContainer(storeURL: url)
+            let context = ModelContext(container)
+            for record in [bothInMSC, bothInMTP, onlyInMSC] {
+                context.insert(CameraObject(row: CatalogueRow(record)))
+            }
+            try context.save()
+        }
+
+        let reopened = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+        let onlyListedInMTP = C.id("DSC04513.JPG", "20261108T101602", 9_400_123, folder: "", camera: mtp)
+        let neverImported = C.id("DSC04514.JPG", "20261108T101603", 9_400_124, folder: "", camera: mtp)
+        #expect(try await reopened.states(of: [bothInMTP.identity, onlyListedInMTP, neverImported])
+            == [bothInMTP.identity: .imported, onlyListedInMTP: .imported, neverImported: .new])
+        #expect(Set(try await reopened.allRecords()) == [bothInMSC, bothInMTP, onlyInMSC])
+        #expect(try await reopened.record(for: bothInMSC.identity) == bothInMSC)
+        #expect(try await reopened.record(for: bothInMTP.identity) == bothInMTP)
+        // Writing one of the pair again keeps all three rows.
+        try await reopened.upsert(bothInMTP)
+        #expect(try await reopened.allRecords().count == 3)
+    }
+
+    @Test func aRequestLargerThanOneFetchChunkAnswersEveryIdentity() async throws {
+        let store = try await SwiftDataCatalogue.open(storeURL: nil)
+        let count = SwiftDataCatalogue.sizesPerFetch * 2 + 200
+        var asked: [ObjectIdentity] = []
+        for i in 0 ..< count {
+            let identity = C.id(String(format: "DSC%05d.ARW", i), "20261108T101530", UInt64(40_000_000 + i))
+            asked.append(identity)
+            // Every third file was imported, under another camera and with no folder.
+            if i.isMultiple(of: 3) {
+                var elsewhere = identity
+                elsewhere.camera = C.mtpCamera
+                elsewhere.folder = ""
+                try await store.upsert(CatalogueRecord(identity: elsewhere, format: .raw, state: .imported))
+            }
+        }
+        let states = try await store.states(of: asked)
+        #expect(states.count == count)
+        for (i, identity) in asked.enumerated() {
+            #expect(states[identity] == (i.isMultiple(of: 3) ? .imported : .new), "\(identity.filename)")
+        }
+    }
+
     @MainActor @Test func openedFromTheMainActorItWritesOffIt() async throws {
         let store = try await SwiftDataCatalogue.open(storeURL: nil)
         #expect(await store.isOnMainThread() == false)

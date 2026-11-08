@@ -13,6 +13,11 @@ import SwiftData
 /// and shares it. Should two rows for one identity ever exist (a second store on the same file, a later sync), reads
 /// answer with the furthest-along row and the next write for that identity removes the others.
 ///
+/// **"Already imported" is by content** (Shamil, 8 Nov; `CatalogueStore`): `states(of:)` fetches candidate rows by
+/// size, whatever their camera, and matches them with `ContentMatch`. Rows of one file under two cameras (build 17.1
+/// wrote them for a file imported in MSC and again in MTP) both count and are both kept: each records a real copy.
+/// No schema change was needed: every version-1 row already holds the file name, capture date and size.
+///
 /// Each write is saved before the call returns. If any step of a write throws (a fetch, the save), every change it
 /// made is rolled back and the error thrown, so a failed write leaves nothing pending for later reads or writes.
 ///
@@ -73,25 +78,31 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         try furthestAlong(objects(withKey: identity.storageKey))?.row.record
     }
 
+    /// By content (Shamil, 8 Nov): the rows of every camera and folder whose size is one of the request's are
+    /// fetched, a chunk of sizes at a time, and matched on name, capture time and size by `ContentMatch`. Rows written
+    /// by any earlier build have these columns, so they match as they are; the schema is unchanged.
     public func states(of identities: [ObjectIdentity]) throws -> [ObjectIdentity: ObjectState] {
-        // One fetch per camera (a job has one), then the diff in memory.
-        var known: [String: ObjectState] = [:]
-        for camera in Set(identities.map(\.camera.rawValue)) {
+        guard !identities.isEmpty else { return [:] }
+        let sizes = Set(identities.map { Int64(bitPattern: $0.size) }).sorted()
+        var candidates: [CatalogueRow] = []
+        var start = sizes.startIndex
+        while start < sizes.endIndex {
+            let end = min(start + Self.sizesPerFetch, sizes.endIndex)
+            let chunk = Array(sizes[start ..< end])
+            start = end
             let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
-                object.cameraKey == camera
+                chunk.contains(object.size)
             })
             for object in try modelContext.fetch(descriptor) {
-                let state = object.row.objectState
-                if let seen = known[object.identityKey], seen.progressRank >= state.progressRank { continue }
-                known[object.identityKey] = state
+                candidates.append(object.row)
             }
         }
-        var out: [ObjectIdentity: ObjectState] = [:]
-        for identity in identities {
-            out[identity] = known[identity.storageKey] ?? .new
-        }
-        return out
+        return ContentMatch.states(of: identities, among: candidates)
     }
+
+    /// Sizes per fetch in `states(of:)`, so one predicate never carries an unbounded list (SQLite limits the
+    /// variables in one statement).
+    static let sizesPerFetch = 500
 
     public func upsert(_ record: CatalogueRecord) throws {
         let row = CatalogueRow(record)

@@ -14,6 +14,9 @@ enum EngineTrace: Sendable, Hashable {
     case sizeMismatch(String, expected: UInt64, actual: UInt64)
     case imported(String, DestinationKind)
     case skipped(String, SkipReason)
+    /// A second copy of a file already in the listing or the pick (same name, capture second and size, another
+    /// folder; Shamil's rule of 8 Nov): left out, since it is the same file.
+    case sameFileListedTwice(String)
     case failed(String, FailureReason)
     case destinationChanged(DestinationDecision)
     case linkEvent(CameraLinkEvent)

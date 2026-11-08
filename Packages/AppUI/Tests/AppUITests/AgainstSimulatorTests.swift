@@ -96,9 +96,9 @@ struct BrowseAndImportAgainstSimulatorTests {
         await bench.expectInFiles(importableStills)
         #expect(await bench.link.bytesCalls.sorted() == importableStills.sorted())   // each file fetched once
 
-        // The badge: the app refreshes Browse when the import's revision goes up (BrowseScreen's onChange).
+        // The badge: Browse follows the import's "more files imported" by itself, with nobody asking it to.
         #expect(bench.importer.importedRevision > 0)
-        await browse.refreshImportedStates()
+        try await bench.until("the badges after the import") { browse.imported.count == importableStills.count }
         #expect(Set(browse.shown.filter(browse.isImported).map(\.name)) == importableStills)
         #expect(browse.selectionBlock(for: try #require(browse.shown("DSC00002.ARW"))) == .imported)
         for item in browse.shown where importableStills.contains(item.name) {

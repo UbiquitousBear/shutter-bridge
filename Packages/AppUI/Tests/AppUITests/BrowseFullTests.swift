@@ -347,6 +347,40 @@ struct BrowseFullTests {
         await h.stop()
     }
 
+    /// The 17.1 bench run's MTP failure: Browse refreshes its badges itself when the import says more files were
+    /// imported (nothing in SwiftUI has to ask), and stops following the import when it goes.
+    @Test func browseRefreshesWhenTheImporterSaysMoreFilesWereImported() async {
+        let catalogue = InMemoryCatalogue()
+        let h = await start(catalogue: catalogue)
+        #expect(await eventually { h.model.phase == .listed })
+        #expect(await eventually { h.importer.updateReaders == 1 })
+        h.model.selectAllNew()
+        #expect(h.model.isSelected(named("DSC00003.JPG")))
+        await catalogue.upsert(importedRow("DSC00003.JPG", camera: h.link.descriptor))
+        h.importer.announceImported()
+        #expect(await eventually { h.model.isImported(named("DSC00003.JPG")) })
+        #expect(!h.model.isSelected(named("DSC00003.JPG")))
+        #expect(h.log.lines.contains { $0.hasPrefix("browse: badges refreshed after import (rev 1): 7 shown, 6 dated, "
+            + "1 imported, key k") })
+        await h.stop()
+        #expect(await eventually { h.importer.updateReaders == 0 })
+    }
+
+    /// Shamil's rule of 8 Nov in Browse: a file imported under another camera key and folder (MSC's, say) is badged.
+    @Test func aFileImportedUnderAnotherKeyAndFolderIsBadged() async {
+        let source = named("DSC00002.ARW")
+        var identity = identity(source, camera: descriptor)
+        identity.camera = CameraKey(rawValue: "usb-msc-name:hashed-volume-name")
+        identity.folder = ""
+        let row = CatalogueRecord(identity: identity, format: .raw, state: .imported)
+        let catalogue = InMemoryCatalogue(records: [row])
+        let h = await start(catalogue: catalogue)
+        #expect(await eventually { h.model.phase == .listed && !h.model.imported.isEmpty })
+        #expect(h.model.isImported(source))
+        #expect(h.model.selectionBlock(for: source) == .imported)
+        await h.stop()
+    }
+
     // MARK: - The link and accessibility
 
     @Test func leavingBrowseKeepsALinkAnImportHolds() async {

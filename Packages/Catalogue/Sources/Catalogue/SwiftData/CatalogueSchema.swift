@@ -71,7 +71,9 @@ extension CatalogueSchemaV1 {
         }
     }
 
-    /// One file on one camera's card, identified by `(camera, folder, filename, captureDate, size)`.
+    /// One file on one camera's card, identified by `(camera, folder, filename, captureDate, size)`. "Already
+    /// imported" matches rows on `filename`, `captureDate` and `size` alone (Shamil, 8 Nov), which every row has had
+    /// since build 17.1: don't change these columns without a new schema version and a stage.
     @Model
     final class CameraObject {
         var camera: Camera?

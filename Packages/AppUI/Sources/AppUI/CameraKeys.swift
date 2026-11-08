@@ -1,23 +1,28 @@
 import CameraTransport
 import Catalogue
 import Foundation
+import Synchronization
 
-/// Works out the catalogue's key for a connected camera (backlog sections 2 and 4: an open point in MSC). The app's
-/// closure reads the link's key material (`USBLink.cameraKeyMaterial()`, Apple-only) and hands it to
-/// `CameraKeys.key(for:material:)`.
+/// Works out the catalogue's key for a connected camera (backlog sections 2 and 4). The app's keying is
+/// `CameraKeys.keying(material:)` over the link's key material (`USBLink.cameraKeyMaterial()`, Apple-only).
 public typealias CameraKeying = @Sendable (CameraDescriptor, any CameraLink) async -> CameraKey
 
 /// The rule for the catalogue's camera key, pure so it is tested on Linux. **Unverified, and provisional as the
-/// backlog says** (sections 2 and 4, *the camera key in MSC*):
+/// backlog says** (sections 2 and 4, *the camera key in MSC*).
+///
+/// Since Shamil's decision of 8 Nov the key no longer decides whether a file is already imported: the catalogue
+/// recognises a file by its name, capture time (to the second) and size, whatever the USB mode, the key or the folder
+/// (`ObjectIdentity.ContentKey`). The key is for grouping only: the camera's album, its Camera row and last-known
+/// card, and finding the camera again after a pulled cable.
 ///
 /// - **MTP:** the device's UUID string (`USBCameraKeyMaterial`), stable across sessions and replugs on the bench.
 ///   It embeds what looks like the camera's USB serial, so it is hashed (SHA-256) before it becomes a key, as
-///   `CameraKey` asks: the raw value never reaches the catalogue, a log or the screen.
+///   `CameraKey` asks: the raw value never reaches the catalogue, a log or the screen. Even the hash stays out of
+///   logs (a short serial's hash can be reversed by trying every serial): logs name keys by `CameraKeyTags`.
 /// - **MSC:** the link gives no material (the device is named after the card's volume, answers no PTP, and whether
 ///   its UUID carries the serial isn't recorded), so the key is the mode and the volume name ("Untitled"), hashed
-///   the same way. Every card with that name shares the key until week 1 settles one both modes can share, so a file
-///   imported in MTP shows as new in MSC and the other way round; the engine's diff still never imports a file twice
-///   *within* a mode.
+///   the same way. Every card with that name shares the key, so MSC and MTP imports of one camera still go to two
+///   albums and Files folders (open for Shamil), and a job paused by a pulled cable continues only in the same mode.
 /// - **Remote Shoot:** nothing is imported, so the MSC-style fallback is fine.
 public enum CameraKeys {
     /// The key for `descriptor`, from the link's material when it has some (MTP), else from the mode and name.
@@ -37,6 +42,46 @@ public enum CameraKeys {
 
     /// A keying that uses the descriptor alone: for tests and previews, and for links with no key material.
     public static let fromDescriptor: CameraKeying = { descriptor, _ in key(for: descriptor, material: nil) }
+
+    /// The app's keying: `material` reads a link's key material (the app: the USB link's
+    /// `cameraKeyMaterial()?.rawValue`, nil for any other link), and the key follows `key(for:material:)`. Pure, so
+    /// the keying the app runs is the one tested on Linux.
+    public static func keying(material: @escaping @Sendable (any CameraLink) async -> String?) -> CameraKeying {
+        { descriptor, link in key(for: descriptor, material: await material(link)) }
+    }
+}
+
+/// Names camera keys in the bench log without the key: the first key seen in a launch is `k1`, the next `k2`, each
+/// with its kind (`usb-device`, `usb-msc-name`…). Keys are private (an MTP key is a hash of a string that embeds the
+/// serial, and a short serial's hash can be reversed by trying them all), so not even a prefix of one is logged; a
+/// tag tells the log's reader whether two lines name the same key, which is what the bench needs.
+public final class CameraKeyTags: Sendable {
+    /// The app's tags, for the whole launch.
+    public static let shared = CameraKeyTags()
+
+    private let tags = Mutex<[String: Int]>([:])
+
+    public init() {}
+
+    /// "k2 (usb-device)": the key's number in this launch, and its kind.
+    public func tag(for key: CameraKey) -> String {
+        let number = tags.withLock { tags in
+            if let n = tags[key.rawValue] { return n }
+            let n = tags.count + 1
+            tags[key.rawValue] = n
+            return n
+        }
+        return "k\(number) (\(Self.kind(of: key)))"
+    }
+
+    /// The key's kind, from the forms `CameraKeys` makes; "other" for anything else, so nothing of an unknown key's
+    /// value reaches the log.
+    static func kind(of key: CameraKey) -> String {
+        let known = ["usb-device", "usb-msc-name", "usb-mtp-name", "usb-remote-shoot-name", "wifi-name"]
+        guard let colon = key.rawValue.firstIndex(of: ":") else { return "other" }
+        let prefix = String(key.rawValue[..<colon])
+        return known.contains(prefix) ? prefix : "other"
+    }
 }
 
 /// SHA-256 (FIPS 180-4), for hashing key material on every platform: CryptoKit is Apple-only and the workspace takes
