@@ -1,5 +1,6 @@
 import Foundation
 import PTPKit
+import Synchronization
 import Testing
 @testable import CameraTransport
 
@@ -91,14 +92,29 @@ struct CameraLinkFailureTests {
 /// A link over a fixed list, to show the protocol can be met in Swift 6 strict mode with no Apple framework.
 actor ListLink: CameraLink {
     nonisolated let descriptor = CameraDescriptor(id: .init(rawValue: "fake"), name: "Fake", mode: .usb(.mtp))
-    nonisolated let events: AsyncStream<CameraLinkEvent>
-    private let continuation: AsyncStream<CameraLinkEvent>.Continuation
+    private let subscribers = Mutex<[UUID: AsyncStream<CameraLinkEvent>.Continuation]?>([:])
     private let items: [CameraItem]
     private(set) var isOpen = false
 
     init(items: [CameraItem]) {
         self.items = items
-        (events, continuation) = AsyncStream.makeStream()
+    }
+
+    /// A new stream per read, which gets only what happens from now on.
+    nonisolated var events: AsyncStream<CameraLinkEvent> {
+        let (stream, continuation) = AsyncStream.makeStream(of: CameraLinkEvent.self)
+        let key = UUID()
+        let added = subscribers.withLock { s -> Bool in
+            guard s != nil else { return false }
+            s?[key] = continuation
+            return true
+        }
+        if added {
+            continuation.onTermination = { [weak self] _ in self?.dropSubscriber(key) }
+        } else {
+            continuation.finish() // closed
+        }
+        return stream
     }
 
     func open() throws(CameraLinkFailure) { isOpen = true }
@@ -122,11 +138,20 @@ actor ListLink: CameraLink {
         return directory.appendingPathComponent(found.name)
     }
 
-    func send(_ event: CameraLinkEvent) { continuation.yield(event) }
+    private nonisolated func dropSubscriber(_ key: UUID) {
+        subscribers.withLock { _ = $0?.removeValue(forKey: key) }
+    }
+
+    func send(_ event: CameraLinkEvent) {
+        for c in subscribers.withLock({ Array(($0 ?? [:]).values) }) { c.yield(event) }
+    }
 
     func close() {
         isOpen = false
-        continuation.finish()
+        for c in subscribers.withLock({ s -> [AsyncStream<CameraLinkEvent>.Continuation] in
+            defer { s = nil }
+            return Array((s ?? [:]).values)
+        }) { c.finish() }
     }
 }
 
@@ -155,12 +180,17 @@ struct CameraLinkContractTests {
 
     @Test func eventsArriveInOrderAndFinishOnClose() async {
         let link = ListLink(items: [])
+        await link.send(.removed) // before anyone listened: never delivered
+        let events = link.events
         await link.send(.willSuspend)
         await link.send(.didSuspend)
         await link.send(.resumedOperations)
         await link.close()
         var seen: [CameraLinkEvent] = []
-        for await e in link.events { seen.append(e) }
+        for await e in events { seen.append(e) }
         #expect(seen == [.willSuspend, .didSuspend, .resumedOperations])
+        var afterClose = 0
+        for await _ in link.events { afterClose += 1 }
+        #expect(afterClose == 0)
     }
 }
