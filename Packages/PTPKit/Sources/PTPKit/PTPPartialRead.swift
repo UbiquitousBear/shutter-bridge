@@ -30,10 +30,13 @@ public enum PTPPartialRead {
         /// on a ZV-E10. `unverified` on the α7C II (the three-parameter form answered InvalidObjectHandle there).
         case sony64
         /// 0x9211 (libgphoto2's SDIO_GetPartialLargeObject): handle, offset low, offset high, length low, length high.
-        /// The layout is a guess from mvpzac/Imagedge's description of the large-object command. `unverified`.
+        /// The layout is a guess from mvpzac/Imagedge's description of the large-object command. 0x9211 is listed in the
+        /// α7C II's PTP/IP DeviceInfo; the layout is `unverified` in tests (the spike's log: it read byte ranges that
+        /// matched a GetObject download by SHA-256, and resumed after Wi-Fi off and on).
         case sonyLarge9211
         /// 0x9219 (what mvpzac/Imagedge calls SDIO_GetPartialLargeObject; unnamed in libgphoto2): the same
-        /// five-parameter layout as `sonyLarge9211`. `unverified`.
+        /// five-parameter layout as `sonyLarge9211`. 0x9219 is listed in the α7C II's PTP/IP DeviceInfo; `unverified`
+        /// otherwise (the spike's log: it answered InvalidObjectHandle in a contents-transfer session).
         case sonyLarge9219
     }
 

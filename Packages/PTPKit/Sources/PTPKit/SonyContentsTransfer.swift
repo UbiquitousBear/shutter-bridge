@@ -1,7 +1,8 @@
 // Sony's whole-card contents-transfer session over PTP/IP, as a plan a transport can run: the commands in order,
 // what to do with each answer, the pauses, the listing poll and the timeouts. Pure values, no I/O.
 //
-// Every Sony value here is `unverified` on the α7C II until a fixture captures it. The sequence is Imagedge's
+// Fixtures hold the camera's answers only (DeviceInfo, the one ExtDeviceInfo reply, StoreAdded and other events), so
+// the commands, their parameters and their order stay `unverified` on the α7C II. The sequence is Imagedge's
 // (field-tested on a ZV-E10); what the spike saw on the α7C II (builds 0.1 (7.1) to 0.1 (14.1), 2–4 Nov 2026) is in each doc
 // comment. Source of the facts: Spike/Sources/Views/WirelessView.swift (`openContents`, `sonyInitSequence`,
 // `initStep`, `setTransferMode`, `pollForHandles`, `connectFresh`, `startKeepAlive`) and docs/spike-findings.md
@@ -163,8 +164,8 @@ public struct SonyListingPoll: Equatable, Sendable {
 }
 
 /// Sony's whole-card contents-transfer session for PTP/IP, as the spike opened it on the α7C II (Imagedge's
-/// sequence, field-tested on a ZV-E10). Unverified on the α7C II until a fixture captures it; what the spike saw is
-/// in each step's doc. A transport runs it with `SonySessionRunner` after the PTP/IP handshake; the plan holds no I/O.
+/// sequence, field-tested on a ZV-E10). The commands and their order are `unverified` on the α7C II (a fixture holds
+/// answers, not requests); what the spike saw is in each step's doc. A transport runs it with `SonySessionRunner` after the PTP/IP handshake; the plan holds no I/O.
 /// Every step's data phase, if any, flows responder → initiator, so Cmd_Request's flag is always `DataPhase.none`.
 public struct SonyContentsTransferPlan: Equatable, Sendable {
     public var steps: [SonySessionStep]
@@ -202,14 +203,15 @@ public struct SonyContentsTransferPlan: Equatable, Sendable {
     /// 2. GetDeviceInfo again (Imagedge's order).
     /// 3. GetStorageIDs (StoreNotAvailable in a plain session; tolerated).
     /// 4–5. SDIO_Connect 1 and 2 (OK, 8 zero bytes each).
-    /// 6. SDIO_GetExtDeviceInfo 0x12C (OK, 970 bytes: version 0x12C, 421 then 59 codes); if not OK retry with
+    /// 6. SDIO_GetExtDeviceInfo 0x12C (OK, 970 bytes: version 0x12C, 421 then 59 codes, the layout of
+    ///    Fixtures/a7c2/ptpip/sdio-extdeviceinfo.bin); if not OK retry with
     ///    0xC8 (never needed on the α7C II).
     /// 7. SDIO_Connect 3 (OK).
     /// 8. SDIO_GetExtDeviceInfo 0x12C again (the same 970 bytes).
     /// 9. GetDeviceInfo (81 operations, 48 events, 0 properties, before and after).
     /// 10. SDIO_SetContentsTransferMode [2, 0, 0], pause 200 ms. A non-OK answer is noted and the plan goes on.
     /// 11. SDIO_SetContentsTransferMode [2, 1, 0], pause 1500 ms. Both answered OK, then StoreAdded 0x4004
-    ///     [0x00010001] arrived.
+    ///     [0x00010001] arrived (Fixtures/a7c2/ptpip/event-4004.bin holds the event).
     ///
     /// Removing any of steps 2, 8 or 9 is untested.
     public static func wholeCard(reopening: Bool = false) -> SonyContentsTransferPlan {
@@ -416,14 +418,15 @@ public struct SonySessionRunner: Sendable, CustomStringConvertible {
 
 /// What an event means to a whole-card session.
 public enum SonySessionEvent: Equatable, Sendable {
-    /// 0x4004 [storage]; seen after 0x9212 [2,1,0] and after a camera restart.
+    /// 0x4004 [storage]; seen after 0x9212 [2,1,0] and after a camera restart. Fixture: event-4004.bin, [0x00010001].
     case storeAdded(PTPStorageID?)
     /// 0x4005; seen before StoreNotAvailable and the camera closing both channels.
     case storeRemoved(PTPStorageID?)
     /// 0x4002 or 0xC201 [first parameter]; 0xC201's 0xFFFFC001 is a buffer slot, not a card handle.
     case objectAdded(PTPObjectHandle?)
     /// Everything else, including 0xC223 (shutter state), 0xC206 and 0xC225 (seen twice on a reopen; meaning
-    /// unknown, no action).
+    /// unknown, no action). Captured parameters (Fixtures/a7c2/ptpip/event-*.bin): 0xC203 [0], 0xC206 none, 0xC223 [1],
+    /// 0xC225 [0, 0x00010001, 0], 0xC234 [1, 1, 0].
     case other(PTPEventCode)
 
     public init(code: PTPEventCode, parameters: [UInt32]) {

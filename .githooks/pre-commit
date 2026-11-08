@@ -33,8 +33,11 @@ if [ -n "$pcaps" ]; then
 fi
 
 # MTP object property lists carry each file's PersistentUniqueObjectIdentifier, which may embed the camera's serial
-# in a form no check here understands yet, so they stay out of the repository until a redaction exists.
-proplists="$(git diff --cached --name-only --diff-filter=ACMR -- ':(icase)*objectproplist*')"
+# in a form no check here understands yet, so they stay out of the repository until a redaction exists. The
+# match is on captured data (objectproplist*.bin and any other non-source name); PTPKit's MTPObjectPropList.swift
+# decoder and docs that mention it are code and prose, not captures, so they are excluded.
+proplists="$(git diff --cached --name-only --diff-filter=ACMR -- ':(icase)*objectproplist*' \
+    ':(exclude,icase)*.swift' ':(exclude,icase)*.md')"
 if [ -n "$proplists" ]; then
     echo "pre-commit: refusing to commit MTP property lists; their object IDs may carry the camera's serial:" >&2
     printf '%s\n' "$proplists" | sed 's/^/  /' >&2

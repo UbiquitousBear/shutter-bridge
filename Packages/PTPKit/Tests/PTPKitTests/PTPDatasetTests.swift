@@ -5,8 +5,9 @@ import Foundation
 @Suite("PTP datasets")
 struct PTPDatasetTests {
 
-    /// A DeviceInfo shaped like a Sony body. Until the spike captures the real one into
-    /// Fixtures/a7c2/usb/deviceinfo.bin this synthetic dataset is what the parser is tested against.
+    /// A synthetic DeviceInfo with Sony's own extension (0x11, as the α7C II reports over PTP/IP); its lists and version
+    /// string are placeholders. The camera's own DeviceInfos are
+    /// Fixtures/a7c2/usb/deviceinfo.bin and ptpip/deviceinfo.bin, tested in PTPFixtureTests and PTPFixtureContentTests.
     static let syntheticSonyDeviceInfo = PTPDeviceInfo(
         standardVersion: 100,
         vendorExtensionID: PTPVendorExtension.sony.rawValue,
@@ -52,7 +53,7 @@ struct PTPDatasetTests {
         #expect(decoded.model == "ILCE-7CM2")
     }
 
-    @Test("Vendor extension IDs match libgphoto2; Sony over PTP/IP or MTP (0xFFFFFFFF) still counts as Sony")
+    @Test("Vendor extension IDs match libgphoto2; Sony with the MTP ID (0xFFFFFFFF, as the α7C II reports over USB in MTP mode) still counts as Sony")
     func vendorExtension() throws {
         #expect(PTPVendorExtension(rawValue: 0x0E) == .fujifilm)
         #expect(PTPVendorExtension(rawValue: 0x12) == nil)
