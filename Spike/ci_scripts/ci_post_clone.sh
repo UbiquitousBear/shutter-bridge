@@ -4,8 +4,8 @@
 #
 # Xcode Cloud only finds custom build scripts in a ci_scripts directory that sits in the same directory as the
 # Xcode project or workspace (Apple: "Writing custom build scripts"). The project is Spike/Spike.xcodeproj, so
-# this file must stay at Spike/ci_scripts/. The production workspace (after the go/no-go) will be committed and
-# won't need generating.
+# this file must stay at Spike/ci_scripts/. The production app, App/ShutterBridge.xcodeproj, is committed and needs
+# no post-clone step.
 set -eu
 
 if ! command -v xcodegen >/dev/null 2>&1; then

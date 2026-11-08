@@ -7,8 +7,9 @@ documentation on this date; the claims that rest only on forum reports are marke
 
 | Job | Where | Trigger | Secrets |
 | --- | --- | --- | --- |
-| PTPKit tests on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/ptpkit.yml`) | PRs touching `Packages/PTPKit` | none |
-| Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`) | PRs touching `Spike/` or `Packages/PTPKit` | none |
+| Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov) | PRs touching `Packages/` | none |
+| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
+| Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`), kept until the spike is retired | PRs touching `Spike/` or `Packages/PTPKit` | none |
 | Archive → TestFlight (internal testing), **now** | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`) | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
 | Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
 
@@ -113,6 +114,28 @@ post-clone scripts, and the first build is the real test.
 It has `permissions: contents: read` and no secrets, so it is safe on PRs from forks. Move `DEVELOPER_DIR` to
 `Xcode_27.2.app` once the image carries the 27.2 release (it currently symlinks the release candidate there;
 App Store Connect accepts builds from both).
+
+## The production app's checks (from 8 Nov)
+
+The workspace (backlog section 0) brought two workflows, both without secrets:
+
+- **`packages-linux.yml`:** one job per package under `Packages/`, `swift build` then `swift test` in `swift:6.4-noble`.
+  Apple-only code is behind `#if canImport(...)`, so this covers each package's transport-neutral part. A new package
+  is added to the matrix by hand (BLEKit when its branch lands).
+- **`app.yml`:** on the `xcode-27` runner with `DEVELOPER_DIR` pinned as in `spike-build.yml`, it builds
+  `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and `generic/platform=iOS`
+  (Release), then runs `xcodebuild test` in every folder under `Packages/` that has a `Package.swift`, against the
+  first iPhone simulator on the newest iOS runtime that the pinned Xcode can run (from 27.0, the deployment target,
+  up to its iOS Simulator SDK; picked at run time from `xcrun simctl list -j`). This is where the code behind
+  `canImport` is compiled and tested. The project has no remote packages, so there is no `Package.resolved` to
+  commit; the first remote dependency (none is planned: Apple frameworks only) would need one.
+
+If a ruleset on `main` requires status checks by name, replace the old `ptpkit.yml` check with these jobs.
+
+**Bundle ID and app record.** The project sets `PRODUCT_BUNDLE_IDENTIFIER` to `net.shamil.shutter-bridge`, with
+`DEVELOPMENT_TEAM` empty and automatic signing, as this file proposes for the production app (a new App ID and
+app record, because the spike's are named for the spike). Shamil confirms the App ID before the first upload; the
+bundle ID can't change after it. Nothing uploads the production app yet: `testflight.yml` still archives the spike.
 
 ## TestFlight from GitHub Actions (no Mac needed)
 

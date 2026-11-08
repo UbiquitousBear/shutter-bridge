@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist for Shutter Bridge. It sits outside the synchronized ShutterBridge/ folder so it isn't copied into the
+  app as a resource; the project points at it with INFOPLIST_FILE. Only what Iteration 1 needs: no Bluetooth, local
+  network, background modes or Hotspot Configuration until the iteration that uses them.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Shutter Bridge</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<!-- From build settings, so CI can set the build number (Xcode Cloud does; each upload needs a new one). -->
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<!-- Only OS-provided cryptography, so TestFlight skips the export compliance questionnaire. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- ImageCaptureCore on iOS reuses the camera privacy string for external cameras. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Reads photos from a camera connected to this iPhone by USB-C.</string>
+	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Saves the photos you import into an album. Limit Access with no photos selected is enough.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Saves the photos you import to your library.</string>
+	<!-- No once-per-launch "Select More Photos" alert under Limited Access. -->
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
+	<!-- The Files-only path (decision 9): with Photos access denied, imports go to the app's folder in Files. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+</dict>
+</plist>

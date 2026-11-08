@@ -1,7 +1,8 @@
 # XcodeGen spec for the throwaway spike app. Generate the project with `make spike` (or `xcodegen generate`
 # in this folder), then open Spike.xcodeproj in Xcode 27. The .xcodeproj is git-ignored on purpose.
 #
-# Nothing in Spike/ is production code. The production app gets its own workspace after the go/no-go.
+# Nothing in Spike/ is production code. The production app is App/ShutterBridge.xcodeproj on the packages in
+# Packages/ (Iteration 1, from 8 Nov); the spike is archived and only built by CI until it is retired.
 
 name: Spike
 options:

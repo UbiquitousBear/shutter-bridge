@@ -1,8 +1,8 @@
-// Linux development container: PTPKit's tests, the docs and the fixture scripts, in GitHub Codespaces, VS Code
-// Dev Containers or any tool that reads devcontainer.json. The spike app can't be built here (it needs Xcode 27
-// on a Mac), and no camera reaches a container.
+// Linux development container: every package's tests, the docs and the fixture scripts, in GitHub Codespaces, VS Code
+// Dev Containers or any tool that reads devcontainer.json. Neither the app nor the spike can be built here (they
+// need Xcode 27 on a Mac), and no camera reaches a container.
 {
-  "name": "Shutter Bridge (PTPKit on Linux)",
+  "name": "Shutter Bridge (packages on Linux)",
   "build": { "dockerfile": "Dockerfile" },
   // The swift image's non-root user (UID 1000); on Linux, Dev Containers gives it the UID of whoever runs the tool,
   // unless that is root.
@@ -17,12 +17,12 @@
   // different UID from the container's user, and git refuses such a repository without safe.directory.
   "onCreateCommand": "git config --global --add safe.directory \"${containerWorkspaceFolder}\" && make hooks",
   // Runs at creation and in Codespaces prebuilds, so the first `make test` doesn't start from a cold build.
-  "updateContentCommand": "cd Packages/PTPKit && swift build --build-tests",
+  "updateContentCommand": "set -e; for p in Packages/*/; do [ -f \"$p/Package.swift\" ] || continue; (cd \"$p\" && swift build --build-tests); done",
   "customizations": {
     "vscode": {
       "extensions": ["swiftlang.swift-vscode"],
       "settings": {
-        // PTPKit is in Packages/PTPKit, not at the repository root. The extension skips folders named Packages
+        // The packages are in Packages/, not at the repository root. The extension skips folders named Packages
         // by default, so the second setting is its default list without "Packages".
         "swift.searchSubfoldersForPackages": true,
         "swift.ignoreSearchingForPackagesInSubfolders": [".", ".build", "out", "bazel-out", "bazel-bin"]

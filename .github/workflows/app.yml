@@ -1,0 +1,122 @@
+# Builds the production app (App/ShutterBridge.xcodeproj) with real Xcode 27 on GitHub's xcode-27 runner, unsigned,
+# for the iOS Simulator and for a generic iPhone, and runs every package's tests in the iOS Simulator, where the
+# code behind `#if canImport(...)` is compiled too. No signing and no secrets, so it is safe on PRs from forks.
+# packages-linux.yml runs the same tests on Linux. Xcode Cloud's pull-request workflow (backlog section 8) comes
+# when Shamil sets it up for the production app (docs/ci.md).
+name: App build and package tests (Xcode 27)
+
+on:
+  pull_request:
+    paths:
+      - "Packages/**"
+      - "App/**"
+      - ".github/workflows/app.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Packages/**"
+      - "App/**"
+      - ".github/workflows/app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      # 27.1 is the image default and a public release; switch to Xcode_27.2 once the image has the release
+      # build (it currently symlinks the 27.2 release candidate there). Keep in step with spike-build.yml.
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Tool versions
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+
+      - name: Pick an iPhone simulator
+        id: sim
+        # The first available iPhone on the newest iOS runtime this Xcode can run: no newer than its iOS Simulator
+        # SDK (the image can hold runtimes from other Xcode versions) and no older than the deployment target, 27.0.
+        # From simctl's JSON, with the python3 that ships with the image.
+        run: |
+          set -o pipefail
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          echo "iOS Simulator SDK: $sdk"
+          id="$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          sdk = tuple(int(x) for x in sys.argv[1].split(".")[:2])
+          floor = (27, 0)
+          devices = json.load(sys.stdin)["devices"]
+          def version(runtime):
+              m = re.search(r"\.iOS-(\d+)-(\d+)", runtime)
+              return tuple(map(int, m.groups())) if m else None
+          usable = [r for r in devices if version(r) and floor <= version(r) <= sdk]
+          for r in sorted(usable, key=version, reverse=True):
+              for d in devices[r]:
+                  if d.get("isAvailable", True) and d["name"].startswith("iPhone"):
+                      print(d["udid"]); print(r, d["name"], file=sys.stderr); sys.exit(0)
+          sys.exit(f"no available iPhone simulator on an iOS runtime from 27.0 to {sys.argv[1]}")
+          ' "$sdk")"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Build the app for the iOS Simulator (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions
+
+      - name: Build the app for iPhone (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions
+
+      - name: Package tests in the iOS Simulator
+        # Every folder under Packages/ with a Package.swift, so a new package (BLEKit) is picked up when it lands.
+        # Xcode names a single-product package's scheme after the product and adds "<Package>-Package" when there
+        # are several; the -Package scheme is preferred because it holds every test target.
+        env:
+          SIM: ${{ steps.sim.outputs.id }}
+        run: |
+          set -o pipefail
+          failed=()
+          for dir in Packages/*/; do
+            [ -f "$dir/Package.swift" ] || continue
+            pkg="$(basename "$dir")"
+            echo "::group::$pkg"
+            # Tolerant probe: xcodebuild can print package-resolution lines before the JSON, and under bash -e a
+            # failing substitution would end the step, so parse from the first "{" and fall back to the folder name.
+            schemes="$(cd "$dir" && xcodebuild -list -json 2>/dev/null | python3 -c 'import json, sys; s = sys.stdin.read(); i = s.find("{"); d = json.loads(s[i:]) if i >= 0 else {}; print("\n".join((d.get("workspace") or d.get("project") or {}).get("schemes", [])))' || true)"
+            if grep -qx "$pkg-Package" <<<"$schemes"; then scheme="$pkg-Package"; else scheme="$pkg"; fi
+            echo "scheme: $scheme"
+            if ! (cd "$dir" && xcodebuild test -scheme "$scheme" -destination "platform=iOS Simulator,id=$SIM" \
+                    | xcbeautify --renderer github-actions); then
+              failed+=("$pkg")
+            fi
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Package tests failed in the iOS Simulator: ${failed[*]}"
+            exit 1
+          fi
