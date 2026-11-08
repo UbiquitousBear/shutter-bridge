@@ -121,8 +121,11 @@ struct BrowseFullTests {
         #expect(await eventually { live.model.phase == .listed })
         #expect(live.model.lastKnownListedAt == nil)
         #expect(live.model.sections.flatMap(\.items).count == card.count)
-        let saved = try #require(await catalogue.lastListing(for: key(camera)))
-        #expect(!saved.entries.contains { $0.identity.filename == "DSC09999.ARW" })
+        // Saved after the catalogue is read again, so it can lag the phase.
+        #expect(await eventually {
+            await catalogue.lastListing(for: key(camera))?.entries.contains { $0.identity.filename == "DSC09999.ARW" }
+                == false
+        })
         #expect(live.log.lines.contains("browse: showing the last-known card (2 files)"))
         await live.stop()
     }
