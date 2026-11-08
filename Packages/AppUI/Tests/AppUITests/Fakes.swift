@@ -165,6 +165,26 @@ func actionFolders(in scratch: JPEGScratch) -> [URL] {
     (try? FileManager.default.contentsOfDirectory(at: scratch.root, includingPropertiesForKeys: nil)) ?? []
 }
 
+/// A clock whose time never moves: an engine on it never declares a stall, never ends a retry wait and never ticks.
+/// For tests that hang a download on purpose and then look at it in flight: on the real clock the engine's 30 s stall
+/// limit can fire first when a loaded CI runner (the iOS Simulator with every suite in parallel) is slow to reach the
+/// checks, and the in-flight file turns into a retry. `sleep` returns only by throwing when its task is cancelled.
+struct FrozenClock: Clock {
+    struct Instant: InstantProtocol {
+        var offset: Swift.Duration
+        func advanced(by duration: Swift.Duration) -> Instant { Instant(offset: offset + duration) }
+        func duration(to other: Instant) -> Swift.Duration { other.offset - offset }
+        static func < (lhs: Instant, rhs: Instant) -> Bool { lhs.offset < rhs.offset }
+    }
+
+    var now: Instant { Instant(offset: .zero) }
+    var minimumResolution: Swift.Duration { .nanoseconds(1) }
+
+    func sleep(until deadline: Instant, tolerance: Swift.Duration?) async throws {
+        while true { try await Task.sleep(for: .seconds(3600)) }
+    }
+}
+
 /// Polls `condition` on the main actor until it holds or about two seconds pass.
 @MainActor
 func eventually(_ condition: @MainActor () async -> Bool) async -> Bool {

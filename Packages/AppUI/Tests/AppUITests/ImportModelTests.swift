@@ -60,7 +60,11 @@ struct ImportModelTests {
         let link = FakeLink(items: card)
         await link.set(writesListedSize: true)
         await link.set(bytesHangs: hangs)
-        let engine = ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
+        // A hung download is looked at in flight: on a frozen clock the engine's 30 s stall limit can't turn it into a
+        // retry before the checks run on a slow runner. Harnesses without a hang keep the real clock.
+        let engine = hangs
+            ? ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging(), clock: FrozenClock())
+            : ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
         let settings = InMemoryDestinationSettingStore(DestinationSetting(preferred: setting))
         let destinations = FakeDestinations()
         let leases = LinkLeases()
