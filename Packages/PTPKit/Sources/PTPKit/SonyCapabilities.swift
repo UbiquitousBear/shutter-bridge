@@ -1,6 +1,8 @@
 // Which Sony features a camera may be asked for, decided from its DeviceInfo alone. Pure values, no I/O.
 //
-// Every Sony value here is `unverified` on the α7C II until a fixture captures it. What the spike saw is in each
+// The gating here is checked against the α7C II's two DeviceInfo fixtures (tests in PTPFixtureContentTests): its
+// PTP/IP DeviceInfo offers every feature, its MTP-mode DeviceInfo over USB none. A DeviceInfo only lists
+// codes, so what each feature does on the camera stays `unverified` unless a fixture shows it. What the spike saw is in each
 // doc comment (Spike/Sources/Views/WirelessView.swift; docs/spike-findings.md "Wireless browsing in 1.0" and
 // "PTP/IP and join facts"; α7C II builds 0.1 (7.1) to 0.1 (14.1), 2–4 Nov 2026).
 
@@ -53,8 +55,9 @@ public struct SonyCapabilities: Equatable, Sendable, CustomStringConvertible {
     /// isSony && lists 0x9211.
     public var largeObjectPartialRead: Bool { isSony && deviceInfo.supports(.sonySDIOGetPartialLargeObject) }
 
-    /// isSony && emits 0xC201. Seen only on a plain PC Remote session after the init sequence, carrying
-    /// 0xFFFFC001 (a buffer slot, not a card handle); not tested in a whole-card session; none over USB.
+    /// isSony && emits 0xC201 (listed in the PTP/IP DeviceInfo; captured with 0xFFFFC001, a buffer slot rather than
+    /// a card handle). The spike saw it only on a plain PC Remote session after the init sequence; not tested in a
+    /// whole-card session; none over USB.
     public var sonyObjectAdded: Bool { isSony && deviceInfo.emits(.sonyObjectAdded) }
 
     /// The byte-range variant to use, or nil for whole-file GetObject (a resume then restarts the file).

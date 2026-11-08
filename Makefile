@@ -22,6 +22,7 @@ fixtures:
 	@n=0; for f in Fixtures/a7c2/*/*.bin; do \
 		[ -f "$$f" ] || continue; \
 		link=$$(basename "$$(dirname "$$f")"); name=$$(basename "$$f"); \
+		case "$$name" in objectproplist*) echo "  $$f skipped: MTP property lists stay out of the repo (Fixtures/README.md, Rules)"; continue;; esac; \
 		cp "$$f" "$(FIXTURE_TESTS)/a7c2-$$link-$$name"; n=$$((n + 1)); \
 		echo "  $$f -> $(FIXTURE_TESTS)/a7c2-$$link-$$name"; \
 	done; echo "$$n fixture(s) copied"

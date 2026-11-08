@@ -73,7 +73,7 @@ Acceptance criteria:
 - **One transaction at a time:** the engine's download limit on Wi-Fi is 1 per session, not the proposal's 3.
 - **No private data in logs, diagnostics or fixtures:** the serial is zeroed, and the camera's hardware ID stays out. The hardware ID is the 12 hex digits at the end of the SSDP description's UDN, also the end of the camera's PTP/IP responder GUID (*SSDP discovery*).
 
-Could change with: decision 6, if it is reopened; the fixtures once committed (the `a7c2-ptpip-*` golden tests; they show the codes 0x9210–0x9212 and 0xC201 in DeviceInfo, and the `unverified` notes stay until a test is built from a captured exchange).
+Could change with: decision 6, if it is reopened; the fixtures, committed on 8 Nov (the `a7c2-ptpip-*` golden tests show the codes 0x9210–0x9212 and 0xC201 in DeviceInfo and the 970 B ExtDeviceInfo layout, and settle those; the commands' parameters and the order keep their `unverified` notes until a test is built from a captured exchange, since a fixture holds answers only).
 
 ## 2. Sony's whole-card session: open, list and stay listed
 

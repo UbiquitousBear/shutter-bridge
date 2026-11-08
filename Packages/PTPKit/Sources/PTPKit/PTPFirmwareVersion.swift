@@ -1,15 +1,19 @@
 // A firmware version string with the place it was read, so two are ordered only when they come from the same
-// place. The α7C II reports the same firmware differently by mode (unverified: spike): DeviceInfo's DeviceVersion
-// is "2.0" in MTP (vendor extension 0xFFFFFFFF; 1 and 5 Nov) and "2.01" in PC Remote (Sony's 0x11; Wi-Fi 2 Nov,
-// USB 4 Nov), and Bluetooth's CC0A reads "2.01" (3 and 5 Nov). Compared across modes, "2.0" < "2.01" would claim
-// an older firmware that isn't there.
+// place. The α7C II reports the same firmware differently by mode: DeviceInfo's DeviceVersion is "2.0" in MTP over
+// USB (vendor extension 0xFFFFFFFF; `usb/deviceinfo.bin`) and "2.01" over PTP/IP (Sony's 0x11;
+// `ptpip/deviceinfo.bin`, saved 5 Nov with the Wi-Fi switched on over Bluetooth; that guided run's setup has PC Remote
+// Function off), both checked by the `firmwareModes` fixture test. PC Remote also reported 2.01 with 0x11, over
+// Wi-Fi and over USB (unverified: spike, 2 and 4 Nov), and Bluetooth's CC0A reads "2.01" (unverified: spike, 3 and 5 Nov; no Bluetooth
+// fixture is committed). Compared across modes, "2.0" < "2.01" would claim an older firmware that isn't there.
 
 import Foundation
 
 public struct PTPFirmwareVersion: Hashable, Sendable, CustomStringConvertible {
     public enum Source: Hashable, Sendable {
         /// DeviceInfo's DeviceVersion, keyed by that DeviceInfo's VendorExtensionID, which tells the camera's
-        /// modes apart (0xFFFFFFFF in MTP, 0x11 in PC Remote and over PTP/IP on the α7C II; unverified).
+        /// modes apart on the α7C II: 0xFFFFFFFF in MTP over USB and 0x11 over PTP/IP (both from the DeviceInfo
+        /// fixtures; the PTP/IP one from a run whose setup has PC Remote Function off); 0x11 in PC Remote over Wi-Fi and
+        /// over USB too (unverified: spike, 2 and 4 Nov).
         case deviceInfo(vendorExtensionID: UInt32)
         /// A source outside PTP, named by the caller, e.g. "ble-CC0A" for Sony's Bluetooth firmware characteristic.
         case other(String)
@@ -73,9 +77,8 @@ public struct PTPFirmwareVersion: Hashable, Sendable, CustomStringConvertible {
 }
 
 extension PTPDeviceInfo {
-    /// `deviceVersion` tagged with this DeviceInfo's vendor extension ID: MTP's "2.0" and PC Remote's "2.01"
-    /// never compare (unverified: spike 1, 2, 4 and 5 Nov; `usb/deviceinfo.bin` and `ptpip/deviceinfo.bin` will
-    /// confirm via `firmwareModes`).
+    /// `deviceVersion` tagged with this DeviceInfo's vendor extension ID: MTP's "2.0" and PTP/IP's "2.01"
+    /// never compare (`firmwareModes`, on `usb/deviceinfo.bin` and `ptpip/deviceinfo.bin`).
     public var firmwareVersion: PTPFirmwareVersion {
         PTPFirmwareVersion(deviceVersion, source: .deviceInfo(vendorExtensionID: vendorExtensionID))
     }
