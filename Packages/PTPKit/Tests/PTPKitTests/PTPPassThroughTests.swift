@@ -83,4 +83,56 @@ struct PTPPassThroughTests {
             try PTPPassThrough.decodeReply(Data([1, 2, 3]), Data([4, 5, 6, 7, 8]), for: Self.command)
         }
     }
+
+    @Test("ImageCaptureCore's layout: GetStorageIDs, 8 B data phase and a renumbered 12-byte response (MTP, 1 Nov)")
+    func imageCaptureCoreStorageIDs() throws {
+        let command = PTPCommand.getStorageIDs(tx: 1)
+        let first = Data([0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00])
+        let second = Data([0x0C, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x20, 0x21, 0x03, 0x00, 0x00])
+        #expect(first.count == 8 && second.count == 12)
+        let reply = try PTPPassThrough.decodeReply(first, second, for: command)
+        #expect(reply.layout == .dataThenResponse)
+        #expect(reply.data == first)
+        #expect(reply.response.transactionID == 801)
+        #expect(reply.response.parameters.isEmpty)
+        #expect(reply.responseCode == .ok)
+        #expect(try PTPStorageID.decodeArray(reply.data) == [PTPStorageID(rawValue: 0x0001_0001)])
+    }
+
+    @Test("ImageCaptureCore's layout: GetDeviceInfo, 247 B MTP DeviceInfo and a renumbered response (MTP, 5 Nov)")
+    func imageCaptureCoreDeviceInfo() throws {
+        let command = PTPCommand.getDeviceInfo(tx: 1)
+        let first = PTPDatasetTests.syntheticMTPDeviceInfo.encode()
+        let second = Data([0x0C, 0, 0, 0, 0x03, 0, 0x01, 0x20, 0x8D, 0x06, 0, 0])
+        try #require(first.count == 247)
+        let reply = try PTPPassThrough.decodeReply(first, second, for: command)
+        // The payload's first u32 is 0xFFFF0064, not 247, so it is not mistaken for a header.
+        #expect(reply.layout == .dataThenResponse)
+        #expect(reply.data == first)
+        #expect(reply.response.transactionID == 1677)
+        #expect(try PTPDeviceInfo.decode(reply.data) == PTPDatasetTests.syntheticMTPDeviceInfo)
+    }
+
+    @Test("Two empty values are ImageCaptureCore's no answer, for any command")
+    func emptyReplyIsNoAnswer() {
+        for cmd in [PTPCommand.getAllObjectProps(tx: 1), PTPCommand.getDeviceInfo(tx: 1), PTPCommand.getObjectHandles(tx: 2)] {
+            #expect(throws: PTPPassThrough.Failure.noAnswer) { try PTPPassThrough.decodeReply(Data(), Data(), for: cmd) }
+        }
+        // Empty slices with a non-zero start index: `isEmpty` is what counts, not the index.
+        let d = Data([1, 2, 3])
+        #expect(throws: PTPPassThrough.Failure.noAnswer) {
+            try PTPPassThrough.decodeReply(d.dropFirst(3), d.dropFirst(3), for: PTPCommand.getDeviceInfo(tx: 1))
+        }
+    }
+
+    @Test("A malformed reply is not no answer")
+    func noAnswerIsNotMalformed() {
+        #expect(throws: PTPPassThrough.Failure.noResponseContainer(firstPrefix: Data(), secondPrefix: Data([0x01]))) {
+            try PTPPassThrough.decodeReply(Data(), Data([0x01]), for: PTPCommand.getDeviceInfo(tx: 1))
+        }
+        let ids = Data([1, 0, 0, 0, 1, 0, 1, 0])
+        #expect(throws: PTPPassThrough.Failure.noResponseContainer(firstPrefix: ids, secondPrefix: Data())) {
+            try PTPPassThrough.decodeReply(ids, Data(), for: PTPCommand.getStorageIDs(tx: 1))
+        }
+    }
 }

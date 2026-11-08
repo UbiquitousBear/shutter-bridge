@@ -56,6 +56,53 @@ struct PTPFixtureTests {
         }
     }
 
+    @Test("Captured USB data phases decode in ImageCaptureCore's layout",
+          .enabled(if: !(CapturedFixtures.named("deviceinfo") + CapturedFixtures.named("storageids")).filter { $0.link == "usb" }.isEmpty))
+    func passThroughGolden() throws {
+        // The spike saves only the data phase, so each is paired with a synthesised 12-byte response.
+        func check(_ kind: String, command: PTPContainer, transactionID: UInt32) throws {
+            for f in CapturedFixtures.named(kind) where f.link == "usb" {
+                let bytes = try Data(contentsOf: f.url)
+                let resp = PTPContainer(type: .response, code: PTPResponseCode.ok.rawValue, transactionID: transactionID).encode()
+                let reply = try PTPPassThrough.decodeReply(bytes, resp, for: command)
+                let name = f.url.lastPathComponent
+                #expect(reply.layout == .dataThenResponse, "\(name)")
+                #expect(reply.data == bytes, "\(name)")
+                #expect(reply.response.transactionID == transactionID, "\(name)")
+            }
+        }
+        try check("deviceinfo", command: PTPCommand.getDeviceInfo(tx: 1), transactionID: 1677)
+        try check("storageids", command: PTPCommand.getStorageIDs(tx: 1), transactionID: 801)
+    }
+
+    @Test("Firmware from the USB and Wi-Fi DeviceInfo fixtures is ordered only within one mode",
+          .enabled(if: Set(CapturedFixtures.named("deviceinfo").map(\.link)).isSuperset(of: ["usb", "ptpip"])))
+    func firmwareModes() throws {
+        let infos = try CapturedFixtures.named("deviceinfo").map { f in
+            (name: f.url.lastPathComponent, link: f.link, info: try PTPDeviceInfo.decode(Data(contentsOf: f.url)))
+        }
+        for a in infos {
+            for b in infos {
+                let comment = "\(a.name) \(a.info.deviceVersion) vs \(b.name) \(b.info.deviceVersion)"
+                #expect((a.info.firmwareVersion.compare(b.info.firmwareVersion) == nil)
+                        == (a.info.vendorExtensionID != b.info.vendorExtensionID), "\(comment)")
+                if a.link == "usb" && b.link == "ptpip" {
+                    #expect(a.info.firmwareVersion.compare(b.info.firmwareVersion) == nil, "\(comment)")
+                }
+            }
+            switch a.link {
+            case "usb":
+                #expect(a.info.vendorExtensionID == 0xFFFF_FFFF, "\(a.name)")
+                #expect(a.info.deviceVersion == "2.0", "\(a.name)")
+            case "ptpip":
+                #expect(a.info.vendorExtensionID == 0x11, "\(a.name)")
+                #expect(a.info.deviceVersion == "2.01", "\(a.name)")
+            default:
+                break
+            }
+        }
+    }
+
     @Test("ObjectInfo from the camera parses with a filename, size, date and the right media kind",
           .enabled(if: !CapturedFixtures.named("objectinfo").isEmpty))
     func objectInfo() throws {
