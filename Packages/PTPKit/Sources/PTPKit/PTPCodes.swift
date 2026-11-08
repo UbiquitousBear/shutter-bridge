@@ -1,10 +1,13 @@
 // PTPKit — codes from ISO 15740 (PTP) plus the vendor values we expect to see on Sony bodies.
 // Pure Swift, no I/O. Sony vendor values come from libgphoto2's camlibs/ptp2/ptp.h (the best public record of
-// Sony's PTP extension); they are `unverified` on the α7C II until the camera's own GetDeviceInfo and
-// GetObjectInfo, captured into Fixtures/a7c2/ during the spike, confirm them. Vendor codes in the 0x9000,
-// 0xB000 and 0xC000 ranges only mean what they say here when the device is Sony (`PTPDeviceInfo.isSony`):
-// vendorExtensionID 0x11, or an MTP ID (0xFFFFFFFF, or 0x6) with a Sony manufacturer. libgphoto2 treats
-// 0xFFFFFFFF from "Sony Corporation" as Sony ("Mostly for PTP/IP mode"), so Sony bodies do send it.
+// Sony's PTP extension). What the α7C II's own bytes prove (Fixtures/a7c2/, 8 Nov; tests in
+// PTPFixtureContentTests): the codes its DeviceInfo lists, object format 0xB101 on its ARW files, and the event codes
+// it sent. A DeviceInfo lists a code; it shows neither the parameters nor what the camera does with it, so a note
+// that says "listed" settles the number only and the behaviour stays `unverified`, with what the spike saw. Vendor
+// codes in the 0x9000, 0xB000 and 0xC000 ranges only mean what they say here when the device is Sony
+// (`PTPDeviceInfo.isSony`): vendorExtensionID 0x11 (what the α7C II reports over PTP/IP in PC Remote), or an MTP ID
+// (0xFFFFFFFF, which it reports over USB in MTP mode, or 0x6) with a Sony manufacturer. libgphoto2 treats
+// 0xFFFFFFFF from "Sony Corporation" as Sony.
 
 public enum PTPContainerType: UInt16, Sendable {
     case command = 1
@@ -34,29 +37,40 @@ public struct PTPOperationCode: RawRepresentable, Hashable, Sendable, CustomStri
     /// Android's MTP extension (libgphoto2 `PTP_OC_ANDROID_GetPartialObject64`): 64-bit offset variant.
     public static let getPartialObject64 = PTPOperationCode(rawValue: 0x95C1)
 
-    // MTP object-property operations (libmtp/libgphoto2 `PTP_OC_MTP_*`). A Sony body in MTP mode lists all four
-    // in its DeviceInfo, but their behaviour is `unverified` on the α7C II until a fixture proves it.
+    // MTP object-property operations (libmtp/libgphoto2 `PTP_OC_MTP_*`). The α7C II lists all four in its MTP-mode
+    // DeviceInfo over USB (Fixtures/a7c2/usb/deviceinfo.bin) and in its PC Remote DeviceInfo over PTP/IP. What they
+    // answer is `unverified` here: no reply is committed, because an MTP property list's object IDs may carry the
+    // serial (the spike's log: 0x9805 answered one object at a time, 385 ms on average; docs/spike-findings.md).
     public static let getObjectPropsSupported = PTPOperationCode(rawValue: 0x9801)
     public static let getObjectPropDesc       = PTPOperationCode(rawValue: 0x9802)
     public static let getObjectPropValue      = PTPOperationCode(rawValue: 0x9803)
     /// Properties of many objects in one data phase (see `MTPObjectPropList`).
     public static let getObjectPropList       = PTPOperationCode(rawValue: 0x9805)
 
-    // Sony SDIO extension (libgphoto2 names). `unverified` on the α7C II.
-    /// Three-phase handshake (param 1 = phase 1, 2, 3) that PC Remote mode needs before vendor ops work.
+    // Sony SDIO extension (libgphoto2 names). Every code in this group is listed in the α7C II's PC Remote DeviceInfo
+    // over PTP/IP (Fixtures/a7c2/ptpip/deviceinfo.bin), which settles the number; the names and parameters stay
+    // `unverified` on the α7C II unless a note says otherwise, with what the spike's log saw.
+    /// Three-phase handshake (param 1 = phase 1, 2, 3) that PC Remote mode needs before vendor ops work. The spike saw
+    /// phases 1 to 3 answer OK.
     public static let sonySDIOConnect = PTPOperationCode(rawValue: 0x9201)
-    /// Param 1 = protocol version (0xC8 = 2.00, 0x12C = 3.00), param 2 = 1. Data phase lists vendor codes.
+    /// Param 1 = protocol version (0xC8 = 2.00, 0x12C = 3.00), param 2 = 1. Data phase lists vendor codes: the one
+    /// captured reply (Fixtures/a7c2/ptpip/sdio-extdeviceinfo.bin) is 970 B, version 0x12C, then two u16 lists of 421
+    /// and 59 codes. The parameters sent are `unverified`: a fixture holds the reply only.
     public static let sonySDIOGetExtDeviceInfo = PTPOperationCode(rawValue: 0x9202)
     /// Sony's replacement for OpenSession (0x1002) in a contents-transfer session. Parameters: session ID, function
     /// mode (1 = contents transfer, 0 = remote control). Sending both this and OpenSession answers 0x201E.
-    /// `unverified` on the α7C II (source: mvpzac/Imagedge on a ZV-E10).
+    /// Parameters `unverified` on the α7C II (source: mvpzac/Imagedge on a ZV-E10); the spike's [1, 1] answered OK.
     public static let sonySDIOOpenSession = PTPOperationCode(rawValue: 0x9210)
-    /// Sony's own 64-bit partial read. Parameter layout undocumented; probe it in the spike.
+    /// Sony's own 64-bit partial read. Parameter layout `unverified`: the spike's five-parameter form (handle, offset
+    /// low and high, length low and high) read byte ranges that matched a GetObject download by SHA-256
+    /// (Fixtures/a7c2/ptpip/getpartialobject.sha256 holds the hashes, not the bytes, so no test replays it).
     public static let sonySDIOGetPartialLargeObject = PTPOperationCode(rawValue: 0x9211)
-    /// Switches the camera into its contents-transfer (card browsing) mode. Parameters undocumented.
+    /// Switches the camera into its contents-transfer (card browsing) mode. Parameters `unverified`: the spike's
+    /// [2, 0, 0] then [2, 1, 0] answered OK and StoreAdded 0x4004 [0x00010001] followed (the event is a fixture).
     public static let sonySDIOSetContentsTransferMode = PTPOperationCode(rawValue: 0x9212)
-    /// Listed in the α7C II's DeviceInfo but unnamed in libgphoto2. mvpzac/Imagedge calls it Sony's
-    /// "SDIO_GetPartialLargeObject" (the same name libgphoto2 gives 0x9211). `unverified`: probe it in the spike.
+    /// Listed in the α7C II's DeviceInfo (fixture) but unnamed in libgphoto2. mvpzac/Imagedge calls it Sony's
+    /// "SDIO_GetPartialLargeObject" (the same name libgphoto2 gives 0x9211). Its meaning is `unverified`: in a
+    /// contents-transfer session the spike's five-parameter read answered InvalidObjectHandle.
     public static let sonySDIO0x9219 = PTPOperationCode(rawValue: 0x9219)
 
     public var description: String {
@@ -170,9 +184,13 @@ public struct PTPEventCode: RawRepresentable, Hashable, Sendable, CustomStringCo
     public static let deviceReset        = PTPEventCode(rawValue: 0x400B)
     public static let storageInfoChanged = PTPEventCode(rawValue: 0x400C)
     public static let captureComplete    = PTPEventCode(rawValue: 0x400D)
-    /// Sony vendor ObjectAdded (libgphoto2 `PTP_EC_Sony_ObjectAdded`). Sony bodies in PC Remote mode report new
-    /// shots with this rather than 0x4002. `unverified` on the α7C II.
+    /// Sony vendor ObjectAdded (libgphoto2 `PTP_EC_Sony_ObjectAdded`). Captured from the α7C II over PTP/IP with one
+    /// parameter, 0xFFFFC001 (Fixtures/a7c2/ptpip/event-objectadded.bin), and listed in its PC Remote DeviceInfo, so the
+    /// code and the layout are settled. That it is the event a shutter press sends, about 0.4 s after the capture, is
+    /// the spike's log (2 Nov, Wi-Fi in PC Remote only; none over USB) and stays `unverified`: the file holds the event,
+    /// not what caused it.
     public static let sonyObjectAdded    = PTPEventCode(rawValue: 0xC201)
+    /// Listed in the α7C II's PC Remote DeviceInfo; never seen on the wire, so its parameters are unknown.
     public static let sonyObjectRemoved  = PTPEventCode(rawValue: 0xC202)
 
     /// True for the standard and the Sony vendor ObjectAdded: the event transfer-while-shooting would act on.
@@ -217,11 +235,14 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
     public static let mp4         = PTPObjectFormat(rawValue: 0xB982)
     /// MTP: XML document (the sidecars the camera writes beside video clips).
     public static let xmlDocument = PTPObjectFormat(rawValue: 0xBA82)
-    /// Sony vendor format for ARW (libgphoto2 `PTP_OFC_SONY_RAW`). `unverified` on the α7C II.
+    /// Sony vendor format for ARW (libgphoto2 `PTP_OFC_SONY_RAW`). On every .ARW ObjectInfo the α7C II sent, over USB and
+    /// PTP/IP (Fixtures/a7c2/*/objectinfo-arw.bin), and in both DeviceInfos' image formats.
     public static let sonyARW     = PTPObjectFormat(rawValue: 0xB101)
-    /// Sony vendor format for HEIF / .HIF (libgphoto2 `PTP_OFC_SONY_HEIF`). `unverified` on the α7C II.
+    /// Sony vendor format for HEIF / .HIF (libgphoto2 `PTP_OFC_SONY_HEIF`). Listed in both of the α7C II's DeviceInfos'
+    /// image formats; no .HIF ObjectInfo is captured, so that the camera gives a .HIF file this code is `unverified`.
     public static let sonyHEIF    = PTPObjectFormat(rawValue: 0xB110)
-    /// Sony vendor format for MPO (libgphoto2 `PTP_OFC_SONY_MPO`).
+    /// Sony vendor format for MPO (libgphoto2 `PTP_OFC_SONY_MPO`). Listed in the MTP-mode DeviceInfo's image formats,
+    /// not in PC Remote's; no MPO object is captured.
     public static let sonyMPO     = PTPObjectFormat(rawValue: 0xB301)
 
     public var description: String {
@@ -245,8 +266,9 @@ public struct PTPObjectFormat: RawRepresentable, Hashable, Sendable, CustomStrin
     }
 }
 
-/// PTP vendor extension IDs (DeviceInfo.vendorExtensionID), as in libgphoto2's ptp.h. Sony is 0x11, but Sony
-/// bodies in PTP/IP and MTP modes report `mtp` (0xFFFFFFFF) instead; see `PTPDeviceInfo.isSony`.
+/// PTP vendor extension IDs (DeviceInfo.vendorExtensionID), as in libgphoto2's ptp.h. The α7C II reports Sony's 0x11
+/// over PTP/IP in PC Remote, and `mtp` (0xFFFFFFFF) over USB in MTP mode, with "Sony Corporation" as the
+/// manufacturer; see `PTPDeviceInfo.isSony`.
 public enum PTPVendorExtension: UInt32, Sendable {
     case none = 0x0000
     case kodak = 0x0001
@@ -283,7 +305,8 @@ public struct PTPDevicePropCode: RawRepresentable, Hashable, Sendable, CustomStr
 }
 
 /// MTP object property codes (MTP 1.1 Appendix B), as carried in an ObjectPropList. Names and values match
-/// libmtp's `LIBMTP_PROPERTY_*` table. Which of them a Sony body actually reports is `unverified` on the α7C II.
+/// libmtp's `LIBMTP_PROPERTY_*` table. Which of them a Sony body actually reports is `unverified` on the α7C II: no
+/// property list is committed (see `PTPOperationCode.getObjectPropList`).
 public struct MTPObjectPropertyCode: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
     public let rawValue: UInt16
     public init(rawValue: UInt16) { self.rawValue = rawValue }

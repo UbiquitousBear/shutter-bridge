@@ -3,8 +3,9 @@ import Foundation
 @testable import PTPKit
 
 /// Bytes captured from the real α7C II, copied in by `make fixtures` as `a7c2-<link>-<name>.bin`, where link is
-/// `usb` or `ptpip` and name is what the spike app saved (see Fixtures/README.md). Each test is skipped until a
-/// fixture of its kind exists, and then checks every one of them.
+/// `usb` or `ptpip` and name is what the spike app saved (see Fixtures/README.md). Each test here is skipped
+/// until a fixture of its kind exists, and then checks every one of them: it decodes and re-encodes to exactly the
+/// camera's bytes. What each fixture says is asserted in `PTPFixtureContentTests`.
 enum CapturedFixtures {
     static var directory: URL? { Bundle.module.url(forResource: "Fixtures", withExtension: nil) }
 
@@ -12,6 +13,18 @@ enum CapturedFixtures {
         guard let dir = directory,
               let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
         return names.filter { $0.hasPrefix("a7c2-") && $0.hasSuffix(".bin") }.sorted().map { dir.appendingPathComponent($0) }
+    }
+
+    struct Missing: Error, CustomStringConvertible {
+        let name: String
+        var description: String { "fixture \(name) is not in the test bundle; run `make fixtures`" }
+    }
+
+    /// The bytes of one fixture by its bundle name, e.g. `a7c2-usb-deviceinfo.bin`. Throws if `make fixtures` hasn't
+    /// copied it, so a test of a specific capture fails loudly instead of passing on nothing.
+    static func data(_ name: String) throws -> Data {
+        guard let url = all.first(where: { $0.lastPathComponent == name }) else { throw Missing(name: name) }
+        return try Data(contentsOf: url)
     }
 
     /// Fixtures whose name, after `a7c2-<link>-`, starts with `kind`.
@@ -33,12 +46,13 @@ struct PTPFixtureTests {
             let data = try Data(contentsOf: f.url)
             let info = try PTPDeviceInfo.decode(data)
             #expect(info.manufacturer.lowercased().contains("sony"), "\(f.url.lastPathComponent)")
-            // Sony bodies report 0x11, or the MTP ID 0xFFFFFFFF over PTP/IP and in MTP mode (libgphoto2 maps it).
+            // The α7C II reports Sony's 0x11 over PTP/IP in PC Remote and the MTP ID 0xFFFFFFFF over USB in MTP mode
+            // (libgphoto2 maps the latter to Sony by the manufacturer).
             #expect(info.isSony, "\(f.url.lastPathComponent): vendor extension 0x\(String(info.vendorExtensionID, radix: 16))")
             #expect(info.model.uppercased().contains("ILCE"), "\(f.url.lastPathComponent)")
             #expect(!info.operationsSupported.isEmpty)
-            // Re-encoding reproduces the camera's bytes (trailing vendor data, if any, is not modelled).
-            #expect(data.starts(with: info.encode()), "\(f.url.lastPathComponent) does not round-trip")
+            // Re-encoding reproduces the camera's bytes exactly: no trailing vendor data in either capture.
+            #expect(info.encode() == data, "\(f.url.lastPathComponent) does not round-trip")
         }
     }
 
@@ -59,30 +73,50 @@ struct PTPFixtureTests {
             default: nil
             }
             if let expected { #expect(info.mediaKind == expected, "\(f.url.lastPathComponent): format \(info.objectFormat)") }
-            #expect(data.starts(with: info.encode()), "\(f.url.lastPathComponent) does not round-trip")
+            #expect(info.encode() == data, "\(f.url.lastPathComponent) does not round-trip")
         }
     }
 
-    @Test("StorageInfo from the camera parses", .enabled(if: !CapturedFixtures.named("storageinfo").isEmpty))
+    @Test("StorageInfo from the camera parses and round-trips; over PTP/IP the capacity is 0",
+          .enabled(if: !CapturedFixtures.named("storageinfo").isEmpty))
     func storageInfo() throws {
         for f in CapturedFixtures.named("storageinfo") {
-            let info = try PTPStorageInfo.decode(try Data(contentsOf: f.url))
-            #expect(info.maxCapacity > 0, "\(f.url.lastPathComponent)")
-            #expect(info.freeSpaceInBytes <= info.maxCapacity)
+            let data = try Data(contentsOf: f.url)
+            let info = try PTPStorageInfo.decode(data)
+            #expect(info.encode() == data, "\(f.url.lastPathComponent) does not round-trip")
+            switch f.link {
+            case "usb":
+                #expect(info.maxCapacity > 0, "\(f.url.lastPathComponent)")
+                #expect(info.freeSpaceInBytes <= info.maxCapacity, "\(f.url.lastPathComponent)")
+            case "ptpip":
+                // The camera fills capacity and free space with 0 over PTP/IP (docs/spike-findings.md: "capacity shown
+                // as 0"; docs/iteration-1-backlog.md section 1). A caller must not read 0 as "full" or "unknown card".
+                #expect(info.maxCapacity == 0, "\(f.url.lastPathComponent)")
+                #expect(info.freeSpaceInBytes == 0, "\(f.url.lastPathComponent)")
+            default:
+                Issue.record("unknown link \(f.link) in \(f.url.lastPathComponent)")
+            }
         }
     }
 
-    @Test("Storage IDs and object handles arrays parse", .enabled(if: !(CapturedFixtures.named("storageids") + CapturedFixtures.named("objecthandles")).isEmpty))
+    @Test("Storage IDs and object handles arrays parse and round-trip",
+          .enabled(if: !(CapturedFixtures.named("storageids") + CapturedFixtures.named("objecthandles")).isEmpty))
     func arrays() throws {
         for f in CapturedFixtures.named("storageids") {
-            #expect(!(try PTPStorageID.decodeArray(try Data(contentsOf: f.url))).isEmpty, "\(f.url.lastPathComponent)")
+            let data = try Data(contentsOf: f.url)
+            let ids = try PTPStorageID.decodeArray(data)
+            #expect(!ids.isEmpty, "\(f.url.lastPathComponent)")
+            #expect(PTPStorageID.encodeArray(ids) == data, "\(f.url.lastPathComponent) does not round-trip")
         }
         for f in CapturedFixtures.named("objecthandles") {
-            #expect(!(try PTPObjectHandle.decodeArray(try Data(contentsOf: f.url))).isEmpty, "\(f.url.lastPathComponent)")
+            let data = try Data(contentsOf: f.url)
+            let handles = try PTPObjectHandle.decodeArray(data)
+            #expect(!handles.isEmpty, "\(f.url.lastPathComponent)")
+            #expect(PTPObjectHandle.encodeArray(handles) == data, "\(f.url.lastPathComponent) does not round-trip")
         }
     }
 
-    @Test("Events: USB containers and PTP/IP packets decode; ObjectAdded fixtures signal a new object",
+    @Test("Events: USB containers and PTP/IP packets decode and re-encode; ObjectAdded fixtures signal a new object",
           .enabled(if: !CapturedFixtures.named("event").isEmpty))
     func events() throws {
         for f in CapturedFixtures.named("event") {
@@ -90,12 +124,19 @@ struct PTPFixtureTests {
             let code: PTPEventCode
             switch f.link {
             case "usb":
-                let (container, _) = try PTPContainer.decode(data)
+                let (container, consumed) = try PTPContainer.decode(data)
                 #expect(container.type == .event, "\(f.url.lastPathComponent)")
+                #expect(consumed == data.count, "\(f.url.lastPathComponent) holds more than one container")
+                #expect(container.encode() == data, "\(f.url.lastPathComponent) does not round-trip")
                 code = container.eventCode
             case "ptpip":
-                let packet = try #require(try PTPIP.Packet.decode(data)?.packet, "\(f.url.lastPathComponent) is not a whole packet")
-                code = try PTPIP.decodeEvent(packet).code
+                let decoded = try #require(try PTPIP.Packet.decode(data), "\(f.url.lastPathComponent) is not a whole packet")
+                #expect(decoded.consumed == data.count, "\(f.url.lastPathComponent) holds more than one packet")
+                #expect(decoded.packet.type == .event, "\(f.url.lastPathComponent)")
+                let event = try PTPIP.decodeEvent(decoded.packet)
+                #expect(PTPIP.event(event.code, transactionID: event.transactionID, parameters: event.parameters).encode() == data,
+                        "\(f.url.lastPathComponent) does not round-trip")
+                code = event.code
             default:
                 Issue.record("unknown link \(f.link) in \(f.url.lastPathComponent)")
                 continue
@@ -103,6 +144,18 @@ struct PTPFixtureTests {
             if f.name.hasPrefix("event-objectadded") {
                 #expect(code.signalsNewObject, "\(f.url.lastPathComponent): got \(code)")
             }
+        }
+    }
+
+    /// A fixture of a kind this suite doesn't check would pass `make test` unseen. Every name must be one the golden
+    /// tests above or the structural check in `PTPFixtureContentTests` (sdio-extdeviceinfo) handle.
+    @Test("Every captured fixture is of a kind a test checks", .enabled(if: !CapturedFixtures.all.isEmpty))
+    func everyFixtureIsCovered() {
+        let checked = ["deviceinfo", "objectinfo", "storageinfo", "storageids", "objecthandles", "event", "sdio-extdeviceinfo"]
+        for url in CapturedFixtures.all {
+            let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-", maxSplits: 2).map(String.init)
+            #expect(parts.count == 3 && ["usb", "ptpip"].contains(parts[1]) && checked.contains { parts[2].hasPrefix($0) },
+                    "\(url.lastPathComponent) is not covered by a fixture test")
         }
     }
 }

@@ -138,28 +138,31 @@ public enum PTPCommand {
         PTPContainer(type: .command, code: PTPOperationCode.getDevicePropDesc.rawValue, transactionID: tx, parameters: [UInt32(prop.rawValue)])
     }
 
-    /// Sony SDIO_Connect (libgphoto2's three-phase handshake for PC Remote mode): phase 1, 2, 3. `unverified` on
-    /// the α7C II. Has a data phase (responder → initiator) that libgphoto2 discards.
+    /// Sony SDIO_Connect (libgphoto2's three-phase handshake for PC Remote mode): phase 1, 2, 3. The code is listed in
+    /// the α7C II's PC Remote DeviceInfo; the parameters are `unverified` (a fixture holds replies, not requests), though
+    /// the spike saw all three phases answer OK. Has a data phase (responder → initiator) that libgphoto2 discards.
     public static func sonySDIOConnect(phase: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOConnect.rawValue, transactionID: tx, parameters: [phase, 0, 0])
     }
 
     /// Sony SDIO_GetExtDeviceInfo: `version` is the protocol version asked for (0xC8 = 2.00, 0x12C = 3.00); a
-    /// camera that doesn't support it answers with its highest. `unverified` on the α7C II.
+    /// camera that doesn't support it answers with its highest. The reply to 0x12C is a fixture (see
+    /// `PTPOperationCode.sonySDIOGetExtDeviceInfo`); the parameters are `unverified` on the α7C II.
     public static func sonySDIOGetExtDeviceInfo(version: UInt32 = 0x12C, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOGetExtDeviceInfo.rawValue, transactionID: tx, parameters: [version, 1])
     }
 
     /// Sony SDIO_OpenSession (0x9210), sent instead of OpenSession (0x1002). `functionMode` 1 = contents transfer
-    /// (whole card), 0 = remote control. No data phase. `unverified` on the α7C II; source: mvpzac/Imagedge
-    /// (field-tested on a ZV-E10).
+    /// (whole card), 0 = remote control. No data phase. The code is listed in the α7C II's PC Remote DeviceInfo; the
+    /// parameters are `unverified` there (the spike's [1, 1] answered OK); source: mvpzac/Imagedge (field-tested on a ZV-E10).
     public static func sonySDIOOpenSession(sessionID: UInt32 = 1, functionMode: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOOpenSession.rawValue, transactionID: tx, parameters: [sessionID, functionMode])
     }
 
     /// Sony SDIO_SetContentsTransferMode (0x9212), three parameters, no data phase. Known sets: `[2, 0, 0]` then
     /// `[2, 1, 0]` (with a 200 ms pause between) for the whole card; `[1, 0, 0]` for the set of photos selected on
-    /// the camera. `unverified` on the α7C II; source: mvpzac/Imagedge (ZV-E10).
+    /// the camera. The code is listed in the α7C II's PC Remote DeviceInfo; the parameters are `unverified` there (the
+    /// spike's [2, 0, 0] then [2, 1, 0] answered OK); source: mvpzac/Imagedge (ZV-E10).
     public static func sonySetContentsTransferMode(_ p1: UInt32, _ p2: UInt32, _ p3: UInt32, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: PTPOperationCode.sonySDIOSetContentsTransferMode.rawValue, transactionID: tx, parameters: [p1, p2, p3])
     }
@@ -181,8 +184,9 @@ public enum PTPCommand {
     /// - `depth`: 0xFFFFFFFF as libmtp sends for the whole device; with the all-objects handle it should be
     ///   moot. For a real handle, 0 is "this object only" and 1 "its children too".
     ///
-    /// `unverified` on the α7C II: its DeviceInfo advertises 0x9805, but no capture yet proves it answers this
-    /// parameter combination, or answers it quickly.
+    /// `unverified` on the α7C II: its DeviceInfo advertises 0x9805, but no capture proves it answers this
+    /// parameter combination, or answers it quickly (MTP property lists are kept out of the repository: their object
+    /// IDs may carry the serial).
     public static func getObjectPropList(
         handle: PTPObjectHandle = .allObjects,
         format: PTPObjectFormat? = nil,
@@ -225,7 +229,7 @@ public enum PTPCommand {
     /// Sony's "SDIO_GetPartialLargeObject": five parameters, handle, offset low, offset high, length low, length
     /// high (length widened to u64). `code` is meant to be 0x9211 (libgphoto2's name for it) or 0x9219 (what
     /// mvpzac/Imagedge calls it) but any code builds. The layout is a guess from mvpzac/Imagedge's description
-    /// (ZV-E10), `unverified` on the α7C II: probe it.
+    /// (ZV-E10), `unverified` on the α7C II in tests (the spike's log: with 0x9211 it read byte ranges that matched GetObject by SHA-256; with 0x9219 it answered InvalidObjectHandle in a contents-transfer session).
     public static func sonyGetPartialLargeObject(code: UInt16, _ handle: PTPObjectHandle, offset: UInt64, length: UInt64, tx: UInt32) -> PTPContainer {
         PTPContainer(type: .command, code: code, transactionID: tx,
                      parameters: [handle.rawValue, UInt32(offset & 0xFFFF_FFFF), UInt32(offset >> 32),

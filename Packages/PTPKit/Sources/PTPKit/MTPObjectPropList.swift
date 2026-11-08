@@ -7,8 +7,8 @@
 // The value's encoding follows the datatype: fixed-width integers (0x0001–0x000A: INT8, UINT8, INT16, UINT16,
 // INT32, UINT32, INT64, UINT64, INT128, UINT128), arrays of those (0x4001–0x400A: u32 count, then elements),
 // or STR (0xFFFF: PTP string). Decoding follows libmtp's `ptp_unpack_OPL` (ptp-pack.c), except that a list cut
-// short throws here, where libmtp returns the elements it managed to read. `unverified` on the α7C II until a
-// fixture captures a real reply.
+// short throws here, where libmtp returns the elements it managed to read. `unverified` on the α7C II: no real reply
+// is committed (an MTP property list's object IDs may carry the camera's serial, so the repository keeps them out).
 
 import Foundation
 

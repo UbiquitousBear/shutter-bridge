@@ -21,7 +21,7 @@ proprietary phone protocol.
 | [`docs/ci.md`](docs/ci.md) | How the spike is built and tested on every pull request (GitHub Actions: Xcode 27 compile check, PTPKit tests on Linux and macOS) and delivered to TestFlight (Xcode Cloud), with the one-time setup. |
 | `Packages/PTPKit/` | Pure-Swift PTP and PTP/IP codec with Swift Testing tests. The only code written during the spike that is meant to survive it. |
 | `Spike/` | Throwaway iPhone app for the spike, one tab per area: Wired (ImageCaptureCore browser and session, PTP pass-through, resume over USB), Wi-Fi (PTP/IP client, port, Bonjour and SSDP probes, QR scan and join), Bluetooth (advertisement scanner, proximity reminder test), Background (`BGContinuedProcessingTask` test) and Log (measurements with export, fixtures). |
-| `Fixtures/` | Bytes captured from the real camera; ground truth for the codec tests. The spike app saves them on the phone; [`Fixtures/README.md`](Fixtures/README.md) lists every file. Empty until day 5, when the week-1 captures are copied in. |
+| `Fixtures/` | Bytes captured from the real camera; ground truth for the codec tests. The spike app saves them on the phone; [`Fixtures/README.md`](Fixtures/README.md) lists every file. Holds the captures exported on 8 Nov (USB in MTP mode and PTP/IP in PC Remote); the golden tests decode and re-encode every one PTPKit has a decoder for. |
 | `Spike/ci_scripts/` | Xcode Cloud post-clone step (generates the spike project). It must sit next to `Spike.xcodeproj` for Xcode Cloud to find it. |
 
 ## Getting started (spike day 1)
@@ -52,7 +52,7 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
 - [x] Spike plan
 - [x] Agent directions and owner-only commit attribution (`AGENTS.md`, `CLAUDE.md`, git hooks)
 - [x] PTPKit codec extended for the spike: pass-through replies, partial reads and resume, PTP/IP stream
-      decoding, device property and Sony vendor commands, fixture tests, seeded round trips and a Sony whole-card session plan (133 tests pass with Swift 6.4 on Linux)
+      decoding, device property and Sony vendor commands, fixture tests, seeded round trips and a Sony whole-card session plan (157 tests pass with Swift 6.4 on Linux, golden tests on the camera's bytes included)
 - [x] Spike app complete for days 1–10; compiles with Xcode 27 in CI, not yet run on a phone
 - [x] Spike runbook, findings template and a draft Iteration 1 backlog
 - [x] Multicast entitlement requested (8 Nov, reference 7BDQ7FRVM8; pending) and its status noted
