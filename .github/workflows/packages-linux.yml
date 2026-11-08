@@ -37,7 +37,7 @@ jobs:
           - ImportEngine
           - AppUI
           - PTPSimulator
-          # BLEKit: add it here when its branch lands (it brings its own blekit.yml until then).
+          - BLEKit
     steps:
       - uses: actions/checkout@v6
         with:

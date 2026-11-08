@@ -133,9 +133,9 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
 If a ruleset on `main` requires status checks by name, replace the old `ptpkit.yml` check with these jobs.
 
 **Bundle ID and app record.** The project sets `PRODUCT_BUNDLE_IDENTIFIER` to `net.shamil.shutter-bridge`, with
-`DEVELOPMENT_TEAM` empty and automatic signing, as this file proposes for the production app (a new App ID and
-app record, because the spike's are named for the spike). Shamil confirms the App ID before the first upload; the
-bundle ID can't change after it. Nothing uploads the production app yet: `testflight.yml` still archives the spike.
+`DEVELOPMENT_TEAM` empty and automatic signing, as Shamil decided on 8 Nov for the production app (a new App ID and
+app record named "Shutter Bridge", because the spike's are named for the spike). Shamil creates both on the Mac before
+the first upload; the bundle ID can't change after it. Nothing uploads the production app yet: `testflight.yml` still archives the spike.
 
 ## TestFlight from GitHub Actions (no Mac needed)
 
