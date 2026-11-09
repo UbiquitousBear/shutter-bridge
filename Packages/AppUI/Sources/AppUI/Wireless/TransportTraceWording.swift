@@ -99,7 +99,8 @@ public enum TransportTraceWording {
         case let .preparationEnded(succeeded, times):
             return "wifi join: \(succeeded ? "ready" : "not ready") after \(seconds(times.total)) "
                 + "(hand-off \(seconds(times.handingOff)), join \(seconds(times.joining)), "
-                + "session \(seconds(times.openingSession)))"
+                + "session \(seconds(times.openingSession))"
+                + (times.held > .zero ? ", held while away \(seconds(times.held)))" : ")")
 
         // MARK: The hand-off
         case let .handoffStatus(status, after):
@@ -193,15 +194,16 @@ public enum TransportTraceWording {
     }
 
     /// GetThumb over the link's life (bench 19.1): counts, response codes by name and times only, never a handle or a
-    /// file. "GetThumb asked 0" when none was asked or skipped.
+    /// file. "GetThumb asked 0" when none was asked, skipped or left unsent.
     static func thumbnailCounts(_ seen: IPThumbnailDiagnostics) -> String {
-        guard seen.asked > 0 || seen.notListed > 0 else { return "GetThumb asked 0" }
+        guard seen.asked > 0 || seen.notListed > 0 || seen.notSent > 0 else { return "GetThumb asked 0" }
         let codes = seen.failuresByCode.map { ("\($0.key)", $0.value) }.sorted { $0.0 < $1.0 }
             .map { "\($0.0) \($0.1)" }
         let refused = codes.isEmpty ? "refused 0" : "refused \(seen.refused) (\(codes.joined(separator: ", ")))"
         let first = seen.firstAfterOpen.map { ", the first answered \(seconds($0)) after the open" } ?? ""
         return "GetThumb asked \(seen.asked), answered \(seen.answered) (\(seen.bytesTotal) B), \(refused), timed out "
-            + "\(seen.timeouts), other failures \(seen.otherFailures), not listed \(seen.notListed)\(first)"
+            + "\(seen.timeouts), other failures \(seen.otherFailures), not listed \(seen.notListed), "
+            + "not sent \(seen.notSent)\(first)"
     }
 
     private static func count(_ value: Int, _ one: String, _ many: String) -> String {

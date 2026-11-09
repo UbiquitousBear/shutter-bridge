@@ -222,6 +222,9 @@ public final class BrowseModel {
     /// Reconnect or Try Again was tapped while Browse waits to prepare the link again.
     @ObservationIgnored private var reopenTapped = false
     @ObservationIgnored private var reopenWaiter: CheckedContinuation<Void, Never>?
+    /// Browse is waiting for a reason to prepare the link again (`waitToReopen()`), parked or not: a return to the front
+    /// then makes one reconnect due.
+    @ObservationIgnored private var waitingToReopen = false
     /// Why the latest hold of a link ended, for the log.
     @ObservationIgnored private var linkEnd: LinkEnd = .eventsFinished
     /// When the card was last listed on a link, for the log.
@@ -229,7 +232,8 @@ public final class BrowseModel {
     /// The last open failed (rather than a listing): the failed state's title says the camera couldn't be reached.
     @ObservationIgnored private var openFailed = false
     // Thumbnails.
-    /// Files whose thumbnail the camera can never give (`unreadableItem`, `itemNotFound`): not asked again.
+    /// Over Wi-Fi, files whose thumbnail this link refused (`unreadableItem`, `itemNotFound`): not asked again until the
+    /// next link lists the card (`listed(_:seconds:)` forgets them). Over USB nothing is kept: a cell asks again, as before.
     @ObservationIgnored private var thumbnailRefused: Set<CameraItem.ID> = []
     @ObservationIgnored private var thumbnailWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
     @ObservationIgnored private var nextThumbnailWaiter = 0
@@ -475,6 +479,8 @@ public final class BrowseModel {
     /// Waits, over Wi-Fi, for a reason to prepare the link again: Reconnect or Try Again, or the app in front after a
     /// return (once per return; after a failed open, only when discovery says so). Nil when the calling task is cancelled.
     private func waitToReopen() async -> String? {
+        waitingToReopen = true
+        defer { waitingToReopen = false }
         while true {
             if Task.isCancelled { return nil }
             if reopenTapped {
@@ -488,6 +494,8 @@ public final class BrowseModel {
                     if Task.isCancelled { return nil }
                     return "back in front after a join that needed the app"
                 }
+                // A tap or a scene change during that suspension found no one parked: look again before parking.
+                continue
             }
             await nextReopenWake()
         }
@@ -526,7 +534,7 @@ public final class BrowseModel {
         case .active:
             guard !inForeground else { return }
             inForeground = true
-            if reopenWaiter != nil { reopenDueOnReturn = true }
+            if waitingToReopen { reopenDueOnReturn = true }
             wakeReopen()
         case .inactive:
             break
@@ -606,6 +614,9 @@ public final class BrowseModel {
         phase = .listed
         listedAt = .now
         linkGeneration += 1
+        // Each new link gets one fresh ask: a refusal may have been the old session's (both links map unknown answers to
+        // `unreadableItem`).
+        thumbnailRefused.removeAll()
         services.log.note(listingLine(items, seconds: seconds))
     }
 
@@ -715,9 +726,10 @@ public final class BrowseModel {
     /// (`USBLink`); over Wi-Fi `IPLink` sends them one at a time, in the order asked, ahead of queued downloads (it has no
     /// cap of its own). Cancelled with the calling task, so a cell scrolled away gives up its place (a GetThumb already on
     /// the wire runs to its end). Over Wi-Fi, while the link is being reached, the card read or the link reconnected, it
-    /// waits (bounded by `BrowseTiming.thumbnailWait` and the calling task) instead of giving up. Nil when it can't be had;
-    /// a file the camera can never give a thumbnail for (`unreadableItem`, `itemNotFound`) isn't asked again, while any
-    /// other failure is asked again next time (the cell asks again on each new link, `linkGeneration`).
+    /// waits (bounded by `BrowseTiming.thumbnailWait` and the calling task) instead of giving up. Nil when it can't be had.
+    /// Over Wi-Fi a file whose thumbnail the link refused (`unreadableItem`, `itemNotFound`) isn't asked again on that link,
+    /// while any other failure is asked again next time; the cell asks again on each new link (`linkGeneration`), and the
+    /// new link is asked once more even for a refused file. Over USB every failure is asked again next time, as before.
     public func thumbnail(for id: CameraItem.ID) async -> Data? {
         if let data = thumbnails[id] { return data }
         if thumbnailRefused.contains(id) { return nil }
@@ -751,7 +763,7 @@ public final class BrowseModel {
                 services.log.note("browse: thumbnail failed (first on this screen): \(error.kind.rawValue)"
                     + (error.detail.map { " (\($0))" } ?? ""))
             }
-            if error.kind == .unreadableItem || error.kind == .itemNotFound { thumbnailRefused.insert(id) }
+            if reconnects, error.kind == .unreadableItem || error.kind == .itemNotFound { thumbnailRefused.insert(id) }
             result = nil
         }
         if tally.asked % 100 == 0 { logThumbnails("every 100 asked") }

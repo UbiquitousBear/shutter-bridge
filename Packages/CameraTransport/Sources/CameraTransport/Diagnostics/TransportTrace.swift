@@ -50,13 +50,16 @@ public struct WirelessStepTimes: Sendable, Equatable {
     /// From the gateway (or, inside the stay, the start) to the camera's session open: the port, PTP/IP and the card's
     /// listing poll.
     public var openingSession: Duration
+    /// Held while the app was away (`WirelessPhase.awaitingFront`), so the four add up to about `total`.
+    public var held: Duration
 
     public init(total: Duration = .zero, handingOff: Duration = .zero, joining: Duration = .zero,
-                openingSession: Duration = .zero) {
+                openingSession: Duration = .zero, held: Duration = .zero) {
         self.total = total
         self.handingOff = handingOff
         self.joining = joining
         self.openingSession = openingSession
+        self.held = held
     }
 }
 

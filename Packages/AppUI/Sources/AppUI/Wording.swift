@@ -99,8 +99,8 @@ public enum BrowseWording {
     public static let readingTitle = "Reading the Card"
 
     /// While a Wi-Fi camera is reached (Bluetooth, the join, the session) and no last-known card is shown: the card
-    /// isn't being read yet, so the screen doesn't say it is (bench 19.1). The detail is the connection's step when the
-    /// status has one (`WiFiImportModel.activityLine`), else `connectingDetail`.
+    /// isn't being read yet, so the screen doesn't say it is (bench 19.1). The detail is always `connectingDetail`: the
+    /// connection's step is in the status strip above (`WiFiImportModel.activityLine`).
     public static let connectingTitle = "Connecting to the Camera"
     public static let connectingDetail = "Shutter Bridge is reaching the camera over Bluetooth and its Wi-Fi."
     /// The bar's subtitle while a Wi-Fi camera is reached under its last-known card.
@@ -880,9 +880,10 @@ public enum WiFiWording {
     public static let failedTitle = "Couldn't Connect to the Camera"
 
     /// A connection that ended because the join needed the app in front (`.paused(.needsJoin)` as an open failure; bench
-    /// 19.1: the session holds the join while the app is away, then lets go).
-    public static let needsAppToJoin = "Shutter Bridge has to be open to join the camera's Wi-Fi. Open the camera again "
-        + "and stay in the app until iOS asks to join."
+    /// 19.1: the session holds the join while the app is away, then lets go). Worded for both places it shows: Browse's
+    /// failed state, with Try Again, and the Import screen. To confirm with Shamil.
+    public static let needsAppToJoin = "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in "
+        + "Shutter Bridge until iOS asks to join."
 
     /// Why the connection failed, with a next step in every line; nil for a cancel the person asked for.
     public static func failure(_ failure: WirelessFailure) -> String? {

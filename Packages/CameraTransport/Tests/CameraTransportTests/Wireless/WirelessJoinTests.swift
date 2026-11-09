@@ -457,6 +457,55 @@ struct WirelessJoinTests {
         #expect(rig.connector.count == 1)
     }
 
+    @Test func leavingAgainDuringTheSwitchOnOnReturnHoldsBeforeTheJoin() async throws {
+        // Away from 2 s to 90 s; the camera's Wi-Fi went off at 56 s. The switch-on on return runs from 90 s to 95 s, and
+        // the person leaves again at 91 s, coming back at 120 s: nothing is applied while away.
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2))),
+                            .init(delay: .seconds(5), during: rig.away(after: .seconds(1)))])
+        rig.link.schedule(status: 0, after: .seconds(56), notify: false)
+        rig.comeBack(at: .seconds(90))
+        rig.comeBack(at: .seconds(120))
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.handoff.kinds == [.run, .run])
+        #expect(rig.handoff.calls.map(\.at) == [.zero, .seconds(90)])
+        #expect(rig.joiner.applyTimes == [.seconds(120)])
+        #expect(rig.connector.count == 1)
+    }
+
+    @Test func aReturnTheAppHasAlreadyLeftAgainKeepsHolding() async throws {
+        // At 30 s the session is told the app is back, but the scene already reads background (it left again at once):
+        // the hold goes on until the real return at 45 s.
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        let session = rig.session
+        rig.clock.schedule(at: .seconds(30)) { Task { await session.appBecameActive() } }
+        rig.comeBack(at: .seconds(45))
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.joiner.applyTimes == [.seconds(45)])
+        #expect(rig.handoff.kinds == [.run])
+        await rig.phases.waitFor(.ready)
+        #expect(rig.phases.all == [.idle, .handingOff, .awaitingFront, .joining, .openingSession, .ready])
+    }
+
+    @Test func aHoldAfterTheWindowMovesToTheHandoffWhileCC09IsRead() async throws {
+        // Back at 90 s, past the camera's 50 s: the phase leaves `.awaitingFront` at once, so the person isn't asked to
+        // come back while CC09 is read; the held time is its own step.
+        let recorder = TraceRecorder()
+        let rig = Rig(trace: recorder.trace)
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        rig.comeBack(at: .seconds(90))
+        _ = try #require(opened(await rig.prepare()))
+        await rig.phases.waitFor(.ready)
+        #expect(rig.phases.all == [.idle, .handingOff, .awaitingFront, .handingOff, .joining, .openingSession, .ready])
+        let ended = recorder.all.compactMap { event -> WirelessStepTimes? in
+            if case let .preparationEnded(true, times) = event { times } else { nil }
+        }
+        let times = try #require(ended.last)
+        #expect(times.held == .seconds(85))
+        #expect(times.handingOff + times.joining + times.openingSession + times.held == times.total)
+    }
+
     @Test func notInForegroundWhileAwayHoldsAndAppliesAgainOnReturn() async throws {
         // iOS refuses the first `apply` (code 14) as the person leaves; they come back at 20 s. The refusal is not a failed
         // try: the join after it still gets its two.

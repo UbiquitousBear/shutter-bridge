@@ -72,6 +72,10 @@ struct TransportTraceWordingTests {
             total: .milliseconds(18_440), handingOff: .milliseconds(7_200), joining: .milliseconds(6_100),
             openingSession: .milliseconds(5_140))))
             == "wifi join: ready after 18.4 s (hand-off 7.2 s, join 6.1 s, session 5.1 s)")
+        #expect(line(.preparationEnded(succeeded: true, times: WirelessStepTimes(
+            total: .seconds(60), handingOff: .seconds(7), joining: .seconds(6), openingSession: .seconds(5),
+            held: .seconds(42))))
+            == "wifi join: ready after 60.0 s (hand-off 7.0 s, join 6.0 s, session 5.0 s, held while away 42.0 s)")
     }
 
     @Test func theHandoffsLines() {
@@ -123,7 +127,8 @@ struct TransportTraceWordingTests {
         thumbs.firstAfterOpen = .milliseconds(420)
         #expect(line(.linkLost(.timedOut(.transaction), thumbnails: thumbs))
             == "wifi link: the session was lost: no answer in time; GetThumb asked 3, answered 1 (7397 B), refused 1 "
-            + "(OperationNotSupported 1), timed out 1, other failures 0, not listed 0, the first answered 0.4 s after the open")
+            + "(OperationNotSupported 1), timed out 1, other failures 0, not listed 0, not sent 0, the first answered 0.4 s "
+            + "after the open")
         var seen = IPLinkDiagnostics()
         seen.sessionsOpened = 2
         seen.sessionsLost = 1
@@ -135,7 +140,11 @@ struct TransportTraceWordingTests {
             + "0x9211 resumes 1, reads 9, refused 0; transfers aborted 0; GetThumb asked 0")
         seen.thumbnails.notListed = 12
         #expect(line(.linkClosed(seen)).hasSuffix("; GetThumb asked 0, answered 0 (0 B), refused 0, timed out 0, other "
-            + "failures 0, not listed 12"))
+            + "failures 0, not listed 12, not sent 0"))
+        seen.thumbnails = IPThumbnailDiagnostics()
+        seen.thumbnails.notSent = 5
+        #expect(line(.linkClosed(seen)).hasSuffix("; GetThumb asked 0, answered 0 (0 B), refused 0, timed out 0, other "
+            + "failures 0, not listed 0, not sent 5"))
         #expect(line(.linkClosed(IPLinkDiagnostics())) == "wifi link: closed without opening a session")
     }
 

@@ -357,8 +357,8 @@ struct WiFiImportModelTests {
 
     @Test func theJoinsFailuresSayWhatReallyHappened() {
         // A pause for a join, as an open failure: the app had to be open.
-        let needsApp = "Shutter Bridge has to be open to join the camera's Wi-Fi. Open the camera again and stay in the "
-            + "app until iOS asks to join."
+        let needsApp = "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in Shutter Bridge "
+            + "until iOS asks to join."
         #expect(WiFiWording.failure(.paused(.needsJoin)) == needsApp)
         #expect(WiFiWording.failure(.join(.notInForeground)) == needsApp)
         // The strip's step for the same pause is unchanged.

@@ -206,6 +206,35 @@ struct IPLinkTraceAgainstSimulatorTests {
         #expect(seen.firstAfterOpen == nil)
     }
 
+    /// Thumbnails queued behind one that is never answered sent nothing: cancelled while queued (the grid scrolled) or
+    /// still queued when the session is lost, they are counted as not sent, not as asked or as more timeouts.
+    @Test func thumbnailsQueuedBehindAnUnansweredOneAreCountedAsNotSent() async throws {
+        let recorder = Recorder()
+        let bench = try LinkBench(trace: recorder.trace) { $0.timing.reply = .seconds(1) }
+        try await bench.open()
+        let item = try #require(try await bench.link.list().first)
+        bench.camera.withResponder { $0.silence(forNext: .getThumb) }
+        let link = bench.link
+        let asks = (0..<6).map { _ in
+            Task { () -> Bool in
+                do { _ = try await link.thumbnail(of: item.id) } catch { return false }
+                return true
+            }
+        }
+        // Scroll two away while the first holds the turn (the reply limit is 1 s on the real clock).
+        try await Task.sleep(for: .milliseconds(100))
+        asks[4].cancel()
+        asks[5].cancel()
+        var succeeded = 0
+        for ask in asks where await ask.value { succeeded += 1 }
+        #expect(succeeded == 0)
+        await bench.link.close()
+        let seen = try #require(recorder.closed).thumbnails
+        #expect(seen.asked == 1 && seen.timeouts == 1)
+        #expect(seen.notSent == 5)
+        #expect(seen.otherFailures == 0 && seen.answered == 0)
+    }
+
     @Test func withoutATraceNothingIsRecordedAndTheLinkBehavesAlike() async throws {
         let bench = try LinkBench()
         try await bench.open()

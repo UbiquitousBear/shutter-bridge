@@ -132,10 +132,39 @@ final class Flag: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Bool
     private var asked = 0
+    private var gate: AsyncStream<Void>?
+    private var release: AsyncStream<Void>.Continuation?
     init(_ value: Bool) { self.value = value }
     func set(_ value: Bool) { lock.withLock { self.value = value } }
     var asks: Int { lock.withLock { asked } }
     func ask() -> Bool { lock.withLock { asked += 1; return value } }
+
+    /// The next answer waits until `releaseAnswer()` (or its task's cancellation); it is counted as asked at once.
+    func holdAnswer() {
+        let (stream, sink) = AsyncStream<Void>.makeStream()
+        lock.withLock { gate = stream; release = sink }
+    }
+
+    func releaseAnswer() {
+        let sink = lock.withLock { () -> AsyncStream<Void>.Continuation? in
+            defer { gate = nil; release = nil }
+            return release
+        }
+        sink?.finish()
+    }
+
+    /// `ask()`, after `holdAnswer()`'s gate when one is set.
+    func answer() async -> Bool {
+        let (held, value) = lock.withLock { () -> (AsyncStream<Void>?, Bool) in
+            asked += 1
+            return (gate, self.value)
+        }
+        if let held {
+            var iterator = held.makeAsyncIterator()
+            _ = await iterator.next()
+        }
+        return value
+    }
 }
 
 /// A clock for `now` the test moves by hand.
@@ -173,7 +202,7 @@ struct BrowseReconnectTests {
         let log = RecordingLog()
         let leases = LinkLeases()
         var again: (@Sendable () async -> Bool)?
-        if let opensAgain { again = { opensAgain.ask() } }
+        if let opensAgain { again = { await opensAgain.answer() } }
         var now: @Sendable () -> Date = { Date() }
         if let clock { now = { clock.now } }
         let model = BrowseModel(
@@ -407,6 +436,57 @@ struct BrowseReconnectTests {
         let answer = await bounded(asked)
         #expect(answer == .some(nil))
         h.links.releaseOpen()
+        await h.stop()
+    }
+
+    @Test func aTryAgainTappedWhileDiscoveryIsAskedIsNotLost() async {
+        let link = ScriptedWiFiLink(items: card)
+        let opensAgain = Flag(false)
+        let h = start([nil, link], openFailureText: WiFiWording.needsAppToJoin, opensAgain: opensAgain)
+        #expect(await eventuallyLong { h.model.phase == .failed(WiFiWording.needsAppToJoin) })
+        // Back in front: discovery is asked, and Try Again is tapped before it answers.
+        opensAgain.holdAnswer()
+        h.model.scenePhaseChanged(.background)
+        h.model.scenePhaseChanged(.active)
+        #expect(await waitUntil { opensAgain.asks == 1 })
+        h.model.retry()
+        opensAgain.releaseAnswer()
+        // The one tap opens again.
+        #expect(await eventuallyLong { h.model.phase == .listed })
+        #expect(h.links.opens == 2)
+        #expect(h.log.lines.contains("browse: opening again (Try Again)"))
+        await h.stop()
+    }
+
+    @Test func aThumbnailRefusedOnOneLinkIsAskedOnceMoreOnTheNext() async {
+        let first = ScriptedWiFiLink(items: card)
+        let second = ScriptedWiFiLink(items: card)
+        let refusal = CameraLinkFailure(.unreadableItem, detail: "thumbnail: GeneralError")
+        await first.failThumbnail(of: ids[0], with: [refusal, refusal])
+        let h = start([first, second])
+        #expect(await eventuallyLong { h.model.phase == .listed })
+        #expect(await h.model.thumbnail(for: ids[0]) == nil)
+        #expect(await h.model.thumbnail(for: ids[0]) == nil)
+        #expect(await first.thumbnailsAsked == [ids[0]])
+        h.model.scenePhaseChanged(.background)
+        await first.close()
+        #expect(await eventuallyLong { h.model.interruption == .disconnected })
+        h.model.scenePhaseChanged(.active)
+        #expect(await eventuallyLong { h.model.interruption == nil && h.model.linkGeneration == 2 })
+        #expect(await h.model.thumbnail(for: ids[0]) != nil)
+        #expect(await second.thumbnailsAsked == [ids[0]])
+        await h.stop()
+    }
+
+    @Test func overUSBARefusedThumbnailIsAskedAgainAsBefore() async {
+        let usb = CameraDescriptor(id: .init(rawValue: "usb"), name: "Untitled", mode: .usb(.mtp))
+        let link = ScriptedWiFiLink(items: card)
+        await link.failThumbnail(of: ids[0], with: [CameraLinkFailure(.unreadableItem, detail: "thumbnail: unexpected reply")])
+        let h = start([link], camera: usb)
+        #expect(await eventuallyLong { h.model.phase == .listed })
+        #expect(await h.model.thumbnail(for: ids[0]) == nil)
+        #expect(await h.model.thumbnail(for: ids[0]) != nil)
+        #expect(await link.thumbnailsAsked == [ids[0], ids[0]])
         await h.stop()
     }
 

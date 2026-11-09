@@ -164,7 +164,7 @@ struct BrowseScreen: View {
             if model.lastKnownListedAt != nil {
                 card(readingSince: since)
             } else {
-                ConnectingView(detail: wifiStatus?.activityLine)
+                ConnectingView()
             }
         case let .reading(since):
             if model.lastKnownListedAt != nil {
@@ -361,11 +361,9 @@ struct BrowseFilterSheet: View {
     }
 }
 
-/// While a Wi-Fi camera is reached and no last-known card is shown: the connection's step (the strip's line) under a
-/// spinner, with no timer, since the card isn't being read yet.
+/// While a Wi-Fi camera is reached and no last-known card is shown: a spinner and a fixed line, with no timer, since the
+/// card isn't being read yet. The connection's step is the status strip's above, so it isn't repeated here.
 struct ConnectingView: View {
-    let detail: String?
-
     var body: some View {
         ContentUnavailableView {
             Label {
@@ -375,7 +373,7 @@ struct ConnectingView: View {
                     .controlSize(.large)
             }
         } description: {
-            Text(detail ?? BrowseWording.connectingDetail)
+            Text(BrowseWording.connectingDetail)
         }
     }
 }
