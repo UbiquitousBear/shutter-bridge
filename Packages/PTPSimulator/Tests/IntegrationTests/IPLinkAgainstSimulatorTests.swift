@@ -154,6 +154,30 @@ struct IPLinkAgainstSimulatorTests {
         await bench.link.close()
     }
 
+    /// What the app keys a Wi-Fi camera by (wireless plan W15): the DeviceInfo serial, only once a session has opened.
+    @Test func itGivesTheSerialAsKeyMaterialOnceOpenAndOnlyThen() async throws {
+        let bench = try Bench()
+        let identifying: any CameraIdentifying = bench.link
+        let materialBefore = await identifying.cameraKeyMaterial()
+        let modelBefore = await identifying.cameraModelName()
+        #expect(materialBefore == nil && modelBefore == nil)
+        try await bench.open()
+        let serial = try CapturedA7C2.deviceInfo(.ptpIP).serialNumber
+        // The captured fixture's serial is zeroed before commit; an empty one is no material at all.
+        #expect(await identifying.cameraKeyMaterial() == (serial.isEmpty ? nil : serial))
+        #expect(await identifying.cameraModelName() == "ILCE-7CM2")
+        await bench.link.close()
+    }
+
+    @Test func aCameraThatReportsASerialGivesIt() async throws {
+        var info = try CapturedA7C2.deviceInfo(.ptpIP)
+        info.serialNumber = "TEST-SERIAL-0001"
+        let bench = try Bench(deviceInfo: info)
+        try await bench.open()
+        #expect(await bench.link.cameraKeyMaterial() == "TEST-SERIAL-0001")
+        await bench.link.close()
+    }
+
     @Test func aChangedSerialIsRefusedBeforeAnythingIsListed() async throws {
         let bench = try Bench { $0.knownSerial = "a serial this camera doesn't have" }
         let failure = await #expect(throws: CameraLinkFailure.self) { try await bench.open() }

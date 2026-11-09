@@ -4,15 +4,35 @@ import Foundation
 import Observation
 
 /// What the Cameras screen needs from discovery: `USBCameraBrowser` in the app (its conformance sits behind
-/// `#if canImport(ImageCaptureCore)`), a fake in tests.
+/// `#if canImport(ImageCaptureCore)`), `WiFiCameraSource` for the cameras set up over Wi-Fi, `CompositeDiscovery` for
+/// both together, a fake in tests.
 public protocol CameraDiscovery: Actor {
     /// Cameras appearing and going away. One consumer: `CamerasModel`.
-    nonisolated var discoveries: AsyncStream<USBDiscoveryEvent> { get }
+    nonisolated var discoveries: AsyncStream<CameraDiscoveryEvent> { get }
     /// Asks for access and starts looking. Throws `notAuthorised` when access is denied or restricted. Starting a
     /// started discovery does nothing.
     func start() async throws(CameraLinkFailure)
-    /// The link for an attached camera. Throws `disconnected` if it has gone.
+    /// The link for an attached camera. Throws `disconnected` if it has gone. Over Wi-Fi it is an open link, reached
+    /// by the join when one is needed (`WiFiCameraSource`), so it can take tens of seconds.
     func cameraLink(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink
+    /// The catalogue's key for the camera, when discovery knows it without a link: a Wi-Fi camera that has connected
+    /// before (its serial's key, kept in the catalogue). Nil when the key has to be read from the link (USB, or a Wi-Fi
+    /// camera not yet connected). It lets the Cameras model find a camera by key without joining every Wi-Fi camera
+    /// to compare, and Browse show the last-known card before the join is over.
+    func knownKey(for id: CameraDescriptor.ID) async -> CameraKey?
+    /// Why the last `cameraLink(for:)` of this camera failed, in words that say what to do next, when discovery knows
+    /// more than the failure's kind says (a Wi-Fi join that was declined, Bluetooth off…). Nil: the kind's own wording.
+    func openFailureText(for id: CameraDescriptor.ID) async -> String?
+    /// Whether the last `cameraLink(for:)` of this camera didn't start because the person chose not to continue (Not Now
+    /// on the Local Network explanation). The screen that asked closes with no notice: the camera didn't go away.
+    func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool
+}
+
+extension CameraDiscovery {
+    /// USB reads the key from the link (`CameraKeys`), so it knows none beforehand.
+    public func knownKey(for id: CameraDescriptor.ID) async -> CameraKey? { nil }
+    public func openFailureText(for id: CameraDescriptor.ID) async -> String? { nil }
+    public func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool { false }
 }
 
 /// What Browse uses besides the link: the JPEG maker, the clipboard, the temporary folders and the bench log.
@@ -129,21 +149,50 @@ public final class CamerasModel: CameraFinding {
                 try await discovery.cameraLink(for: id)
             },
             services: services,
+            openFailureText: { await discovery.openFailureText(for: id) },
+            openWasDeclined: { await discovery.openWasDeclined(for: id) },
             onGone: { [weak self] id in self?.cameraWentAway(id) },
-            catalogue: catalogue.map { BrowseCatalogue(store: $0, cameraKey: cameraKey) },
+            onDeclined: { [weak self] id in self?.openWasDeclined(id) },
+            catalogue: catalogue.map {
+                BrowseCatalogue(store: $0, cameraKey: cameraKey, knownKey: { await discovery.knownKey(for: id) })
+            },
             importer: importModel,
             leases: leases
         )
     }
 
     /// A link to the connected camera whose catalogue key is `key`, for the import to carry on through after a
-    /// removal. Asks discovery for each connected camera's link (cheap: nothing is opened) until one matches.
+    /// removal. A camera whose key discovery knows (a Wi-Fi camera that has connected before) is matched by it, and
+    /// only the match is opened, so no other Wi-Fi camera is joined to be compared. For the rest, asks discovery for
+    /// each camera's link (cheap over USB: nothing is opened) until one matches.
     public func link(forCameraWith key: CameraKey) async -> (any CameraLink)? {
         for camera in cameras {
+            if let known = await discovery.knownKey(for: camera.id) {
+                guard known == key else { continue }
+                return try? await discovery.cameraLink(for: camera.id)
+            }
+            // A Wi-Fi camera with no key yet has never connected: no job can be under its key, and asking for its
+            // link would start a join just to find that out.
+            if camera.carrier == .wifi { continue }
             guard let link = try? await discovery.cameraLink(for: camera.id) else { continue }
             if await cameraKey(camera, link) == key { return link }
         }
         return nil
+    }
+
+    /// What the camera's row may say about the device: its battery level and the card's free space, only for a link that
+    /// reports them (`CameraLinkCapabilities.reportsBatteryAndFreeSpace`; Wi-Fi's does not, B:70). `nil` for a value
+    /// nobody has read: unknown is never shown as 0. The app reads neither over USB yet (`unverified`), so today the
+    /// rule has nothing to show; it is here so a Wi-Fi row can never grow a "0%" or "0 bytes free".
+    public func deviceStatusLines(for camera: CameraDescriptor, batteryPercent: Int? = nil,
+                                  freeBytes: UInt64? = nil) -> [String] {
+        CamerasWording.deviceStatus(carrier: camera.carrier, batteryPercent: batteryPercent, freeBytes: freeBytes)
+    }
+
+    /// The person declined to open the camera (Not Now on the Local Network explanation): back to Cameras, with no message,
+    /// since nothing went wrong.
+    func openWasDeclined(_ id: CameraDescriptor.ID) {
+        path.removeAll { $0.id == id }
     }
 
     /// The camera went away: if it is being browsed, back to Cameras with a message.
@@ -155,7 +204,7 @@ public final class CamerasModel: CameraFinding {
         noticeCamera = id
     }
 
-    func apply(_ event: USBDiscoveryEvent) {
+    func apply(_ event: CameraDiscoveryEvent) {
         switch event {
         case let .appeared(camera):
             if notice != nil, camera.id == noticeCamera {

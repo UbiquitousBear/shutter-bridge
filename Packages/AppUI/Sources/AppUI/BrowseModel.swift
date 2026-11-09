@@ -48,10 +48,16 @@ public struct BrowseCatalogue: Sendable {
     public var store: any CatalogueStore
     /// The camera's key, worked out once the link is in hand (`CameraKeys`).
     public var cameraKey: CameraKeying
+    /// The camera's key when it is known before the link is open (`CameraDiscovery.knownKey(for:)`: a Wi-Fi camera that
+    /// has connected before), so the last-known card shows while the join and the session open. Nil, the default,
+    /// shows it once the link is in hand (USB, where opening is quick).
+    public var knownKey: (@Sendable () async -> CameraKey?)?
 
-    public init(store: any CatalogueStore, cameraKey: @escaping CameraKeying) {
+    public init(store: any CatalogueStore, cameraKey: @escaping CameraKeying,
+                knownKey: (@Sendable () async -> CameraKey?)? = nil) {
         self.store = store
         self.cameraKey = cameraKey
+        self.knownKey = knownKey
     }
 }
 
@@ -145,7 +151,10 @@ public final class BrowseModel {
     /// The zone identities are made in for this screen (fixed when the link opens, as the engine fixes its own per
     /// job), so Browse's badges follow the engine's rule.
     @ObservationIgnored private var zone = TimeZone.current
+    @ObservationIgnored private let openFailureText: (@Sendable () async -> String?)?
+    @ObservationIgnored private let openWasDeclined: (@Sendable () async -> Bool)?
     @ObservationIgnored private let onGone: @MainActor (CameraDescriptor.ID) -> Void
+    @ObservationIgnored private let onDeclined: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private var link: (any CameraLink)?
@@ -171,11 +180,19 @@ public final class BrowseModel {
     ///     nothing.
     ///   - leases: Shared with the import, so leaving Browse doesn't close a link a job still uses. A fresh one (the
     ///     default) closes the link when Browse goes.
+    ///   - openFailureText: Asked when opening the link failed: a line that says why and what to do next, for a camera
+    ///     whose discovery knows more than the failure's kind (a Wi-Fi camera: `CameraDiscovery.openFailureText`).
+    ///     Nil, or a nil answer, shows the kind's own wording.
+    ///   - openWasDeclined: Asked when opening the link failed: true when the person chose not to continue (Not Now on the
+    ///     Local Network explanation), so `onDeclined` closes the screen with no notice instead of `onGone`'s.
     public init(
         camera: CameraDescriptor,
         openLink: @escaping @Sendable () async throws(CameraLinkFailure) -> any CameraLink,
         services: BrowseServices,
+        openFailureText: (@Sendable () async -> String?)? = nil,
+        openWasDeclined: (@Sendable () async -> Bool)? = nil,
         onGone: @escaping @MainActor (CameraDescriptor.ID) -> Void,
+        onDeclined: @escaping @MainActor (CameraDescriptor.ID) -> Void = { _ in },
         catalogue: BrowseCatalogue? = nil,
         importer: (any BrowseImporting)? = nil,
         leases: LinkLeases = LinkLeases(),
@@ -187,7 +204,10 @@ public final class BrowseModel {
         self.camera = camera
         self.openLink = openLink
         self.services = services
+        self.openFailureText = openFailureText
+        self.openWasDeclined = openWasDeclined
         self.onGone = onGone
+        self.onDeclined = onDeclined
         self.catalogue = catalogue
         self.importer = importer
         self.leases = leases
@@ -207,20 +227,47 @@ public final class BrowseModel {
         isRunning = true
         defer { isRunning = false }
         phase = .reading(since: now())
+        zone = TimeZone(identifier: TimeZone.current.identifier) ?? TimeZone.current
+        // Over Wi-Fi opening the link is the join, tens of seconds: the camera's last-known card shows meanwhile (B:101),
+        // under the key the catalogue already has for it.
+        var shownEarlyFor: CameraKey?
+        if let catalogue, let early = await catalogue.knownKey?() {
+            cameraKey = early
+            await showLastKnown(for: early, from: catalogue.store)
+            if lastKnownListedAt != nil { shownEarlyFor = early }
+        }
         let link: any CameraLink
         do throws(CameraLinkFailure) {
             link = try await openLink()
         } catch {
-            if !Task.isCancelled { listingFailed(error) }
+            if shownEarlyFor != nil { clearLastKnown() }
+            if !Task.isCancelled {
+                if await openWasDeclined?() == true {
+                    // The person chose not to continue: back to Cameras, with nothing said.
+                    phase = .gone
+                    onDeclined(camera.id)
+                } else {
+                    listingFailed(error, text: await openFailureText?())
+                }
+            }
             return
         }
         self.link = link
         leases.acquire(link)
-        zone = TimeZone(identifier: TimeZone.current.identifier) ?? TimeZone.current
         if let catalogue {
             let key = await catalogue.cameraKey(camera, link)
-            cameraKey = key
-            await showLastKnown(for: key, from: catalogue.store)
+            if CameraKeys.isUnidentifiedWiFi(key) {
+                // A Wi-Fi camera that gave no serial and has no key of its own: every one would share this key, so
+                // nothing is listed, saved or imported under it.
+                cameraKey = nil
+                if shownEarlyFor != nil { clearLastKnown() }
+                services.log.note("browse: the camera has no key of its own, so nothing is saved or imported")
+            } else {
+                cameraKey = key
+                // Another camera answered than the one whose card is shown: its card is not this one's.
+                if let shown = shownEarlyFor, shown != key { clearLastKnown() }
+                await showLastKnown(for: key, from: catalogue.store)
+            }
         }
         let events = link.events
         // Subscribed before the listing, so an import that finishes while the card is read is still noticed.
@@ -311,7 +358,13 @@ public final class BrowseModel {
         }
     }
 
-    private func listingFailed(_ failure: CameraLinkFailure) {
+    /// `text`, when there is one, is the reason with its next step (Wi-Fi): it is shown whatever the kind, so a failed join
+    /// isn't taken for a camera that went away.
+    private func listingFailed(_ failure: CameraLinkFailure, text: String? = nil) {
+        if let text {
+            phase = .failed(text)
+            return
+        }
         switch failure.kind {
         case .disconnected: cameraGone()
         case .modeListsNoFiles: phase = .listsNoFiles
@@ -596,6 +649,13 @@ public final class BrowseModel {
         return "browse: listed \(listed.count) files in \(seconds) s\(keyText), \(unfiled) with no folder "
             + "(\(CamerasWording.modeLine(camera.mode)) at discovery); newest: "
             + (newest.isEmpty ? "none" : newest.joined(separator: ", "))
+    }
+
+    /// Takes the last-known card off the screen (it was shown before the link opened, and the link didn't open, or opened
+    /// to another camera).
+    private func clearLastKnown() {
+        show([])
+        lastKnownListedAt = nil
     }
 
     /// The catalogue's last listing of this camera, shown at once while the card is read (decision 7).

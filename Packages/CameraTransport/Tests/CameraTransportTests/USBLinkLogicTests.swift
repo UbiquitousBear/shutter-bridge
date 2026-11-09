@@ -374,6 +374,15 @@ struct USBDiscoveryEventTests {
         #expect(events.first == .appeared(d))
         #expect(events.last == .disappeared(.init(rawValue: "u")))
     }
+
+    /// Every source reports the same event (wireless plan W15); USB's name for it is an alias, not a second type.
+    @Test func theUSBNameIsTheCommonDiscoveryEvent() {
+        let d = CameraDescriptor(id: .init(rawValue: "w"), name: "Camera", mode: .wifi(.cameraNetwork))
+        let common: CameraDiscoveryEvent = .appeared(d)
+        let usb: USBDiscoveryEvent = common
+        #expect(usb == .appeared(d))
+        #expect(CameraDiscoveryEvent.disappeared(d.id) == USBDiscoveryEvent.disappeared(d.id))
+    }
 }
 
 // MARK: - Review fixes (8 Nov)
