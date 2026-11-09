@@ -69,11 +69,25 @@ public struct BrowseCatalogue: Sendable {
 ///
 /// The screen's `.task` calls `run()`, which holds the link (`LinkLeases`) until the task is cancelled (the screen
 /// went away) and then lets go of it; the link closes unless an import still uses it.
+///
+/// **Over Wi-Fi the link can go while the screen stays** (bench 19.1, 9 Nov). Opening it is the join, so the screen says
+/// it is connecting (`Phase.connecting`) until the link is in hand, and only then reads the card. When the camera's session
+/// is lost with the app in front and nothing else holds the link, Browse reopens the same link and lists again, reusing
+/// what it knows (`ReusingListing`). When the link is let go (the app went to the background with Browse open and no
+/// import: the phone leaves the camera's network) or can't be reopened, the card stays on screen with a strip saying so
+/// and Reconnect (`interruption`); coming back to the app reconnects by itself, once per return, through `openLink` (which
+/// prepares again), and the selection and the thumbnails already fetched are kept. A failed open offers Try Again, and on
+/// the way back to the app opens again by itself when discovery says so (`opensAgainOnReturn`: a join that needed the app
+/// in front). Nothing reconnects while the app is in the background. Over USB none of this applies: Browse behaves as it
+/// always has.
 @MainActor
 @Observable
 public final class BrowseModel {
     public enum Phase: Sendable, Hashable {
-        /// Opening the link and waiting for ImageCaptureCore's catalogue, since `since`.
+        /// Over Wi-Fi: reaching the camera (Bluetooth, the join, the session), since `since`. The card isn't being read
+        /// yet; `reading` follows once the link is in hand.
+        case connecting(since: Date)
+        /// Opening the link and waiting for ImageCaptureCore's catalogue (over Wi-Fi: listing the card), since `since`.
         case reading(since: Date)
         case listed
         /// The catalogue completed at once with no files: Remote Shoot (PC Remote), or an empty card in MTP.
@@ -81,6 +95,14 @@ public final class BrowseModel {
         case failed(String)
         /// The camera went away; the Cameras screen takes over.
         case gone
+    }
+
+    /// The link went away under a card that is still shown (Wi-Fi): what the strip above the card says.
+    public enum Interruption: Sendable, Hashable {
+        /// Getting the link back: the same link reopened after its session was lost, or a new one prepared.
+        case reconnecting
+        /// The link was let go or lost and isn't back: Reconnect, or coming back to the app, prepares a new one.
+        case disconnected
     }
 
     /// Why a file can't be selected.
@@ -95,7 +117,21 @@ public final class BrowseModel {
     }
 
     public let camera: CameraDescriptor
-    public private(set) var phase: Phase
+    public private(set) var phase: Phase {
+        didSet { if !waitsForLink { resumeThumbnailWaiters() } }
+    }
+    /// Set while the link has gone under a shown card (Wi-Fi only); nil when there is nothing to say.
+    public private(set) var interruption: Interruption? {
+        didSet { if !waitsForLink { resumeThumbnailWaiters() } }
+    }
+    /// Why the last reconnect failed, with its next step, under the disconnected strip (Wi-Fi: the discovery's failure
+    /// text); nil when there is none.
+    public private(set) var interruptionDetail: String?
+    /// Goes up each time a link has listed the card, so a cell still without a thumbnail asks again on the new link (the
+    /// cell's task is keyed by it, `ThumbnailTaskID`).
+    public private(set) var linkGeneration = 0
+    /// True after a failed open over Wi-Fi, while Try Again would prepare the link again (`retry()`).
+    public private(set) var canReopen = false
     /// The card as the grid shows it: filtered, by day, newest first.
     public private(set) var sections: [CardSection] = []
     /// When the shown card was listed, while it is the catalogue's last-known card rather than the live one; nil
@@ -153,6 +189,7 @@ public final class BrowseModel {
     @ObservationIgnored private var zone = TimeZone.current
     @ObservationIgnored private let openFailureText: (@Sendable () async -> String?)?
     @ObservationIgnored private let openWasDeclined: (@Sendable () async -> Bool)?
+    @ObservationIgnored private let opensAgainOnReturn: (@Sendable () async -> Bool)?
     @ObservationIgnored private let onGone: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let onDeclined: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let now: @Sendable () -> Date
@@ -173,6 +210,31 @@ public final class BrowseModel {
     @ObservationIgnored private var badgeReadsStarted = 0
     @ObservationIgnored private var badgeReadsApplied = 0
     @ObservationIgnored private let keyTags: CameraKeyTags
+    // The link going away (Wi-Fi).
+    /// Whether the app is in front, as `scenePhaseChanged(_:)` last said.
+    @ObservationIgnored private var inForeground = true
+    /// How many times the app has gone to the background, and the count when the current hold or open began: a hold that
+    /// ends with the count moved ended with (or after) a trip away, so the next return reconnects by itself.
+    @ObservationIgnored private var leaves = 0
+    @ObservationIgnored private var leavesAtAttempt = 0
+    /// One automatic reconnect is due once the app is in front (once per return).
+    @ObservationIgnored private var reopenDueOnReturn = false
+    /// Reconnect or Try Again was tapped while Browse waits to prepare the link again.
+    @ObservationIgnored private var reopenTapped = false
+    @ObservationIgnored private var reopenWaiter: CheckedContinuation<Void, Never>?
+    /// Why the latest hold of a link ended, for the log.
+    @ObservationIgnored private var linkEnd: LinkEnd = .eventsFinished
+    /// When the card was last listed on a link, for the log.
+    @ObservationIgnored private var listedAt: ContinuousClock.Instant?
+    /// The last open failed (rather than a listing): the failed state's title says the camera couldn't be reached.
+    @ObservationIgnored private var openFailed = false
+    // Thumbnails.
+    /// Files whose thumbnail the camera can never give (`unreadableItem`, `itemNotFound`): not asked again.
+    @ObservationIgnored private var thumbnailRefused: Set<CameraItem.ID> = []
+    @ObservationIgnored private var thumbnailWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    @ObservationIgnored private var nextThumbnailWaiter = 0
+    @ObservationIgnored private var tally = ThumbnailTally()
+    @ObservationIgnored private var undecodable: Set<CameraItem.ID> = []
 
     /// - Parameters:
     ///   - catalogue: The last-known card and the already-imported badge; without it Browse shows neither.
@@ -185,12 +247,15 @@ public final class BrowseModel {
     ///     Nil, or a nil answer, shows the kind's own wording.
     ///   - openWasDeclined: Asked when opening the link failed: true when the person chose not to continue (Not Now on the
     ///     Local Network explanation), so `onDeclined` closes the screen with no notice instead of `onGone`'s.
+    ///   - opensAgainOnReturn: Asked, over Wi-Fi, when the app comes back to the front after an open failed: true to open
+    ///     again by itself (`CameraDiscovery.opensAgainOnReturn(for:)`: the join needed the app in front). Nil: never.
     public init(
         camera: CameraDescriptor,
         openLink: @escaping @Sendable () async throws(CameraLinkFailure) -> any CameraLink,
         services: BrowseServices,
         openFailureText: (@Sendable () async -> String?)? = nil,
         openWasDeclined: (@Sendable () async -> Bool)? = nil,
+        opensAgainOnReturn: (@Sendable () async -> Bool)? = nil,
         onGone: @escaping @MainActor (CameraDescriptor.ID) -> Void,
         onDeclined: @escaping @MainActor (CameraDescriptor.ID) -> Void = { _ in },
         catalogue: BrowseCatalogue? = nil,
@@ -206,6 +271,7 @@ public final class BrowseModel {
         self.services = services
         self.openFailureText = openFailureText
         self.openWasDeclined = openWasDeclined
+        self.opensAgainOnReturn = opensAgainOnReturn
         self.onGone = onGone
         self.onDeclined = onDeclined
         self.catalogue = catalogue
@@ -213,70 +279,135 @@ public final class BrowseModel {
         self.leases = leases
         self.now = now
         self.calendar = calendar
-        phase = .reading(since: now())
+        phase = camera.carrier == .wifi ? .connecting(since: now()) : .reading(since: now())
     }
 
     // MARK: - Lifecycle
 
+    /// Why a hold of a link ended, for the log.
+    enum LinkEnd: String, Sendable {
+        /// The link's events finished: it was closed (a leave in the background, or the session let it go).
+        case eventsFinished = "events finished"
+        /// Its session was lost and couldn't be reopened, or was lost with the app away.
+        case sessionLost
+        /// Listing again on a reconnected link failed.
+        case relistFailed = "relist failed"
+    }
+
+    /// How an attempt to open and hold a link ended.
+    private enum Attempt {
+        /// The screen went, the camera went away, or (USB) the link's events ended: nothing more to do.
+        case stopped
+        /// Opening failed and the failed state is shown.
+        case openFailed
+        /// The link ended under the screen (or a reconnect didn't get one).
+        case linkEnded
+    }
+
+    /// Whether this screen's link can come back while the screen stays: Wi-Fi only (USB behaves as it always has).
+    private var reconnects: Bool { camera.carrier == .wifi }
+
     /// Opens the link, shows the last-known card, lists the card, and follows the link's events and the import's
     /// "more files imported" (refreshing the badges on each) until the calling task is cancelled or the link's events
-    /// end, then lets go of the link (closing it unless an import holds it). A second call while one runs does
-    /// nothing.
+    /// end, then lets go of the link (closing it unless an import holds it). Over Wi-Fi it then waits, with the card
+    /// still shown, for Reconnect, Try Again or the app's return, and holds the next link the same way, until the calling
+    /// task is cancelled. A second call while one runs does nothing.
     public func run() async {
         guard !isRunning, phase != .gone else { return }
         isRunning = true
-        defer { isRunning = false }
-        phase = .reading(since: now())
+        defer {
+            isRunning = false
+            canReopen = false
+            resumeThumbnailWaiters()
+            logThumbnails(Task.isCancelled ? "the screen went" : "Browse stopped")
+        }
         zone = TimeZone(identifier: TimeZone.current.identifier) ?? TimeZone.current
-        // Over Wi-Fi opening the link is the join, tens of seconds: the camera's last-known card shows meanwhile (B:101),
-        // under the key the catalogue already has for it.
+        var reconnecting = false
+        while !Task.isCancelled, phase != .gone {
+            switch await attempt(reconnecting: reconnecting) {
+            case .stopped:
+                return
+            case .openFailed:
+                guard reconnects, phase != .gone else { return }
+                canReopen = true
+            case .linkEnded:
+                guard reconnects, !Task.isCancelled, phase != .gone else { return }
+                if case .failed = phase { canReopen = true }
+            }
+            guard let why = await waitToReopen() else { return }
+            canReopen = false
+            reconnecting = showsListedCard
+            if reconnecting { interruptionDetail = nil }
+            services.log.note("browse: \(reconnecting ? "reconnecting" : "opening again") (\(why))")
+        }
+    }
+
+    /// Whether the live card is on screen (as opposed to the last-known card, a failure or nothing).
+    private var showsListedCard: Bool { phase == .listed && lastKnownListedAt == nil }
+
+    /// One open of the link and its hold. `reconnecting`: the live card is on screen and stays while a new link is
+    /// prepared and the card listed again; otherwise the screen connects (Wi-Fi) or reads (USB) from the start.
+    private func attempt(reconnecting: Bool) async -> Attempt {
+        let started = ContinuousClock.now
+        leavesAtAttempt = leaves
         var shownEarlyFor: CameraKey?
-        if let catalogue, let early = await catalogue.knownKey?() {
-            cameraKey = early
-            await showLastKnown(for: early, from: catalogue.store)
-            if lastKnownListedAt != nil { shownEarlyFor = early }
+        if reconnecting {
+            interruption = .reconnecting
+        } else {
+            openFailed = false
+            phase = reconnects ? .connecting(since: now()) : .reading(since: now())
+            // Over Wi-Fi opening the link is the join, tens of seconds: the camera's last-known card shows meanwhile
+            // (B:101), under the key the catalogue already has for it.
+            if let catalogue, let early = await catalogue.knownKey?() {
+                cameraKey = early
+                await showLastKnown(for: early, from: catalogue.store)
+                if lastKnownListedAt != nil { shownEarlyFor = early }
+            }
         }
         let link: any CameraLink
         do throws(CameraLinkFailure) {
             link = try await openLink()
         } catch {
-            if shownEarlyFor != nil { clearLastKnown() }
-            if !Task.isCancelled {
-                if await openWasDeclined?() == true {
-                    // The person chose not to continue: back to Cameras, with nothing said.
-                    phase = .gone
-                    onDeclined(camera.id)
-                } else {
-                    listingFailed(error, text: await openFailureText?())
-                }
+            if reconnecting {
+                guard !Task.isCancelled else { return .stopped }
+                services.log.note("browse: reconnecting failed after \(Self.seconds(since: started)) s: \(error)")
+                interruptionDetail = await openFailureText?()
+                interruption = .disconnected
+                noteLeaveDuringAttempt()
+                return .linkEnded
             }
-            return
+            if shownEarlyFor != nil { clearLastKnown() }
+            guard !Task.isCancelled else { return .stopped }
+            if await openWasDeclined?() == true {
+                // The person chose not to continue: back to Cameras, with nothing said.
+                phase = .gone
+                onDeclined(camera.id)
+                return .stopped
+            }
+            openFailed = true
+            listingFailed(error, text: await openFailureText?())
+            noteLeaveDuringAttempt()
+            return phase == .gone ? .stopped : .openFailed
         }
         self.link = link
         leases.acquire(link)
-        if let catalogue {
-            let key = await catalogue.cameraKey(camera, link)
-            if CameraKeys.isUnidentifiedWiFi(key) {
-                // A Wi-Fi camera that gave no serial and has no key of its own: every one would share this key, so
-                // nothing is listed, saved or imported under it.
-                cameraKey = nil
-                if shownEarlyFor != nil { clearLastKnown() }
-                services.log.note("browse: the camera has no key of its own, so nothing is saved or imported")
-            } else {
-                cameraKey = key
-                // Another camera answered than the one whose card is shown: its card is not this one's.
-                if let shown = shownEarlyFor, shown != key { clearLastKnown() }
-                await showLastKnown(for: key, from: catalogue.store)
-            }
+        // A trip away during the open doesn't count against this link: only one during its hold does.
+        leavesAtAttempt = leaves
+        // The card is read from now on: the time so far starts here, not at the join (bench 19.1).
+        if case .connecting = phase { phase = .reading(since: now()) }
+        await adoptKey(of: link, shownEarlyFor: shownEarlyFor, reconnecting: reconnecting)
+        if reconnecting {
+            services.log.note("browse: reconnected: a link in \(Self.seconds(since: started)) s; listing again")
         }
         let events = link.events
         // Subscribed before the listing, so an import that finishes while the card is read is still noticed.
         let imports = importer?.importedUpdates()
-        await withTaskGroup(of: Void.self) { group in
+        linkEnd = .eventsFinished
+        await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 // The import's updates never end by themselves: they stop with the link's events.
                 await withTaskGroup(of: Bool.self) { followers in
-                    followers.addTask { await self.follow(events); return true }
+                    followers.addTask { await self.follow(events, of: link); return true }
                     if let imports {
                         followers.addTask { await self.followImports(imports); return false }
                     }
@@ -284,50 +415,198 @@ public final class BrowseModel {
                         if eventsEnded { followers.cancelAll() }
                     }
                 }
+                return true
             }
-            group.addTask { await self.load(link) }
-            await group.waitForAll()
+            group.addTask { await self.load(link, relisting: reconnecting) }
+            // A failed relist ends the hold: the card stays, and the next link is prepared afresh.
+            while let keepHolding = await group.next() {
+                if !keepHolding { group.cancelAll() }
+            }
         }
-        // The screen went away (or the link's events ended): nothing more is asked of this link.
+        // The screen went away (or the link ended): nothing more is asked of this link.
         loadTask?.cancel()
         loadTask = nil
         actionTask?.cancel()
         self.link = nil
+        let screenGone = Task.isCancelled
+        if screenGone {
+            services.log.note("browse: the screen went; letting go of the link after \(Self.seconds(since: started)) s")
+        } else {
+            let after = listedAt.map { "\(Self.seconds(since: $0)) s after listing" } ?? "before listing"
+            services.log.note("browse: the link ended under the screen (\(linkEnd.rawValue)) \(after), phase "
+                + "\(phaseWord), thumbnails ok \(tally.ok)")
+            logThumbnails("the link changed")
+        }
         await leases.release(link)
+        guard !screenGone, reconnects, phase != .gone else { return .stopped }
+        if showsListedCard, interruption != .disconnected {
+            interruption = .disconnected
+        }
+        noteLeaveDuringAttempt()
+        return .linkEnded
     }
 
-    /// Lists again after a failure.
-    public func retry() {
-        guard case .failed = phase, let link, loadTask == nil else { return }
-        phase = .reading(since: now())
-        loadTask = Task { [weak self] in
-            await self?.load(link)
-            self?.loadTask = nil
+    /// The camera's key for the link, worked out once it is in hand (and again for a reconnected link, which also tells the
+    /// reminder's connection hold which camera the new link is).
+    private func adoptKey(of link: any CameraLink, shownEarlyFor: CameraKey?, reconnecting: Bool) async {
+        guard let catalogue else { return }
+        let key = await catalogue.cameraKey(camera, link)
+        if CameraKeys.isUnidentifiedWiFi(key) {
+            // A Wi-Fi camera that gave no serial and has no key of its own: every one would share this key, so nothing
+            // is listed, saved or imported under it.
+            cameraKey = nil
+            if shownEarlyFor != nil { clearLastKnown() }
+            services.log.note("browse: the camera has no key of its own, so nothing is saved or imported")
+        } else {
+            cameraKey = key
+            guard !reconnecting else { return }
+            // Another camera answered than the one whose card is shown: its card is not this one's.
+            if let shown = shownEarlyFor, shown != key { clearLastKnown() }
+            await showLastKnown(for: key, from: catalogue.store)
         }
     }
 
-    public var canRetry: Bool { link != nil }
+    /// An attempt that ended with the app having gone to the background since it began: its end came with (or after) a
+    /// trip away, so the next return to the front reconnects by itself.
+    private func noteLeaveDuringAttempt() {
+        if leaves > leavesAtAttempt { reopenDueOnReturn = true }
+    }
 
-    private func load(_ link: any CameraLink) async {
+    /// Waits, over Wi-Fi, for a reason to prepare the link again: Reconnect or Try Again, or the app in front after a
+    /// return (once per return; after a failed open, only when discovery says so). Nil when the calling task is cancelled.
+    private func waitToReopen() async -> String? {
+        while true {
+            if Task.isCancelled { return nil }
+            if reopenTapped {
+                reopenTapped = false
+                return interruption == .disconnected ? "Reconnect" : "Try Again"
+            }
+            if inForeground, reopenDueOnReturn {
+                reopenDueOnReturn = false
+                if showsListedCard { return "back in front" }
+                if await opensAgainOnReturn?() == true {
+                    if Task.isCancelled { return nil }
+                    return "back in front after a join that needed the app"
+                }
+            }
+            await nextReopenWake()
+        }
+    }
+
+    /// Parks until `wakeReopen()` or the calling task's cancellation, whichever comes first.
+    private func nextReopenWake() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    reopenWaiter?.resume()
+                    reopenWaiter = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in self.wakeReopen() }
+        }
+    }
+
+    private func wakeReopen() {
+        reopenWaiter?.resume()
+        reopenWaiter = nil
+    }
+
+    /// The app's scene changed (`AppModel.scenePhaseChanged(_:)`): on the way back to the front from the background, a
+    /// Wi-Fi Browse whose link was let go or lost reconnects by itself, once per return (and after a failed open, opens
+    /// again when discovery says so). Nothing reconnects in the background.
+    public func scenePhaseChanged(_ scene: AppScenePhase) {
+        switch scene {
+        case .background:
+            guard inForeground else { return }
+            inForeground = false
+            leaves += 1
+        case .active:
+            guard !inForeground else { return }
+            inForeground = true
+            if reopenWaiter != nil { reopenDueOnReturn = true }
+            wakeReopen()
+        case .inactive:
+            break
+        }
+    }
+
+    /// Lists again after a failed listing; after a failed open (Wi-Fi), prepares the link again.
+    public func retry() {
+        guard case .failed = phase else { return }
+        if let link, loadTask == nil {
+            phase = .reading(since: now())
+            loadTask = Task { [weak self] in
+                _ = await self?.load(link)
+                self?.loadTask = nil
+            }
+        } else if canReopen {
+            reopenTapped = true
+            wakeReopen()
+        }
+    }
+
+    public var canRetry: Bool { link != nil || canReopen }
+
+    /// The disconnected strip's Reconnect: prepares a new link (Wi-Fi), keeping the card, the selection and the
+    /// thumbnails.
+    public func reconnect() {
+        guard interruption == .disconnected else { return }
+        reopenTapped = true
+        wakeReopen()
+    }
+
+    /// The failed state's title: a Wi-Fi camera that couldn't be reached isn't a card that couldn't be read.
+    public var failedTitle: String {
+        reconnects && openFailed ? WiFiWording.failedTitle : BrowseWording.listingFailedTitle
+    }
+
+    /// Lists the card on `link`; `relisting` lists it again under the live card shown (a reconnected link), asking the
+    /// camera only about files it doesn't know when the link can (`ReusingListing`). Returns false when a relist failed,
+    /// which ends the link's hold.
+    private func load(_ link: any CameraLink, relisting: Bool = false) async -> Bool {
         let start = ContinuousClock.now
         do throws(CameraLinkFailure) {
             try await link.open()
-            let items = try await link.list()
-            guard !Task.isCancelled, phase != .gone else { return }
-            rule = JPEGSourceRule(listing: items)
-            // The last-known card's Imported badges carry over by content, so the grid, New Only and Select All
-            // New never see the live card without them while the catalogue is asked again.
-            show(items, carryingImported: true)
-            lastKnownListedAt = nil
-            phase = .listed
-            services.log.note(listingLine(items, seconds: Self.seconds(since: start)))
+            let items: [CameraItem]
+            if relisting, let reusing = link as? any ReusingListing {
+                items = try await reusing.list(reusing: self.items)
+            } else {
+                items = try await link.list()
+            }
+            guard !Task.isCancelled, phase != .gone else { return true }
+            listed(items, seconds: Self.seconds(since: start))
             await refreshImportedStates(.listing)
             await saveListing(items)
+            return true
         } catch {
-            guard !Task.isCancelled else { return }
-            services.log.note("browse: listing ended after \(Self.seconds(since: start)) s: \(error)")
+            guard !Task.isCancelled else { return true }
+            services.log.note("browse: \(relisting ? "listing again" : "listing") ended after "
+                + "\(Self.seconds(since: start)) s: \(error)")
+            if relisting {
+                linkEnd = .relistFailed
+                return false
+            }
             listingFailed(error)
+            return true
         }
+    }
+
+    /// The live card from a link: shown, and the cells without a thumbnail ask again (`linkGeneration`).
+    private func listed(_ items: [CameraItem], seconds: String) {
+        rule = JPEGSourceRule(listing: items)
+        // The last-known card's Imported badges carry over by content, so the grid, New Only and Select All New never
+        // see the live card without them while the catalogue is asked again.
+        show(items, carryingImported: true)
+        lastKnownListedAt = nil
+        interruption = nil
+        interruptionDetail = nil
+        phase = .listed
+        listedAt = .now
+        linkGeneration += 1
+        services.log.note(listingLine(items, seconds: seconds))
     }
 
     /// Refreshes the badges each time the import says more files were imported, so they show without leaving
@@ -338,7 +617,7 @@ public final class BrowseModel {
         }
     }
 
-    private func follow(_ events: AsyncStream<CameraLinkEvent>) async {
+    private func follow(_ events: AsyncStream<CameraLinkEvent>, of link: any CameraLink) async {
         for await event in events {
             switch event {
             case .removed:
@@ -349,12 +628,51 @@ public final class BrowseModel {
                 // action is cancelled and says why when the person comes back.
                 services.log.note("browse: link event \(event)")
                 cancelForSuspension()
+            case .sessionLost:
+                services.log.note("browse: link event \(event)")
+                // Over Wi-Fi, with the live card shown and no import holding the link (its recovery has the link then):
+                // in front, the same link reopens and lists again; away, the link is let go, and the return reconnects.
+                guard reconnects, showsListedCard, leases.holders(of: link) <= 1 else { continue }
+                guard inForeground else {
+                    linkEnd = .sessionLost
+                    return
+                }
+                if await !reopen(link) {
+                    linkEnd = .sessionLost
+                    return
+                }
             case .didSuspend, .cancelledSuspending, .resumedOperations,
-                 .waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost:
-                // Nothing else to pause in this slice; the log helps read the bench's background runs. The last
-                // four are Wi-Fi's (`IPLink`, Iteration 3): Browse acts on them when the wireless screens arrive.
+                 .waitingForLocalNetwork, .storeRemoved, .storeAdded:
+                // Nothing else to pause in this slice; the log helps read the bench's background runs.
                 services.log.note("browse: link event \(event)")
             }
+        }
+    }
+
+    /// The link's session was lost with the app in front: open it again (a reopen, `IPLink`) and list the card again,
+    /// keeping the selection and the thumbnails. False when it couldn't.
+    private func reopen(_ link: any CameraLink) async -> Bool {
+        let start = ContinuousClock.now
+        interruption = .reconnecting
+        services.log.note("browse: reconnecting (the session was lost; reopening the same link)")
+        do throws(CameraLinkFailure) {
+            try await link.open()
+            let items: [CameraItem]
+            if let reusing = link as? any ReusingListing {
+                items = try await reusing.list(reusing: self.items)
+            } else {
+                items = try await link.list()
+            }
+            guard !Task.isCancelled, phase != .gone else { return true }
+            services.log.note("browse: reconnected: the same link reopened in \(Self.seconds(since: start)) s")
+            listed(items, seconds: Self.seconds(since: start))
+            await refreshImportedStates(.listing)
+            return true
+        } catch {
+            guard !Task.isCancelled else { return true }
+            services.log.note("browse: reconnecting failed after \(Self.seconds(since: start)) s: \(error)")
+            interruption = .disconnected
+            return false
         }
     }
 
@@ -379,16 +697,131 @@ public final class BrowseModel {
         onGone(camera.id)
     }
 
+    /// The phase in a word, for the log.
+    private var phaseWord: String {
+        switch phase {
+        case .connecting: "connecting"
+        case .reading: "reading"
+        case .listed: "listed"
+        case .listsNoFiles: "lists no files"
+        case .failed: "failed"
+        case .gone: "gone"
+        }
+    }
+
     // MARK: - Thumbnails
 
-    /// The camera's thumbnail for a file, through the link (which keeps two in flight, newest first). Cancelled with
-    /// the calling task, so a cell scrolled away gives up its place. Nil when it can't be had.
+    /// The camera's thumbnail for a file, through the link. Over USB the link keeps two in flight, newest first
+    /// (`USBLink`); over Wi-Fi `IPLink` sends them one at a time, in the order asked, ahead of queued downloads (it has no
+    /// cap of its own). Cancelled with the calling task, so a cell scrolled away gives up its place (a GetThumb already on
+    /// the wire runs to its end). Over Wi-Fi, while the link is being reached, the card read or the link reconnected, it
+    /// waits (bounded by `BrowseTiming.thumbnailWait` and the calling task) instead of giving up. Nil when it can't be had;
+    /// a file the camera can never give a thumbnail for (`unreadableItem`, `itemNotFound`) isn't asked again, while any
+    /// other failure is asked again next time (the cell asks again on each new link, `linkGeneration`).
     public func thumbnail(for id: CameraItem.ID) async -> Data? {
         if let data = thumbnails[id] { return data }
-        guard let link, phase == .listed else { return nil }
-        guard let data = try? await link.thumbnail(of: id) else { return nil }
-        thumbnails[id] = data
-        return data
+        if thumbnailRefused.contains(id) { return nil }
+        // The last-known card's files aren't the link's: nothing to ask (their cells go once the live card lists).
+        if lastKnownListedAt != nil, itemsByID[id] != nil { return nil }
+        if waitsForLink, !Task.isCancelled { await waitForLinkToServe() }
+        if Task.isCancelled {
+            tally.cancelled += 1
+            return nil
+        }
+        if let data = thumbnails[id] { return data }
+        guard phase == .listed, lastKnownListedAt == nil, itemsByID[id] != nil else {
+            tally.skippedNotListed += 1
+            return nil
+        }
+        guard let link, interruption == nil else {
+            tally.skippedNoLink += 1
+            return nil
+        }
+        tally.asked += 1
+        let result: Data?
+        do throws(CameraLinkFailure) {
+            let data = try await link.thumbnail(of: id)
+            thumbnails[id] = data
+            tally.ok += 1
+            result = data
+        } catch {
+            tally.failed[error.kind, default: 0] += 1
+            if !tally.failureLogged {
+                tally.failureLogged = true
+                services.log.note("browse: thumbnail failed (first on this screen): \(error.kind.rawValue)"
+                    + (error.detail.map { " (\($0))" } ?? ""))
+            }
+            if error.kind == .unreadableItem || error.kind == .itemNotFound { thumbnailRefused.insert(id) }
+            result = nil
+        }
+        if tally.asked % 100 == 0 { logThumbnails("every 100 asked") }
+        return result
+    }
+
+    /// The cell made (or failed to make) a picture of a thumbnail: one that didn't decode is counted, and the first is
+    /// logged with its size and whether it starts like a JPEG.
+    public func thumbnailShown(_ data: Data, decoded: Bool, for id: CameraItem.ID) {
+        guard !decoded, undecodable.insert(id).inserted else { return }
+        tally.undecodable += 1
+        if tally.undecodable == 1 {
+            let jpeg = data.starts(with: [0xFF, 0xD8])
+            services.log.note("browse: a thumbnail of \(data.count) B didn't decode (starts FFD8: \(jpeg ? "yes" : "no"))")
+        }
+    }
+
+    /// Whether a thumbnail asked now waits for the link rather than giving up (Wi-Fi): it is being reached, the card read,
+    /// or the link reconnected. Over USB a thumbnail never waits, as before.
+    private var waitsForLink: Bool {
+        guard reconnects else { return false }
+        switch phase {
+        case .connecting, .reading: return true
+        case .listed: return interruption == .reconnecting
+        case .listsNoFiles, .failed, .gone: return false
+        }
+    }
+
+    /// Parks until the link can serve thumbnails (or never will), the calling task is cancelled, or
+    /// `BrowseTiming.thumbnailWait` passes.
+    private func waitForLinkToServe() async {
+        let id = nextThumbnailWaiter
+        nextThumbnailWaiter += 1
+        let limit = Task { [weak self] in
+            do {
+                try await Task.sleep(for: BrowseTiming.thumbnailWait)
+            } catch {
+                return
+            }
+            self?.resumeThumbnailWaiter(id)
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if Task.isCancelled || !waitsForLink || !isRunning {
+                    continuation.resume()
+                } else {
+                    thumbnailWaiters[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in self.resumeThumbnailWaiter(id) }
+        }
+        limit.cancel()
+    }
+
+    private func resumeThumbnailWaiter(_ id: Int) {
+        thumbnailWaiters.removeValue(forKey: id)?.resume()
+    }
+
+    private func resumeThumbnailWaiters() {
+        guard !thumbnailWaiters.isEmpty else { return }
+        let waiting = thumbnailWaiters
+        thumbnailWaiters = [:]
+        for continuation in waiting.values { continuation.resume() }
+    }
+
+    /// The thumbnail counts so far, as one bench line (no file names, handles or identifiers), when anything was asked.
+    private func logThumbnails(_ when: String) {
+        guard tally.hasAnything else { return }
+        services.log.note("browse: thumbnails (\(when)): \(tally.line)")
     }
 
     // MARK: - Copy as JPEG and Share as JPEG…
@@ -396,7 +829,7 @@ public final class BrowseModel {
     /// Whether a file offers the two actions: a still of the live card (not the last-known one, whose files the link
     /// can't fetch by handle).
     public func offersJPEGActions(_ item: CameraItem) -> Bool {
-        CardLayout.kind(of: item).offersJPEGActions && phase == .listed
+        CardLayout.kind(of: item).offersJPEGActions && phase == .listed && interruption == nil
     }
 
     public var isBusy: Bool { action.isWorking || share != nil }
@@ -658,6 +1091,14 @@ public final class BrowseModel {
         lastKnownListedAt = nil
     }
 
+    /// Whether the link is being reached or the card read: the last-known card may still be shown.
+    private var isOpening: Bool {
+        switch phase {
+        case .connecting, .reading: true
+        case .listed, .listsNoFiles, .failed, .gone: false
+        }
+    }
+
     /// The catalogue's last listing of this camera, shown at once while the card is read (decision 7).
     private func showLastKnown(for key: CameraKey, from store: any CatalogueStore) async {
         let listing: CardListing?
@@ -667,7 +1108,7 @@ public final class BrowseModel {
             services.log.note("browse: no last-known card: \(type(of: error))")
             return
         }
-        guard let listing, case .reading = phase, items.isEmpty else { return }
+        guard let listing, isOpening, items.isEmpty else { return }
         let zone = self.zone
         let known = listing.entries.map { entry in
             let identity = entry.identity
@@ -822,11 +1263,12 @@ public final class BrowseModel {
         isSelecting ? BrowseWording.selectingTitle(selectionSummary) : CamerasWording.displayName(for: camera)
     }
 
-    /// The bar's subtitle: the selection's size while selecting something, "Reading the card…" while the last-known
-    /// card is shown, otherwise the mode in the camera's wording.
+    /// The bar's subtitle: the selection's size while selecting something, "Connecting to the camera…" or "Reading the
+    /// card…" while the last-known card is shown, otherwise the mode in the camera's wording.
     public var navigationSubtitle: String {
         let summary = selectionSummary
         if isSelecting, summary.count > 0 { return ByteWording.size(summary.bytes) }
+        if case .connecting = phase, lastKnownListedAt != nil { return BrowseWording.connectingSubtitle }
         if case .reading = phase, lastKnownListedAt != nil { return BrowseWording.readingSubtitle }
         return CamerasWording.modeLine(camera.mode)
     }
@@ -851,7 +1293,7 @@ public final class BrowseModel {
 
     public var canImport: Bool {
         !selection.isEmpty && !isStartingImport && importer != nil && link != nil && cameraKey != nil
-            && phase == .listed
+            && phase == .listed && interruption == nil
     }
 
     /// Hands the selection to the import: a new job, or the end of the running one. The selection clears once the
@@ -899,5 +1341,54 @@ public final class BrowseModel {
 
     private static func seconds(since start: ContinuousClock.Instant) -> String {
         JPEGBenchRecord.format(JPEGPipeline.seconds(ContinuousClock.now - start))
+    }
+}
+
+/// Browse's own waits, with what they rest on.
+public enum BrowseTiming {
+    /// The longest a cell's thumbnail waits for the link to be reached, the card read or the link reconnected before it
+    /// gives up (the cell asks again when a link next lists the card, `BrowseModel.linkGeneration`). `unverified`: a
+    /// choice, above a join with iOS's prompt (55 s on 5 Nov) and a full card's listing; the cell's own task, cancelled
+    /// when it scrolls away, usually ends the wait first.
+    public static let thumbnailWait: Duration = .seconds(120)
+}
+
+/// A grid cell's thumbnail task: the file and the link generation, so a cell still without a picture asks again when a
+/// new link has listed the card (bench 19.1: thumbnails asked of a dead link were never asked again).
+struct ThumbnailTaskID: Hashable, Sendable {
+    let item: CameraItem.ID
+    let generation: Int
+}
+
+/// What became of Browse's thumbnail requests, for the bench log: counts and failure kinds only, never a file name,
+/// handle or identifier.
+struct ThumbnailTally: Sendable, Equatable {
+    /// Asked of the link.
+    var asked = 0
+    var ok = 0
+    /// Failed, by the link's failure kind.
+    var failed: [CameraLinkFailure.Kind: Int] = [:]
+    /// Not asked: no link (it went, or is reconnecting and the wait ended).
+    var skippedNoLink = 0
+    /// Not asked: the live card isn't listed (still reading after the wait, failed, or the file isn't on the live card).
+    var skippedNotListed = 0
+    /// The cell went before anything was asked.
+    var cancelled = 0
+    /// Data came back that the cell couldn't make a picture of (counted once per file).
+    var undecodable = 0
+    /// The first failure has been logged.
+    var failureLogged = false
+
+    var hasAnything: Bool {
+        asked > 0 || skippedNoLink > 0 || skippedNotListed > 0 || cancelled > 0 || undecodable > 0
+    }
+
+    /// "asked 12: ok 0, failed 12 (unreadableItem 12), skipped no-link 48, not-listed 0, cancelled 5, undecodable 0".
+    var line: String {
+        let failures = failed.values.reduce(0, +)
+        let kinds = failed.sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.rawValue) \($0.value)" }
+        let byKind = kinds.isEmpty ? "" : " (\(kinds.joined(separator: ", ")))"
+        return "asked \(asked): ok \(ok), failed \(failures)\(byKind), skipped no-link \(skippedNoLink), not-listed "
+            + "\(skippedNotListed), cancelled \(cancelled), undecodable \(undecodable)"
     }
 }

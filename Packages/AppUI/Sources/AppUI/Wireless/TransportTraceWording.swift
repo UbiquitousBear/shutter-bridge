@@ -42,11 +42,13 @@ public enum TransportTraceWording {
             let left = (statusTwoAlready ? "at most " : "") + seconds(windowLeft)
             return "wifi join: \(rewrite ? "rewrite " : "")hand-off done in \(seconds(after)) (connect included): \(write); "
                 + "\(left) left of the camera's 50 s"
-        case let .joinApplied(attempt, after, failure, _):
+        case let .joinApplied(attempt, after, failure, inFront):
+            // `inFront` is false when the app went to the background during `apply` or was there when it returned.
+            let app = inFront ? "with the app in front" : "with the app away"
             guard let failure else {
-                return "wifi join: join \(attempt) returned after \(seconds(after)) (iOS's prompt included)"
+                return "wifi join: join \(attempt) returned after \(seconds(after)) \(app) (iOS's prompt included)"
             }
-            return "wifi join: join \(attempt) failed after \(seconds(after)): \(failure)"
+            return "wifi join: join \(attempt) failed after \(seconds(after)) \(app): \(failure)"
         case let .gateway(found, after):
             return found
                 ? "wifi join: the camera's gateway \(WirelessCamera.cameraNetworkGateway) appeared \(seconds(after)) "
@@ -75,14 +77,14 @@ public enum TransportTraceWording {
         case let .sessionNotOpened(after, tries, refused):
             return "wifi join: the camera's session didn't open: \(refused ? "refused" : "no answer") after "
                 + "\(seconds(after)), \(count(tries, "try", "tries"))"
-        // Placeholder lines for the bench 19.1 events (CameraTransport, stage 1); the wording is still to settle.
+        // The app leaving and coming back during a preparation, and the join held meanwhile (bench 19.1).
         case let .appWentToBackground(during):
             return "wifi join: the app went to the background during the \(stepWord(during))"
         case let .appCameBack(after, during):
             return "wifi join: the app came back after \(seconds(after)), during the \(stepWord(during))"
         case let .joinHeld(reason, limit):
-            return "wifi join: join held (\(reason)): the app is away; waiting for it to come back (at most "
-                + "\(seconds(limit)))"
+            return "wifi join: join held \(holdReasonWord(reason)): the app is away; waiting for it to come back (at "
+                + "most \(seconds(limit)))"
         case let .joinHoldEnded(after, windowPassed):
             return "wifi join: the app is back after \(seconds(after)); the camera's 50 s "
                 + "\(windowPassed ? "have passed" : "have not passed"); joining now"
@@ -92,7 +94,8 @@ public enum TransportTraceWording {
             return "wifi join: the \(rewrite ? "rewrite " : "")hand-off failed with the app away for part of it "
                 + "(\(failure)); running it once more from the front"
         case let .preparationFailed(rewrite, appAway):
-            return "wifi join: failed\(rewrite ? " in a rewrite hand-off" : ""); the app was away \(seconds(appAway)) in all"
+            return "wifi join: the preparation failed \(rewrite ? "in a rewrite hand-off" : "outside a rewrite hand-off"); "
+                + "the app was away \(seconds(appAway)) in all since it began"
         case let .preparationEnded(succeeded, times):
             return "wifi join: \(succeeded ? "ready" : "not ready") after \(seconds(times.total)) "
                 + "(hand-off \(seconds(times.handingOff)), join \(seconds(times.joining)), "
@@ -131,14 +134,14 @@ public enum TransportTraceWording {
                 + "the file again from the start"
         case let .resumeFinished(reads):
             return "wifi link: the resumed file finished after \(count(reads, "0x9211 read", "0x9211 reads"))"
-        case let .linkLost(failure, _):
-            return "wifi link: the session was lost: \(lossReason(failure))"
+        case let .linkLost(failure, thumbnails):
+            return "wifi link: the session was lost: \(lossReason(failure)); \(thumbnailCounts(thumbnails))"
         case let .linkClosed(seen):
             guard seen.sessionsOpened > 0 else { return "wifi link: closed without opening a session" }
             return "wifi link: closed: sessions opened \(seen.sessionsOpened), lost \(seen.sessionsLost); keep-alives "
                 + "answered \(seen.keepAlivesAnswered), failed \(seen.keepAlivesFailed); GetDevicePropValue sent "
                 + "\(seen.devicePropValueReads); 0x9211 resumes \(seen.resumes), reads \(seen.partialReads), refused "
-                + "\(seen.resumeFallbacks); transfers aborted \(seen.transfersAborted)"
+                + "\(seen.resumeFallbacks); transfers aborted \(seen.transfersAborted); \(thumbnailCounts(seen.thumbnails))"
         }
     }
 
@@ -177,6 +180,28 @@ public enum TransportTraceWording {
         case .join: "join"
         case .session: "session"
         }
+    }
+
+    /// Why a join was held, for its line.
+    private static func holdReasonWord(_ reason: WirelessHoldReason) -> String {
+        switch reason {
+        case .beforeJoin: "before the join"
+        case .beforeSwitchOn: "before switching the camera's Wi-Fi on again"
+        case .joinRefused: "after iOS refused the join with the app away (code 14)"
+        case .retryHandoff: "before running the hand-off again"
+        }
+    }
+
+    /// GetThumb over the link's life (bench 19.1): counts, response codes by name and times only, never a handle or a
+    /// file. "GetThumb asked 0" when none was asked or skipped.
+    static func thumbnailCounts(_ seen: IPThumbnailDiagnostics) -> String {
+        guard seen.asked > 0 || seen.notListed > 0 else { return "GetThumb asked 0" }
+        let codes = seen.failuresByCode.map { ("\($0.key)", $0.value) }.sorted { $0.0 < $1.0 }
+            .map { "\($0.0) \($0.1)" }
+        let refused = codes.isEmpty ? "refused 0" : "refused \(seen.refused) (\(codes.joined(separator: ", ")))"
+        let first = seen.firstAfterOpen.map { ", the first answered \(seconds($0)) after the open" } ?? ""
+        return "GetThumb asked \(seen.asked), answered \(seen.answered) (\(seen.bytesTotal) B), \(refused), timed out "
+            + "\(seen.timeouts), other failures \(seen.otherFailures), not listed \(seen.notListed)\(first)"
     }
 
     private static func count(_ value: Int, _ one: String, _ many: String) -> String {

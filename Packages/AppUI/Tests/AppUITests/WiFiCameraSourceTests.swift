@@ -323,6 +323,51 @@ struct WiFiCameraSourceTests {
         #expect(await h.source.openFailureText(for: id) == nil)
     }
 
+    @Test func aJoinThatNeededTheAppIsOpenedAgainOncePerReturn() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.failure(.paused(.needsJoin)), .failure(.paused(.needsJoin)), .success(FakeWiFiLink()))
+        await #expect(throws: CameraLinkFailure.self) { _ = try await h.source.cameraLink(for: id) }
+        #expect(await h.source.openFailureText(for: id) == WiFiWording.needsAppToJoin)
+        // Not before the app has been away and come back.
+        #expect(await !h.source.opensAgainOnReturn(for: id))
+        await h.source.scenePhaseChanged(.background)
+        #expect(await !h.source.opensAgainOnReturn(for: id))
+        await h.source.scenePhaseChanged(.active)
+        #expect(await h.source.opensAgainOnReturn(for: id))
+        #expect(await !h.source.opensAgainOnReturn(for: id))   // once per return
+        // An inactive spell is no return; the next trip away is.
+        await h.source.scenePhaseChanged(.inactive)
+        await h.source.scenePhaseChanged(.active)
+        #expect(await !h.source.opensAgainOnReturn(for: id))
+        await h.source.scenePhaseChanged(.background)
+        await h.source.scenePhaseChanged(.active)
+        #expect(await h.source.opensAgainOnReturn(for: id))
+        // Opened again and failing again the same way: the next return says yes again; once connected, never.
+        await #expect(throws: CameraLinkFailure.self) { _ = try await h.source.cameraLink(for: id) }
+        await h.source.scenePhaseChanged(.background)
+        await h.source.scenePhaseChanged(.active)
+        #expect(await h.source.opensAgainOnReturn(for: id))
+        _ = try await h.source.cameraLink(for: id)
+        await h.source.scenePhaseChanged(.background)
+        await h.source.scenePhaseChanged(.active)
+        #expect(await !h.source.opensAgainOnReturn(for: id))
+        #expect(session.count("prepare") == 3)
+    }
+
+    @Test func anotherFailureIsNotOpenedAgainOnTheReturn() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.failure(.cameraNotFound))
+        await #expect(throws: CameraLinkFailure.self) { _ = try await h.source.cameraLink(for: id) }
+        await h.source.scenePhaseChanged(.background)
+        await h.source.scenePhaseChanged(.active)
+        #expect(await !h.source.opensAgainOnReturn(for: id))
+        // And through the composite, as the Cameras model asks.
+        let composite = CompositeDiscovery(sources: [h.source])
+        #expect(await !composite.opensAgainOnReturn(for: id))
+    }
+
     @Test func everyFailureMapsToAKindAndNothingPrivateReachesTheLog() async throws {
         let failures: [WirelessFailure] = [
             .paused(.needsJoin), .paused(.notPaired), .paused(.bluetoothOff), .paused(.bluetoothNotAllowed),

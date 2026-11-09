@@ -94,6 +94,11 @@ public actor CompositeDiscovery: CameraDiscovery {
         return await sources[index].openWasDeclined(for: id)
     }
 
+    public func opensAgainOnReturn(for id: CameraDescriptor.ID) async -> Bool {
+        guard let index = routes[id] else { return false }
+        return await sources[index].opensAgainOnReturn(for: id)
+    }
+
     private func relay(_ event: CameraDiscoveryEvent, from index: Int) {
         switch event {
         case let .appeared(camera): routes[camera.id] = index

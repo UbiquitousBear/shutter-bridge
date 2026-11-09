@@ -62,6 +62,10 @@ public enum WiFiImportTiming {
 ///
 /// **Unknown is not zero:** nothing here shows a battery level or free space (Wi-Fi reads neither).
 ///
+/// **A join held with the app away** (`WirelessPhase.awaitingFront`, bench 19.1): the line asks the person to come back,
+/// and one local notification says the same (`AppNotification.joinWaiting`) through `notifier`, only if notifications are
+/// already allowed (it never asks), withdrawn as soon as the session moves on.
+///
 /// Never logs or shows the camera's serial, its network's name or any address.
 @MainActor
 @Observable
@@ -92,6 +96,12 @@ public final class WiFiImportModel {
     @ObservationIgnored private var hintTask: Task<Void, Never>?
     @ObservationIgnored private var waiters: [Int: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private var nextWaiter = 0
+    /// Posts the held join's notification (the app's W13 notifier, set by `AppModel`); nil posts nothing.
+    @ObservationIgnored public var notifier: (any LocalNotifier)?
+    /// Whether the held join's notification is wanted now, whether it was posted, and the post and withdrawal in turn.
+    @ObservationIgnored private var joinNotificationWanted = false
+    @ObservationIgnored private var joinNotificationPosted = false
+    @ObservationIgnored private var joinNotificationTask: Task<Void, Never>?
 
     public init(source: any WiFiConnectionSource,
                 record: any LocalNetworkExplainedRecord = InMemoryLocalNetworkExplainedRecord(),
@@ -170,6 +180,7 @@ public final class WiFiImportModel {
         case let .connecting(id):
             camera = id
             phase = .idle
+            joinHeld(false)
             failure = nil
             wifiMayStayOn = false
             stayEndsAt = nil
@@ -179,6 +190,7 @@ public final class WiFiImportModel {
             camera = id
             let wasLeaving = phase == .leaving
             phase = newPhase
+            joinHeld(newPhase == .awaitingFront)
             switch newPhase {
             case .idle:
                 if wasLeaving { wifiMayStayOn = true }
@@ -199,6 +211,7 @@ public final class WiFiImportModel {
             guard camera == nil || camera == id else { return }
             camera = id
             failure = why
+            joinHeld(false)
             setWaitingForLocalNetwork(false)
         case let .link(id, linkEvent):
             guard camera == nil || camera == id else { return }
@@ -213,6 +226,36 @@ public final class WiFiImportModel {
             }
         }
     }
+
+    /// The session entered or left a join held while the app is away: the notification is posted (if allowed) or
+    /// withdrawn, one after the other, so a withdrawal never overtakes its post.
+    private func joinHeld(_ held: Bool) {
+        guard held != joinNotificationWanted else { return }
+        joinNotificationWanted = held
+        guard let notifier else { return }
+        let previous = joinNotificationTask
+        let log = self.log
+        joinNotificationTask = Task { [weak self] in
+            await previous?.value
+            if held {
+                guard await notifier.authorisation().allowsPosting else {
+                    log.note("wifi: the join is held with the app away; notifications aren't allowed")
+                    return
+                }
+                await notifier.post(.joinWaiting)
+                self?.joinNotificationPosted = true
+                log.note("wifi: posted the join notification")
+            } else {
+                guard let self, self.joinNotificationPosted else { return }
+                self.joinNotificationPosted = false
+                await notifier.withdraw(.joinWaiting)
+                log.note("wifi: withdrew the join notification")
+            }
+        }
+    }
+
+    /// Waits for the held join's notification to be posted or withdrawn (for tests).
+    func joinNotificationSettled() async { await joinNotificationTask?.value }
 
     private func setWaitingForLocalNetwork(_ waiting: Bool) {
         guard waiting != isWaitingForLocalNetwork else { return }

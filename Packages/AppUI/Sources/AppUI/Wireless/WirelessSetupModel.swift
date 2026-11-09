@@ -175,9 +175,9 @@ extension WiFiImportModel {
     }
 
     /// A spinner goes beside the line while the session is busy getting somewhere: reaching the camera, waiting for iOS's
-    /// prompt, or leaving. Not while it stays or waits for the person.
+    /// prompt, or leaving. Not while it stays or waits for the person (a join held until the app is back included).
     public var showsActivity: Bool {
-        isConnecting || isWaitingForLocalNetwork || phase == .leaving
+        (isConnecting && phase != .awaitingFront) || isWaitingForLocalNetwork || phase == .leaving
     }
 
     /// Whether the status has anything to say about `camera` (the camera in view, `camera`): a line or a note.

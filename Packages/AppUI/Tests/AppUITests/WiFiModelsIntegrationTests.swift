@@ -151,8 +151,10 @@ struct WiFiBrowseTests {
         let browse = model(catalogue: await catalogue(for: key), knownKey: key, openedKey: key, gate: gate, link: link)
         let run = Task { await browse.run() }
         #expect(await eventuallyLong { browse.lastKnownListedAt == listedAt })
-        // The link isn't open yet, so nothing can be picked from the card, and the screen is still reading.
-        guard case .reading = browse.phase else { Issue.record("not reading: \(browse.phase)"); return }
+        // The link isn't open yet, so nothing can be picked from the card, and the screen is still connecting: the card
+        // isn't being read until the link is in hand (bench 19.1).
+        guard case .connecting = browse.phase else { Issue.record("not connecting: \(browse.phase)"); return }
+        #expect(browse.navigationSubtitle == BrowseWording.connectingSubtitle)
         #expect(browse.sections.flatMap(\.items).map(\.name) == ["DSC00002.ARW", "DSC00001.ARW"])
         #expect(!browse.canImport)
         gate.release()
@@ -171,7 +173,7 @@ struct WiFiBrowseTests {
         // The open has been reached, so the known-key step is over: it found none and showed nothing.
         #expect(await waitUntil { gate.arrivals == 1 })
         #expect(browse.lastKnownListedAt == nil && browse.sections.isEmpty)
-        guard case .reading = browse.phase else { Issue.record("not reading: \(browse.phase)"); return }
+        guard case .connecting = browse.phase else { Issue.record("not connecting: \(browse.phase)"); return }
         gate.release()
         #expect(await eventuallyLong { browse.phase == .listed })
         run.cancel()
@@ -190,6 +192,10 @@ struct WiFiBrowseTests {
         #expect(await eventuallyLong { browse.phase == .failed(text) })
         #expect(browse.lastKnownListedAt == nil && browse.sections.isEmpty)
         #expect(gone.ids.isEmpty)
+        // A failed open offers Try Again (it prepares the link again), under the connection's own title.
+        #expect(browse.canRetry)
+        #expect(browse.failedTitle == WiFiWording.failedTitle)
+        run.cancel()
         #expect(await bounded(run) != nil)
     }
 
@@ -203,6 +209,7 @@ struct WiFiBrowseTests {
         gate.release()
         #expect(await eventuallyLong { browse.phase == .failed("Open the camera again.") })
         #expect(gone.ids.isEmpty)
+        run.cancel()
         #expect(await bounded(run) != nil)
     }
 
@@ -279,7 +286,7 @@ struct WiFiAppModelTests {
         let record = InMemoryLocalNetworkExplainedRecord(hasExplained: true)
     }
 
-    func bench() -> Bench {
+    func bench(log: RecordingLog = RecordingLog()) -> Bench {
         let catalogue = InMemoryCatalogue()
         let connecting = FakeConnecting()
         let source = WiFiCameraSource(catalogue: catalogue, connecting: connecting)
@@ -287,7 +294,7 @@ struct WiFiAppModelTests {
         let usb = ScriptedDiscovery()
         let composite = CompositeDiscovery(sources: [usb, source])
         let app = AppModel(
-            discovery: composite, services: services(), catalogue: catalogue,
+            discovery: composite, services: services(log: log), catalogue: catalogue,
             engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
             settingsStore: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(),
             destinations: FakeDestinations(), cameraKey: CameraKeys.keying(material: { _ in nil }),
@@ -342,30 +349,54 @@ struct WiFiAppModelTests {
         #expect(session.calls == ["prepare", "background", "importFinished", "active"])
     }
 
-    @Test func goingToTheBackgroundWithBrowseOpenAndNoImportLeavesTheCameraNetwork() async throws {
-        let b = bench()
+    @Test func goingToTheBackgroundWithBrowseOpenAndNoImportLeavesTheCameraNetworkAndTheReturnReconnects() async throws {
+        let log = RecordingLog()
+        let b = bench(log: log)
         let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)
         let session = b.connecting.session(for: WiFiCameraEntry(
             descriptor: descriptor, key: nil, peripheral: peripheral, guid: UUID())) as! FakeSession
-        session.script(.success(FakeWiFiLink(items: [item("DSC00001.ARW", at: 10, size: 1_000)])),
-                       .success(FakeWiFiLink()))
+        let files = [item("DSC00001.ARW", at: 10, size: 1_000), item("DSC00002.ARW", at: 20, size: 1_000)]
+        let first = FakeWiFiLink(items: files)
+        let second = FakeWiFiLink(items: files)
+        session.script(.success(first), .success(second))
+        // As the real session: the import's end closes the link it handed out (bench 19.1's dead grid).
+        session.set(closesLinkWhenFinished: true)
         await b.app.scenePhaseChanged(.active)
         #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
         let browse = b.app.browseModel(for: descriptor)
         let run = Task { await browse.run() }
         #expect(await eventuallyLong { browse.phase == .listed })
+        let ids = files.newestFirst().map(\.id)
+        #expect(await browse.thumbnail(for: ids[0]) != nil)
+        browse.tap(files[0])
         // Browse is open, nothing is imported: the phone still leaves when the app does.
         await b.app.scenePhaseChanged(.background)
         #expect(session.count("importFinished") == 1)
         #expect(await !b.source.hasLiveLink(for: descriptor.id))
-        // Back in front, the next open prepares again rather than handing out the closed link.
+        #expect(await first.closed)
+        #expect(log.lines.contains("wifi: let go on the way to the background (Browse open, no import)"))
+        // Browse leaves the silent dead grid for its disconnected strip, keeping the card and the selection, and nothing
+        // reconnects while the app is away.
+        #expect(await eventuallyLong { browse.interruption == .disconnected })
+        #expect(browse.phase == .listed && browse.selection == [files[0].id])
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(session.count("prepare") == 1)
+        #expect(await browse.thumbnail(for: ids[1]) == nil)
+        // Back in front, the same Browse prepares again (no closed link handed out), lists and loads thumbnails.
         await b.app.scenePhaseChanged(.active)
+        #expect(await eventuallyLong { browse.interruption == nil && browse.linkGeneration == 2 })
+        #expect(session.count("prepare") == 2)
+        #expect(browse.phase == .listed && browse.selection == [files[0].id])
+        #expect(await browse.thumbnail(for: ids[1]) != nil)
+        // The open the next screen makes is handed the same live link, prepared once.
         _ = try await b.source.cameraLink(for: descriptor.id)
         #expect(session.count("prepare") == 2)
         run.cancel()
         #expect(await bounded(run) != nil)
-        // The closed link's last holder letting go finds it no longer live: no second finish for the old link.
-        #expect(await waitUntil { session.count("importFinished") == 1 })
+        // The new link's last holder letting go is the end of its import; the closed one's ended at the leave.
+        #expect(await waitUntil { session.count("importFinished") == 2 })
+        #expect(log.lines.contains { $0.hasPrefix("browse: the link ended under the screen (events finished)") })
+        #expect(log.lines.contains("browse: reconnecting (back in front)"))
     }
 
     @Test func anImportsLeaseGoingInTheBackgroundWhileBrowseHoldsTheLinkLeavesTheCameraNetwork() async throws {
