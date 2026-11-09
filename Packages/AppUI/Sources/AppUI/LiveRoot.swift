@@ -73,7 +73,9 @@ extension AppScenePhase {
 }
 
 /// The live root on iPhone: opens the catalogue, then shows the app; if the catalogue can't be opened, a clear error
-/// with Try Again instead of a crash.
+/// with Try Again instead of a crash. Meanwhile the Cameras screen's bar and title are up at once, matching the launch
+/// screen's navigation bar (Info.plist), with no splash text; a plain spinner shows only if opening takes longer than
+/// `AppWording.spinnerDelay` (HIG Launching).
 struct LiveRoot: View {
     @State private var launcher = AppLauncher.live()
 
@@ -81,19 +83,23 @@ struct LiveRoot: View {
         Group {
             switch launcher.state {
             case .opening:
-                ProgressView(AppWording.openingCatalogue)
+                LaunchShell {
+                    DelayedSpinner()
+                }
             case let .ready(model):
                 LiveApp(model: model)
             case .failed:
-                ContentUnavailableView {
-                    Label(AppWording.catalogueFailedTitle, systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(AppWording.catalogueFailedDetail)
-                } actions: {
-                    Button(AppWording.tryAgain) {
-                        Task { await launcher.launch() }
+                LaunchShell {
+                    ContentUnavailableView {
+                        Label(AppWording.catalogueFailedTitle, systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(AppWording.catalogueFailedDetail)
+                    } actions: {
+                        Button(AppWording.tryAgain) {
+                            Task { await launcher.launch() }
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
         }
@@ -101,8 +107,42 @@ struct LiveRoot: View {
     }
 }
 
+/// The Cameras screen's navigation shell before the app is ready: its bar and title around `content`.
+private struct LaunchShell<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.clear
+                content
+            }
+            .navigationTitle(CamerasWording.title)
+        }
+    }
+}
+
+/// Nothing at first; a plain spinner once `AppWording.spinnerDelay` has passed, so a quick launch doesn't flicker.
+private struct DelayedSpinner: View {
+    @State private var showsSpinner = false
+
+    var body: some View {
+        ZStack {
+            if showsSpinner {
+                ProgressView()
+                    .accessibilityLabel(AppWording.openingCatalogue)
+            }
+        }
+        .task {
+            guard (try? await Task.sleep(for: AppWording.spinnerDelay)) != nil else { return }
+            showsSpinner = true
+        }
+    }
+}
+
 /// The app once the catalogue is open: Cameras in a navigation stack with Browse pushed onto it, and the Import and
 /// Settings screens as sheets over the whole stack, so the Import screen outlives Browse when the cable is pulled.
+/// (A tab bar with History, carrying the running import as its bottom accessory, waits for Iteration 2.)
 ///
 /// - The scene's phase goes to the app model in order (discovery starts when active; a USB import pauses when the
 ///   app leaves the foreground and carries on when it is back, decision 1).
@@ -124,14 +164,23 @@ struct LiveApp: View {
                           showImport: { showsImport = true })
                 .navigationDestination(for: CameraDescriptor.self) { camera in
                     BrowseScreen(model: model.browseModel(for: camera), importer: model.importer,
-                                 showImport: { showsImport = true })
+                                 isImportShown: showsImport, showImport: { showsImport = true })
                 }
         }
         .sheet(isPresented: $showsSettings) {
             SettingsScreen(model: model.settings)
         }
-        .sheet(isPresented: $showsImport) {
+        // The close button and swiping down do the same (HIG Sheets): a finished job is cleared once it has been
+        // seen, however the sheet closed; a running one stays.
+        .sheet(isPresented: $showsImport, onDismiss: {
+            if model.importer.isFinished { model.importer.dismiss() }
+        }) {
             ImportScreen(model: model.importer)
+        }
+        // The job's outcome is felt wherever the person is in the app (HIG Playing haptics): success, a warning when
+        // it needs them, an error when it stopped.
+        .sensoryFeedback(trigger: model.importer.feedbackState) { old, new in
+            OutcomeFeedback.forImport(from: old, to: new)?.sensoryFeedback
         }
         .task { model.cameras.launch() }
         .onChange(of: scenePhase, initial: true) { _, phase in

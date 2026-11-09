@@ -37,9 +37,11 @@ struct BrowseFullTests {
     func key(_ descriptor: CameraDescriptor) -> CameraKey { CameraKeys.key(for: descriptor, material: nil) }
 
     func start(catalogue: InMemoryCatalogue = InMemoryCatalogue(), items: [CameraItem]? = nil,
-               leases: LinkLeases = LinkLeases(), listFailure: CameraLinkFailure? = nil) async -> Harness {
+               leases: LinkLeases = LinkLeases(), listFailure: CameraLinkFailure? = nil,
+               listHangs: Bool = false) async -> Harness {
         let link = FakeLink(items: items ?? card)
         await link.set(listFailure: listFailure)
+        await link.set(listHangs: listHangs)
         let importer = FakeImporter()
         let log = RecordingLog()
         let model = BrowseModel(
@@ -195,7 +197,7 @@ struct BrowseFullTests {
         // Newest first, as the card shows them.
         #expect(h.model.selectedItems.map(\.name) == ["DSC00004.HIF", "DSC00003.JPG", "DSC00001.ARW", "DSC00001.JPG"])
         #expect(h.model.selectionSummary == SelectionSummary(count: 4, bytes: 91_000_000))
-        #expect(BrowseWording.selectionSummary(h.model.selectionSummary) == "4 files · 91.0 MB")
+        #expect(BrowseWording.selectionSummary(h.model.selectionSummary) == "4 files · \(ByteWording.size(91_000_000))")
         #expect(h.model.selectionBlock(for: named("C0001.MP4")) == .video)
         #expect(h.model.selectionBlock(for: named("DSC00005.JPG")) == .noCaptureDate)
         await h.stop()
@@ -209,7 +211,7 @@ struct BrowseFullTests {
         #expect(h.model.selection.isEmpty)
         h.model.toggleSelection(named("DSC00003.JPG"))
         #expect(h.model.isSelected(named("DSC00003.JPG")))
-        #expect(BrowseWording.selectionSummary(h.model.selectionSummary) == "1 file · 22.0 MB")
+        #expect(BrowseWording.selectionSummary(h.model.selectionSummary) == "1 file · \(ByteWording.size(22_000_000))")
         h.model.toggleSelection(named("DSC00003.JPG"))
         #expect(h.model.selection.isEmpty)
         #expect(BrowseWording.selectionSummary(h.model.selectionSummary) == BrowseWording.noSelection)
@@ -407,7 +409,9 @@ struct BrowseFullTests {
         #expect(await h.link.closed)
     }
 
-    @Test func cellLabelsSayNameDateTypeImportedAndSelected() async {
+    /// The label names the cell; whether it is selected is the `.isSelected` trait (never "Selected" in words as
+    /// well, and no "Not selected" on every other cell), and why it can't be picked is the value, not a hint.
+    @Test func cellLabelsSayNameDateTypeAndImportedAndTheValueSaysWhyNot() async {
         let catalogue = InMemoryCatalogue(records: [importedRow("DSC00002.ARW", camera: descriptor)])
         let h = await start(catalogue: catalogue)
         #expect(await eventually { h.model.phase == .listed && !h.model.imported.isEmpty })
@@ -415,13 +419,20 @@ struct BrowseFullTests {
             == "DSC00002.ARW, 8 Nov 2026 at 10:00, RAW, Imported")
         h.model.isSelecting = true
         h.model.toggleSelection(named("DSC00003.JPG"))
-        #expect(h.model.accessibilityLabel(for: named("DSC00003.JPG"), date: "9 Nov")
-            == "DSC00003.JPG, 9 Nov, JPEG, New, Selected")
-        #expect(h.model.accessibilityLabel(for: named("DSC00001.JPG"), date: "8 Nov")
-            == "DSC00001.JPG, 8 Nov, JPEG, New, Not selected")
-        #expect(h.model.accessibilityLabel(for: named("C0001.MP4"), date: "9 Nov")
-            == "C0001.MP4, 9 Nov, Video: from 1.1")
-        #expect(h.model.accessibilityLabel(for: named("DSC00005.JPG"), date: nil) == "DSC00005.JPG, No date, JPEG, New")
+        #expect(h.model.accessibilityLabel(for: named("DSC00003.JPG"), date: "9 Nov") == "DSC00003.JPG, 9 Nov, JPEG, New")
+        #expect(h.model.accessibilityLabel(for: named("DSC00001.JPG"), date: "8 Nov") == "DSC00001.JPG, 8 Nov, JPEG, New")
+        #expect(h.model.accessibilityLabel(for: named("C0001.MP4"), date: "9 Nov") == "C0001.MP4, 9 Nov, Video")
+        #expect(h.model.accessibilityLabel(for: named("DSC00005.JPG"), date: nil) == "DSC00005.JPG, No Date, JPEG, New")
+        // The value: the reason, unless the label says it already.
+        #expect(h.model.accessibilityValue(for: named("DSC00003.JPG")) == nil)
+        #expect(h.model.accessibilityValue(for: named("DSC00001.JPG")) == nil)
+        #expect(h.model.accessibilityValue(for: named("DSC00002.ARW")) == nil)   // the label says Imported
+        #expect(h.model.accessibilityValue(for: named("C0001.MP4")) == "Videos can't be imported yet.")
+        #expect(h.model.accessibilityValue(for: named("DSC00005.JPG"))
+            == "No capture date, so it can't be imported yet.")
+        // The same outside the selecting mode, where a tap now selects too.
+        h.model.isSelecting = false
+        #expect(h.model.accessibilityValue(for: named("C0001.MP4")) == "Videos can't be imported yet.")
         await h.stop()
     }
 }

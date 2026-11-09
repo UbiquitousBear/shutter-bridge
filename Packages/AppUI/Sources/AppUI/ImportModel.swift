@@ -180,6 +180,41 @@ public final class ImportModel: BrowseImporting {
     }
     public var canCancel: Bool { state.isActive }
 
+    /// The one button that pauses and continues. One button whose title and symbol change, rather than two that swap,
+    /// so VoiceOver's focus stays on it when it is pressed (HIG Accessibility > VoiceOver).
+    public enum PauseControl: Sendable, Hashable {
+        case pause
+        case resume
+
+        public var title: String {
+            switch self {
+            case .pause: ImportWording.pause
+            case .resume: ImportWording.resume
+            }
+        }
+
+        public var systemImage: String {
+            switch self {
+            case .pause: "pause.fill"
+            case .resume: "play.fill"
+            }
+        }
+    }
+
+    /// What the pause button does now; nil hides it (no job, finished, or waiting for a removed camera).
+    public var pauseControl: PauseControl? {
+        if canPause { .pause } else if canResume { .resume } else { nil }
+    }
+
+    /// The pause button: pauses a running job, or continues a paused one.
+    public func togglePause() async {
+        switch pauseControl {
+        case .pause?: await pause()
+        case .resume?: await resume()
+        case nil: break
+        }
+    }
+
     public var statusLine: String? {
         guard camera != nil else { return nil }
         if isAskingForPhotosAccess { return ImportWording.askingForPhotos }
@@ -226,10 +261,28 @@ public final class ImportModel: BrowseImporting {
         return ByteWording.rate(megabytesPerSecond: rate)
     }
 
+    /// `rateLine` as VoiceOver says it ("41.8 MB per second").
+    public var rateSpokenLine: String? {
+        guard state == .running, let rate = progress.megabytesPerSecond else { return nil }
+        return ByteWording.rateSpoken(megabytesPerSecond: rate)
+    }
+
     /// The ETA at the measured rate, while running.
     public var timeLeftLine: String? {
         guard state == .running, let eta = progress.estimatedTimeRemaining else { return nil }
         return ByteWording.timeLeft(eta)
+    }
+
+    /// `timeLeftLine` as VoiceOver says it, in whole words ("About 3 minutes left").
+    public var timeLeftSpokenLine: String? {
+        guard state == .running, let eta = progress.estimatedTimeRemaining else { return nil }
+        return ByteWording.timeLeftSpoken(eta)
+    }
+
+    /// What the app's haptic for the job looks at (`OutcomeFeedback.forImport(from:to:)`): its state and how many
+    /// files failed, wherever the person is in the app.
+    public var feedbackState: ImportFeedbackState {
+        ImportFeedbackState(state: announcedState, failedFiles: camera == nil ? 0 : progress.filesFailed)
     }
 
     // MARK: - Starting and adding

@@ -25,6 +25,9 @@ actor FakeLink: CameraLink {
     var listFailure: CameraLinkFailure?
     var bytesFailure: CameraLinkFailure?
     var bytesHangs = false
+    /// Listing waits until this is turned off again (or the link closes): the card is "being read".
+    var listHangs = false
+    private var listWaiter: CheckedContinuation<Void, Never>?
     /// Write the listed size (for the engine, which checks it) rather than the item's name.
     var writesListedSize = false
     private(set) var fetched: [CameraItem.ID] = []
@@ -43,6 +46,10 @@ actor FakeLink: CameraLink {
     func set(listFailure: CameraLinkFailure?) { self.listFailure = listFailure }
     func set(bytesFailure: CameraLinkFailure?) { self.bytesFailure = bytesFailure }
     func set(bytesHangs: Bool) { self.bytesHangs = bytesHangs }
+    func set(listHangs: Bool) {
+        self.listHangs = listHangs
+        if !listHangs { releaseList() }
+    }
     func set(writesListedSize: Bool) { self.writesListedSize = writesListedSize }
 
     func remove() { eventSink.yield(.removed) }
@@ -50,7 +57,10 @@ actor FakeLink: CameraLink {
 
     func open() throws(CameraLinkFailure) { isOpen = true }
 
-    func list() throws(CameraLinkFailure) -> [CameraItem] {
+    func list() async throws(CameraLinkFailure) -> [CameraItem] {
+        if listHangs, !closed {
+            await withCheckedContinuation { continuation in listWaiter = continuation }
+        }
         if let listFailure { throw listFailure }
         return items.newestFirst()
     }
@@ -94,10 +104,16 @@ actor FakeLink: CameraLink {
         hang = nil
     }
 
+    private func releaseList() {
+        listWaiter?.resume()
+        listWaiter = nil
+    }
+
     func close() {
         guard !closed else { return }
         closed = true
         releaseHang()
+        releaseList()
         eventSink.finish()
     }
 }

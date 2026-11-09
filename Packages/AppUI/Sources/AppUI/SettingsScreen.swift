@@ -1,14 +1,19 @@
 #if canImport(SwiftUI) && canImport(UIKit) && os(iOS)
 import PhotosBridge
 import SwiftUI
+import UIKit
 
 /// The Settings screen (backlog section 6, *Settings, destination*; decision 9, 8 Nov): where imports go, Photos or
-/// Files, app-wide, default Photos, saved as soon as it changes. The footer says that Files is used whatever the
-/// setting when Photos access is off or restricted, and where the files go. Shown as a sheet from the Cameras
-/// screen's toolbar.
+/// Files, app-wide, default Photos, saved as soon as it changes. When Photos access is off or restricted, a row under
+/// the choice says the next import goes to Files whatever the setting (HIG Settings: show what the app will actually
+/// do), with Open Settings after a denial (HIG Privacy); the access is read when the screen appears and when the app
+/// comes back to the foreground. The footer says where files go in Files. Shown as a sheet from the Cameras screen's
+/// toolbar; the choice is saved at once, so the sheet closes with the system close button, not Done (HIG Sheets).
 struct SettingsScreen: View {
     @Bindable var model: SettingsModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -22,6 +27,15 @@ struct SettingsScreen: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                    if let line = model.forcedFilesLine {
+                        Label(line, systemImage: "exclamationmark.triangle")
+                            .font(.subheadline)
+                        if model.offersPhotosSettingsLink {
+                            Button(ImportWording.openSettings) {
+                                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                            }
+                        }
+                    }
                 } header: {
                     Text(SettingsWording.destinationHeader)
                 } footer: {
@@ -31,10 +45,15 @@ struct SettingsScreen: View {
             .navigationTitle(SettingsWording.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(SettingsWording.done) { dismiss() }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { dismiss() }
                 }
             }
+        }
+        .task { await model.refreshPhotosAccess() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await model.refreshPhotosAccess() }
         }
     }
 

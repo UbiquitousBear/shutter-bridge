@@ -7,8 +7,11 @@ import UIKit
 /// The Import screen (backlog section 6, *Import*; decisions 1, 4 and 9): the job's state in the person's words, the
 /// overall bytes, rate and time left, where the files go (named from the first file) and, when Files is forced, why,
 /// with a button to the app's page in Settings when Photos access is off; then a row per file with its state and
-/// progress. Pause, Continue and Cancel as the job allows. Shown as a sheet over the whole app, so it stays up when
-/// Browse closes because the cable was pulled; the job carries on when the camera is back.
+/// progress. Pause or Continue (one button) and Cancel as the job allows, in the system bottom toolbar. Shown as a
+/// sheet over the whole app, so it stays up when Browse closes because the cable was pulled; the job carries on when
+/// the camera is back. The job runs on whether the sheet is up or not, so it closes with the system close button, not
+/// Done (HIG Sheets); closing it and swiping it down do the same: the app clears a finished job when the sheet closes
+/// either way (`LiveApp`).
 struct ImportScreen: View {
     let model: ImportModel
     @Environment(\.dismiss) private var dismiss
@@ -28,17 +31,25 @@ struct ImportScreen: View {
             .navigationTitle(ImportWording.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(ImportWording.done) {
-                        // A finished job is cleared once it has been seen; a running one stays.
-                        if model.isFinished { model.dismiss() }
-                        dismiss()
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { dismiss() }
+                }
+                // One button that changes between Pause and Continue, so VoiceOver's focus stays on it.
+                if model.hasJob, let control = model.pauseControl {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button {
+                            Task { await model.togglePause() }
+                        } label: {
+                            Label(control.title, systemImage: control.systemImage)
+                                .labelStyle(.titleAndIcon)
+                        }
                     }
                 }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if model.hasJob, model.canPause || model.canResume || model.canCancel {
-                    ImportControls(model: model, confirmCancel: { confirmsCancel = true })
+                if model.hasJob, model.canCancel {
+                    ToolbarSpacer(.flexible, placement: .bottomBar)
+                    ToolbarItem(placement: .bottomBar) {
+                        Button(ImportWording.cancel, role: .destructive) { confirmsCancel = true }
+                    }
                 }
             }
             .confirmationDialog(ImportWording.cancelConfirmTitle, isPresented: $confirmsCancel,
@@ -123,15 +134,18 @@ struct ImportSummary: View {
                 Text(bytes)
                     .monospacedDigit()
             }
+            // Abbreviated units on screen, whole words for VoiceOver ("MB per second", "3 minutes").
             if let rate = model.rateLine {
                 Text(rate)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(model.rateSpokenLine ?? rate)
             }
             if let timeLeft = model.timeLeftLine {
                 Text(timeLeft)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(model.timeLeftSpokenLine ?? timeLeft)
             }
             if let counts = model.countsLine {
                 Text(counts)
@@ -144,52 +158,6 @@ struct ImportSummary: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// Pause, Continue and Cancel, side by side, or stacked at the accessibility text sizes.
-struct ImportControls: View {
-    let model: ImportModel
-    let confirmCancel: @MainActor () -> Void
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    var body: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
-        layout {
-            if model.canPause {
-                Button {
-                    Task { await model.pause() }
-                } label: {
-                    Label(ImportWording.pause, systemImage: "pause.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-            if model.canResume {
-                Button {
-                    Task { await model.resume() }
-                } label: {
-                    Label(ImportWording.resume, systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            if model.canCancel {
-                Button(role: .destructive) {
-                    confirmCancel()
-                } label: {
-                    Text(ImportWording.cancel)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .controlSize(.large)
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
     }
 }
 

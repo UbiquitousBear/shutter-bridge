@@ -7,6 +7,8 @@ actor FakeDiscovery: CameraDiscovery {
     nonisolated let discoveries: AsyncStream<USBDiscoveryEvent>
     private let sink: AsyncStream<USBDiscoveryEvent>.Continuation
     var refuses = true
+    /// Starting fails with this, for a reason other than access, while set.
+    var failure: CameraLinkFailure.Kind?
     private(set) var starts = 0
     let link: FakeLink
 
@@ -16,10 +18,12 @@ actor FakeDiscovery: CameraDiscovery {
     }
 
     func allow() { refuses = false }
+    func set(failure: CameraLinkFailure.Kind?) { self.failure = failure }
     func send(_ event: USBDiscoveryEvent) { sink.yield(event) }
 
     func start() throws(CameraLinkFailure) {
         starts += 1
+        if let failure { throw CameraLinkFailure(failure, detail: "browse: scripted") }
         if refuses { throw CameraLinkFailure(.notAuthorised, detail: "browse: contents access denied") }
     }
 
@@ -329,7 +333,7 @@ struct BrowseModelTests {
         await h.link.set(bytesFailure: CameraLinkFailure(.unreadableItem))
         h.model.copyAsJPEG(named("DSC00003.JPG"))
         await h.model.waitForAction()
-        #expect(h.model.action == .failed("The camera couldn't read this file."))
+        #expect(h.model.action == .failed("The camera couldn't read this file. Check the card in the camera, then try again."))
         #expect(actionFolders(in: h.scratch).isEmpty)
         h.model.dismissMessage()
         #expect(h.model.action == .idle)
@@ -342,7 +346,7 @@ struct BrowseModelTests {
         #expect(await listed(h))
         h.model.copyAsJPEG(named("DSC00002.ARW"))
         await h.model.waitForAction()
-        #expect(h.model.action == .failed("This photo couldn't be made into a JPEG on this iPhone."))
+        #expect(h.model.action == .failed("This photo couldn't be made into a JPEG on this iPhone. Import it to keep the original."))
         #expect(actionFolders(in: h.scratch).isEmpty)
         h.run.cancel()
         await h.run.value

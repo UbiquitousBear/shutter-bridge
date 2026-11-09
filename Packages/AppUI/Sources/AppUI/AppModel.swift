@@ -37,7 +37,7 @@ public final class AppModel {
                                cameraKey: cameraKey, leases: leases)
         importer = ImportModel(engine: engine, settings: settingsStore, photos: photos, destinations: destinations,
                                leases: leases, log: services.log, now: now)
-        settings = SettingsModel(store: settingsStore)
+        settings = SettingsModel(store: settingsStore, photos: photos)
         cameras.importModel = importer
         importer.cameraFinder = cameras
     }
@@ -47,10 +47,14 @@ public final class AppModel {
         cameras.browseModel(for: camera)
     }
 
-    /// The scene's phase: discovery starts (again) when the app is active, and a USB import pauses when it leaves
-    /// the foreground and carries on when it is back (decision 1).
+    /// The scene's phase: discovery starts (again) when the app is active, Settings reads Photos access again (the
+    /// person may have changed it in Settings), and a USB import pauses when the app leaves the foreground and
+    /// carries on when it is back (decision 1).
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
-        if phase == .active { await cameras.becameActive() }
+        if phase == .active {
+            await cameras.becameActive()
+            await settings.refreshPhotosAccess()
+        }
         await importer.scenePhaseChanged(phase)
     }
 
@@ -116,10 +120,13 @@ public final class AppLauncher {
 
 /// App-wide copy.
 public enum AppWording {
+    /// The launch spinner's VoiceOver label; nothing is written on screen (HIG Launching).
     public static let openingCatalogue = "Opening Shutter Bridge…"
-    public static let catalogueFailedTitle = "Shutter Bridge couldn't start"
+    /// How long launch waits before showing a spinner: the catalogue usually opens well within it.
+    public static let spinnerDelay: Duration = .milliseconds(500)
+    public static let catalogueFailedTitle = "Shutter Bridge Couldn't Start"
+    /// The screen has Try Again, so it never asks to restart the app (HIG: don't ask people to quit).
     public static let catalogueFailedDetail = "It couldn't open its catalogue of imported files, so it can't tell "
-        + "which photos are already imported. Try again. If this keeps happening, free some space on this iPhone "
-        + "and restart the app."
+        + "which photos are already imported. Free some space on this iPhone, then tap Try Again."
     public static let tryAgain = "Try Again"
 }

@@ -4,8 +4,9 @@ import SwiftUI
 import UIKit
 
 /// The Cameras screen (backlog section 6): the connected cameras with a USB-C badge and the mode in the camera's
-/// wording, the empty state, and a clear message when ImageCaptureCore's access is off. Its toolbar opens Settings,
-/// and the Import screen while a job is shown.
+/// wording, the empty state, a clear message when ImageCaptureCore's access is off, and another with Try Again when
+/// discovery couldn't start at all (so it isn't taken for "No Camera Connected"). Its toolbar opens Settings.
+/// While a job exists, the same import strip as on Browse sits at the top and opens the Import screen.
 struct CamerasScreen: View {
     let model: CamerasModel
     var importer: ImportModel?
@@ -17,16 +18,6 @@ struct CamerasScreen: View {
         content
             .navigationTitle(CamerasWording.title)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if let importer, importer.hasJob {
-                        Button {
-                            showImport()
-                        } label: {
-                            Label(CamerasWording.importButton, systemImage: "square.and.arrow.down")
-                        }
-                        .accessibilityValue(importer.statusLine ?? "")
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSettings()
@@ -35,15 +26,20 @@ struct CamerasScreen: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .top) {
-                if let notice = model.noticeStatus {
-                    NoticeStrip(notice: notice) {
-                        if model.noticeStatus == notice { model.notice = nil }
+            .safeAreaBar(edge: .top) {
+                StatusStrips {
+                    if let notice = model.noticeStatus {
+                        NoticeStrip(notice: notice) {
+                            if model.noticeStatus == notice { model.notice = nil }
+                        }
                     }
-                    .padding(.horizontal)
+                    if let importer, importer.hasJob {
+                        ImportStatusStrip(importer: importer, action: showImport)
+                    }
                 }
             }
             .animation(.default, value: model.noticeStatus)
+            .animation(.default, value: importer?.hasJob)
             .onChange(of: model.noticeStatus) { _, notice in notice?.announcement.post() }
     }
 
@@ -59,6 +55,18 @@ struct CamerasScreen: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
+        } else if model.access == .failed {
+            ContentUnavailableView {
+                Label(CamerasWording.discoveryFailedTitle, systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(CamerasWording.discoveryFailedDetail)
+            } actions: {
+                Button(BrowseWording.tryAgain) {
+                    let model = self.model
+                    Task { await model.becameActive() }
+                }
+                .buttonStyle(.borderedProminent)
+            }
         } else if model.cameras.isEmpty {
             CamerasEmptyView(isLooking: model.isLooking)
         } else {
@@ -71,15 +79,25 @@ struct CamerasScreen: View {
     }
 }
 
+/// A connected camera: its name, its mode and the USB-C badge. At the accessibility text sizes the row stacks, the
+/// decorative symbol goes and the badge moves under the mode line, so the long MTP mode line isn't wrapped a word
+/// per line (HIG Typography > Dynamic Type).
 struct CameraRow: View {
     let camera: CameraDescriptor
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "camera")
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+        layout {
+            if !stacked {
+                Image(systemName: "camera")
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(CamerasWording.displayName(for: camera))
                     .font(.headline)
@@ -87,13 +105,16 @@ struct CameraRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
+            if !stacked {
+                Spacer(minLength: 8)
+            }
             if camera.carrier == .usb {
+                // A fill, not a material: the row is solid, so there is nothing behind it to blur (HIG Materials).
                 Label(CamerasWording.usbBadge, systemImage: "cable.connector")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
             }
         }
         .padding(.vertical, 4)
@@ -101,20 +122,21 @@ struct CameraRow: View {
     }
 }
 
+/// No camera: the cable and the mode to choose, short, with *Which USB Mode?* for the modes in detail (HIG Writing;
+/// `ContentUnavailableView`: a short title, a brief description, an action for more).
 struct CamerasEmptyView: View {
     let isLooking: Bool
     private let copy = CamerasEmptyState.standard
+    @State private var showsModeHelp = false
 
     var body: some View {
         ContentUnavailableView {
             Label(copy.title, systemImage: "cable.connector")
         } description: {
-            VStack(spacing: 12) {
-                Text(copy.connect)
-                Text(copy.modeAdvice)
-                Text(copy.remoteShootNote)
-            }
+            Text(copy.connect)
         } actions: {
+            Button(copy.modeHelpButton) { showsModeHelp = true }
+                .buttonStyle(.bordered)
             if isLooking {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -124,48 +146,33 @@ struct CamerasEmptyView: View {
                 .foregroundStyle(.secondary)
             }
         }
+        .sheet(isPresented: $showsModeHelp) {
+            USBModeHelpSheet(copy: copy)
+                .presentationDetents([.medium, .large])
+        }
     }
 }
 
-/// A one-line message with a close button, for the top of a screen. A problem shows `exclamationmark.triangle` and
-/// stays until closed; a confirmation closes itself after `StatusNotice.autoDismissDelay`, except while VoiceOver is
-/// running. The close button's target is 44 × 44 pt (HIG Buttons); it is borderless, not glass, because the strip is
-/// already a material surface.
-struct NoticeStrip: View {
-    let notice: StatusNotice
-    let dismiss: () -> Void
-    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
-
-    private struct TimerID: Hashable {
-        var notice: StatusNotice
-        var voiceOverEnabled: Bool
-    }
+/// The USB modes in detail: which to choose, why Remote Shoot (PC Remote) shows nothing, and what to do when the
+/// camera doesn't ask. Nothing is confirmed here, so it closes with the system close button (HIG Sheets).
+struct USBModeHelpSheet: View {
+    let copy: CamerasEmptyState
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: notice.systemImage)
-                .accessibilityHidden(true)
-            Text(notice.text)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: dismiss) {
-                Label(BrowseWording.close, systemImage: "xmark")
-                    .labelStyle(.iconOnly)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
+        NavigationStack {
+            List {
+                ForEach(copy.modeHelpLines, id: \.self) { line in
+                    Text(line)
+                }
             }
-            .buttonStyle(.borderless)
-        }
-        .font(.subheadline)
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
-        .padding(.vertical, 4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .task(id: TimerID(notice: notice, voiceOverEnabled: voiceOverEnabled)) {
-            guard let delay = notice.dismissDelay(voiceOverRunning: voiceOverEnabled) else { return }
-            // Cancelled when the notice changes or goes, or VoiceOver starts: then it isn't closed here.
-            guard (try? await Task.sleep(for: delay)) != nil else { return }
-            dismiss()
+            .navigationTitle(copy.modeHelpButton)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { dismiss() }
+                }
+            }
         }
     }
 }

@@ -159,7 +159,7 @@ struct ImportModelTests {
         #expect(h.model.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › Camera.")
         #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
-        #expect(h.model.rows.allSatisfy { $0.stateText == "Saved to Files" })
+        #expect(h.model.rows.allSatisfy { $0.stateText == "Imported to Files" })
     }
 
     @Test func restrictedGoesToFilesWithoutTheSettingsLink() async {
@@ -227,9 +227,11 @@ struct ImportModelTests {
         #expect(h.model.rows.first?.stateText == "Copying from the camera")
         #expect(h.model.rows.first?.isInFlight == true)
         #expect(h.model.rows.dropFirst().allSatisfy { $0.stateText == "Waiting" && !$0.isInFlight })
-        #expect(h.model.rows[1].accessibilityLabel == "DSC00001.ARW, Waiting, 4 KB")
+        // Sizes come from the system's formatter for the region (`ByteWording`), so they're compared with it.
+        #expect(h.model.rows[1].accessibilityLabel == "DSC00001.ARW, Waiting, \(ByteWording.size(card[0].size))")
         #expect(h.model.statusLine == "0 of 3 files done")
-        #expect(h.model.bytesLine == "0 bytes of 9 KB")
+        #expect(h.model.progress.bytesTotal == card[0].size + card[1].size + card[2].size)
+        #expect(h.model.bytesLine == ByteWording.progress(0, of: h.model.progress.bytesTotal))
         #expect(await h.importAll([card[0]]) == .nothingNew)
         #expect(h.model.keepsScreenOn)
         await h.model.cancel()
@@ -259,7 +261,7 @@ struct ImportModelTests {
         #expect(h.model.canPause)
         await h.model.pause()
         #expect(h.model.state == .paused(.byPerson))
-        #expect(h.model.statusLine == "Paused. Tap Continue to carry on.")
+        #expect(h.model.statusLine == "Paused. Tap Continue to resume.")
         #expect(h.model.canResume)
         #expect(!h.model.canPause)
         #expect(!h.model.keepsScreenOn)   // the person paused it: the screen may sleep
