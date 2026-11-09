@@ -100,7 +100,7 @@ struct IPLinkTraceAgainstSimulatorTests {
         let (_, checkpoints) = try await IPLinkResumeAgainstSimulatorTests.cutFreshDownload(raw, at: 0.54, on: bench,
                                                                                             events: &events)
         let last = try #require(checkpoints.last)
-        #expect(recorder.all.contains { if case .linkLost(.some) = $0 { true } else { false } })
+        #expect(recorder.all.contains { if case .linkLost(.some, _) = $0 { true } else { false } })
 
         try await bench.open()
         #expect(recorder.all.contains { if case .linkOpened(_, true, true, _, _, _) = $0 { true } else { false } })
@@ -139,6 +139,71 @@ struct IPLinkTraceAgainstSimulatorTests {
         #expect(recorder.all.contains(.resumeRefused(offset: UInt64(chunk))))
         #expect(!recorder.all.contains { if case .resumeFinished = $0 { true } else { false } })
         await bench.link.close()
+    }
+
+    // MARK: Thumbnails (bench 19.1: thumbnails that never loaded, with nothing logged)
+
+    @Test func answeredThumbnailsAreCountedWithTheirBytesAndTheFirstOnesTime() async throws {
+        let recorder = Recorder()
+        let bench = try LinkBench(trace: recorder.trace)
+        try await bench.open()
+        let items = try await bench.link.list()
+        var bytes: UInt64 = 0
+        for item in items.prefix(2) { bytes += UInt64(try await bench.link.thumbnail(of: item.id).count) }
+        await bench.link.close()
+        let seen = try #require(recorder.closed).thumbnails
+        #expect(seen.asked == 2 && seen.answered == 2)
+        #expect(seen.bytesTotal == bytes && bytes > 0)
+        #expect(seen.failuresByCode.isEmpty && seen.timeouts == 0 && seen.otherFailures == 0 && seen.notListed == 0)
+        // Nothing moved the camera's clock between the open and the thumbnail.
+        #expect(seen.firstAfterOpen == .zero)
+    }
+
+    @Test func aThumbnailNotListedInDeviceInfoIsCountedAndNeverSent() async throws {
+        var info = try CapturedA7C2.deviceInfo(.ptpIP)
+        info.operationsSupported.removeAll { $0 == PTPOperationCode.getThumb.rawValue }
+        let bench = try LinkBench(deviceInfo: info)
+        try await bench.open()
+        let item = try #require(try await bench.link.list().first)
+        await #expect(throws: CameraLinkFailure.self) { try await bench.link.thumbnail(of: item.id) }
+        #expect(!bench.camera.commandsAnswered.contains(.getThumb))
+        let seen = await bench.link.diagnostics.thumbnails
+        #expect(seen.notListed == 1 && seen.asked == 0)
+        await bench.link.close()
+    }
+
+    @Test(arguments: [PTPResponseCode.operationNotSupported, .noThumbnailPresent])
+    func aRefusedThumbnailIsCountedByCodeAndTheSessionStays(code: PTPResponseCode) async throws {
+        let bench = try LinkBench()
+        try await bench.open()
+        let item = try #require(try await bench.link.list().first)
+        bench.camera.withResponder { $0.inject(code, forNext: .getThumb) }
+        await #expect(throws: CameraLinkFailure.self) { try await bench.link.thumbnail(of: item.id) }
+        #expect(await bench.link.isOpen)
+        #expect(try await !bench.link.thumbnail(of: item.id).isEmpty)
+        let seen = await bench.link.diagnostics.thumbnails
+        #expect(seen.asked == 2 && seen.answered == 1)
+        #expect(seen.failuresByCode == [code: 1] && seen.refused == 1)
+        await bench.link.close()
+    }
+
+    @Test func aThumbnailNeverAnsweredLosesTheSessionAndCountsATimeout() async throws {
+        let recorder = Recorder()
+        // A short reply limit on the real clock, so the unanswered GetThumb ends quickly; the simulated camera answers
+        // everything else at once.
+        let bench = try LinkBench(trace: recorder.trace) { $0.timing.reply = .seconds(1) }
+        var events = bench.link.events.makeAsyncIterator()
+        try await bench.open()
+        let item = try #require(try await bench.link.list().first)
+        bench.camera.withResponder { $0.silence(forNext: .getThumb) }
+        await #expect(throws: CameraLinkFailure.self) { try await bench.link.thumbnail(of: item.id) }
+        #expect(await events.next() == .sessionLost)
+        #expect(!(await bench.link.isOpen))
+        #expect(recorder.all.contains { if case .linkLost(.timedOut?, _) = $0 { true } else { false } })
+        await bench.link.close()
+        let seen = try #require(recorder.closed).thumbnails
+        #expect(seen.asked == 1 && seen.answered == 0 && seen.timeouts == 1)
+        #expect(seen.firstAfterOpen == nil)
     }
 
     @Test func withoutATraceNothingIsRecordedAndTheLinkBehavesAlike() async throws {

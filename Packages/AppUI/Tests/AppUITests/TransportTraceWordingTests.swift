@@ -42,9 +42,9 @@ struct TransportTraceWordingTests {
                                       windowLeft: .seconds(50)))
             == "wifi join: rewrite hand-off done in 1.0 s (connect included): no CC08 write, the camera's Wi-Fi was already on; "
             + "at most 50.0 s left of the camera's 50 s")
-        #expect(line(.joinApplied(attempt: 1, after: .milliseconds(55_200), failure: nil))
+        #expect(line(.joinApplied(attempt: 1, after: .milliseconds(55_200), failure: nil, inFront: true))
             == "wifi join: join 1 returned after 55.2 s (iOS's prompt included)")
-        #expect(line(.joinApplied(attempt: 2, after: .milliseconds(400), failure: .userDenied))
+        #expect(line(.joinApplied(attempt: 2, after: .milliseconds(400), failure: .userDenied, inFront: true))
             == "wifi join: join 2 failed after 0.4 s: declined")
         #expect(line(.gateway(found: true, after: .milliseconds(1_250)))
             == "wifi join: the camera's gateway 192.168.122.1 appeared 1.3 s after the join")
@@ -104,10 +104,10 @@ struct TransportTraceWordingTests {
         #expect(line(.resumeRefused(offset: 16 * 1_048_576))
             == "wifi link: the camera refused the first 0x9211 read at 16.0 MiB (16777216 B); copying the file again from the start")
         #expect(line(.resumeFinished(reads: 9)) == "wifi link: the resumed file finished after 9 0x9211 reads")
-        #expect(line(.linkLost(.linkLost(posix: 53))) == "wifi link: the session was lost: the network went away")
-        #expect(line(.linkLost(.protocolViolation("serial 1234567 at 10.0.0.9")))
+        #expect(line(.linkLost(.linkLost(posix: 53), thumbnails: IPThumbnailDiagnostics())) == "wifi link: the session was lost: the network went away")
+        #expect(line(.linkLost(.protocolViolation("serial 1234567 at 10.0.0.9"), thumbnails: IPThumbnailDiagnostics()))
             == "wifi link: the session was lost: the camera's bytes broke PTP/IP")
-        #expect(line(.linkLost(nil)) == "wifi link: the session was lost: the camera answered SessionNotOpen")
+        #expect(line(.linkLost(nil, thumbnails: IPThumbnailDiagnostics())) == "wifi link: the session was lost: the camera answered SessionNotOpen")
         var seen = IPLinkDiagnostics()
         seen.sessionsOpened = 2
         seen.sessionsLost = 1

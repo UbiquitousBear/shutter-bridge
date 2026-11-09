@@ -276,11 +276,22 @@ struct WirelessJoinTests {
         #expect(await rig.session.network == nil)
     }
 
-    @Test func notInForegroundAtApplyPausesForAJoin() async throws {
+    @Test func notInForegroundTwiceWithTheSceneActivePausesForAJoin() async throws {
+        // iOS says the app isn't in front while the scene reads active (an inactive to active race): once more after a
+        // second, then pause.
+        let rig = Rig()
+        rig.joiner.script([.init(failure: .notInForeground), .init(failure: .notInForeground)])
+        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
+        #expect(rig.joiner.applyTimes == [.zero, WirelessTiming.applyAgainInFrontAfter])
+        #expect(await rig.session.phase == .paused(.needsJoin))
+        #expect(!rig.phases.all.contains(.awaitingFront))
+    }
+
+    @Test func notInForegroundOnceWithTheSceneActiveIsTriedOnceMore() async throws {
         let rig = Rig()
         rig.joiner.script([.init(failure: .notInForeground)])
-        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
-        #expect(await rig.session.phase == .paused(.needsJoin))
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.joiner.applyTimes == [.zero, WirelessTiming.applyAgainInFrontAfter])
     }
 
     @Test func aJoinFromTheBackgroundPausesWithoutTouchingBluetooth() async throws {
@@ -409,5 +420,191 @@ struct WirelessJoinTests {
         #expect(rig.path.waitTimes.isEmpty)
         #expect(await session.phase == .idle)
         #expect(await session.network == nil)
+    }
+
+    // MARK: The app away during the join (bench 19.1)
+
+    @Test func awayDuringTheHandoffHoldsTheJoinUntilTheAppIsBack() async throws {
+        // The person switches apps 2 s into a 5 s hand-off and comes back at 30 s: nothing is applied while away.
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        rig.comeBack(at: .seconds(30))
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.joiner.applyTimes == [.seconds(30)])
+        #expect(rig.handoff.kinds == [.run])
+        // Inside the camera's 50 s (they end at 55 s): no look at CC09, no second switch-on.
+        #expect(rig.link.count(.read(.status)) == 0)
+        // The Bluetooth link was kept through the hold.
+        #expect(rig.connector.count == 1)
+        #expect(!rig.link.calls.contains(.disconnect))
+        await rig.phases.waitFor(.ready)
+        #expect(rig.phases.all == [.idle, .handingOff, .awaitingFront, .joining, .openingSession, .ready])
+    }
+
+    @Test func awayPastTheCamerasFiftySecondsSwitchesTheWiFiOnAgainOnReturnWithoutUsingARewrite() async throws {
+        // Away from 2 s to 90 s; the camera's Wi-Fi went off at 56 s. On the return: CC09 read in front, a fresh `run`,
+        // then the join. Two lapses after that still get their two rewrites, so the switch-on on return wasn't counted.
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        rig.link.schedule(status: 0, after: .seconds(56), notify: false)
+        rig.comeBack(at: .seconds(90))
+        rig.path.script([.never, .never, .after(.seconds(1))])
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.handoff.kinds == [.run, .run, .rewrite, .rewrite])
+        #expect(rig.handoff.calls.map(\.at) == [.zero, .seconds(90), .seconds(110), .seconds(130)])
+        #expect(rig.joiner.applyTimes == [.seconds(90), .seconds(110), .seconds(130)])
+        #expect(rig.link.logged.filter { $0.call == .read(.status) }.map(\.at) == [.seconds(90), .seconds(110), .seconds(130)])
+        #expect(rig.connector.count == 1)
+    }
+
+    @Test func notInForegroundWhileAwayHoldsAndAppliesAgainOnReturn() async throws {
+        // iOS refuses the first `apply` (code 14) as the person leaves; they come back at 20 s. The refusal is not a failed
+        // try: the join after it still gets its two.
+        let rig = Rig()
+        rig.joiner.script([.init(failure: .notInForeground, during: rig.away(after: .zero))])
+        rig.comeBack(at: .seconds(20))
+        rig.path.script([.never, .after(.seconds(1))])
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.joiner.applyTimes == [.zero, .seconds(20), .seconds(40)])
+        await rig.phases.waitFor(.ready)
+        #expect(rig.phases.all.contains(.awaitingFront))
+    }
+
+    @Test func theHoldRunningOutLetsGoOfEverythingAndPausesForAJoin() async throws {
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
+        #expect(rig.clock.elapsed == .seconds(5) + WirelessTiming.joinHoldWhileAway)
+        #expect(rig.joiner.applyTimes.isEmpty)
+        #expect(Array(rig.link.calls.suffix(6)) == fiveOff + [.disconnect])
+        #expect(rig.journal.all == ["notifications off"])
+        #expect(await rig.session.phase == .paused(.needsJoin))
+        #expect(await rig.session.network == nil)
+    }
+
+    @Test func leavingDuringTheHoldEndsItPromptlyAndLetsGo() async throws {
+        let rig = Rig()
+        rig.handoff.script([.init(during: rig.away(after: .zero))])
+        let session = rig.session
+        let preparing = Task { () -> WirelessFailure? in
+            do throws(WirelessFailure) {
+                _ = try await session.prepareImport()
+                return nil
+            } catch {
+                return error
+            }
+        }
+        await rig.clock.waitUntilSomeoneSleeps() // the hold's limit
+        #expect(await session.phase == .awaitingFront)
+        await session.leave()
+        #expect(await preparing.value == .cancelled)
+        #expect(rig.clock.elapsed == .zero)
+        #expect(rig.joiner.applyTimes.isEmpty)
+        #expect(rig.link.calls.last == .disconnect)
+        #expect(await session.phase == .idle)
+    }
+
+    /// Bench 19.1's probes B, C and D: the person left during the hand-off and never came back. `apply` used to be called
+    /// from the background, the camera's 50 s ran out, and the rewrite's failure was reported as the hand-off's ("The
+    /// camera didn't switch its Wi-Fi on"). Now nothing is applied or rewritten while away, and the join pauses for the app.
+    @Test(arguments: [HandoffFailure.timedOut(lastStatus: .terminated), .wifiDidNotStart(lastStatus: .terminated)])
+    func awayThroughoutAfterTheHandoffPausesForAJoinNotAHandoffFailure(rewriteFailure: HandoffFailure) async throws {
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2))),
+                            .init(delay: .seconds(30), failure: rewriteFailure)])
+        rig.link.schedule(status: 0, after: .seconds(56), notify: false)
+        rig.path.script([], fallback: .never)
+        rig.joiner.script([.init(delay: .seconds(60))])
+        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
+        #expect(rig.joiner.applyTimes.isEmpty)
+        #expect(rig.handoff.kinds == [.run])
+    }
+
+    /// The person left while iOS's prompt was up, and `apply` came back (with nothing, or failing) after the camera's 50 s:
+    /// no rewrite while away; the hold runs out and the join pauses for the app.
+    @Test(arguments: [JoinFailure?.none, .other(11)])
+    func leavingWhileThePromptIsUpHoldsTheRewriteAndPausesForAJoin(applyFailure: JoinFailure?) async throws {
+        let rig = Rig()
+        rig.handoff.script([.init(), .init(delay: .seconds(30), failure: .timedOut(lastStatus: .terminated))])
+        rig.joiner.script([.init(delay: .seconds(60), failure: applyFailure, during: rig.away(after: .seconds(2)))])
+        rig.link.schedule(status: 0, after: .seconds(56), notify: false)
+        rig.path.script([], fallback: .never)
+        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
+        #expect(rig.handoff.kinds == [.run])
+        #expect(rig.joiner.applyTimes == [.zero])
+        #expect(rig.clock.elapsed == .seconds(60) + WirelessTiming.joinHoldWhileAway)
+        #expect(rig.joiner.leftNetworks == [Cam.ssid])
+        #expect(Array(rig.link.calls.suffix(6)) == fiveOff + [.disconnect])
+    }
+
+    /// As above, but the person comes back at 90 s: the switch-on runs in front (a fresh `run`) and fails. The lapse came
+    /// while the app was away with no prompt answered, so the join pauses for the app rather than blaming the camera.
+    @Test(arguments: [HandoffFailure.timedOut(lastStatus: .terminated), .wifiDidNotStart(lastStatus: .terminated)])
+    func aSwitchOnAfterALapseWhileAwayThatFailsPausesForAJoin(rewriteFailure: HandoffFailure) async throws {
+        let rig = Rig()
+        rig.handoff.script([.init(), .init(delay: .seconds(30), failure: rewriteFailure)])
+        rig.joiner.script([.init(delay: .seconds(60), during: rig.away(after: .seconds(2)))])
+        rig.link.schedule(status: 0, after: .seconds(56), notify: false)
+        rig.path.script([], fallback: .never)
+        rig.comeBack(at: .seconds(90))
+        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
+        #expect(rig.handoff.kinds == [.run, .run])
+        #expect(rig.handoff.calls.map(\.at) == [.zero, .seconds(90)])
+        #expect(rig.joiner.applyTimes == [.zero])
+    }
+
+    @Test func aHandoffThatTimedOutWhileTheAppWasAwayIsRunOnceMoreFromTheFront() async throws {
+        // Its time limits may have run out while the app was suspended, without the camera having had its time.
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), failure: .timedOut(lastStatus: .terminated),
+                                  during: rig.away(after: .seconds(2))),
+                            .init()])
+        rig.comeBack(at: .seconds(20))
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.handoff.kinds == [.run, .run])
+        #expect(rig.handoff.calls.map(\.at) == [.zero, .seconds(20)])
+        #expect(rig.joiner.applyTimes == [.seconds(20)])
+    }
+
+    @Test func aHandoffThatTimedOutInFrontFailsAsBefore() async throws {
+        let rig = Rig()
+        rig.handoff.script([.init(delay: .seconds(5), failure: .timedOut(lastStatus: .terminated))])
+        #expect(failure(await rig.prepare()) == .handoff(.timedOut(lastStatus: .terminated)))
+        #expect(rig.handoff.kinds == [.run])
+        #expect(rig.joiner.applyTimes.isEmpty)
+    }
+
+    @Test func aRewriteThatFailsInFrontIsARewriteFailure() async throws {
+        let rig = Rig()
+        rig.link.schedule(status: 0, after: .seconds(10), notify: false)
+        rig.path.script([.never])
+        rig.handoff.script([.init(), .init(failure: .wifiDidNotStart(lastStatus: .terminated))])
+        #expect(failure(await rig.prepare()) == .rewriteFailed(.wifiDidNotStart(lastStatus: .terminated)))
+        #expect(rig.handoff.kinds == [.run, .rewrite])
+        #expect(await rig.session.phase == .idle)
+    }
+
+    @Test func theAppAwayWhileThePromptIsUpStillJoins() async throws {
+        // 5 Nov 01:21: in the background 8.9 s with iOS's prompt up, and still joined. `apply` is already out, so nothing
+        // is held: the gateway is awaited as usual.
+        let rig = Rig()
+        rig.joiner.script([.init(delay: .seconds(9), during: rig.away(after: .seconds(1)))])
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.joiner.applyTimes == [.zero])
+        #expect(rig.path.waitTimes == [.seconds(9)])
+        await rig.phases.waitFor(.ready)
+        #expect(!rig.phases.all.contains(.awaitingFront))
+    }
+
+    @Test func anInactiveAppIsInFrontSoNothingIsHeld() async throws {
+        // iOS's prompt, Control Centre or a call banner make the app inactive, not background: `isInForeground` reads true
+        // and no move to the background is told, so the join goes on.
+        let rig = Rig()
+        rig.foreground.set(true)
+        rig.joiner.script([.init(delay: .seconds(8))])
+        _ = try #require(opened(await rig.prepare()))
+        #expect(rig.joiner.applyTimes == [.zero])
+        await rig.phases.waitFor(.ready)
+        #expect(rig.phases.all == [.idle, .handingOff, .joining, .openingSession, .ready])
     }
 }

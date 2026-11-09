@@ -58,6 +58,16 @@ public enum WirelessTiming {
     /// progress at the limit is not cut off: it finishes within the connector's own limits first.
     public static let linkDownStayLimit: Duration = .seconds(60)
 
+    /// How long a join is held while the app is away (`WirelessPhase.awaitingFront`), with the Bluetooth link kept, before
+    /// the session lets go of everything and pauses with `.needsJoin`. A join is never applied from the background (bench
+    /// 19.1, 9 Nov: `apply` made while away showed no prompt, and the camera's 50 s ran out). Decided by Shamil on 9 Nov as
+    /// a starting value: `unverified`, nobody measured how long the camera keeps its Bluetooth link with the app away.
+    public static let joinHoldWhileAway: Duration = .seconds(300)
+
+    /// After iOS refused `apply` because the app wasn't in front while the scene already read active (an inactive to active
+    /// race), the gap before the one more try. `unverified`: the race was never seen; a second refusal pauses.
+    public static let applyAgainInFrontAfter: Duration = .seconds(1)
+
     /// The gap between tries to reconnect the Bluetooth link during the stay. `unverified`: the spike never reconnected
     /// during a stay; each try already spends the connector's own limits (W10: 8 s, or 20 s, then a 10 s scan).
     public static let bluetoothReconnectEvery: Duration = .seconds(5)

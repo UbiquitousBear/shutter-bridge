@@ -108,6 +108,7 @@ public struct PTPResponder: Sendable {
     /// Every command answered, in order, for tests and logs.
     public private(set) var commandsAnswered: [PTPOperationCode] = []
     private var injected: [UInt16: [PTPResponseCode]] = [:]
+    private var silenced: [UInt16: Int] = [:]
     /// How the PTP/IP flavour's whole-card session behaves and how long it takes (`WholeCardBehaviour`).
     public var wholeCard = WholeCardBehaviour()
     // Whole-card state, in WholeCardSession.swift (stored properties can't live in an extension).
@@ -140,6 +141,13 @@ public struct PTPResponder: Sendable {
     /// DeviceBusy, an IncompleteTransfer, AccessDenied. Faults beyond these (drops, a slow link) are Iteration 2's.
     public mutating func inject(_ code: PTPResponseCode, forNext operation: PTPOperationCode, times: Int = 1) {
         injected[operation.rawValue, default: []] += Array(repeating: code, count: max(0, times))
+    }
+
+    /// The next `times` commands with this operation code get no response at all, as GetDevicePropValue gets in a
+    /// whole-card session: the initiator's own reply limit ends the wait (a GetThumb the camera never answers, bench 19.1,
+    /// `unverified` on the camera).
+    public mutating func silence(forNext operation: PTPOperationCode, times: Int = 1) {
+        silenced[operation.rawValue, default: 0] += max(0, times)
     }
 
     /// Shoots `frames` onto the card (`ScriptedCard.shootMore`) and returns the events to send, one per new object.
@@ -189,6 +197,12 @@ public struct PTPResponder: Sendable {
         guard command.type == .command else { return reply(.generalError, tx) }
         commandsAnswered.append(op)
         idle = .zero
+        if let left = silenced[op.rawValue], left > 0 {
+            silenced[op.rawValue] = left > 1 ? left - 1 : nil
+            var silent = reply(.ok, tx)
+            silent.isSilent = true
+            return silent
+        }
         if var queue = injected[op.rawValue], !queue.isEmpty {
             let code = queue.removeFirst()
             injected[op.rawValue] = queue.isEmpty ? nil : queue

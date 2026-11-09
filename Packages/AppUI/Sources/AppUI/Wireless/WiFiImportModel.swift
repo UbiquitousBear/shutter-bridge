@@ -120,7 +120,7 @@ public final class WiFiImportModel {
     /// The camera is being reached: Bluetooth, the join or the session.
     public var isConnecting: Bool {
         switch phase {
-        case .handingOff, .joining, .openingSession: true
+        case .handingOff, .joining, .awaitingFront, .openingSession: true
         case .idle, .ready, .staying, .leaving, .paused: false
         }
     }
@@ -129,7 +129,7 @@ public final class WiFiImportModel {
     public var isJoined: Bool {
         switch phase {
         case .joining, .openingSession, .ready, .staying: true
-        case .idle, .handingOff, .leaving, .paused: false
+        case .idle, .handingOff, .awaitingFront, .leaving, .paused: false
         }
     }
 
@@ -191,7 +191,7 @@ public final class WiFiImportModel {
                 stayEndsAt = nil
             case .openingSession:
                 stayEndsAt = nil
-            case .joining, .ready, .leaving, .paused:
+            case .joining, .awaitingFront, .ready, .leaving, .paused:
                 stayEndsAt = nil
                 if newPhase != .joining { setWaitingForLocalNetwork(false) }
             }

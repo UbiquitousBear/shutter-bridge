@@ -54,7 +54,7 @@ struct TransportTraceTests {
             .handoffDetailsRead(after: statusTwo, tries: 1),
             .handoffFinished(after: statusTwo, rewrite: false, wroteWiFiOn: true, statusTwoAlready: false,
                              windowLeft: HandoffTiming.cameraWiFiWindow),
-            .joinApplied(attempt: 1, after: .seconds(8), failure: nil),
+            .joinApplied(attempt: 1, after: .seconds(8), failure: nil, inFront: true),
             .gateway(found: true, after: .milliseconds(1_500)),
             .sessionOpened(after: .zero, tries: 1, reopening: false),
             .preparationEnded(succeeded: true, times: WirelessStepTimes(
@@ -88,7 +88,7 @@ struct TransportTraceTests {
         _ = try #require(opened(await rig.prepare()))
 
         let events = recorder.all
-        #expect(events.contains(.joinApplied(attempt: 1, after: .seconds(55), failure: nil)))
+        #expect(events.contains(.joinApplied(attempt: 1, after: .seconds(55), failure: nil, inFront: true)))
         let checked = try #require(events.firstIndex(of: .cameraWiFiChecked(.read(3), windowPassed: true, off: true)))
         let rewrite = try #require(events.firstIndex(of: .rewriteStarted(number: 1, limit: WirelessTiming.rewritesPerJoin)))
         #expect(checked < rewrite)
@@ -107,7 +107,7 @@ struct TransportTraceTests {
         rig.joiner.script([.init(delay: .seconds(3), failure: .userDenied)])
         #expect(failure(await rig.prepare()) == .paused(.joinDeclined))
         let events = recorder.all
-        #expect(events.contains(.joinApplied(attempt: 1, after: .seconds(3), failure: .userDenied)))
+        #expect(events.contains(.joinApplied(attempt: 1, after: .seconds(3), failure: .userDenied, inFront: true)))
         #expect(events.last.map { if case .preparationEnded(false, _) = $0 { true } else { false } } == true)
     }
 
@@ -173,6 +173,89 @@ struct TransportTraceTests {
         let deadline = ContinuousClock.now + .seconds(10)
         while signals().count < 2, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
         #expect(signals() == [-58, -58])
+    }
+
+    // MARK: The app away during the join (bench 19.1)
+
+    /// The scene and hold events, in order.
+    private func awayEvents(_ events: [TransportTraceEvent]) -> [TransportTraceEvent] {
+        events.filter {
+            switch $0 {
+            case .appWentToBackground, .appCameBack, .joinHeld, .joinHoldEnded, .joinHoldRanOut, .handoffRetriedAfterAway,
+                 .preparationFailed:
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    @Test func aHeldJoinRecordsTheSceneChangesAndTheHold() async throws {
+        let recorder = TraceRecorder()
+        let rig = Rig(trace: recorder.trace)
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        rig.comeBack(at: .seconds(30))
+        _ = try #require(opened(await rig.prepare()))
+        let events = recorder.all
+        #expect(awayEvents(events) == [
+            .appWentToBackground(during: .handOff),
+            .joinHeld(reason: .beforeJoin, limit: WirelessTiming.joinHoldWhileAway),
+            .appCameBack(after: .seconds(28), during: .join),
+            .joinHoldEnded(after: .seconds(25), windowPassed: false),
+        ])
+        #expect(events.contains(.joinApplied(attempt: 1, after: .zero, failure: nil, inFront: true)))
+    }
+
+    @Test func aHoldThatRunsOutIsRecordedWithTheTimeAway() async throws {
+        let recorder = TraceRecorder()
+        let rig = Rig(trace: recorder.trace)
+        rig.handoff.script([.init(delay: .seconds(5), during: rig.away(after: .seconds(2)))])
+        #expect(failure(await rig.prepare()) == .paused(.needsJoin))
+        let events = recorder.all
+        #expect(awayEvents(events) == [
+            .appWentToBackground(during: .handOff),
+            .joinHeld(reason: .beforeJoin, limit: WirelessTiming.joinHoldWhileAway),
+            .joinHoldRanOut(after: WirelessTiming.joinHoldWhileAway),
+            .preparationFailed(rewrite: false, appAway: .seconds(3) + WirelessTiming.joinHoldWhileAway),
+        ])
+        #expect(events.last.map { if case .preparationEnded(false, _) = $0 { true } else { false } } == true)
+    }
+
+    @Test func aRewriteFailureIsRecordedAsARewrite() async throws {
+        let recorder = TraceRecorder()
+        let rig = Rig(trace: recorder.trace)
+        rig.link.schedule(status: 0, after: .seconds(10), notify: false)
+        rig.path.script([.never])
+        rig.handoff.script([.init(), .init(failure: .wifiDidNotStart(lastStatus: .terminated))])
+        #expect(failure(await rig.prepare()) == .rewriteFailed(.wifiDidNotStart(lastStatus: .terminated)))
+        #expect(awayEvents(recorder.all) == [.preparationFailed(rewrite: true, appAway: .zero)])
+    }
+
+    @Test func aHandoffRetriedFromTheFrontIsRecorded() async throws {
+        let recorder = TraceRecorder()
+        let rig = Rig(trace: recorder.trace)
+        rig.handoff.script([.init(delay: .seconds(5), failure: .timedOut(lastStatus: .terminated),
+                                  during: rig.away(after: .seconds(2))),
+                            .init()])
+        rig.comeBack(at: .seconds(20))
+        _ = try #require(opened(await rig.prepare()))
+        #expect(awayEvents(recorder.all) == [
+            .appWentToBackground(during: .handOff),
+            .handoffRetriedAfterAway(rewrite: false, failure: .timedOut(lastStatus: .terminated)),
+            .joinHeld(reason: .retryHandoff, limit: WirelessTiming.joinHoldWhileAway),
+            .appCameBack(after: .seconds(18), during: .join),
+            .joinHoldEnded(after: .seconds(15), windowPassed: false),
+        ])
+    }
+
+    @Test func anApplyDuringWhichTheAppWentAwayIsRecordedAsAway() async throws {
+        let recorder = TraceRecorder()
+        let rig = Rig(trace: recorder.trace)
+        rig.joiner.script([.init(delay: .seconds(9), during: rig.away(after: .seconds(1)))])
+        _ = try #require(opened(await rig.prepare()))
+        let events = recorder.all
+        #expect(events.contains(.joinApplied(attempt: 1, after: .seconds(9), failure: nil, inFront: false)))
+        #expect(awayEvents(events) == [.appWentToBackground(during: .join)])
     }
 
     @Test func theStepTimelineSumsEachPhase() {

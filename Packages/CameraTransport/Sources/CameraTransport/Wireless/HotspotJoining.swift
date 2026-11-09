@@ -10,7 +10,9 @@ public enum JoinFailure: Error, Sendable, Equatable, Hashable, CustomStringConve
     /// by itself.
     case userDenied
     /// The app wasn't in front (`applicationIsNotInForeground`): a join needs the app in front (backlog section 8). The
-    /// session pauses until the person comes back. The app going briefly inactive while iOS's prompt is up is not this:
+    /// session holds the join until the person comes back and applies again (not a failed try), for at most
+    /// `WirelessTiming.joinHoldWhileAway`; when it comes with the scene already active, it tries once more, then pauses.
+    /// The app going briefly inactive while iOS's prompt is up is not this:
     /// on 5 Nov 01:21 it was in the background for 8.9 s with the prompt up, and still joined.
     case notInForeground
     /// iOS refused the name, the password or the configuration as a whole (`invalidSSID`, `invalidWPAPassphrase`,

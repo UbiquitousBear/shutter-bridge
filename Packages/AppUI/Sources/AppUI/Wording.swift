@@ -813,6 +813,7 @@ public enum WiFiWording {
         case .idle, .ready: nil
         case .handingOff: "Switching on the camera's Wi-Fi…"
         case .joining: "Joining the camera's Wi-Fi. Tap Join if iOS asks."
+        case .awaitingFront: "Come back to Shutter Bridge to finish joining the camera's Wi-Fi."
         case .openingSession: "Opening the camera…"
         case .staying: stay
         case .leaving: "Leaving the camera's Wi-Fi…"
@@ -881,6 +882,15 @@ public enum WiFiWording {
                  .credentialsInvalid:
                 return "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then "
                     + "try again."
+            }
+        case let .rewriteFailed(handoff):
+            switch handoff {
+            case .notPaired: return paused(.notPaired)
+            case .cancelled: return nil
+            case .gatt, .linkDropped, .statusUnreadable, .unexpectedStatus, .wifiDidNotStart, .timedOut, .wifiLapsed,
+                 .credentialsInvalid:
+                return "The camera's Wi-Fi switched itself off before iOS joined it. Try again, and tap Join as soon "
+                    + "as iOS asks."
             }
         case let .join(join):
             switch join {

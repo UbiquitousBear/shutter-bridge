@@ -468,7 +468,7 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             }
         case let .join(join):
             return CameraLinkFailure(join == .userDenied ? .notAuthorised : .noAnswer, detail: detail)
-        case .cameraNotFound, .bluetooth, .handoff, .noGateway, .cameraWiFiLapsed:
+        case .cameraNotFound, .bluetooth, .handoff, .rewriteFailed, .noGateway, .cameraWiFiLapsed:
             return CameraLinkFailure(.noAnswer, detail: detail)
         }
     }

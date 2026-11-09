@@ -42,7 +42,7 @@ public enum TransportTraceWording {
             let left = (statusTwoAlready ? "at most " : "") + seconds(windowLeft)
             return "wifi join: \(rewrite ? "rewrite " : "")hand-off done in \(seconds(after)) (connect included): \(write); "
                 + "\(left) left of the camera's 50 s"
-        case let .joinApplied(attempt, after, failure):
+        case let .joinApplied(attempt, after, failure, _):
             guard let failure else {
                 return "wifi join: join \(attempt) returned after \(seconds(after)) (iOS's prompt included)"
             }
@@ -75,6 +75,24 @@ public enum TransportTraceWording {
         case let .sessionNotOpened(after, tries, refused):
             return "wifi join: the camera's session didn't open: \(refused ? "refused" : "no answer") after "
                 + "\(seconds(after)), \(count(tries, "try", "tries"))"
+        // Placeholder lines for the bench 19.1 events (CameraTransport, stage 1); the wording is still to settle.
+        case let .appWentToBackground(during):
+            return "wifi join: the app went to the background during the \(stepWord(during))"
+        case let .appCameBack(after, during):
+            return "wifi join: the app came back after \(seconds(after)), during the \(stepWord(during))"
+        case let .joinHeld(reason, limit):
+            return "wifi join: join held (\(reason)): the app is away; waiting for it to come back (at most "
+                + "\(seconds(limit)))"
+        case let .joinHoldEnded(after, windowPassed):
+            return "wifi join: the app is back after \(seconds(after)); the camera's 50 s "
+                + "\(windowPassed ? "have passed" : "have not passed"); joining now"
+        case let .joinHoldRanOut(after):
+            return "wifi join: the hold ran out after \(seconds(after)); letting go"
+        case let .handoffRetriedAfterAway(rewrite, failure):
+            return "wifi join: the \(rewrite ? "rewrite " : "")hand-off failed with the app away for part of it "
+                + "(\(failure)); running it once more from the front"
+        case let .preparationFailed(rewrite, appAway):
+            return "wifi join: failed\(rewrite ? " in a rewrite hand-off" : ""); the app was away \(seconds(appAway)) in all"
         case let .preparationEnded(succeeded, times):
             return "wifi join: \(succeeded ? "ready" : "not ready") after \(seconds(times.total)) "
                 + "(hand-off \(seconds(times.handingOff)), join \(seconds(times.joining)), "
@@ -113,7 +131,7 @@ public enum TransportTraceWording {
                 + "the file again from the start"
         case let .resumeFinished(reads):
             return "wifi link: the resumed file finished after \(count(reads, "0x9211 read", "0x9211 reads"))"
-        case let .linkLost(failure):
+        case let .linkLost(failure, _):
             return "wifi link: the session was lost: \(lossReason(failure))"
         case let .linkClosed(seen):
             guard seen.sessionsOpened > 0 else { return "wifi link: closed without opening a session" }
@@ -149,6 +167,15 @@ public enum TransportTraceWording {
         case 3?: "3 (stopping)"
         case .some: "an unknown value"
         case nil: "unreadable"
+        }
+    }
+
+    /// A preparation's step, for the scene lines.
+    private static func stepWord(_ step: WirelessStep) -> String {
+        switch step {
+        case .handOff: "hand-off"
+        case .join: "join"
+        case .session: "session"
         }
     }
 
