@@ -57,7 +57,8 @@ public struct CameraLinkCapabilities: Sendable, Hashable {
         itemIDsSurviveReopen: false)
 
     /// `IPLink`'s capabilities over Sony's whole-card session: one transaction at a time, 0x9211 resume, nothing
-    /// read from the device, no deletion, handles that outlive the session.
+    /// read from the device, no deletion, handles that outlive the session. Until its 0x9211 resume lands (plan W8),
+    /// `IPLink` reports this without `resumesPartialFiles` (`IPLink.capabilitiesWithoutResume`).
     public static let wifi = CameraLinkCapabilities(
         maxDownloadsInFlight: 1, resumesPartialFiles: true, reportsBatteryAndFreeSpace: false, deletes: false,
         itemIDsSurviveReopen: true)
