@@ -19,6 +19,8 @@ public final class AppModel {
     public let importer: ImportModel
     public let settings: SettingsModel
     public let leases: LinkLeases
+    /// The Wi-Fi cameras, when the app has them (`WiFiSupport`); nil leaves the app USB-only, as it was.
+    public let wifi: WiFiSupport?
     @ObservationIgnored private let notifier: any LocalNotifier
     @ObservationIgnored private var registeredCategories = false
 
@@ -33,20 +35,40 @@ public final class AppModel {
         cameraKey: @escaping CameraKeying,
         now: @escaping @Sendable () -> Date = { Date() },
         notifier: any LocalNotifier = SilentNotifier(),
-        notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord()
+        notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord(),
+        wifi: WiFiSupport? = nil
     ) {
         self.notifier = notifier
+        self.wifi = wifi
         let leases = LinkLeases()
         self.leases = leases
+        // A Wi-Fi camera that has connected before is keyed by the key its discovery kept for it, so Browse and the
+        // import always write under the catalogue row's key; a name-hash fallback only ever shows for one that has none
+        // (`CameraKeys.isUnidentifiedWiFi`), and Browse refuses to import under it.
+        let keying: CameraKeying = { descriptor, link in
+            if descriptor.carrier == .wifi, let known = await discovery.knownKey(for: descriptor.id) { return known }
+            return await cameraKey(descriptor, link)
+        }
         cameras = CamerasModel(discovery: discovery, services: services, catalogue: catalogue,
-                               cameraKey: cameraKey, leases: leases)
+                               cameraKey: keying, leases: leases)
         importer = ImportModel(engine: engine, settings: settingsStore, photos: photos, destinations: destinations,
                                leases: leases, log: services.log, now: now, notifier: notifier,
                                notificationAsks: notificationAsks)
         settings = SettingsModel(store: settingsStore, photos: photos)
         cameras.importModel = importer
         importer.cameraFinder = cameras
+        // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).
+        // In the background it doesn't wait for Browse: an import's lease going with no import running is its end.
+        if let source = wifi?.source {
+            leases.onClosed = { link in await source.linkClosed(link) }
+            leases.onReleased = { [weak self] link in
+                await source.linkReleased(link, activeImport: self?.activeImportKey)
+            }
+        }
     }
+
+    /// The key of the camera whose import is running (or paused, which still holds its link), if one is.
+    private var activeImportKey: CameraKey? { importer.isActive ? importer.camera?.key : nil }
 
     /// The model for browsing `camera`, with the catalogue and the import.
     public func browseModel(for camera: CameraDescriptor) -> BrowseModel {
@@ -59,6 +81,7 @@ public final class AppModel {
     /// categories are registered at the first activation (W13).
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
         if phase == .active {
+            wifi?.status.start()
             await cameras.becameActive()
             await settings.refreshPhotosAccess()
             await importer.notificationPermission.refresh()
@@ -68,10 +91,26 @@ public final class AppModel {
             }
         }
         await importer.scenePhaseChanged(phase)
+        // After the import's own rule: the sessions leave the camera's network on the way to the background and check
+        // the stay on the way back (`WirelessSession`). The caller holds the app's background time until this returns.
+        await wifi?.source.scenePhaseChanged(phase, activeImport: activeImportKey)
     }
 
     /// Whether the app keeps the screen on (`UIApplication.isIdleTimerDisabled`): while a USB import runs.
     public var keepsScreenOn: Bool { importer.keepsScreenOn }
+}
+
+/// The Wi-Fi half of the app, composed by the live root (W16): the cameras the person set up (`source`, which is also
+/// one of `CompositeDiscovery`'s sources) and the model of their connection's states (`status`). The onboarding and the
+/// typed-address sheet are made when their screens open (`OnboardingModel`, `TypedAddressModel`), over `source`.
+public struct WiFiSupport: Sendable {
+    public let source: WiFiCameraSource
+    public let status: WiFiImportModel
+
+    public init(source: WiFiCameraSource, status: WiFiImportModel) {
+        self.source = source
+        self.status = status
+    }
 }
 
 /// Opens the catalogue at launch and builds the app's models, or shows a clear error instead of crashing when the
