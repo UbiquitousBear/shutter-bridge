@@ -28,6 +28,15 @@ final class ImportBackgroundCoordinator {
     private var expiryTask: Task<Void, Never>?
     private var latest: ImportProgress?
     private var reported: (done: UInt64, total: UInt64, subtitle: String)?
+    /// Made-up bytes a recovery's waits have shown on top of the job's (`nudge()`): what the run shows until the job's
+    /// own bytes pass it. 0 for none.
+    private var madeUp: UInt64 = 0
+
+    /// How far `nudge()` moves the run: the spike's copy recovery (1 MB a second of waiting).
+    static let nudgeBytes: UInt64 = 1_000_000
+    /// How far each report moves the run while it shows made-up bytes, so it doesn't stand still while the job's own
+    /// bytes catch up: the spike's 4 KB.
+    static let catchUpBytes: UInt64 = 4_096
 
     init(run: any ImportBackgroundRun, log: any BenchLog) {
         self.run = run
@@ -114,6 +123,7 @@ final class ImportBackgroundCoordinator {
         }
         self.handle = handle
         reported = (0, 0, subtitle)
+        madeUp = 0
         log.note("import: continued task started")
         report()
         let expired = handle.expired
@@ -125,15 +135,32 @@ final class ImportBackgroundCoordinator {
         }
     }
 
-    private func report() {
+    /// A recovery is waiting (W14): moves the live run by made-up bytes, never up to the total, so iOS doesn't see a
+    /// task standing still through the waits (the spike's copy recovery did this; `unverified` whether iOS ends a
+    /// continued task whose progress stands still).
+    func nudge() {
+        guard handle != nil, let progress = latest, progress.bytesTotal > 1 else { return }
+        let shown = max(madeUp, progress.bytesDone)
+        madeUp = min(shown + Self.nudgeBytes, progress.bytesTotal - 1)
+        report(catchingUp: false)
+    }
+
+    private func report(catchingUp: Bool = true) {
         guard let handle, let progress = latest else { return }
+        var done = progress.bytesDone
+        if madeUp > done, progress.bytesTotal > 1 {
+            if catchingUp { madeUp = min(madeUp + Self.catchUpBytes, progress.bytesTotal - 1) }
+            done = max(madeUp, done)
+        } else {
+            madeUp = 0
+        }
         let subtitle = ImportBackgroundWording.subtitle(progress)
-        if let r = reported, r.done == progress.bytesDone, r.total == progress.bytesTotal, r.subtitle == subtitle {
+        if let r = reported, r.done == done, r.total == progress.bytesTotal, r.subtitle == subtitle {
             return
         }
         let changed = reported?.subtitle != subtitle
-        reported = (progress.bytesDone, progress.bytesTotal, subtitle)
-        handle.update(completedBytes: Int64(clamping: progress.bytesDone),
+        reported = (done, progress.bytesTotal, subtitle)
+        handle.update(completedBytes: Int64(clamping: done),
                       totalBytes: Int64(clamping: progress.bytesTotal), title: nil, subtitle: changed ? subtitle : nil)
     }
 
