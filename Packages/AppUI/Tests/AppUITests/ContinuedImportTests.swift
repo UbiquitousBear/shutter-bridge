@@ -477,12 +477,12 @@ struct ContinuedImportTests {
         #expect(b.notifier.posts.isEmpty)
 
         await b.model.scenePhaseChanged(.active)
-        await link.release(Self.victim)
+        // Continue before the held read is let go: a read let go first can finish the last file while the job is
+        // paused (a call in flight across a pause still commits), and then there is nothing left to continue.
         await b.model.resume()
-        // Continue begins the new run in a task of its own, so wait for its handle before counting, as the other
-        // Continue tests do.
-        _ = try #require(await b.handle(1))
-        #expect(b.run.begins.count == 2)
+        // The run is begun without waiting, on another executor: polled, as the other tests wait for its handle.
+        #expect(await eventually { b.run.begins.count == 2 })
+        await link.release(Self.victim)
         #expect(await b.finished())
         #expect(b.model.state == .finished(.completed))
         #expect(await b.destinations.files.names.sorted() == ["DSC00001.ARW", "DSC00002.JPG", "DSC00003.ARW"])
