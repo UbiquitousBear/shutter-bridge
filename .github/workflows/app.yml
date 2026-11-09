@@ -147,8 +147,15 @@ jobs:
             if grep -qx "$pkg-Package" <<<"$schemes"; then scheme="$pkg-Package"; else scheme="$pkg"; fi
             echo "scheme: $scheme"
             raw="$RUNNER_TEMP/$pkg-test.log"
+            # AppUI's tests run one at a time. Nearly all of them are main-actor bound, and Swift Testing starts every
+            # test at once, so in the Simulator they queue for the main actor and the wait counts against each test's
+            # own time limit: with about 240 tests a passing run already had a median of 45 s and a slowest of 56 s
+            # against the 60 s limits, and larger suites went over. One at a time, a limit measures only the test.
+            # The other packages' tests aren't main-actor bound and stay parallel.
+            parallel=()
+            if [ "$pkg" = AppUI ]; then parallel=(-parallel-testing-enabled NO); fi
             if ! (cd "$dir" && xcodebuild test -scheme "$scheme" -destination "platform=iOS Simulator,id=$SIM" \
-                    | tee "$raw" | xcbeautify --renderer github-actions); then
+                    "${parallel[@]}" | tee "$raw" | xcbeautify --renderer github-actions); then
               failed+=("$pkg")
               # xcbeautify shortens Swift Testing failures to "Recorded an issue", so print the raw lines that
               # name the test and the expectation that failed.
