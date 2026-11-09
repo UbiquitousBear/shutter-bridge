@@ -12,6 +12,38 @@ extension ImportModel: WiFiRecoveryHost {
     public func attachWiFiRecovery(_ coordinator: WiFiRecoveryCoordinator) {
         wifiRecovery = coordinator
         coordinator.host = self
+        wifiRecoveryPhase = coordinator.plan.phase
+        coordinator.onPhaseChanged = { [weak self] phase in self?.wifiRecoveryPhase = phase }
+    }
+
+    /// What the Import screen offers for a Wi-Fi job the recovery is getting back, or waiting on the person for (W16).
+    public enum WiFiRecoveryControl: Sendable, Hashable {
+        /// The recovery is reaching the camera by itself: a spinner and a line, no button.
+        case reconnecting
+        /// The recovery gave up, or waits for a join it couldn't make from where it was: *Try Again*.
+        case tryAgain
+    }
+
+    /// Nil unless a Wi-Fi job with a recovery and a session attached is paused for its camera, its card or a join: hidden
+    /// rather than greyed out when it doesn't apply.
+    public var wifiRecoveryControl: WiFiRecoveryControl? {
+        guard camera?.descriptor.carrier == .wifi, let wifiRecovery, wifiRecovery.session != nil,
+              case let .paused(reason) = state else { return nil }
+        switch reason {
+        case .needsJoin, .cameraUnreachable, .cardUnavailable: break
+        case .appInBackground, .stalled, .byPerson, .taskExpired, .cameraRemoved: return nil
+        }
+        switch wifiRecoveryPhase {
+        case .waitingForCard, .reopening, .relisting: return .reconnecting
+        case .idle, .pausedForJoin, .gaveUp: return .tryAgain
+        }
+    }
+
+    /// *Try Again* on the Import screen: the recovery runs again from the front (`WiFiRecoveryCoordinator.tryAgain()`).
+    /// Does nothing when the screen offers no Try Again.
+    public func tryAgainWiFi() {
+        guard wifiRecoveryControl == .tryAgain else { return }
+        wifiRecovery?.tryAgain()
     }
 
     var isAppAway: Bool { isAway }

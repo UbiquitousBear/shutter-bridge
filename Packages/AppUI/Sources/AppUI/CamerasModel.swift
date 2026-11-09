@@ -81,6 +81,10 @@ public final class CamerasModel: CameraFinding {
     public var notice: String?
     /// `notice` as the strip shows it, numbered so a second disconnect with the same text is announced again.
     public var noticeStatus: StatusNotice? { notice.map { StatusNotice.cameras($0, id: noticeCount) } }
+    /// The catalogue key of each listed camera whose key discovery knows without a link (a Wi-Fi camera that has
+    /// connected before), for the *nearby* badge and for opening the camera a reminder named (W16). Read when a camera
+    /// appears and when the app becomes active, since a Wi-Fi camera's key becomes known at its first session.
+    public private(set) var knownKeys: [CameraDescriptor.ID: CameraKey] = [:]
 
     /// The import, told when a camera is connected, and handed Browse's selection. Set by the app (`AppModel`).
     @ObservationIgnored public weak var importModel: ImportModel?
@@ -123,6 +127,7 @@ public final class CamerasModel: CameraFinding {
     /// was refused or starting failed before (the person may have changed it in Settings).
     public func becameActive() async {
         watchDiscoveries()
+        await refreshKnownKeys()
         guard !isLooking, !starting else {
             await importModel?.cameraConnected()
             return
@@ -189,6 +194,39 @@ public final class CamerasModel: CameraFinding {
         CamerasWording.deviceStatus(carrier: camera.carrier, batteryPercent: batteryPercent, freeBytes: freeBytes)
     }
 
+    // MARK: - Keys, the nearby badge and a reminder's camera (W16)
+
+    /// Reads again the key of every listed camera whose key discovery knows.
+    public func refreshKnownKeys() async {
+        for camera in cameras {
+            await readKnownKey(of: camera.id)
+        }
+    }
+
+    private func readKnownKey(of id: CameraDescriptor.ID) async {
+        let key = await discovery.knownKey(for: id)
+        // The camera may have gone while discovery was asked.
+        guard cameras.contains(where: { $0.id == id }) else { return }
+        if knownKeys[id] != key { knownKeys[id] = key }
+    }
+
+    /// Whether to show the *nearby* badge on `camera`'s row: its key is known and `isNearby` says so for it
+    /// (`ReminderModel.isNearby(_:)`, the proximity scan's reports). Unknown is not nearby.
+    public func isNearby(_ camera: CameraDescriptor, by isNearby: (CameraKey) -> Bool) -> Bool {
+        guard let key = knownKeys[camera.id] else { return false }
+        return isNearby(key)
+    }
+
+    /// Opens Browse on the listed camera whose key is `key` (a reminder's *Import Now*: a Wi-Fi camera is then joined
+    /// as Browse opens it). False when no listed camera has that key yet, so the caller can keep the request until the
+    /// cameras are listed. A camera already being browsed is left as it is.
+    @discardableResult
+    public func showCamera(withKey key: CameraKey) -> Bool {
+        guard let camera = cameras.first(where: { knownKeys[$0.id] == key }) else { return false }
+        if path.last?.id != camera.id { path = [camera] }
+        return true
+    }
+
     /// The person declined to open the camera (Not Now on the Local Network explanation): back to Cameras, with no message,
     /// since nothing went wrong.
     func openWasDeclined(_ id: CameraDescriptor.ID) {
@@ -221,8 +259,11 @@ public final class CamerasModel: CameraFinding {
             if let importModel {
                 Task { await importModel.cameraConnected() }
             }
+            let id = camera.id
+            Task { [weak self] in await self?.readKnownKey(of: id) }
         case let .disappeared(id):
             cameras.removeAll { $0.id == id }
+            knownKeys[id] = nil
             cameraWentAway(id)
         }
     }
