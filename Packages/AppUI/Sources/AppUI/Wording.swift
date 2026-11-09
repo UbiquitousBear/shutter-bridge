@@ -109,6 +109,12 @@ public enum BrowseWording {
             "This iPhone is out of space. Free some space, then try again."
         case .itemNotFound, .unreadableItem, .unsupportedFormat:
             "The camera couldn't read its card. Check the card in the camera, then try again."
+        case .cardUnavailable:
+            "The camera isn't offering its card right now. Check that the card is in the camera, then try again."
+        case .refused:
+            "The camera refused the connection. Check its network settings, then try again."
+        case .identityChanged:
+            "This isn't the camera that was connected before. Connect to the same camera, then try again."
         }
     }
 }
@@ -156,6 +162,9 @@ public enum JPEGWording {
             case .phoneStorageFull: "This iPhone is out of space. Free some space, then try again."
             case .notAuthorised: CamerasWording.notAllowedDetail
             case .modeListsNoFiles: BrowseWording.noFilesDetail
+            case .cardUnavailable: "The camera isn't offering its card right now. Try again in a moment."
+            case .refused: "The camera refused the connection."
+            case .identityChanged: "This isn't the camera that was connected before."
             }
         case .conversion:
             "This photo couldn't be made into a JPEG on this iPhone."
@@ -418,6 +427,9 @@ public enum ImportWording {
         case .disconnected: "the camera was disconnected."
         case .busy, .noAnswer: "the camera stopped answering."
         case .itemNotFound, .unreadableItem, .unsupportedFormat: "the camera couldn't read its card."
+        case .refused: "the camera refused the connection."
+        case .identityChanged: "a different camera answered."
+        case .cardUnavailable: "the camera stopped offering its card."
         }
     }
 
@@ -495,7 +507,8 @@ public enum ImportWording {
             case .itemNotFound: "no longer on the card"
             case .unreadableItem: "the camera couldn't read it"
             case .unsupportedFormat: "this kind of file can't be imported"
-            case .busy, .noAnswer, .disconnected, .phoneStorageFull, .notAuthorised, .modeListsNoFiles:
+            case .busy, .noAnswer, .disconnected, .phoneStorageFull, .notAuthorised, .modeListsNoFiles,
+                 .identityChanged, .refused, .cardUnavailable:
                 "the camera couldn't send it"
             }
         }
@@ -508,7 +521,8 @@ public enum ImportWording {
             case .phoneStorageFull: "this iPhone is out of space"
             case .unreadableItem: "the camera couldn't read it"
             case .itemNotFound: "no longer on the card"
-            case .busy, .noAnswer, .disconnected, .notAuthorised, .modeListsNoFiles, .unsupportedFormat:
+            case .busy, .noAnswer, .disconnected, .notAuthorised, .modeListsNoFiles, .unsupportedFormat,
+                 .identityChanged, .refused, .cardUnavailable:
                 "the camera couldn't send it"
             }
         case .sizeMismatch: "the copy didn't match the size the camera gave"

@@ -1,5 +1,7 @@
 /// The four things the engine can do about a failure (proposal, "Import engine design", *Error taxonomy*). The UI
 /// shows the outcome, never the code behind it; the code goes to the log.
+///
+/// Waiting for the Local Network prompt is not a failure and has no outcome: it is `CameraLinkEvent.waitingForLocalNetwork`.
 public enum FailureOutcome: String, Sendable, Hashable, CaseIterable {
     /// Transient: try the same call again now.
     case retryNow
@@ -34,13 +36,26 @@ public struct CameraLinkFailure: Error, Sendable, Hashable, CustomStringConverti
         case notAuthorised
         /// The camera's mode lists no files: Remote Shoot (PC Remote) over USB (decision 1).
         case modeListsNoFiles
+        /// The camera that answered is not the one the job began with: its serial differs from the one the app
+        /// knows (Wi-Fi, on reconnect). Nothing is imported from the wrong camera.
+        case identityChanged
+        /// The camera refused the connection or the session: a closed port (`ECONNREFUSED`) or PTP/IP's
+        /// `Init_Fail`. The bench saw it with access authentication on (`unverified`: that the setting closes the
+        /// port is inferred, not tested). Trying again won't help until the camera's settings change.
+        case refused
+        /// The session is up but the card is not offered: StoreNotAvailable (0x2013), or, from StoreRemoved until
+        /// StoreAdded, InvalidObjectHandle too (the camera answered both on 3 Nov, and InvalidObjectHandle must not
+        /// become `itemNotFound` then, which skips the file). The camera is still there, so no file counts as
+        /// failed; the job pauses until the card comes back. The camera normally drops its Wi-Fi about 6 s after
+        /// StoreRemoved, so `CameraLinkEvent.sessionLost` usually follows.
+        case cardUnavailable
 
         public var outcome: FailureOutcome {
             switch self {
             case .busy, .noAnswer: .retryNow
-            case .disconnected: .retryOnReconnect
+            case .disconnected, .cardUnavailable: .retryOnReconnect
             case .itemNotFound, .unreadableItem, .unsupportedFormat: .skipFile
-            case .phoneStorageFull, .notAuthorised, .modeListsNoFiles: .stopJob
+            case .phoneStorageFull, .notAuthorised, .modeListsNoFiles, .identityChanged, .refused: .stopJob
             }
         }
     }

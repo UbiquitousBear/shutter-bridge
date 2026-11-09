@@ -344,6 +344,9 @@ public actor ImportEngine {
         // No pause was made for these; *resumed operations* also fires with no suspension before it, so the job
         // continues on the app's return (`resume(.appInBackground)`), not on this.
         case .willSuspend, .cancelledSuspending, .resumedOperations: break
+        // Wi-Fi's events (`IPLink`, Iteration 3). They are traced above and change nothing yet: no job pauses on them
+        // until the engine's Wi-Fi pause reasons exist, and a USB link never sends them.
+        case .waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost: break
         }
     }
 

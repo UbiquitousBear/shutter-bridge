@@ -169,6 +169,27 @@ struct PauseTests {
         await h.cleanup()
     }
 
+    /// Wi-Fi's events are delivered and traced but change nothing until the engine has Wi-Fi pause reasons: the job
+    /// keeps running and no file counts as failed.
+    @Test func wifiEventsAreTracedButDoNotYetChangeAJob() async throws {
+        let h = Harness()
+        let card = h.singles(["A.JPG", "B.JPG"])
+        let link = h.link(card, mode: .wifi(.cameraNetwork))
+        await link.script("A.JPG", .hold, .deliver)
+        try await h.start(.items(card), from: link)
+        let a = await link.nextHeldCall("A.JPG")
+        for event in [CameraLinkEvent.waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost] {
+            link.send(event)
+            await h.trace.next(.linkEvent(event))
+        }
+        #expect(await h.engine.state == .running)
+        a.release()
+        #expect(await h.waitFinished() == .completed)
+        #expect(await h.engine.currentProgress.filesFailed == 0)
+        #expect(await link.bytesCalls == ["A.JPG", "B.JPG"])
+        await h.cleanup()
+    }
+
     /// The cable comes out while the last file is being saved: nothing is left to copy, so the job completes rather
     /// than waiting (screen on) for the camera.
     @Test func aRemovalDuringTheLastCommitStillCompletes() async throws {
@@ -236,7 +257,7 @@ struct PauseTests {
         do {
             let h = Harness()
             let card = h.singles(["A.JPG"])
-            let link = h.link(card, mode: .wifi)
+            let link = h.link(card, mode: .wifi(.cameraNetwork))
             await link.script("A.JPG", .hold)
             try await h.start(.items(card), from: link)
             _ = await link.nextHeldCall("A.JPG")

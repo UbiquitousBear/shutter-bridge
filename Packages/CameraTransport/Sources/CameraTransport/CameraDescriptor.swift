@@ -31,11 +31,22 @@ public enum USBMode: String, Sendable, Hashable, Codable, CaseIterable {
     public static let recommended: USBMode = .massStorage
 }
 
-/// The mode a camera is connected in. Wi-Fi's routes (the camera's own network, the home network) arrive with
-/// `IPLink` in Iteration 3.
+/// Which network a Wi-Fi link reaches the camera on.
+public enum WiFiRoute: String, Sendable, Hashable, Codable, CaseIterable {
+    /// The camera's own access point (192.168.122.1 on the α7C II): the phone joins it and the camera is the only
+    /// host. The 1.0 route.
+    case cameraNetwork
+    /// The phone and the camera are both on a network that isn't the camera's own (the phone's current Wi-Fi), and
+    /// the camera is found by SSDP or a typed address. Named for what it is, any other network, not "home"; the
+    /// home-network flow itself follows Iteration 3's core (decision 5), so nothing builds this route yet.
+    case otherNetwork
+}
+
+/// The mode a camera is connected in. Over Wi-Fi it is the route; the link and the engine behave the same on both
+/// (the carrier's rules are `CameraLinkCapabilities`), and only joining and discovery differ.
 public enum CameraMode: Sendable, Hashable, Codable {
     case usb(USBMode)
-    case wifi
+    case wifi(WiFiRoute)
 
     public var carrier: CameraCarrier {
         switch self {

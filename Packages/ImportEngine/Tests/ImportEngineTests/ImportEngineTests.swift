@@ -62,12 +62,14 @@ struct ImportSelectionTests {
 
 actor NoLink: CameraLink {
     nonisolated let descriptor = CameraDescriptor(id: .init(rawValue: "none"), name: "None", mode: .usb(.massStorage))
+    nonisolated let capabilities = CameraLinkCapabilities.usb
     nonisolated let events = AsyncStream<CameraLinkEvent> { $0.finish() }
     func open() throws(CameraLinkFailure) {}
     func list() throws(CameraLinkFailure) -> [CameraItem] { [] }
     func info(of item: CameraItem.ID) throws(CameraLinkFailure) -> CameraItem { throw CameraLinkFailure(.itemNotFound) }
     func thumbnail(of item: CameraItem.ID) throws(CameraLinkFailure) -> Data { Data() }
-    func bytes(of item: CameraItem.ID, into directory: URL,
+    func bytes(of item: CameraItem.ID, into directory: URL, resuming: PartialDownload?,
+               checkpoint: @escaping @Sendable (PartialDownload) -> Void,
                progress: @escaping @Sendable (UInt64) -> Void) throws(CameraLinkFailure) -> URL {
         throw CameraLinkFailure(.itemNotFound)
     }

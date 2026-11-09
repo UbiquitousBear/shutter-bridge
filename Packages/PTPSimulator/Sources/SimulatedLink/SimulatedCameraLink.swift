@@ -28,8 +28,21 @@ import PTPSimulator
 /// - **Closing** is final, as `USBLink`'s is: `open()` on a closed link throws `.disconnected`.
 ///
 /// Remote Shoot (PC Remote) lists no files (`.modeListsNoFiles`), as `USBLink` reports it. Drops, a slow link and
-/// duplicate file names are Iteration 2's fault matrix; the Wi-Fi behaviours (Sony's whole-card session, 0xC201)
-/// come in Iteration 3.
+/// duplicate file names are Iteration 2's fault matrix.
+///
+/// **Carrier rules follow `capabilities`** (by default the mode's carrier baseline, `CameraLinkCapabilities.usb` or
+/// `.wifi`), so one simulator plays either link as far as the contract goes (not Sony's PTP/IP wire behaviour,
+/// which is `PTPIPSimulatorServer`'s):
+/// - **Resume** (`resumesPartialFiles`): `bytes(of:into:resuming:…)` cuts the partial file back to its offset and
+///   writes the rest into it, and reports a checkpoint after each chunk but the last. Without the capability
+///   `resuming` is ignored and the file restarts from 0 in the folder, as `USBLink` does.
+/// - **Item IDs** (`itemIDsSurviveReopen`): stable across `replugged()` (the Wi-Fi link's PTP handles) or carrying
+///   the generation, so they don't (ImageCaptureCore's).
+/// - **Wi-Fi's events, scripted:** `holdForLocalNetworkPrompt()` makes `open()` wait, after
+///   `.waitingForLocalNetwork`, until `allowLocalNetwork()`; `removeStore()` sends `.storeRemoved` and makes every
+///   call fail as `cardUnavailable` until `addStore()` sends `.storeAdded`, a download in flight stopping at its next
+///   chunk (`unverified`: what the camera does to a read in flight); `loseSession()` sends `.sessionLost`, ends
+///   every pending call as `disconnected` and closes the session but not the link, which `open()` can open again.
 public actor SimulatedCameraLink: CameraLink {
     /// An operation a failure can be injected into.
     public enum Operation: String, Sendable, Hashable, CaseIterable {
@@ -50,12 +63,26 @@ public actor SimulatedCameraLink: CameraLink {
         case holdAfter(UInt64)
     }
 
+    /// A `bytes` call that continued a partial file.
+    public struct Resume: Sendable, Hashable {
+        public var filename: String
+        /// The offset it continued from: the partial's `bytesWritten`, or 0 when the partial couldn't be continued.
+        public var offset: UInt64
+
+        public init(filename: String, offset: UInt64) {
+            self.filename = filename
+            self.offset = offset
+        }
+    }
+
     private enum HoldOutcome: Sendable {
         case released, removed, cancelled
     }
 
     public nonisolated let descriptor: CameraDescriptor
-    /// Which plugging-in this is: item IDs carry it, so they don't survive a replug, as ImageCaptureCore's don't.
+    public nonisolated let capabilities: CameraLinkCapabilities
+    /// Which plugging-in this is: item IDs carry it unless `capabilities.itemIDsSurviveReopen`, so they don't
+    /// survive a replug, as ImageCaptureCore's don't.
     public nonisolated let generation: Int
     /// The zone capture dates are made in, as ImageCaptureCore makes them in the phone's zone.
     public nonisolated let timeZone: TimeZone
@@ -80,6 +107,14 @@ public actor SimulatedCameraLink: CameraLink {
     /// Files whose `bytes` call returned, in order.
     public private(set) var delivered: [String] = []
     public private(set) var maxBytesInFlight = 0
+    /// Every `bytes` call that continued a partial file, in order.
+    public private(set) var resumes: [Resume] = []
+    /// Whether the card is offered; false between `removeStore()` and `addStore()`.
+    public private(set) var isStoreAvailable = true
+    /// Whether `open()` waits for `allowLocalNetwork()`.
+    public private(set) var isHeldForLocalNetwork = false
+    /// Counts `loseSession()`s: a call that began in an earlier session ends as `disconnected`.
+    private var sessionEpoch = 0
     private var bytesInFlight = 0
     private var closed = false
 
@@ -87,6 +122,7 @@ public actor SimulatedCameraLink: CameraLink {
     private var scripts: [String: [BytesStep]] = [:]
     private var catalogueWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
     private var suspensionWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var localNetworkWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
     private var listWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var held: [Int: (name: String, continuation: CheckedContinuation<HoldOutcome, Never>)] = [:]
     private var heldWaiters: [(name: String?, continuation: CheckedContinuation<Void, Never>)] = []
@@ -97,6 +133,7 @@ public actor SimulatedCameraLink: CameraLink {
     ///     no files.
     ///   - name: What the camera calls itself (in MSC the card's volume name, "Untitled", would be truer).
     ///   - descriptorID: The discovery handle; kept across `replugged()`.
+    ///   - capabilities: The link's rules; the mode's carrier baseline when nil.
     public init(
         card: ScriptedCard,
         mode: CameraMode = .usb(.mtp),
@@ -105,10 +142,12 @@ public actor SimulatedCameraLink: CameraLink {
         timeZone: TimeZone = .current,
         generation: Int = 1,
         honoursCancellation: Bool = false,
-        chunkSize: UInt64 = 256 * 1024
+        chunkSize: UInt64 = 256 * 1024,
+        capabilities: CameraLinkCapabilities? = nil
     ) {
         self.card = card
         descriptor = CameraDescriptor(id: .init(rawValue: descriptorID), name: name, mode: mode)
+        self.capabilities = capabilities ?? .defaults(for: mode.carrier)
         self.timeZone = timeZone
         self.generation = generation
         self.honoursCancellation = honoursCancellation
@@ -122,6 +161,15 @@ public actor SimulatedCameraLink: CameraLink {
     public func open() async throws(CameraLinkFailure) {
         if isRemoved { throw CameraLinkFailure(.disconnected, detail: "open: the camera has gone") }
         try requireNotClosed(.open)
+        if isHeldForLocalNetwork {
+            fanOut.send(.waitingForLocalNetwork)
+            while isHeldForLocalNetwork && isUsable {
+                await park(.localNetwork)
+                try throwIfCancelled(.open)
+            }
+            try requireNotClosed(.open)
+            if isRemoved { throw CameraLinkFailure(.disconnected, detail: "open: the camera has gone") }
+        }
         try await waitWhileSuspended(.open)
         try requireNotClosed(.open)
         try takeInjected(.open)
@@ -131,17 +179,21 @@ public actor SimulatedCameraLink: CameraLink {
 
     public func list() async throws(CameraLinkFailure) -> [CameraItem] {
         try requireOpen(.list)
+        let epoch = sessionEpoch
         try await waitWhileSuspended(.list)
+        try requireSession(epoch, .list)
         listCount += 1
         let due = listWaiters.filter { $0.count <= listCount }
         listWaiters.removeAll { $0.count <= listCount }
         for waiter in due { waiter.continuation.resume() }
         try takeInjected(.list)
-        while isCatalogueHeld && isUsable {
+        try requireStore(.list)
+        while isCatalogueHeld && isUsable && isOpen {
             await park(.catalogue)
             try throwIfCancelled(.list)
         }
         try requireOpen(.list)
+        try requireSession(epoch, .list)
         guard descriptor.mode != .usb(.remoteShoot) else {
             throw CameraLinkFailure(.modeListsNoFiles, detail: "list: the catalogue completed at once with no files")
         }
@@ -151,6 +203,7 @@ public actor SimulatedCameraLink: CameraLink {
     public func info(of id: CameraItem.ID) async throws(CameraLinkFailure) -> CameraItem {
         try requireOpen(.info)
         try takeInjected(.info)
+        try requireStore(.info)
         guard let object = object(for: id) else {
             throw CameraLinkFailure(.itemNotFound, detail: "info: not on the card")
         }
@@ -161,6 +214,7 @@ public actor SimulatedCameraLink: CameraLink {
         try requireOpen(.thumbnail)
         try await waitWhileSuspended(.thumbnail)
         try takeInjected(.thumbnail)
+        try requireStore(.thumbnail)
         guard let object = object(for: id) else {
             throw CameraLinkFailure(.itemNotFound, detail: "thumbnail: not on the card")
         }
@@ -173,11 +227,14 @@ public actor SimulatedCameraLink: CameraLink {
     public func bytes(
         of id: CameraItem.ID,
         into directory: URL,
+        resuming: PartialDownload?,
+        checkpoint: @escaping @Sendable (PartialDownload) -> Void,
         progress: @escaping @Sendable (_ bytesWritten: UInt64) -> Void
     ) async throws(CameraLinkFailure) -> URL {
         try requireOpen(.bytes)
         try await waitWhileSuspended(.bytes)
         try takeInjected(.bytes)
+        try requireStore(.bytes)
         guard let object = object(for: id) else {
             throw CameraLinkFailure(.itemNotFound, detail: "bytes: not on the card")
         }
@@ -186,19 +243,36 @@ public actor SimulatedCameraLink: CameraLink {
         maxBytesInFlight = max(maxBytesInFlight, bytesInFlight)
         defer { bytesInFlight -= 1 }
 
-        let url = directory.appendingPathComponent(object.filename, isDirectory: false)
-        switch nextStep(for: object.filename) {
-        case let .fail(kind):
+        // A scripted failure comes before anything touches the caller's partial file or `resumes`.
+        let step = nextStep(for: object.filename)
+        if case let .fail(kind) = step {
             throw CameraLinkFailure(kind, detail: "bytes: scripted")
+        }
+        var url = directory.appendingPathComponent(object.filename, isDirectory: false)
+        var start: UInt64 = 0
+        if let partial = resuming, capabilities.resumesPartialFiles {
+            url = partial.file
+            start = continuableOffset(of: partial, size: object.size)
+            resumes.append(Resume(filename: object.filename, offset: start))
+        }
+        let session = Session(epoch: sessionEpoch, checkpoint: capabilities.resumesPartialFiles ? checkpoint : nil)
+        switch step {
+        case .fail:
+            break // handled above
         case .deliver:
-            try await write(object, from: 0, to: object.size, at: url, progress: progress)
+            try await write(object, from: start, to: object.size, at: url, session, progress: progress)
         case let .deliverShort(count):
-            try await write(object, from: 0, to: min(count, object.size), at: url, progress: progress)
+            try await write(object, from: start, to: max(start, min(count, object.size)), at: url, session,
+                            progress: progress)
         case let .holdAfter(count):
             let first = min(count, object.size)
-            try await write(object, from: 0, to: first, at: url, progress: progress)
+            if start <= first {
+                try await write(object, from: start, to: first, at: url, session, progress: progress)
+            }
             try await hold(object.filename)
-            try await write(object, from: first, to: object.size, at: url, progress: progress)
+            try requireSession(session.epoch, .bytes)
+            try requireStore(.bytes)
+            try await write(object, from: max(start, first), to: object.size, at: url, session, progress: progress)
         }
         delivered.append(object.filename)
         return url
@@ -244,6 +318,51 @@ public actor SimulatedCameraLink: CameraLink {
         fanOut.send(.resumedOperations)
     }
 
+    /// From now `open()` waits, after sending `.waitingForLocalNetwork`, until `allowLocalNetwork()`: the Local
+    /// Network prompt unanswered. A link that is already open is not affected.
+    public func holdForLocalNetworkPrompt() { isHeldForLocalNetwork = true }
+
+    /// The prompt was allowed: a waiting `open()` goes on.
+    public func allowLocalNetwork() {
+        isHeldForLocalNetwork = false
+        wakeAll(.localNetwork)
+    }
+
+    /// The camera drops its card from the session: `.storeRemoved`, and every call fails as `cardUnavailable` (a
+    /// download in flight at its next chunk) until `addStore()`. The session stays open.
+    public func removeStore() {
+        guard isStoreAvailable else { return }
+        isStoreAvailable = false
+        fanOut.send(.storeRemoved)
+    }
+
+    /// The card is offered again: `.storeAdded`.
+    public func addStore() {
+        guard !isStoreAvailable else { return }
+        isStoreAvailable = true
+        fanOut.send(.storeAdded)
+    }
+
+    /// The session's sockets are gone with the camera still there: `.sessionLost`, then every pending call ends with
+    /// `.disconnected` (a download leaves its partial file) and the session closes. Unlike `remove()` the events
+    /// stay open and `open()` opens the link again, with the same item IDs if the capabilities say they last.
+    public func loseSession() {
+        guard isUsable else { return }
+        sessionEpoch += 1
+        isOpen = false
+        fanOut.send(.sessionLost)
+        wakeEveryone(with: .removed)
+    }
+
+    /// `loseSession()` and the link opening again in one step, so a test can have the new session in place before a
+    /// call from the old one wakes. Calls that began before it still end as `.disconnected`.
+    public func loseSessionAndReopen() {
+        guard isUsable else { return }
+        loseSession()
+        openCount += 1
+        isOpen = true
+    }
+
     /// Sends any event as it is, without changing the link's state.
     public func send(_ event: CameraLinkEvent) { fanOut.send(event) }
 
@@ -258,12 +377,13 @@ public actor SimulatedCameraLink: CameraLink {
         wakeEveryone(with: .removed)
     }
 
-    /// The camera plugged in again: a new, unopened link over the card as it is now, with the same name, mode and
-    /// descriptor and the next generation of item IDs. Failures and scripts don't carry over.
+    /// The camera plugged in again (or, over Wi-Fi, the link made again): a new, unopened link over the card as it is
+    /// now, with the same name, mode, capabilities and descriptor and the next generation of item IDs (which differ
+    /// from the old ones only if the capabilities say IDs don't last). Failures and scripts don't carry over.
     public func replugged() -> SimulatedCameraLink {
         SimulatedCameraLink(card: card, mode: descriptor.mode, name: descriptor.name,
                             descriptorID: descriptor.id.rawValue, timeZone: timeZone, generation: generation + 1,
-                            honoursCancellation: honoursCancellation, chunkSize: chunkSize)
+                            honoursCancellation: honoursCancellation, chunkSize: chunkSize, capabilities: capabilities)
     }
 
     /// The next `times` calls of `operation` throw `kind` (after waiting out a suspension, before doing anything).
@@ -325,12 +445,25 @@ public actor SimulatedCameraLink: CameraLink {
         }
     }
 
+    /// A call that began in an earlier session ends as disconnected, even if the link has opened again since.
+    private func requireSession(_ epoch: Int, _ operation: Operation) throws(CameraLinkFailure) {
+        if epoch != sessionEpoch {
+            throw CameraLinkFailure(.disconnected, detail: "\(operation.rawValue): the session was lost while waiting")
+        }
+    }
+
+    private func requireStore(_ operation: Operation) throws(CameraLinkFailure) {
+        if !isStoreAvailable {
+            throw CameraLinkFailure(.cardUnavailable, detail: "\(operation.rawValue): the card is not offered")
+        }
+    }
+
     private func requireNotClosed(_ operation: Operation) throws(CameraLinkFailure) {
         if closed { throw CameraLinkFailure(.disconnected, detail: "\(operation.rawValue): the link is closed") }
     }
 
     private func waitWhileSuspended(_ operation: Operation) async throws(CameraLinkFailure) {
-        while isSuspended && isUsable {
+        while isSuspended && isUsable && (operation == .open || isOpen) {
             await park(.suspension)
             try throwIfCancelled(operation)
         }
@@ -344,7 +477,7 @@ public actor SimulatedCameraLink: CameraLink {
         }
     }
 
-    private enum WaitList { case suspension, catalogue }
+    private enum WaitList { case suspension, catalogue, localNetwork }
 
     /// Waits until the list is woken (`wakeAll`), or, when cancellation is honoured, until the task is cancelled.
     /// Callers re-check their condition afterwards, and `throwIfCancelled`.
@@ -357,6 +490,7 @@ public actor SimulatedCameraLink: CameraLink {
                 switch list {
                 case .suspension: suspensionWaiters[token] = continuation
                 case .catalogue: catalogueWaiters[token] = continuation
+                case .localNetwork: localNetworkWaiters[token] = continuation
                 }
                 if honours && Task.isCancelled { wake(list, token) }
             }
@@ -369,6 +503,7 @@ public actor SimulatedCameraLink: CameraLink {
         switch list {
         case .suspension: suspensionWaiters.removeValue(forKey: token)?.resume()
         case .catalogue: catalogueWaiters.removeValue(forKey: token)?.resume()
+        case .localNetwork: localNetworkWaiters.removeValue(forKey: token)?.resume()
         }
     }
 
@@ -376,6 +511,7 @@ public actor SimulatedCameraLink: CameraLink {
         let tokens = switch list {
         case .suspension: suspensionWaiters.keys.sorted()
         case .catalogue: catalogueWaiters.keys.sorted()
+        case .localNetwork: localNetworkWaiters.keys.sorted()
         }
         for token in tokens { wake(list, token) }
     }
@@ -395,12 +531,33 @@ public actor SimulatedCameraLink: CameraLink {
     }
 
     private func itemID(for handle: PTPObjectHandle) -> CameraItem.ID {
-        CameraItem.ID(rawValue: "g\(generation)-\(String(handle.rawValue, radix: 16))")
+        let hex = String(handle.rawValue, radix: 16)
+        return CameraItem.ID(rawValue: capabilities.itemIDsSurviveReopen ? "h-\(hex)" : "g\(generation)-\(hex)")
     }
 
     private func item(for object: ScriptedCard.Object) -> CameraItem {
         CameraItem(id: itemID(for: object.handle), folder: object.folder, name: object.filename, size: object.size,
                    captureDate: PTPDateTime.parse(object.captureDateRaw, defaultTimeZone: timeZone))
+    }
+
+    /// What one `bytes` call keeps from the session it began in.
+    private struct Session {
+        let epoch: Int
+        /// Nil when the link can't resume: it reports no checkpoints.
+        let checkpoint: (@Sendable (PartialDownload) -> Void)?
+    }
+
+    /// The offset a resume continues from: the partial's, after cutting the file back to it, or 0 (the file is
+    /// created again) when the file is missing, shorter than its offset, or the offset is past the object's end.
+    private func continuableOffset(of partial: PartialDownload, size: UInt64) -> UInt64 {
+        let path = partial.file.path
+        guard partial.bytesWritten <= size,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let length = (attributes[.size] as? NSNumber)?.uint64Value, length >= partial.bytesWritten,
+              let handle = try? FileHandle(forWritingTo: partial.file) else { return 0 }
+        defer { try? handle.close() }
+        guard (try? handle.truncate(atOffset: partial.bytesWritten)) != nil else { return 0 }
+        return partial.bytesWritten
     }
 
     private func object(for id: CameraItem.ID) -> ScriptedCard.Object? {
@@ -410,7 +567,7 @@ public actor SimulatedCameraLink: CameraLink {
     /// Writes `start..<end` of the object's bytes at `url` (a new file when `start` is 0), a chunk at a time,
     /// reporting progress and stopping for a suspension between chunks.
     private func write(
-        _ object: ScriptedCard.Object, from start: UInt64, to end: UInt64, at url: URL,
+        _ object: ScriptedCard.Object, from start: UInt64, to end: UInt64, at url: URL, _ session: Session,
         progress: @Sendable (UInt64) -> Void
     ) async throws(CameraLinkFailure) {
         let handle = try openFile(at: url, fresh: start == 0)
@@ -421,10 +578,13 @@ public actor SimulatedCameraLink: CameraLink {
             try append(ScriptedCard.content(of: object.handle, in: offset ..< offset + n), to: handle)
             offset += n
             progress(offset)
+            if offset < object.size { session.checkpoint?(PartialDownload(file: url, bytesWritten: offset)) }
             guard offset < end else { break }
             await Task.yield()
             try await waitWhileSuspended(.bytes)
             try throwIfCancelled(.bytes)
+            try requireSession(session.epoch, .bytes)
+            try requireStore(.bytes)
         }
     }
 
@@ -490,5 +650,6 @@ public actor SimulatedCameraLink: CameraLink {
         for token in held.keys.sorted() { resolveHold(token, outcome) }
         wakeAll(.catalogue)
         wakeAll(.suspension)
+        wakeAll(.localNetwork)
     }
 }

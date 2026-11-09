@@ -284,8 +284,10 @@ public final class BrowseModel {
                 // action is cancelled and says why when the person comes back.
                 services.log.note("browse: link event \(event)")
                 cancelForSuspension()
-            case .didSuspend, .cancelledSuspending, .resumedOperations:
-                // Nothing else to pause in this slice; the log helps read the bench's background runs.
+            case .didSuspend, .cancelledSuspending, .resumedOperations,
+                 .waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost:
+                // Nothing else to pause in this slice; the log helps read the bench's background runs. The last
+                // four are Wi-Fi's (`IPLink`, Iteration 3): Browse acts on them when the wireless screens arrive.
                 services.log.note("browse: link event \(event)")
             }
         }

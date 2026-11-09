@@ -109,3 +109,33 @@ struct WordingTests {
         #expect(JPEGBenchRecord.format(0.04) == "0.04")
     }
 }
+
+@Suite("Wi-Fi routes in wording and keys")
+struct WiFiRouteTests {
+    @Test func bothRoutesAreCalledWiFi() {
+        for route in WiFiRoute.allCases {
+            #expect(CamerasWording.modeLine(.wifi(route)) == "Wi-Fi")
+            let reading = BrowseWording.readingDetail(.wifi(route))
+            #expect(reading.hasSuffix(".") && !reading.lowercased().contains("sony"))
+        }
+    }
+
+    @Test func theRouteIsNotPartOfTheCameraKey() {
+        let keys = WiFiRoute.allCases.map { route in
+            CameraKeys.key(for: CameraDescriptor(id: .init(rawValue: "x"), name: "ILCE-7CM2", mode: .wifi(route)),
+                           material: nil)
+        }
+        #expect(Set(keys).count == 1)
+        #expect(keys[0].rawValue.hasPrefix("wifi-name:"))
+    }
+
+    @Test func theNewFailuresAreSaidInFinishedSentencesWithoutSonyMarks() {
+        for kind in [CameraLinkFailure.Kind.identityChanged, .refused, .cardUnavailable] {
+            let lines = [BrowseWording.listingFailed(kind), JPEGWording.failed(.link(CameraLinkFailure(kind)))]
+            for line in lines.compactMap({ $0 }) {
+                #expect(line.hasSuffix(".") && !line.lowercased().contains("sony"), "\(kind): \(line)")
+            }
+            #expect(ImportWording.stopReason(kind).hasSuffix("."))
+        }
+    }
+}

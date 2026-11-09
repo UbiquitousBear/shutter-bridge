@@ -35,7 +35,9 @@ public enum CameraKeys {
         case .usb(.massStorage): mode = "usb-msc"
         case .usb(.mtp): mode = "usb-mtp"
         case .usb(.remoteShoot): mode = "usb-remote-shoot"
-        case .wifi: mode = "wifi"
+        // The route is how the phone reaches the camera, not which camera it is: both routes key alike. The Wi-Fi
+        // camera's own key (the PTP/IP GUID or the serial, hashed) arrives with `IPLink` and its material.
+        case .wifi(.cameraNetwork), .wifi(.otherNetwork): mode = "wifi"
         }
         return CameraKey(rawValue: mode + "-name:" + SHA256Digest.hex(of: Data(descriptor.name.utf8)))
     }
