@@ -49,8 +49,9 @@ public enum WirelessTiming {
 
     /// How long a session that won't reopen on the camera's network is retried on Wi-Fi before going back to Bluetooth to
     /// switch the camera's Wi-Fi on again. Decided by Shamil on 9 Nov (the spike's first wait); also the wait before
-    /// Bluetooth that decision 3 keeps, since the camera's Bluetooth answers while it is switched off.
-    public static let wifiRetryBeforeBluetooth: Duration = .seconds(30)
+    /// Bluetooth that decision 3 keeps, since the camera's Bluetooth answers while it is switched off. One value with the
+    /// recovery's (`WiFiRecoveryTiming.waitBeforeBluetooth`, W14).
+    public static let wifiRetryBeforeBluetooth: Duration = WiFiRecoveryTiming.waitBeforeBluetooth
 
     /// How long the stay keeps going with the Bluetooth link down and not restored. A stay with the link closed is tested
     /// only to 63 to 64 s (3 Nov 14:56 and 15:21, 4 Nov 13:06), so the stay ends here (backlog section 8). A reconnect in

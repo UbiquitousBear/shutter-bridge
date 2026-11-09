@@ -118,6 +118,13 @@ extension WiFiHandoff: WiFiHandingOff {}
 /// again and join. When the phone left the camera's network while the app was away more than the camera's 50 s ago, its
 /// Wi-Fi is off, so the next preparation goes to Bluetooth at once (B:191).
 ///
+/// **Recovery** (`prepareImport(bluetoothSwitchOnWhenAway:)` during an import whose session or card went, W14): the same
+/// order, which is the decided recovery's (backlog section 9): reopen on Wi-Fi for `WiFiRecoveryTiming.waitBeforeBluetooth`,
+/// then, in front, Bluetooth and the join as soon as CC09 reads 2, with no second fixed wait. With the app away nothing
+/// joins (B:211): when allowed, the camera's Wi-Fi is switched on over Bluetooth and iOS is given
+/// `WiFiRecoveryTiming.rejoinWhileAway` to rejoin by itself (the configuration is still saved); if it doesn't, the session
+/// pauses with `.needsJoin`, letting go of everything, and the person's return joins.
+///
 /// **Stay** (`importFinished()` in front): close the session, then one timer of `WirelessTiming.stay` from the end of the
 /// import. Keep the Bluetooth link and reconnect it when it drops; if it can't be restored within
 /// `WirelessTiming.linkDownStayLimit`, leave. When the stay runs out, leave.
@@ -167,6 +174,9 @@ public actor WirelessSession {
     private var awaySince: Duration?
     /// The last scene change the session was told of was to the background.
     private var inBackground = false
+    /// The preparation under way may switch the camera's Wi-Fi on over Bluetooth with the app away, and wait for iOS to
+    /// rejoin by itself (W14). Set by the call that starts it.
+    private var switchOnWhenAway = false
     /// Counts the scene changes the session was told of, so a read of `foreground` they overtook can be set aside.
     private var sceneChanges = 0
     private var stayEnd: Duration?
@@ -230,12 +240,24 @@ public actor WirelessSession {
     /// Gives an open link to the camera for an import: reopened with no join inside the stay, else after the join. A second
     /// call while one is preparing waits for the same result. Throws `WirelessFailure`, holding nothing afterwards.
     public func prepareImport() async throws(WirelessFailure) -> any CameraLink {
+        try await prepareImport(bluetoothSwitchOnWhenAway: false)
+    }
+
+    /// `prepareImport()`, as the Wi-Fi recovery calls it (W14). With `bluetoothSwitchOnWhenAway` and the app away when a
+    /// join would be needed, the session takes the steps that need no join instead of pausing at once: it switches the
+    /// camera's Wi-Fi on over Bluetooth (no write when CC09 already reads 2) and waits up to
+    /// `WiFiRecoveryTiming.rejoinWhileAway`, and no longer than what is left of the camera's 50 s, for iOS to rejoin the
+    /// network whose configuration it still holds; then it opens the session. If iOS doesn't rejoin, it pauses with
+    /// `.needsJoin`. Never `apply`s from the background. Only a call that starts a preparation sets this; a second call
+    /// meanwhile waits for the same result.
+    public func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
         if let leaveTask { await leaveTask.value }
         let task: Task<Result<any CameraLink, WirelessFailure>, Never>
         if let operation {
             task = operation
         } else {
             epoch += 1
+            switchOnWhenAway = bluetoothSwitchOnWhenAway
             task = Task { await self.runPreparation() }
             operation = task
         }
@@ -378,7 +400,11 @@ public actor WirelessSession {
     }
 
     private func joinSteps(_ held: inout Held) async throws(WirelessFailure) -> any CameraLink {
-        guard await isInForeground() else { throw .paused(.needsJoin) }
+        guard await isInForeground() else {
+            // A join needs the app in front. Without one, iOS can only rejoin a network whose configuration is still saved.
+            guard switchOnWhenAway, held.ssid != nil else { throw .paused(.needsJoin) }
+            return try await switchOnAndAwaitRejoin(&held)
+        }
         try checkCancelled()
         set(.handingOff)
         if let current = held.gatt, !(await isConnected(current)) {
@@ -453,6 +479,36 @@ public actor WirelessSession {
             }
         }
 
+        set(.openingSession)
+        switch await openSession(reopening: openedSinceLeave && !switchedOn, within: WirelessTiming.portWait) {
+        case .opened(let opened):
+            held.link = opened
+            return opened
+        case .refused(let failure), .gaveUp(let failure):
+            throw .link(failure)
+        case .cancelled:
+            throw .cancelled
+        }
+    }
+
+    /// With the app away (W14, B:211): switch the camera's Wi-Fi on over Bluetooth, wait for iOS to rejoin by itself, and
+    /// open the session; `.needsJoin` when iOS doesn't rejoin in time. A Bluetooth failure is thrown as it is: the person has
+    /// to come back for any of them.
+    private func switchOnAndAwaitRejoin(_ held: inout Held) async throws(WirelessFailure) -> any CameraLink {
+        try checkCancelled()
+        set(.handingOff)
+        if let current = held.gatt, !(await isConnected(current)) {
+            await current.disconnect()
+            held.gatt = nil
+        }
+        let (handed, switchedOn) = try await handOff(&held, rewriting: false)
+        try checkCancelled()
+        set(.joining)
+        // Nobody joined yet, so the camera's Wi-Fi goes off 50 s after status 2: no point waiting past that.
+        let wait = min(WiFiRecoveryTiming.rejoinWhileAway, handed.windowRemaining)
+        let rejoined = await path.waitForGateway(WirelessCamera.cameraNetworkGateway, timeout: wait)
+        try checkCancelled()
+        guard rejoined else { throw .paused(.needsJoin) }
         set(.openingSession)
         switch await openSession(reopening: openedSinceLeave && !switchedOn, within: WirelessTiming.portWait) {
         case .opened(let opened):
