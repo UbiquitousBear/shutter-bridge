@@ -14,7 +14,10 @@ public protocol CameraLink: Actor {
     /// The camera this link talks to.
     nonisolated var descriptor: CameraDescriptor { get }
 
-    /// What this link can do, fixed for its life (`CameraLinkCapabilities.defaults(for:)` is the carrier's baseline).
+    /// What this link can do (`CameraLinkCapabilities.defaults(for:)` is the carrier's baseline). Fixed for the
+    /// link's life once it is open; a link whose abilities depend on what the camera says reports less until it has
+    /// opened, never more (`IPLink` reports resume only once DeviceInfo lists 0x9211). The engine reads it after
+    /// `open()`.
     nonisolated var capabilities: CameraLinkCapabilities { get }
 
     /// Removal and the session's lifecycle, live: each read returns a new stream that gets only the events that
@@ -52,10 +55,10 @@ public protocol CameraLink: Actor {
     /// file is missing or shorter than the offset) is copied again from 0 into the same file.
     ///
     /// **Checkpoint.** A link that can resume calls `checkpoint` each time the first `bytesWritten` bytes of the
-    /// camera's file are on disk and a resume could start there (Wi-Fi, if the link reads in chunks: say after each
-    /// 4 MiB 0x9211 chunk but the last; whether new files use chunked 0x9211 or GetObject is still open, backlog
-    /// Iteration 3), with the file and that offset. The engine decides which of these to keep (every 16 MiB,
-    /// `PTPPartialRead.crossesCheckpoint`).
+    /// camera's file are on disk and a resume could start there, with the file and that offset (`IPLink`: after each
+    /// 4 MiB 0x9211 chunk but the last, every 4 MiB of a whole-file GetObject, and once more when a copy breaks off;
+    /// whether new files use chunked 0x9211 or GetObject is still open, backlog Iteration 3). The engine decides which
+    /// of these to keep (every 16 MiB, `PTPPartialRead.crossesCheckpoint`).
     /// A link that can't resume never calls it. It is called from the link's own context, in order, and never
     /// after `bytes` has returned or thrown.
     ///

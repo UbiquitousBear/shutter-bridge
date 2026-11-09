@@ -61,6 +61,33 @@ enum IPListing {
                           format: info.mediaKind)
     }
 
+    /// What a relist can take from items it listed before (`IPLink.list(reusing:)`): handles were stable across
+    /// sessions on the bench (backlog B:91), so a known item whose handle is listed again is kept as it was, and only
+    /// the handles not among them need GetObjectInfo (`SonyHandleSet.unseen`). Folders are never items, so their
+    /// handles are always unseen and their ObjectInfo is always read: new files get their folder paths.
+    ///
+    /// Known items that aren't this link's (no handle in the ID), or whose name isn't a plain file name, are not kept;
+    /// the first of two items naming one handle wins.
+    ///
+    /// - Returns: The kept items by handle (only handles listed now), and the listed handles not among them, in
+    ///   listing order.
+    static func reuse(_ known: [CameraItem], listed handles: [PTPObjectHandle])
+        -> (kept: [PTPObjectHandle: CameraItem], unseen: [PTPObjectHandle]) {
+        var byHandle: [PTPObjectHandle: CameraItem] = [:]
+        var order: [UInt32] = []
+        for item in known {
+            guard let handle = IPItemID.handle(of: item.id), isSafeFileName(item.name), byHandle[handle] == nil
+            else { continue }
+            byHandle[handle] = item
+            order.append(handle.rawValue)
+        }
+        let previous = SonyHandleSet(order)
+        let current = SonyHandleSet(handles.map(\.rawValue))
+        let unseen = previous.unseen(in: current).map(PTPObjectHandle.init(rawValue:))
+        let kept = byHandle.filter { current.contains($0.key.rawValue) }
+        return (kept, unseen)
+    }
+
     /// Every file in a listing, newest first, as Browse and the thumbnail queue want them.
     static func items(from infos: [(handle: PTPObjectHandle, info: PTPObjectInfo)], timeZone: TimeZone) -> [CameraItem] {
         let folders = folders(in: infos)
