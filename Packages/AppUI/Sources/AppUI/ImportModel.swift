@@ -72,6 +72,20 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
 /// - The screen shows `statusLine`, `destinationLine`, `filesReasonLine` (with the Settings button when
 ///   `offersPhotosSettingsLink`), `bytesLine`, `rateLine`, `timeLeftLine`, `rows`, and the buttons as `canPause`,
 ///   `canResume`, `canCancel` and `isFinished` say.
+///
+/// While the app is away (W13; backlog Iteration 3, section 9, and section 13):
+/// - Each job runs inside a background run (`ImportBackgroundRun`, a `BGContinuedProcessingTask` on iPhone), begun at
+///   *Import* and again at *Continue* when none is live, with the job's progress in bytes, and finished when the job
+///   ends.
+/// - When iOS ends the run early on a link that loses its session when the app is suspended (Wi-Fi), the job's
+///   checkpoints are flushed (`ImportEngine.flushCheckpoints()`), it pauses with `.taskExpired`, one pause
+///   notification is posted with the app away, the run is finished, and then the link's transfer is stopped
+///   (`abortTransfer`). The notification is withdrawn once the job goes again or ends. *Continue* then begins a
+///   new run and carries the job on through `ImportEngine.reconnect(_:to:knownItems:route:)`, which continues the file
+///   in flight from its checkpoint. Over USB the pause rule is unchanged (decision 1): an early end is only logged.
+/// - A USB job that pauses because the app left the foreground posts one pause notification too (Shamil, 9 Nov).
+/// - The notification permission is asked once, at the first Import on either link, with the reason line as the status
+///   line alongside iOS's prompt (`notificationPermission`; decided by Shamil, 8 and 9 Nov).
 @MainActor
 @Observable
 public final class ImportModel: BrowseImporting {
@@ -115,6 +129,21 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private var loggedImports: Set<ObjectIdentity> = []
     @ObservationIgnored private var loggedEnd = false
     @ObservationIgnored private let keyTags: CameraKeyTags
+    /// The notification permission, asked at the first Import (W13); its reason line is the status line meanwhile.
+    public let notificationPermission: NotificationPermissionModel
+    @ObservationIgnored private let background: ImportBackgroundCoordinator
+    @ObservationIgnored private let notifier: any LocalNotifier
+    @ObservationIgnored private let abortTransfer: @Sendable (any CameraLink) async -> Void
+    /// The app is in the background (the last phase handed over was `.background`, not yet followed by `.active`).
+    @ObservationIgnored private var isAway = false
+    /// A pause notification was posted since the app last left the foreground: one per stay away.
+    @ObservationIgnored private var notifiedWhileAway = false
+    /// A pause notification is up: withdrawn once the job goes again or ends, when it no longer holds.
+    @ObservationIgnored private var pauseNotificationShown = false
+    /// The person paused the job and hasn't continued it. Kept here because the engine's state shows only the pause
+    /// that comes first (`PauseReason.precedence`, where the person's is last): a removal or an expiry on top of it
+    /// hides it.
+    @ObservationIgnored private var pausedByPerson = false
 
     public init(
         engine: ImportEngine,
@@ -124,9 +153,17 @@ public final class ImportModel: BrowseImporting {
         leases: LinkLeases = LinkLeases(),
         log: any BenchLog = SilentBenchLog(),
         keyTags: CameraKeyTags = .shared,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        background: any ImportBackgroundRun = NoImportBackgroundRun(),
+        notifier: any LocalNotifier = SilentNotifier(),
+        notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord(),
+        abortTransfer: @escaping @Sendable (any CameraLink) async -> Void = { _ in }
     ) {
         self.keyTags = keyTags
+        self.notifier = notifier
+        self.abortTransfer = abortTransfer
+        notificationPermission = NotificationPermissionModel(notifier: notifier, record: notificationAsks)
+        self.background = ImportBackgroundCoordinator(run: background, log: log)
         self.engine = engine
         self.settings = settings
         self.photos = photos
@@ -134,6 +171,7 @@ public final class ImportModel: BrowseImporting {
         self.leases = leases
         self.log = log
         self.now = now
+        self.background.onExpired = { [weak self] in await self?.backgroundRunEnded() }
         // The engine's progress has one consumer, read for the model's lifetime; each update is a cue to read the
         // engine's snapshot (progress and files together).
         let stream = engine.progress
@@ -223,6 +261,7 @@ public final class ImportModel: BrowseImporting {
     public var statusLine: String? {
         guard camera != nil else { return nil }
         if isAskingForPhotosAccess { return ImportWording.askingForPhotos }
+        if let reason = notificationPermission.reasonLine { return reason }
         return ImportWording.status(progress, mode: usbMode)
     }
 
@@ -338,6 +377,7 @@ public final class ImportModel: BrowseImporting {
         importedSoFar = 0
         loggedImports = []
         loggedEnd = false
+        pausedByPerson = false
         do {
             try await engine.start(.items(items), from: link, camera: camera.key, to: route)
         } catch {
@@ -348,7 +388,16 @@ public final class ImportModel: BrowseImporting {
         }
         await hold(link)
         log.note("import: started \(items.count) file(s) to \(decision)")
+        // The run starts from the person's tap (iOS's rule), without holding the import up.
+        background.begin(progress)
         await refresh()
+        // Once, at the first Import on either link: the reason line, then iOS's prompt. After the job has started, so
+        // it never waits on the answer and the Photos prompt (above) never meets this one.
+        if await notificationPermission.askAtImport() {
+            // The job may have moved on, or ended, while the prompt was up.
+            starting = false
+            await refresh()
+        }
         return .started(items.count)
     }
 
@@ -386,16 +435,52 @@ public final class ImportModel: BrowseImporting {
     // MARK: - Pause, continue, cancel
 
     public func pause() async {
-        try? await engine.pause(.byPerson)
+        do {
+            try await engine.pause(.byPerson)
+            pausedByPerson = true
+        } catch {}
         await refresh()
     }
 
-    /// Continue: lifts the person's pause, the app's and a stall, after reading Photos access again.
+    /// Continue: lifts the person's pause, the app's and a stall, after reading Photos access again. A person's tap,
+    /// so a new background run begins if none is live. After iOS ended the run (`.taskExpired`) the job carries on
+    /// through `ImportEngine.reconnect(_:to:knownItems:route:)` (backlog Iteration 3, section 9, *Continue*): the
+    /// session is opened again, the card listed, and the file in flight continued from its checkpoint, so each file is
+    /// written once. The link is the camera finder's for the job's camera, or the job's own; W16 puts the Wi-Fi
+    /// reopen (`WirelessSession.prepareImport()`) and its listing of known handles in front of it.
     public func resume() async {
+        if camera != nil, await engine.state.isActive { background.begin(progress) }
         let route = await continuingRoute()
-        try? await engine.resume(nil, to: route)
+        if await engine.state == .paused(.taskExpired), await continueAfterExpiry(route: route) {
+            await refresh()
+            return
+        }
+        do {
+            try await engine.resume(nil, to: route)
+            pausedByPerson = false
+        } catch {}
         await refresh()
         await cameraConnected()
+    }
+
+    /// The reconnect after an expiry; false when there is no link to carry on through or the engine refused.
+    private func continueAfterExpiry(route: ImportRoute?) async -> Bool {
+        guard let camera, let job = await engine.currentJobID else { return false }
+        var target = link
+        if let finder = cameraFinder, let found = await finder.link(forCameraWith: camera.key) { target = found }
+        guard let target else { return false }
+        do {
+            try await engine.reconnect(job, to: target, route: route)
+        } catch {
+            log.note("import: didn't carry on after the continued task ended: \(error)")
+            return false
+        }
+        // Continue lifts the person's pause, the app's and a stall too, which a reconnect leaves.
+        try? await engine.resume(nil)
+        pausedByPerson = false
+        log.note("import: carrying on after the continued task ended")
+        await hold(target)
+        return true
     }
 
     /// Cancels the job: files already imported stay where they went.
@@ -421,13 +506,19 @@ public final class ImportModel: BrowseImporting {
     /// so the app pauses it here. The link isn't closed: the same session carries on when the app is back. Coming
     /// back reads Photos access again and lifts that pause only (never the person's), then reconnects if the camera
     /// went away meanwhile.
+    ///
+    /// A USB job paused this way posts one pause notification (Shamil, 9 Nov), unless the person had paused it.
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
         switch phase {
         case .background:
-            guard await engine.state.isActive, camera?.descriptor.carrier == .usb else { return }
+            isAway = true
+            guard await engine.state.isActive, pausesWhenTheAppLeaves else { return }
             try? await engine.pause(.appInBackground)
             await refresh()
+            if !pausedByPerson { await notifyPausedWhileAway() }
         case .active:
+            isAway = false
+            notifiedWhileAway = false
             guard await engine.state.isActive else { return }
             let route = await continuingRoute()
             try? await engine.resume(.appInBackground, to: route)
@@ -436,6 +527,49 @@ public final class ImportModel: BrowseImporting {
         case .inactive:
             break
         }
+    }
+
+    /// Whether the job's link keeps its session through the app's suspension, so the job pauses when the app leaves
+    /// and an early end of the background run doesn't pause it: USB (ImageCaptureCore's session survived a 652 s lock;
+    /// *did suspend* stops it 30 s after leaving, even inside a continued task). Wi-Fi loses its session within about
+    /// 5 s without a continued task and keeps going with one. By carrier, as the scene-phase rule always was; no
+    /// capability says it.
+    private var pausesWhenTheAppLeaves: Bool { camera?.descriptor.carrier == .usb }
+
+    /// iOS ended the background run early (an expiry, or Stop in the system's UI; backlog Iteration 3, section 9,
+    /// *Expiry is normal*). On Wi-Fi: flush the checkpoints, pause with `.taskExpired`, and post one pause
+    /// notification while the app is away (not when the person had paused the job); then, once the coordinator has
+    /// finished the run, stop the link's transfer (the returned step). The abort may wait on a camera whose Wi-Fi has
+    /// faded, as it usually has at an expiry, so it never holds the run past its end or the notification back. Over
+    /// USB nothing changes: the job pauses at the app's leaving, as before (decision 1).
+    private func backgroundRunEnded() async -> (@MainActor () async -> Void)? {
+        guard await engine.state.isActive else { return nil }
+        guard !pausesWhenTheAppLeaves else {
+            log.note("import: the continued task ended; a USB job keeps to the leaving rule")
+            return nil
+        }
+        await engine.flushCheckpoints()
+        try? await engine.pause(.taskExpired)
+        log.note("import: paused, the continued task ended")
+        await refresh()
+        if !pausedByPerson { await notifyPausedWhileAway() }
+        guard let link else { return nil }
+        let abort = abortTransfer
+        return { await abort(link) }
+    }
+
+    /// Posts the pause notification, once per stay away, and only when iOS allows it (a notification posted while
+    /// permission is undetermined fails: UNErrorDomain 2003). W14's `.needsJoin` pause posts through it too.
+    func notifyPausedWhileAway() async {
+        guard isAway, !notifiedWhileAway else { return }
+        notifiedWhileAway = true
+        guard await notificationPermission.allowsPosting() else {
+            log.note("import: paused while away; notifications aren't allowed")
+            return
+        }
+        await notifier.post(.importPaused)
+        pauseNotificationShown = true
+        log.note("import: posted the pause notification")
     }
 
     /// A camera was connected (or the app is back): if the job is waiting for its camera after a removal and that
@@ -469,6 +603,21 @@ public final class ImportModel: BrowseImporting {
         guard mine > refreshesApplied else { return }
         refreshesApplied = mine
         apply(s)
+        // As `apply`: while a job starts, a finished snapshot is the last job's, not this one's.
+        if !starting || s.progress.state.isActive {
+            if case let .finished(outcome) = s.progress.state {
+                background.finish(success: outcome == .completed)
+            } else if s.progress.state.isActive {
+                background.update(s.progress)
+            }
+        }
+        if pauseNotificationShown, s.progress.state == .running || !s.progress.state.isActive {
+            // The import is going again (the app is back, Continue, a reconnect) or has ended: "Import paused" no
+            // longer holds.
+            pauseNotificationShown = false
+            await notifier.withdraw(.importPaused)
+            log.note("import: withdrew the pause notification")
+        }
         if case .finished = s.progress.state, let link {
             self.link = nil
             await leases.release(link)

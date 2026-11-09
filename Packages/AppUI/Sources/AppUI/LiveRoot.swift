@@ -35,7 +35,9 @@ extension AppModel {
     /// - discovery through `USBCameraBrowser`, and the camera key from the USB link's key material
     ///   (`CameraKeys.keying(material:)`: hashed device UUID in MTP, mode and volume name in MSC; unverified, backlog
     ///   sections 2 and 4). The key groups imports (album, Camera row, last-known card, reconnecting); whether a file
-    ///   is already imported doesn't depend on it (Shamil, 8 Nov).
+    ///   is already imported doesn't depend on it (Shamil, 8 Nov);
+    /// - local notifications through `UNLocalNotifier`, with the ask recorded in `UserDefaults` (W13: the permission
+    ///   at the first Import, and the pause notification).
     static func live(catalogue: any CatalogueStore) -> AppModel {
         let library = SystemPhotoLibrary()
         let engine = ImportEngine(catalogue: catalogue)
@@ -56,7 +58,9 @@ extension AppModel {
             cameraKey: CameraKeys.keying(material: { link in
                 guard let usb = link as? USBLink else { return nil }
                 return await usb.cameraKeyMaterial()?.rawValue
-            })
+            }),
+            notifier: UNLocalNotifier(),
+            notificationAsks: UserDefaultsNotificationAskRecord()
         )
     }
 }
@@ -195,6 +199,18 @@ struct LiveApp: View {
         .onChange(of: model.keepsScreenOn, initial: true) { _, keepsOn in
             UIApplication.shared.isIdleTimerDisabled = keepsOn
         }
+    }
+}
+#endif
+
+#if canImport(BackgroundTasks) && os(iOS)
+/// What the app sets up before it finishes launching: called from the app's `init`. iOS requires a background task's
+/// launch handler to be registered by then, so it can't wait for `LiveRoot` or the catalogue.
+public enum LiveLaunch {
+    /// Registers the continued import's launch handler (`ContinuedImportRunner.register()`, W13). W16 hands the runner
+    /// to the import.
+    public static func beforeLaunchFinishes() {
+        ContinuedImportRunner.register()
     }
 }
 #endif

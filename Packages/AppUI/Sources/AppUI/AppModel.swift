@@ -19,6 +19,8 @@ public final class AppModel {
     public let importer: ImportModel
     public let settings: SettingsModel
     public let leases: LinkLeases
+    @ObservationIgnored private let notifier: any LocalNotifier
+    @ObservationIgnored private var registeredCategories = false
 
     public init(
         discovery: any CameraDiscovery,
@@ -29,14 +31,18 @@ public final class AppModel {
         photos: any PhotosAuthorising,
         destinations: any ImportDestinationMaking,
         cameraKey: @escaping CameraKeying,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        notifier: any LocalNotifier = SilentNotifier(),
+        notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord()
     ) {
+        self.notifier = notifier
         let leases = LinkLeases()
         self.leases = leases
         cameras = CamerasModel(discovery: discovery, services: services, catalogue: catalogue,
                                cameraKey: cameraKey, leases: leases)
         importer = ImportModel(engine: engine, settings: settingsStore, photos: photos, destinations: destinations,
-                               leases: leases, log: services.log, now: now)
+                               leases: leases, log: services.log, now: now, notifier: notifier,
+                               notificationAsks: notificationAsks)
         settings = SettingsModel(store: settingsStore, photos: photos)
         cameras.importModel = importer
         importer.cameraFinder = cameras
@@ -49,11 +55,17 @@ public final class AppModel {
 
     /// The scene's phase: discovery starts (again) when the app is active, Settings reads Photos access again (the
     /// person may have changed it in Settings), and a USB import pauses when the app leaves the foreground and
-    /// carries on when it is back (decision 1).
+    /// carries on when it is back (decision 1). The notification permission is read again too, and the notification
+    /// categories are registered at the first activation (W13).
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
         if phase == .active {
             await cameras.becameActive()
             await settings.refreshPhotosAccess()
+            await importer.notificationPermission.refresh()
+            if !registeredCategories {
+                registeredCategories = true
+                await notifier.registerCategories()
+            }
         }
         await importer.scenePhaseChanged(phase)
     }

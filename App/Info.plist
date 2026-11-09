@@ -3,10 +3,10 @@
 <!--
   Info.plist for Shutter Bridge. It sits outside the synchronized ShutterBridge/ folder so it isn't copied into the
   app as a resource; the project points at it with INFOPLIST_FILE. Only what the built features need: Iteration 1's keys;
-  for the camera's Bluetooth link (Iteration 3, W10), the Bluetooth permission and the bluetooth-central background mode;
-  and, for the camera's Wi-Fi (Iteration 3, W12), the Local Network permission. No other background modes until the
-  change that uses them. Joining the camera's network needs no key here: it is the Hotspot Configuration entitlement, in
-  ShutterBridge.entitlements.
+  for the camera's Bluetooth link (W10), the Bluetooth permission and the bluetooth-central background mode; for the
+  camera's Wi-Fi (W12), the Local Network permission; and for imports that go on while the app is away (W13), the
+  continued task's identifier. No other background modes until the change that uses them. Joining the camera's network
+  needs no key here: it is the Hotspot Configuration entitlement, in ShutterBridge.entitlements.
   Left out on purpose: NSBonjourServices (the camera advertised no _ptp._tcp; the app connects to its fixed address,
   backlog section 5) and the ATS NSAllowsLocalNetworking exception (only the SSDP description fetch over plain HTTP would
   need it, and that stays off).
@@ -69,6 +69,12 @@
 	     fail (backlog section 1). Says why, and that nothing else on the network is touched (HIG Privacy). -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connects to your camera over Wi-Fi to import your photos. It doesn't connect to other devices on your network.</string>
+	<!-- The continued task each import runs in (BGContinuedProcessingTask, ContinuedImportRunner.identifier). Needs no
+	     background mode. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>net.shamil.shutter-bridge.import</string>
+	</array>
 	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Saves the photos you import into an album. Limit Access with no photos selected is enough.</string>
