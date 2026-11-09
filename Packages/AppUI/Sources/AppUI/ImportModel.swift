@@ -131,11 +131,11 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private let keyTags: CameraKeyTags
     /// The notification permission, asked at the first Import (W13); its reason line is the status line meanwhile.
     public let notificationPermission: NotificationPermissionModel
-    @ObservationIgnored private let background: ImportBackgroundCoordinator
+    @ObservationIgnored let background: ImportBackgroundCoordinator
     @ObservationIgnored private let notifier: any LocalNotifier
     @ObservationIgnored private let abortTransfer: @Sendable (any CameraLink) async -> Void
     /// The app is in the background (the last phase handed over was `.background`, not yet followed by `.active`).
-    @ObservationIgnored private var isAway = false
+    @ObservationIgnored private(set) var isAway = false
     /// A pause notification was posted since the app last left the foreground: one per stay away.
     @ObservationIgnored private var notifiedWhileAway = false
     /// A pause notification is up: withdrawn once the job goes again or ends, when it no longer holds.
@@ -143,7 +143,9 @@ public final class ImportModel: BrowseImporting {
     /// The person paused the job and hasn't continued it. Kept here because the engine's state shows only the pause
     /// that comes first (`PauseReason.precedence`, where the person's is last): a removal or an expiry on top of it
     /// hides it.
-    @ObservationIgnored private var pausedByPerson = false
+    @ObservationIgnored private(set) var pausedByPerson = false
+    /// Gets a Wi-Fi job back after the camera drops its card or the session (W14; ImportModel+WiFiRecovery.swift).
+    @ObservationIgnored var wifiRecovery: WiFiRecoveryCoordinator?
 
     public init(
         engine: ImportEngine,
@@ -418,7 +420,7 @@ public final class ImportModel: BrowseImporting {
     /// or interrupted import continues); nil when nothing changes. A continue can move a Photos job to Files when
     /// access was turned off or restricted meanwhile, but never moves a Files job to Photos: granting access mid-job
     /// applies from the next import, which follows the setting (decision 9; the Photos-denied line says "next time").
-    private func continuingRoute() async -> ImportRoute? {
+    func continuingRoute() async -> ImportRoute? {
         guard let made = jobDestinations, progress.destination?.kind != .filesFolder else { return nil }
         let decision = DestinationDecision.resolve(setting: jobSetting, authorisation: await photos.authorisation())
         guard decision.kind == .filesFolder, decision != progress.destination else { return nil }
@@ -519,6 +521,7 @@ public final class ImportModel: BrowseImporting {
         case .active:
             isAway = false
             notifiedWhileAway = false
+            wifiRecovery?.appBecameActive()
             guard await engine.state.isActive else { return }
             let route = await continuingRoute()
             try? await engine.resume(.appInBackground, to: route)
@@ -625,6 +628,7 @@ public final class ImportModel: BrowseImporting {
         if s.progress.state == .paused(.cameraRemoved) {
             await cameraConnected()   // the camera may already be back
         }
+        wifiRecovery?.jobChanged(s.progress.state)
     }
 
     private func apply(_ s: ImportSnapshot) {
@@ -676,7 +680,7 @@ public final class ImportModel: BrowseImporting {
     }
 
     /// Holds `newLink` for the job, letting go of the one it used before.
-    private func hold(_ newLink: any CameraLink) async {
+    func hold(_ newLink: any CameraLink) async {
         if let old = link, ObjectIdentifier(old) == ObjectIdentifier(newLink) { return }
         leases.acquire(newLink)
         let old = link

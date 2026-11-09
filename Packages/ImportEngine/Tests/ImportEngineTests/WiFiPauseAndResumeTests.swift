@@ -445,6 +445,34 @@ struct WiFiPauseAndResumeTests {
         await h.cleanup()
     }
 
+    /// An expiry hidden behind a needed join is still seen (`isPaused(for:)`), and a reconnect that keeps it lifts the
+    /// rest but copies nothing until Continue lifts the expiry (W14).
+    @Test func aReconnectKeepingTheExpiryWaitsForContinue() async throws {
+        let h = Harness()
+        let card = h.singles(["A.JPG", "B.JPG"])
+        let link = h.resumingLink(card)
+        await link.script("A.JPG", .holdAfter(300))
+        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        await link.waitUntilHeld("A.JPG")
+
+        try await h.engine.pause(.cameraUnreachable)
+        try await h.engine.pause(.needsJoin)
+        try await h.engine.pause(.taskExpired)
+        #expect(await h.engine.state == .paused(.needsJoin))
+        #expect(await h.engine.isPaused(for: .taskExpired))
+        #expect(await !h.engine.isPaused(for: .byPerson))
+
+        try await h.engine.reconnect(job, to: link, knownItems: card, keepingExpiry: true)
+        #expect(await h.engine.state == .paused(.taskExpired))
+        #expect(await !h.engine.isPaused(for: .needsJoin))
+        #expect(await !h.engine.isPaused(for: .cameraUnreachable))
+        try await h.engine.resume()
+        #expect(await h.waitFinished() == .completed)
+        #expect(await !h.engine.isPaused(for: .taskExpired))
+        expectImported(h, card)
+        await h.cleanup()
+    }
+
     @Test func importRunningFollowsTheLinksCarrier() async throws {
         let h = Harness()
         let card = h.singles(["A.JPG"])

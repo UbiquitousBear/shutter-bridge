@@ -240,6 +240,10 @@ public actor ImportEngine {
         }
     }
 
+    /// Whether the job is paused for `reason`, whichever pause `state` shows (`PauseReason.precedence`): an expiry
+    /// stays hidden behind a needed join, for one (W14).
+    public func isPaused(for reason: PauseReason) -> Bool { job?.pauses.contains(reason) ?? false }
+
     /// Continues a paused job in the same session, without reopening it.
     ///
     /// - Parameters:
@@ -291,10 +295,13 @@ public actor ImportEngine {
     ///     only for handles it hasn't seen, W8); empty to have the engine call `list()`. Each file's name and size
     ///     are still checked against the camera before a partial file is continued.
     ///   - route: A new route for the files not yet committed, after re-reading Photos access (backlog section 5).
+    ///   - keepingExpiry: true leaves `.taskExpired` in place: the new link is the job's and the card is listed, but
+    ///     nothing is copied until Continue lifts the expiry (W14: a Wi-Fi recovery that ends after iOS ended the
+    ///     continued task).
     /// - Throws: `.cameraNotRemoved` when the job is neither waiting for the camera nor paused for a reason this
     ///   lifts.
     public func reconnect(_ job: ImportJobID, to link: any CameraLink, knownItems: [CameraItem] = [],
-                          route: ImportRoute? = nil) throws(ImportEngineError) {
+                          route: ImportRoute? = nil, keepingExpiry: Bool = false) throws(ImportEngineError) {
         guard let current = self.job, current.id == job.rawValue else { throw .noJob }
         guard current.phase == .waitingForCamera || !current.pauses.isDisjoint(with: PauseReason.liftedByReconnect)
         else { throw .cameraNotRemoved }
@@ -311,7 +318,7 @@ public actor ImportEngine {
         current.pendingListing = knownItems.isEmpty ? nil : knownItems
         ensureConsumer(for: link)
         current.phase = .listing
-        liftPauses(PauseReason.liftedByReconnect, of: current)
+        liftPauses(PauseReason.liftedByReconnect.subtracting(keepingExpiry ? [.taskExpired] : []), of: current)
         current.signal.fire()
         scheduleCheckpointFlush()
     }
