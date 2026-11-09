@@ -318,12 +318,15 @@ struct BrowseFullTests {
         #expect(h.model.selection.isEmpty)
         #expect(!h.model.isSelecting)
         #expect(h.model.importNotice == "Importing 2 files.")
+        #expect(h.model.importStatus?.tone == .info)
+        #expect(h.model.importStatus?.dismissesItself == true)
         h.model.dismissImportNotice()
         #expect(h.model.importNotice == nil)
+        #expect(h.model.importStatus == nil)
         await h.stop()
     }
 
-    @Test func aRefusedImportKeepsTheSelection() async {
+    @Test func aRefusedImportKeepsTheSelection() async throws {
         let h = await start()
         #expect(await eventually { h.model.phase == .listed })
         h.importer.outcome = .busyWithAnotherCamera
@@ -331,6 +334,15 @@ struct BrowseFullTests {
         #expect(await h.model.importSelected() == .busyWithAnotherCamera)
         #expect(h.model.selectionSummary.count == 1)
         #expect(h.model.importNotice == BrowseWording.importRequested(.busyWithAnotherCamera))
+        // A refusal is kept until it is closed, with the warning symbol, and VoiceOver hears it urgently.
+        let first = try #require(h.model.importStatus)
+        #expect(first.tone == .problem && !first.dismissesItself)
+        #expect(first.systemImage == "exclamationmark.triangle")
+        #expect(first.announcement.priority == .high)
+        // The same refusal again is a new notice, so it is announced again.
+        #expect(await h.model.importSelected() == .busyWithAnotherCamera)
+        let second = try #require(h.model.importStatus)
+        #expect(second.text == first.text && second != first)
         await h.stop()
     }
 

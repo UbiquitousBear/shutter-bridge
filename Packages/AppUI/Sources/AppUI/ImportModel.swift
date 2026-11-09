@@ -16,8 +16,22 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
     public var stateText: String
     /// "12.3 MB of 45.6 MB" while copying, the size otherwise.
     public var sizeText: String
-    /// Skipped or failed: drawn as a problem.
+    /// How a row's symbol is coloured (HIG Colour: the reason text stays primary, never orange).
+    public enum Tone: Sendable, Hashable {
+        /// Waiting, copying, saving or not imported: secondary.
+        case neutral
+        /// Imported: green.
+        case done
+        /// Skipped: orange.
+        case skipped
+        /// Failed: red.
+        case failed
+    }
+
+    /// Skipped or failed: drawn as a problem, with the reason in the primary text colour.
     public var isProblem: Bool
+    /// The symbol's colour.
+    public var tone: Tone
     /// Downloading or committing: drawn with a bar.
     public var isInFlight: Bool
     public var accessibilityLabel: String
@@ -30,9 +44,12 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
         stateText = ImportWording.row(status.phase, item: status.item, going: kind)
         sizeText = ImportWording.rowSize(status)
         switch status.phase {
-        case .skipped, .failed: isProblem = true
-        default: isProblem = false
+        case .skipped: tone = .skipped
+        case .failed: tone = .failed
+        case .imported: tone = .done
+        default: tone = .neutral
         }
+        isProblem = tone == .skipped || tone == .failed
         switch status.phase {
         case .downloading, .committing: isInFlight = true
         default: isInFlight = false
@@ -141,6 +158,8 @@ public final class ImportModel: BrowseImporting {
 
     public var progress: ImportProgress { snapshot.progress }
     public var state: ImportJobState { snapshot.progress.state }
+    /// The state as the screen's VoiceOver announcements see it (`ImportWording.stateAnnouncement`).
+    public var announcedState: ImportWording.AnnouncedState { ImportWording.AnnouncedState(progress) }
     /// A job is shown (running, paused or finished and not yet dismissed).
     public var hasJob: Bool { camera != nil }
     public var isActive: Bool { state.isActive }

@@ -156,7 +156,7 @@ struct ImportModelTests {
         #expect(await h.finished())
         #expect(await h.destinations.files.names.count == 3)
         #expect(await h.destinations.photos.names.isEmpty)
-        #expect(h.model.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › Untitled.")
+        #expect(h.model.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › Camera.")
         #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         #expect(h.model.rows.allSatisfy { $0.stateText == "Saved to Files" })

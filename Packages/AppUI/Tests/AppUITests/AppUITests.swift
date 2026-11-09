@@ -31,7 +31,11 @@ struct WordingTests {
     /// Every sentence the slice can show, with the failure messages for every kind.
     var sentences: [String] {
         var lines = [
-            CamerasWording.notAllowedDetail, CamerasWording.disconnected("Untitled"),
+            CamerasWording.notAllowedDetail,
+            CamerasWording.disconnected(CameraDescriptor(id: .init(rawValue: "a"), name: "Untitled",
+                                                         mode: .usb(.massStorage))),
+            CamerasWording.disconnected(CameraDescriptor(id: .init(rawValue: "b"), name: "ILCE-7CM2",
+                                                         mode: .usb(.mtp))),
             BrowseWording.readingDetail(.usb(.massStorage)), BrowseWording.readingDetail(.usb(.mtp)),
             BrowseWording.noFilesDetail, BrowseWording.emptyCardDetail, BrowseWording.goneDetail,
             JPEGWording.copied(pressedName: "DSC00001.ARW", embeddedPreview: false), JPEGWording.copiedPreview,
@@ -49,6 +53,7 @@ struct WordingTests {
          BrowseWording.readingTitle, BrowseWording.noFilesTitle, BrowseWording.emptyCardTitle,
          BrowseWording.goneTitle, BrowseWording.listingFailedTitle, BrowseWording.tryAgain,
          BrowseWording.videoLabel, BrowseWording.otherLabel,
+         BrowseWording.close, CamerasWording.genericName,
          JPEGWording.copyAction, JPEGWording.shareAction, JPEGWording.cancel]
             + USBMode.allCases.map { CamerasWording.modeLine(.usb($0)) }
     }

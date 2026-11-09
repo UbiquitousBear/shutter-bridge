@@ -112,9 +112,23 @@ public final class BrowseModel {
     }
     /// True while Import is handing the selection over (Photos may be asking).
     public private(set) var isStartingImport = false
-    /// What came of the last Import tap, for a strip at the top; cleared with `dismissImportNotice()`.
-    public private(set) var importNotice: String?
-    public private(set) var action: JPEGActionState = .idle
+    /// What came of the last Import tap, for a strip at the top: a confirmation that goes by itself, or a refusal or
+    /// failure that stays until it is closed (`StatusNotice.importRequest(_:id:)`); cleared with
+    /// `dismissImportNotice()`.
+    public private(set) var importStatus: StatusNotice?
+    /// The import notice's text.
+    public var importNotice: String? { importStatus?.text }
+    public private(set) var action: JPEGActionState = .idle {
+        didSet {
+            switch action {
+            case .finished, .failed: actionOutcomeCount += 1
+            case .idle, .working: break
+            }
+        }
+    }
+    /// The action's confirmation (goes by itself) or error (stays until closed), for the strip at the top. Numbered,
+    /// so the same error twice in a row (with no work in between) is a new notice, announced again.
+    public var actionNotice: StatusNotice? { StatusNotice.jpegAction(action, id: actionOutcomeCount) }
     /// Set when a JPEG is ready to share; the screen presents the share sheet and calls `shareFinished()`.
     public private(set) var share: JPEGShare?
 
@@ -140,6 +154,9 @@ public final class BrowseModel {
     @ObservationIgnored private var thumbnails: [CameraItem.ID: Data] = [:]
     @ObservationIgnored private var actionTask: Task<Void, Never>?
     @ObservationIgnored private var actionCount = 0
+    /// Counts the action's outcomes (`actionNotice`'s id).
+    private var actionOutcomeCount = 0
+    @ObservationIgnored private var importNoticeCount = 0
     /// Said instead of nothing when the action in progress ends as cancelled, because the app cancelled it.
     @ObservationIgnored private var cancelMessage: String?
     /// Badge reads started and applied, so a read that answers after a newer one is dropped.
@@ -736,11 +753,12 @@ public final class BrowseModel {
         case .busyWithAnotherCamera, .stillStarting, .failed:
             break
         }
-        importNotice = BrowseWording.importRequested(outcome)
+        importNoticeCount += 1
+        importStatus = StatusNotice.importRequest(outcome, id: importNoticeCount)
         return outcome
     }
 
-    public func dismissImportNotice() { importNotice = nil }
+    public func dismissImportNotice() { importStatus = nil }
 
     /// The grid cell's VoiceOver label (`date` formatted by the screen).
     public func accessibilityLabel(for item: CameraItem, date: String?) -> String {

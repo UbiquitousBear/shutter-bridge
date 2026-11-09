@@ -269,8 +269,11 @@ final class SimulatorBench {
 
     // MARK: - Reading the results
 
-    /// The camera's folder in Files.
-    var filesFolder: URL { documents.appendingPathComponent(FilesFolderNaming.folderName(forCamera: camera.name)) }
+    /// The camera's folder in Files, named with the app's display name ("Camera" in MSC).
+    var filesFolder: URL {
+        let name = CamerasWording.displayName(for: camera)
+        return documents.appendingPathComponent(FilesFolderNaming.folderName(forCamera: name))
+    }
 
     /// The files in the camera's Files folder, by name.
     func importedFiles() -> [String: Data] {

@@ -56,6 +56,8 @@ public final class CamerasModel: CameraFinding {
     /// A message for the top of the screen, such as a camera disconnected while it was browsed. It goes when that
     /// camera is connected again, or when the person closes it.
     public var notice: String?
+    /// `notice` as the strip shows it, numbered so a second disconnect with the same text is announced again.
+    public var noticeStatus: StatusNotice? { notice.map { StatusNotice.cameras($0, id: noticeCount) } }
 
     /// The import, told when a camera is connected, and handed Browse's selection. Set by the app (`AppModel`).
     @ObservationIgnored public weak var importModel: ImportModel?
@@ -70,6 +72,8 @@ public final class CamerasModel: CameraFinding {
     @ObservationIgnored private var launched = false
     /// The camera `notice` is about, if it is about one.
     @ObservationIgnored private var noticeCamera: CameraDescriptor.ID?
+    /// Counts the disconnect notices (`noticeStatus`'s id).
+    private var noticeCount = 0
 
     /// - Parameters:
     ///   - catalogue: For Browse's last-known card and badge; nil shows neither.
@@ -143,7 +147,8 @@ public final class CamerasModel: CameraFinding {
     public func cameraWentAway(_ id: CameraDescriptor.ID) {
         guard let browsed = path.first(where: { $0.id == id }) else { return }
         path.removeAll()
-        notice = CamerasWording.disconnected(browsed.name)
+        noticeCount += 1
+        notice = CamerasWording.disconnected(browsed)
         noticeCamera = id
     }
 
