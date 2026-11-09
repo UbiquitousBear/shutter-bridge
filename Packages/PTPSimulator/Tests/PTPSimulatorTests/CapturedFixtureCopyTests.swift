@@ -11,6 +11,7 @@ struct CapturedFixtureCopyTests {
         ("a7c2-ptpip-deviceinfo", "ptpip/deviceinfo.bin"),
         ("a7c2-usb-storageinfo", "usb/storageinfo.bin"),
         ("a7c2-ptpip-storageinfo", "ptpip/storageinfo.bin"),
+        ("a7c2-ptpip-sdio-extdeviceinfo", "ptpip/sdio-extdeviceinfo.bin"),
         ("a7c2-usb-objectinfo-arw", "usb/objectinfo-arw.bin"),
         ("a7c2-usb-objectinfo-jpg", "usb/objectinfo-jpg.bin"),
     ]
@@ -33,6 +34,7 @@ struct CapturedFixtureCopyTests {
             #expect(info.serialNumber.count == 32 && info.serialNumber.allSatisfy { $0 == "0" }, "\(flavour)")
             #expect(try CapturedA7C2.storageInfo(flavour).storageType == 4)
         }
+        #expect(try CapturedA7C2.sdioExtDeviceInfo().count == 970)
         #expect(try CapturedA7C2.objectInfoTemplate(raw: true).filename == "DSC02018.ARW")
         #expect(try CapturedA7C2.objectInfoTemplate(raw: false).filename == "DSC01997.JPG")
         #expect(throws: SimulatorFixtureError.self) { try CapturedA7C2.bytes("no-such-fixture") }

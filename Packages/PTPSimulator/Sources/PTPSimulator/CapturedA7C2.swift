@@ -9,9 +9,10 @@ public enum SimulatorFlavour: String, Sendable, Hashable, CaseIterable {
     /// Iteration 1 imports over USB, and `GetPartialObject` (0x101B) behaves here as it does over USB in MTP.
     case usbMTP
     /// The camera's PTP/IP answer (`Fixtures/a7c2/ptpip/deviceinfo.bin`, firmware string "2.01", from a run with PC
-    /// Remote Function off). Only the DeviceInfo, StorageInfo and ObjectAdded style follow it: Sony's whole-card
-    /// session (SDIO_OpenSession, 0x9212) and its 0x9211 partial read, without which the real camera answers
-    /// StoreNotAvailable or InvalidObjectHandle, are Iteration 3's.
+    /// Remote Function off). The DeviceInfo, StorageInfo and ObjectAdded style follow it, and so does Sony's
+    /// whole-card session: a plain OpenSession lists nothing, SDIO_OpenSession (0x9210) with the contents-transfer
+    /// steps (0x9212) offers the card, and 0x9211 reads byte ranges where 0x101B answers InvalidObjectHandle
+    /// (`PTPResponder`, `WholeCardBehaviour`).
     case ptpIP
 }
 
@@ -49,6 +50,12 @@ public enum CapturedA7C2 {
     /// capacity and free space 0, the camera's way of saying nothing.
     public static func storageInfo(_ flavour: SimulatorFlavour) throws(SimulatorFixtureError) -> PTPStorageInfo {
         try decode("a7c2-\(flavour.linkName)-storageinfo", PTPStorageInfo.decode)
+    }
+
+    /// The camera's SDIO_GetExtDeviceInfo reply (`Fixtures/a7c2/ptpip/sdio-extdeviceinfo.bin`), 970 bytes: the simulator
+    /// answers 0x9202 with it. Over PTP/IP only; the USB flavour has no copy.
+    public static func sdioExtDeviceInfo() throws(SimulatorFixtureError) -> Data {
+        try bytes("a7c2-ptpip-sdio-extdeviceinfo")
     }
 
     /// The captured USB ObjectInfo of an ARW (`DSC02018.ARW`: a 160 × 120 JFIF thumbnail of 6,584 B, 7008 × 4672) or
