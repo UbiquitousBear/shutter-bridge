@@ -107,6 +107,15 @@ public struct SelectionSummary: Sendable, Hashable {
 public final class LinkLeases {
     private var holders: [ObjectIdentifier: (link: any CameraLink, count: Int)] = [:]
 
+    /// Called after a link has been closed because its last holder let go. The Wi-Fi cameras use it to end the stay
+    /// (`WiFiCameraSource.linkClosed(_:)`): a camera's import has finished when no one holds its link any more. Nil by
+    /// default.
+    public var onClosed: (@MainActor (any CameraLink) async -> Void)?
+    /// Called after a holder let go of a link that another still holds. Nil by default. The Wi-Fi cameras use it in the
+    /// background (`WiFiCameraSource.linkReleased(_:activeImport:)`), where Browse being open must not keep the phone on
+    /// the camera's network once the import is over.
+    public var onReleased: (@MainActor (any CameraLink) async -> Void)?
+
     public init() {}
 
     public func acquire(_ link: any CameraLink) {
@@ -120,10 +129,12 @@ public final class LinkLeases {
         let remaining = (holders[key]?.count ?? 1) - 1
         if remaining > 0 {
             holders[key] = (link, remaining)
+            await onReleased?(link)
             return
         }
         holders[key] = nil
         await link.close()
+        await onClosed?(link)
     }
 
     /// How many hold `link`.

@@ -27,6 +27,29 @@ public enum CamerasWording {
         }
     }
 
+    /// The badge on a camera's row: how it is connected.
+    public static func badge(for mode: CameraMode) -> String {
+        switch mode.carrier {
+        case .usb: usbBadge
+        case .wifi: wifiBadge
+        }
+    }
+
+    public static let wifiBadge = "Wi-Fi"
+
+    /// The lines about the device on a camera's row: its battery level and the card's free space. Only a link that can read
+    /// them has any (`CameraLinkCapabilities.reportsBatteryAndFreeSpace`: Wi-Fi's can't, the whole-card session lists no
+    /// device properties and its storage reports no capacity, B:70), and a value nobody has read (`nil`) is left out, never
+    /// shown as 0.
+    public static func deviceStatus(carrier: CameraCarrier, batteryPercent: Int?, freeBytes: UInt64?,
+                                    locale: Locale = .autoupdatingCurrent) -> [String] {
+        guard CameraLinkCapabilities.defaults(for: carrier).reportsBatteryAndFreeSpace else { return [] }
+        var lines: [String] = []
+        if let batteryPercent { lines.append("Battery \(min(max(batteryPercent, 0), 100))%") }
+        if let freeBytes { lines.append("\(ByteWording.size(freeBytes, locale: locale)) free") }
+        return lines
+    }
+
     /// When discovery couldn't start for a reason other than access (`CamerasModel.Access.failed`): the camera would
     /// never appear, so the screen says so with Try Again rather than show "No Camera Connected".
     public static let discoveryFailedTitle = "Can't Look for Cameras"
@@ -478,15 +501,17 @@ public enum ImportWording {
                 : "The camera stopped sending, so the file is being copied again."
         case .byPerson:
             "Paused. Tap Continue to resume."
-        // Wi-Fi's reasons (W7). Placeholder copy until the wireless screens (W15) word them.
+        // Wi-Fi's reasons (W7, worded in W15): each says what to do next. The two the app lifts by itself on a
+        // reconnect say so, the others have a Continue button.
         case .taskExpired:
             "Paused while Shutter Bridge was in the background. Tap Continue to resume."
         case .cardUnavailable:
-            "Paused: the camera isn't offering its card. The import resumes when the card is back."
+            "Paused: the camera isn't offering its card. Check that the card is in the camera; the import resumes by itself."
         case .cameraUnreachable:
-            "Paused: the camera can't be reached. The import resumes when it's back in reach."
+            "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on; the import resumes when it's "
+                + "back in reach."
         case .needsJoin:
-            "Paused: open Shutter Bridge to join the camera's network and resume."
+            "Paused: open Shutter Bridge to join the camera's Wi-Fi, then the import carries on."
         }
     }
 
@@ -638,5 +663,241 @@ public enum ImportWording {
         var parts = [name, state, size]
         if let fraction { parts.append("\(Int((fraction * 100).rounded(.down))) percent") }
         return parts.joined(separator: ", ")
+    }
+}
+
+
+// MARK: - Wi-Fi cameras (wireless plan W15)
+//
+// Titles in title case, descriptions in sentence case, a next step in every failure, "Tap Continue to resume" for a
+// pause the person lifts (the house style of the HIG pass, #94). The camera's own wording is used for its menus and
+// settings; where the camera's wording isn't confirmed, a comment says `unverified`. No serial, network name or
+// address is ever put in copy.
+
+/// Pairing the camera over Bluetooth, the Wi-Fi onboarding (backlog Iteration 3, section 6).
+public enum OnboardingWording {
+    public static let title = "Pair Your Camera"
+
+    /// What the camera menu path and its two settings are. Both settings are named until it is known whether the
+    /// hand-off needs *Bluetooth Rmt Ctrl* (backlog section 6: *Bluetooth Function* was on in every run, *Bluetooth
+    /// Rmt Ctrl* in the runs that record their settings).
+    public static let cameraPath = "MENU › Network › Bluetooth › Pairing"
+    public static let settingsToCheck = "Bluetooth Function and Bluetooth Rmt Ctrl"
+
+    public static let explainTitle = "Pair Over Bluetooth"
+    /// The steps, in order. The camera's confirmation wording and whether either prompt shows a code to compare aren't
+    /// recorded yet (`unverified`), so the copy says only that the camera asks for a confirmation.
+    public static let explainSteps: [String] = [
+        "On the camera, open \(cameraPath) and leave that screen open.",
+        "Check that \(settingsToCheck) are on.",
+        "Tap Start Pairing. Two prompts follow: iOS asks to pair this iPhone with the camera, and the camera asks you "
+            + "to confirm. Accept both.",
+    ]
+    /// iOS asks for Bluetooth access at this step, with its own wording.
+    public static let bluetoothPrompt = "iOS also asks whether Shutter Bridge may use Bluetooth."
+
+    public static let start = "Start Pairing"
+    public static let cancel = "Cancel"
+    public static let tryAgain = "Try Again"
+    public static let done = "Done"
+    public static let openSettings = "Open Settings"
+
+    public static let waitingTitle = "Waiting for You"
+    public static let waitingDetail = "Accept the pairing request on this iPhone, then confirm on the camera. Keep the "
+        + "camera's Pairing screen open. This can take about 15 seconds."
+
+    public static let pairedTitle = "Camera Paired"
+    public static let pairedDetail = "Shutter Bridge can now switch on the camera's Wi-Fi and join it for you."
+    public static let alreadyPairedTitle = "Already Paired"
+    public static let alreadyPairedDetail = "This iPhone is already paired with the camera, so there was nothing to "
+        + "confirm. Shutter Bridge can switch on the camera's Wi-Fi and join it for you."
+
+    public static let notPairedTitle = "Not Paired Yet"
+    public static let notPairedDetail = "The camera didn't accept the pairing. On the camera, open \(cameraPath) and "
+        + "leave that screen open, then tap Try Again."
+
+    public static let bluetoothOffTitle = "Bluetooth Is Off"
+    public static let bluetoothOffDetail = "Turn on Bluetooth in Control Centre or Settings, then tap Try Again."
+    public static let bluetoothNotAllowedTitle = "Bluetooth Access Is Off"
+    public static let bluetoothNotAllowedDetail = "Allow Shutter Bridge to use Bluetooth in Settings, then tap Try Again."
+    public static let droppedTitle = "Connection Lost"
+    /// The pairing check already tried a second connection (`PairingCheck`), so this is after two drops.
+    public static let droppedDetail = "The Bluetooth connection to the camera dropped twice. Open \(cameraPath) on the "
+        + "camera again and move closer, then tap Try Again."
+    public static let notFoundTitle = "Couldn't Find the Camera"
+    public static let notFoundDetail = "Check that the camera is on and close to this iPhone with Bluetooth Function on, "
+        + "then tap Try Again."
+    public static let unsupportedTitle = "Can't Pair With This Camera"
+    public static let unsupportedDetail = "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Check "
+        + "that its firmware is up to date, or import over USB-C instead."
+
+    /// The title and detail for a pairing that couldn't finish for `failure` (never for a refusal: that is
+    /// `notPairedTitle`).
+    public static func unavailable(_ failure: GATTFailure) -> (title: String, detail: String) {
+        switch failure {
+        case .bluetoothOff: (bluetoothOffTitle, bluetoothOffDetail)
+        case .unauthorised: (bluetoothNotAllowedTitle, bluetoothNotAllowedDetail)
+        case .linkDropped: (droppedTitle, droppedDetail)
+        case .serviceMissing: (unsupportedTitle, unsupportedDetail)
+        case .notPaired: (notPairedTitle, notPairedDetail)
+        case .wifiOff, .timedOut, .cancelled, .other: (notFoundTitle, notFoundDetail)
+        }
+    }
+}
+
+/// Typing the camera's address, for a camera on the same network as the phone (backlog Iteration 3, section 5).
+public enum TypedAddressWording {
+    public static let title = "Camera Address"
+    public static let explanation = "Use this when the camera and this iPhone are on the same Wi-Fi network. Find the "
+        + "camera's IP address in its network settings and type it here."
+    public static let fieldLabel = "Address"
+    public static let fieldHint = "Four numbers with dots, such as 10.0.0.12, or a name. Add :port only if the camera "
+        + "uses a port other than 15740."
+    public static let connect = "Add Camera"
+    public static let cancel = "Cancel"
+
+    /// Why the text can't be used, and what to type instead.
+    public static func problem(_ problem: TypedAddressModel.Problem) -> String {
+        switch problem {
+        case .url: "Leave out http:// and anything after the address."
+        case .ipv6: "Use an IPv4 address (four numbers with dots) or a name. IPv6 isn't supported."
+        case .port: "The port must be a number from 1 to 65535. Leave it out to use 15740."
+        case .numbers: "An address has four numbers from 0 to 255 with dots between them, such as 10.0.0.12."
+        case .unusable: "That address can't be a camera. Check the numbers, then try again."
+        case .name: "A name can only have letters, numbers, hyphens and dots."
+        case .cameraNetwork:
+            "That is the camera's own network. Set the camera up with Bluetooth instead: Shutter Bridge joins that "
+                + "network for you."
+        case .other: "That isn't an address Shutter Bridge can use. Check it, then try again."
+        }
+    }
+}
+
+/// Connecting to a camera over Wi-Fi: the steps of the join and the stay, the Local Network prompt, and why a
+/// connection failed (backlog Iteration 3, sections 1, 8 and 9).
+public enum WiFiWording {
+    // MARK: The Local Network prompt
+
+    /// Before the first connection, so iOS's prompt isn't a surprise (backlog section 1, *Local Network permission*).
+    public static let localNetworkTitle = "Allow Local Network Access"
+    public static let localNetworkDetail = "To talk to the camera over Wi-Fi, iOS asks whether Shutter Bridge may find "
+        + "devices on your local network. Tap Allow. Without it the camera can't be reached over Wi-Fi."
+    public static let localNetworkContinue = "Continue"
+    public static let localNetworkNotNow = "Not Now"
+    /// While iOS's prompt is up.
+    public static let waitingForLocalNetwork = "Waiting for Local Network access. Tap Allow in the iOS prompt."
+    /// When the prompt has been up a while, or never showed (it shows once; after Don't Allow it never comes back).
+    public static let stillWaitingForLocalNetwork = "Still waiting. If you didn't see a prompt, turn on Local Network "
+        + "for Shutter Bridge in Settings, then try again."
+
+    // MARK: Steps
+
+    /// What the connection is doing, for the line under a camera's name. Nil when there is nothing to say (idle, and
+    /// connected: the screen shows the card or the import).
+    public static func step(_ phase: WirelessPhase) -> String? {
+        switch phase {
+        case .idle, .ready: nil
+        case .handingOff: "Switching on the camera's Wi-Fi…"
+        case .joining: "Joining the camera's Wi-Fi. Tap Join if iOS asks."
+        case .openingSession: "Opening the camera…"
+        case .staying: stay
+        case .leaving: "Leaving the camera's Wi-Fi…"
+        case let .paused(pause): paused(pause)
+        }
+    }
+
+    /// While the phone stays on the camera's network after an import (decided 8 Nov: one 3-minute timer, from the end
+    /// of the import, while the app is in front).
+    public static let stay = "Still joined to the camera's Wi-Fi, so a second import starts at once."
+
+    /// The camera's network takes the phone's internet while it is joined (backlog section 8, measured 2 Nov).
+    public static let mobileDataNote = "While this iPhone is joined to the camera's Wi-Fi, its internet uses mobile data."
+
+    /// After leaving: 1.0 writes nothing to switch the camera's Wi-Fi off (backlog section 8; the camera's went off
+    /// 51 to 53 s later in two runs and stayed on for the 59 s watched in a third).
+    public static let wifiMayStayOn = "The camera's Wi-Fi may stay on for a while. Switching the camera off ends it."
+
+    // MARK: Waiting for the person
+
+    /// A pause the connection can't lift by itself, with the next step (`WirelessPause`).
+    public static func paused(_ pause: WirelessPause) -> String {
+        switch pause {
+        case .needsJoin: "Open Shutter Bridge to join the camera's Wi-Fi."
+        case .notPaired:
+            "The camera isn't paired with this iPhone. Open \(OnboardingWording.cameraPath) on the camera, then open "
+                + "the camera here again."
+        case .bluetoothOff: "Bluetooth is off. Turn it on to reach the camera, then open it again."
+        case .bluetoothNotAllowed:
+            "Bluetooth access is off for Shutter Bridge. Allow it in Settings, then open the camera again."
+        case .joinDeclined:
+            "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Open the camera again and choose Join when "
+                + "iOS asks."
+        }
+    }
+
+    // MARK: Failures
+
+    public static let failedTitle = "Couldn't Connect to the Camera"
+
+    /// Why the connection failed, with a next step in every line; nil for a cancel the person asked for.
+    public static func failure(_ failure: WirelessFailure) -> String? {
+        switch failure {
+        case let .paused(pause):
+            return paused(pause)
+        case .cameraNotFound:
+            return "Shutter Bridge couldn't find the camera. Check that it is on and close to this iPhone with "
+                + "Bluetooth on, then try again."
+        case let .bluetooth(gatt):
+            switch gatt {
+            case .bluetoothOff: return paused(.bluetoothOff)
+            case .unauthorised: return paused(.bluetoothNotAllowed)
+            case .notPaired: return paused(.notPaired)
+            case .serviceMissing:
+                return "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Import over USB-C "
+                    + "instead."
+            case .cancelled: return nil
+            case .wifiOff, .linkDropped, .timedOut, .other:
+                return "The Bluetooth connection to the camera failed. Move closer to the camera, then try again."
+            }
+        case let .handoff(handoff):
+            switch handoff {
+            case .notPaired: return paused(.notPaired)
+            case .cancelled: return nil
+            case .gatt, .linkDropped, .statusUnreadable, .unexpectedStatus, .wifiDidNotStart, .timedOut, .wifiLapsed,
+                 .credentialsInvalid:
+                return "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then "
+                    + "try again."
+            }
+        case let .join(join):
+            switch join {
+            case .userDenied: return paused(.joinDeclined)
+            case .notInForeground: return paused(.needsJoin)
+            case .cancelled: return nil
+            case .invalidCredentials:
+                return "iOS couldn't use the camera's network details. Try again; if it keeps happening, switch the "
+                    + "camera off and on."
+            case .pending, .systemConfiguration, .other:
+                return "iOS couldn't join the camera's Wi-Fi. Move closer to the camera, then try again."
+            }
+        case .noGateway:
+            return "The camera's Wi-Fi didn't answer after joining. Move closer to the camera, then try again."
+        case .cameraWiFiLapsed:
+            return "The camera's Wi-Fi switched itself off while joining. Try again, and tap Join as soon as iOS "
+                + "asks."
+        case let .link(link):
+            return listingFailed(link.kind)
+        case .cancelled:
+            return nil
+        }
+    }
+
+    /// `BrowseWording.listingFailed(_:)` for a Wi-Fi camera: the same, except where it mentions the cable.
+    public static func listingFailed(_ kind: CameraLinkFailure.Kind) -> String {
+        switch kind {
+        case .busy, .noAnswer:
+            "The camera didn't answer. Check that it is on and its Wi-Fi is on, then try again."
+        default:
+            BrowseWording.listingFailed(kind)
+        }
     }
 }

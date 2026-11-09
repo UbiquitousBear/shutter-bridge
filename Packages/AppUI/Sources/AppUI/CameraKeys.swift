@@ -24,32 +24,54 @@ public typealias CameraKeying = @Sendable (CameraDescriptor, any CameraLink) asy
 ///   the same way. Every card with that name shares the key, so MSC and MTP imports of one camera still go to two
 ///   albums and Files folders (open for Shamil), and a job paused by a pulled cable continues only in the same mode.
 /// - **Remote Shoot:** nothing is imported, so the MSC-style fallback is fine.
+/// - **Wi-Fi** (wireless plan W15): the camera's serial number from the PTP/IP DeviceInfo (`IPLink`, through
+///   `CameraIdentifying`), hashed before it becomes a key, like the MTP material: `wifi-serial:<hash>`. The key is the
+///   same over the camera's own network and over another one, since it names the camera and not the route. It is known
+///   only once the first session has opened (the serial is in DeviceInfo), which is why `WiFiCameraSource` hands out an
+///   open link and keeps a camera's key from then on. The name-hash key, `wifi-name:<hash>`, is only the fallback for a
+///   link with no serial (not opened yet, or a camera that reports none): every camera with that name would share it, so
+///   nothing keyed that way should be written to the catalogue. The serial is never logged or shown; logs name keys by
+///   `CameraKeyTags`.
 public enum CameraKeys {
-    /// The key for `descriptor`, from the link's material when it has some (MTP), else from the mode and name.
+    /// The key for `descriptor`, from the link's material when it has some (MTP, or the Wi-Fi camera's serial), else
+    /// from the mode and name.
     public static func key(for descriptor: CameraDescriptor, material: String?) -> CameraKey {
         if let material, !material.isEmpty {
-            return CameraKey(rawValue: "usb-device:" + SHA256Digest.hex(of: Data(material.utf8)))
+            let kind = descriptor.carrier == .wifi ? "wifi-serial" : "usb-device"
+            return CameraKey(rawValue: kind + ":" + SHA256Digest.hex(of: Data(material.utf8)))
         }
         let mode: String
         switch descriptor.mode {
         case .usb(.massStorage): mode = "usb-msc"
         case .usb(.mtp): mode = "usb-mtp"
         case .usb(.remoteShoot): mode = "usb-remote-shoot"
-        // The route is how the phone reaches the camera, not which camera it is: both routes key alike. The Wi-Fi
-        // camera's own key (the PTP/IP GUID or the serial, hashed) arrives with `IPLink` and its material.
+        // The route is how the phone reaches the camera, not which camera it is: both routes key alike. Without the
+        // serial this is only the fallback (see the type's documentation).
         case .wifi(.cameraNetwork), .wifi(.otherNetwork): mode = "wifi"
         }
         return CameraKey(rawValue: mode + "-name:" + SHA256Digest.hex(of: Data(descriptor.name.utf8)))
     }
 
+    /// Whether `key` is the name-hash fallback of a Wi-Fi camera (no serial, no known key): shared by every camera with
+    /// that name, so Browse and the import refuse to use it (wireless plan W15).
+    public static func isUnidentifiedWiFi(_ key: CameraKey) -> Bool {
+        key.rawValue.hasPrefix("wifi-name:")
+    }
+
     /// A keying that uses the descriptor alone: for tests and previews, and for links with no key material.
     public static let fromDescriptor: CameraKeying = { descriptor, _ in key(for: descriptor, material: nil) }
 
-    /// The app's keying: `material` reads a link's key material (the app: the USB link's
-    /// `cameraKeyMaterial()?.rawValue`, nil for any other link), and the key follows `key(for:material:)`. Pure, so
-    /// the keying the app runs is the one tested on Linux.
+    /// The app's keying: a link that identifies itself (`CameraIdentifying`: `IPLink`, the camera's serial) gives its
+    /// own material; for any other link `material` reads it (the app: the USB link's `cameraKeyMaterial()?.rawValue`,
+    /// nil for any other link). The key follows `key(for:material:)`. Pure, so the keying the app runs is the one
+    /// tested on Linux.
     public static func keying(material: @escaping @Sendable (any CameraLink) async -> String?) -> CameraKeying {
-        { descriptor, link in key(for: descriptor, material: await material(link)) }
+        { descriptor, link in
+            if let identifying = link as? any CameraIdentifying {
+                return key(for: descriptor, material: await identifying.cameraKeyMaterial())
+            }
+            return key(for: descriptor, material: await material(link))
+        }
     }
 }
 
@@ -79,7 +101,7 @@ public final class CameraKeyTags: Sendable {
     /// The key's kind, from the forms `CameraKeys` makes; "other" for anything else, so nothing of an unknown key's
     /// value reaches the log.
     static func kind(of key: CameraKey) -> String {
-        let known = ["usb-device", "usb-msc-name", "usb-mtp-name", "usb-remote-shoot-name", "wifi-name"]
+        let known = ["usb-device", "usb-msc-name", "usb-mtp-name", "usb-remote-shoot-name", "wifi-serial", "wifi-name"]
         guard let colon = key.rawValue.firstIndex(of: ":") else { return "other" }
         let prefix = String(key.rawValue[..<colon])
         return known.contains(prefix) ? prefix : "other"
