@@ -13,8 +13,17 @@ import Observation
 /// app refresh). The app's is `BackgroundRefreshScheduler`; tests record the asks.
 public protocol ProximityRefreshScheduling: Sendable {
     /// Asks iOS to run the refresh task no earlier than `date`, replacing any earlier ask; nil cancels it. iOS decides when,
-    /// or whether, it runs.
+    /// or whether, it runs. It never waits: the ask may reach iOS later (`settle(within:)`).
     func scheduleRefresh(earliest date: Date?)
+
+    /// Waits, for at most `limit`, until the asks made so far have reached iOS and iOS has accepted or refused them. The
+    /// refresh task calls it before it ends: iOS may suspend the app once the task is complete, and the next ask mustn't be
+    /// left on its way. Does nothing by default.
+    func settle(within limit: Duration) async
+}
+
+extension ProximityRefreshScheduling {
+    public func settle(within limit: Duration) async {}
 }
 
 /// A known camera reported nearby, for the reminder rules (W18). The time is the report's.
@@ -161,15 +170,23 @@ public final class ProximityModel {
     }
 
     /// The app-refresh task ran (`BackgroundRefreshScheduler`): restart the scan if a re-arm is due, and ask for the next one.
+    /// Returns once that ask has reached iOS, or after `refreshSettleLimit`.
     public func refreshTaskRan() async {
         // Running the task uses up the request, and an earlier submit may have failed: ask again even for the same date.
         askedRefresh = nil
-        guard isEnabled else {
+        if isEnabled {
+            await apply(rules.handle(.refreshTask, at: now()))
+        } else {
             askRefresh(nil)
-            return
         }
-        await apply(rules.handle(.refreshTask, at: now()))
+        // The task is completed when this returns, and iOS may suspend the app then: the ask above goes to iOS
+        // asynchronously (`submitTaskRequest`), so wait for it, or the chain of refreshes could stop here.
+        await refresh.settle(within: Self.refreshSettleLimit)
     }
+
+    /// How long the refresh task waits for its ask to reach iOS before it ends anyway; well inside the time iOS gives an
+    /// app-refresh task (about 30 s, Apple's documentation). `unverified` how long `submitTaskRequest` takes on a device.
+    public nonisolated static let refreshSettleLimit: Duration = .seconds(5)
 
     // MARK: Events (internal for tests)
 

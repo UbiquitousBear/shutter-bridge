@@ -157,7 +157,7 @@ struct WiFiCameraSourceTests {
         #expect(h.pending.load().count == 1)
         #expect(h.pending.load().first?.peripheral == peripheral.uuid)
         #expect(await h.source.knownKey(for: first.id) == nil)   // no key until the first session has a serial
-        #expect(try await h.catalogue.cameras().isEmpty)   // and nothing in the catalogue under a key that will change
+        #expect(await h.catalogue.cameras().isEmpty)   // and nothing in the catalogue under a key that will change
         // Another camera is another entry.
         let second = await h.source.registerPairedCamera(peripheral: anotherPeripheral)
         #expect(second.id != first.id)
@@ -255,7 +255,7 @@ struct WiFiCameraSourceTests {
         session.script(.success(FakeWiFiLink(serial: nil)))
         _ = try await h.source.cameraLink(for: id)
         #expect(await h.source.knownKey(for: id) == nil)
-        #expect(try await h.catalogue.cameras().isEmpty)
+        #expect(await h.catalogue.cameras().isEmpty)
         #expect(h.pending.load().count == 1)
         #expect(h.log.lines.contains { $0.contains("reports no serial") })
     }
@@ -266,7 +266,7 @@ struct WiFiCameraSourceTests {
         session.script(.success(FakeLink(items: [], mode: .wifi(.cameraNetwork))))
         _ = try await h.source.cameraLink(for: id)
         #expect(await h.source.knownKey(for: id) == nil)
-        #expect(try await h.catalogue.cameras().isEmpty)
+        #expect(await h.catalogue.cameras().isEmpty)
     }
 
     @Test func anotherCameraAnsweringIsRefusedAndNothingIsImportedFromIt() async throws {
@@ -290,7 +290,7 @@ struct WiFiCameraSourceTests {
         let kept = await h.source.knownKey(for: id)
         #expect(kept == CameraKeys.key(for: WiFiCameraEntry.placeholderDescriptor, material: fakeSerial))
         // The catalogue still holds the one camera it knew.
-        let rows = try await h.catalogue.cameras()
+        let rows = await h.catalogue.cameras()
         #expect(rows.count == 1)
     }
 
@@ -726,9 +726,11 @@ struct WiFiCameraConnectionTests {
         await h.source.scenePhaseChanged(.inactive)
         await h.source.linkReleased(link, activeImport: nil)
         #expect(session.count("importFinished") == 0)
-        // In the background, with an import still running over it: not yet.
-        await h.source.scenePhaseChanged(.background, activeImport: try #require(await h.source.knownKey(for: id)))
-        await h.source.linkReleased(link, activeImport: try #require(await h.source.knownKey(for: id)))
+        // In the background, with an import still running over it: not yet. (The key is read on its own line: inside
+        // `activeImport:`, a `CameraKey?`, `#require` would check the wrapped optional and let nil through.)
+        let running = try #require(await h.source.knownKey(for: id))
+        await h.source.scenePhaseChanged(.background, activeImport: running)
+        await h.source.linkReleased(link, activeImport: running)
         #expect(session.count("importFinished") == 0)
         // In the background, the import over: the camera is let go although Browse holds the link.
         await h.source.linkReleased(link, activeImport: nil)
