@@ -146,6 +146,13 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private(set) var pausedByPerson = false
     /// Gets a Wi-Fi job back after the camera drops its card or the session (W14; ImportModel+WiFiRecovery.swift).
     @ObservationIgnored var wifiRecovery: WiFiRecoveryCoordinator?
+    /// Told when a job has started (the engine took it) and when it has ended, with its camera (W16: the app gives the Wi-Fi
+    /// recovery the job's session and holds the camera's reminders back while it imports). A continued or reconnected job
+    /// is the same job.
+    @ObservationIgnored public var onJobStarted: (@MainActor (ImportCamera) -> Void)?
+    @ObservationIgnored public var onJobEnded: (@MainActor (ImportCamera) -> Void)?
+    /// The job last announced through `onJobStarted` and not yet through `onJobEnded`.
+    @ObservationIgnored private(set) var announcedJob: ImportCamera?
 
     public init(
         engine: ImportEngine,
@@ -389,6 +396,7 @@ public final class ImportModel: BrowseImporting {
             return error == .emptySelection ? .nothingNew : remember(.failed(ImportWording.couldNotStart))
         }
         await hold(link)
+        announceStart(camera)
         log.note("import: started \(items.count) file(s) to \(decision)")
         // The run starts from the person's tap (iOS's rule), without holding the import up.
         background.begin(progress)
@@ -397,6 +405,10 @@ public final class ImportModel: BrowseImporting {
         // it never waits on the answer and the Photos prompt (above) never meets this one.
         if await notificationPermission.askAtImport() {
             // The job may have moved on, or ended, while the prompt was up.
+            starting = false
+            await refresh()
+        } else if await !engine.state.isActive {
+            // It ended while it was starting, when a finished state still read as the last job's: read its end.
             starting = false
             await refresh()
         }
@@ -471,8 +483,15 @@ public final class ImportModel: BrowseImporting {
         var target = link
         if let finder = cameraFinder, let found = await finder.link(forCameraWith: camera.key) { target = found }
         guard let target else { return false }
+        // Over Wi-Fi the card is listed asking the camera only about handles it hasn't seen (W8, `ReusingListing`), given
+        // the job's files; empty, or a listing that fails, lets the engine list the card itself.
+        var known: [CameraItem] = []
+        if camera.descriptor.carrier == .wifi,
+           let listed = try? await WiFiRecoveryCoordinator.listNewHandles(target, known: recoveryKnownItems) {
+            known = listed
+        }
         do {
-            try await engine.reconnect(job, to: target, route: route)
+            try await engine.reconnect(job, to: target, knownItems: known, route: route)
         } catch {
             log.note("import: didn't carry on after the continued task ended: \(error)")
             return false
@@ -628,7 +647,26 @@ public final class ImportModel: BrowseImporting {
         if s.progress.state == .paused(.cameraRemoved) {
             await cameraConnected()   // the camera may already be back
         }
+        announceJob(s.progress.state)
         wifiRecovery?.jobChanged(s.progress.state)
+    }
+
+    /// A job has started (`onJobStarted`): a job announced before whose end was never read ends first.
+    private func announceStart(_ camera: ImportCamera) {
+        if let announced = announcedJob {
+            announcedJob = nil
+            onJobEnded?(announced)
+        }
+        announcedJob = camera
+        onJobStarted?(camera)
+    }
+
+    /// The announced job has ended (`onJobEnded`). While a job starts, a finished state is the last job's, so it ends
+    /// nothing; `importItems` reads the engine again once it has started, for a job that ended meanwhile.
+    private func announceJob(_ state: ImportJobState) {
+        guard case .finished = state, !starting, let announced = announcedJob else { return }
+        announcedJob = nil
+        onJobEnded?(announced)
     }
 
     private func apply(_ s: ImportSnapshot) {

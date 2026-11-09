@@ -21,8 +21,22 @@ public final class AppModel {
     public let leases: LinkLeases
     /// The Wi-Fi cameras, when the app has them (`WiFiSupport`); nil leaves the app USB-only, as it was.
     public let wifi: WiFiSupport?
+    /// The wireless parts that live for the app's whole run (the central, the scene signal, the proximity scan and the
+    /// reminder), when the app has them; made before launch finishes (W16).
+    public let wireless: WirelessRuntime?
+    /// Gets a Wi-Fi job back after the camera drops its card or the session (W14), when the app has Wi-Fi. The Import
+    /// screen's Try Again calls `tryAgain()` on it.
+    public let wifiRecovery: WiFiRecoveryCoordinator?
     @ObservationIgnored private let notifier: any LocalNotifier
+    @ObservationIgnored private let discovery: any CameraDiscovery
+    @ObservationIgnored private let log: any BenchLog
+    /// The catalogue key of a camera, as Browse and the import read it.
+    @ObservationIgnored private let cameraKeying: CameraKeying
     @ObservationIgnored private var registeredCategories = false
+    /// The reminder's begin and end for connections and imports, one after the other, so an end never overtakes its begin.
+    @ObservationIgnored private var reminderActivity: Task<Void, Never>?
+    /// When each camera counts as connected for the reminder (W18), when the app has a reminder.
+    @ObservationIgnored let connectionHolds: ConnectionHolds?
 
     public init(
         discovery: any CameraDiscovery,
@@ -36,35 +50,156 @@ public final class AppModel {
         now: @escaping @Sendable () -> Date = { Date() },
         notifier: any LocalNotifier = SilentNotifier(),
         notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord(),
-        wifi: WiFiSupport? = nil
+        background: any ImportBackgroundRun = NoImportBackgroundRun(),
+        wifi: WiFiSupport? = nil,
+        wireless: WirelessRuntime? = nil
     ) {
         self.notifier = notifier
         self.wifi = wifi
+        self.wireless = wireless
+        self.discovery = discovery
+        log = services.log
         let leases = LinkLeases()
         self.leases = leases
+        let connectionHolds = wireless == nil ? nil : ConnectionHolds(isHeld: { leases.holders(of: $0) > 0 })
+        self.connectionHolds = connectionHolds
         // A Wi-Fi camera that has connected before is keyed by the key its discovery kept for it, so Browse and the
         // import always write under the catalogue row's key; a name-hash fallback only ever shows for one that has none
         // (`CameraKeys.isUnidentifiedWiFi`), and Browse refuses to import under it.
+        // Each key read for a link also tells the reminder's connection hold which camera the link is (W18).
         let keying: CameraKeying = { descriptor, link in
-            if descriptor.carrier == .wifi, let known = await discovery.knownKey(for: descriptor.id) { return known }
-            return await cameraKey(descriptor, link)
+            let key: CameraKey
+            if descriptor.carrier == .wifi, let known = await discovery.knownKey(for: descriptor.id) {
+                key = known
+            } else {
+                key = await cameraKey(descriptor, link)
+            }
+            await connectionHolds?.keyed(link, as: key)
+            return key
         }
+        cameraKeying = keying
         cameras = CamerasModel(discovery: discovery, services: services, catalogue: catalogue,
                                cameraKey: keying, leases: leases)
-        importer = ImportModel(engine: engine, settings: settingsStore, photos: photos, destinations: destinations,
-                               leases: leases, log: services.log, now: now, notifier: notifier,
-                               notificationAsks: notificationAsks)
+        // The continued task carries Wi-Fi jobs only (`WiFiOnlyBackgroundRun`): USB keeps its leaving rule (decision 1).
+        let jobShown = ImportJobCarrier()
+        let importer = ImportModel(engine: engine, settings: settingsStore, photos: photos, destinations: destinations,
+                                   leases: leases, log: services.log, now: now,
+                                   background: WiFiOnlyBackgroundRun(background, carrier: { jobShown.carrier }),
+                                   notifier: notifier, notificationAsks: notificationAsks,
+                                   abortTransfer: { link in await TransferAbort.abort(link) })
+        self.importer = importer
+        jobShown.importer = importer
+        if wifi != nil {
+            let recovery = WiFiRecoveryCoordinator(engine: engine, log: services.log)
+            importer.attachWiFiRecovery(recovery)
+            wifiRecovery = recovery
+        } else {
+            wifiRecovery = nil
+        }
         settings = SettingsModel(store: settingsStore, photos: photos)
         cameras.importModel = importer
         importer.cameraFinder = cameras
         // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).
         // In the background it doesn't wait for Browse: an import's lease going with no import running is its end.
         if let source = wifi?.source {
-            leases.onClosed = { link in await source.linkClosed(link) }
             leases.onReleased = { [weak self] link in
                 await source.linkReleased(link, activeImport: self?.activeImportKey)
             }
         }
+        if wifi != nil || connectionHolds != nil {
+            let source = wifi?.source
+            leases.onClosed = { link in
+                connectionHolds?.closed(link)
+                await source?.linkClosed(link)
+            }
+        }
+        // A camera is connected, for the reminder, while its link is held, over either link (W18; USB too).
+        if let connectionHolds {
+            leases.onAcquired = { link in connectionHolds.acquired(link) }
+            connectionHolds.onBegin = { [weak self] camera in
+                self?.queueReminder { await $0.begin(.connection, camera: camera) }
+            }
+            connectionHolds.onEnd = { [weak self] camera in
+                self?.queueReminder { $0.end(.connection, camera: camera) }
+            }
+        }
+        importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
+        importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
+        if let wireless {
+            // The known cameras go to the proximity confirmation before the reminder applies its setting (W17).
+            Task { await wireless.catalogueOpened(catalogue) }
+        }
+    }
+
+    /// A job started: a Wi-Fi job's recovery gets the camera's session (W14; none for a typed-address camera, which joins
+    /// nothing), and the camera's reminders are held back while it imports (W18).
+    private func jobStarted(_ camera: ImportCamera) {
+        if camera.descriptor.carrier == .wifi, let recovery = wifiRecovery {
+            recovery.session = wifi?.recoverySession?(camera.descriptor.id)
+        }
+        queueReminder { await $0.begin(.importing, camera: camera.key) }
+    }
+
+    /// The job ended: the recovery lets the session go (the job's end has already reset it), and the camera's reminders
+    /// are free again after a new hold from now.
+    private func jobEnded(_ camera: ImportCamera) {
+        if camera.descriptor.carrier == .wifi { wifiRecovery?.session = nil }
+        queueReminder { $0.end(.importing, camera: camera.key) }
+    }
+
+    /// Hands `step` to the reminder after the steps handed over before it.
+    private func queueReminder(_ step: @escaping @MainActor (ReminderModel) async -> Void) {
+        guard let reminders = wireless?.reminders else { return }
+        let previous = reminderActivity
+        reminderActivity = Task {
+            await previous?.value
+            await step(reminders)
+        }
+    }
+
+    /// Waits for the reminder's begin and end handed over so far (for tests).
+    func reminderActivitySettled() async { await reminderActivity?.value }
+
+    /// Opens Browse on the camera a reminder's Import Now (or a tap) asked for (`ReminderModel.cameraToOpen`), once it is
+    /// listed: a Wi-Fi camera's import then starts with the join, as Browse opens its link. Matched as
+    /// `CamerasModel.link(forCameraWith:)` matches: by the key discovery knows for it (a Wi-Fi camera that has connected
+    /// before), so no other Wi-Fi camera is joined to compare, else, over USB, by the key read from its link (cheap: nothing
+    /// is opened). A camera not listed yet stays asked for, and the app calls this again when the list changes; the request
+    /// is dropped when the app goes to the background with it still unmatched. Returns whether Browse was opened.
+    @discardableResult
+    public func openCameraFromReminder() async -> Bool {
+        guard let reminders = wireless?.reminders, let key = reminders.cameraToOpen else { return false }
+        for camera in cameras.cameras {
+            guard await isCamera(camera, withKey: key) else { continue }
+            // Taken only once it is found, and only if it is still the one asked for.
+            guard reminders.cameraToOpen == key else { return false }
+            _ = reminders.takeCameraToOpen()
+            if cameras.path.last != camera { cameras.path = [camera] }
+            return true
+        }
+        return false
+    }
+
+    /// Whether `camera` is the one whose catalogue key is `key`. A Wi-Fi camera with no key yet has never connected, so it
+    /// can't be the reminder's camera, and asking for its link would start a join.
+    private func isCamera(_ camera: CameraDescriptor, withKey key: CameraKey) async -> Bool {
+        if let known = await discovery.knownKey(for: camera.id) { return known == key }
+        guard camera.carrier != .wifi, let link = try? await discovery.cameraLink(for: camera.id) else { return false }
+        return await cameraKeying(camera, link) == key
+    }
+
+    /// The onboarding's model for pairing a camera over Bluetooth (W15), over the app's one central and the Wi-Fi cameras;
+    /// nil without wireless. Made when its screen opens.
+    public func makeOnboarding(known: PeripheralID? = nil) -> OnboardingModel? {
+        guard let source = wifi?.source, let bluetooth = wireless?.bluetooth else { return nil }
+        return OnboardingModel(checker: BluetoothPairingChecker(connector: bluetooth), registry: source, known: known,
+                               log: log)
+    }
+
+    /// The typed-address sheet's model (W15): adding lists the camera among the Wi-Fi cameras. Nil without Wi-Fi.
+    public func makeTypedAddress() -> TypedAddressModel? {
+        guard let source = wifi?.source else { return nil }
+        return TypedAddressModel(onAdd: { address in _ = await source.addTypedCamera(address) })
     }
 
     /// The key of the camera whose import is running (or paused, which still holds its link), if one is.
@@ -80,6 +215,8 @@ public final class AppModel {
     /// carries on when it is back (decision 1). The notification permission is read again too, and the notification
     /// categories are registered at the first activation (W13).
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
+        // First, so the Wi-Fi sessions reading the scene and the reminder's rules see it before anything acts on it (W16).
+        wireless?.sceneChanged(phase)
         if phase == .active {
             wifi?.status.start()
             await cameras.becameActive()
@@ -94,6 +231,21 @@ public final class AppModel {
         // After the import's own rule: the sessions leave the camera's network on the way to the background and check
         // the stay on the way back (`WirelessSession`). The caller holds the app's background time until this returns.
         await wifi?.source.scenePhaseChanged(phase, activeImport: activeImportKey)
+        switch phase {
+        case .active:
+            // After the import's rule and the sessions, so a paused USB import carries on as soon as it did before (W16).
+            await wireless?.becameActive()
+        case .background:
+            // A reminder's camera that never showed up isn't opened the next time the person happens to open the app.
+            if let reminders = wireless?.reminders, reminders.cameraToOpen != nil {
+                _ = reminders.takeCameraToOpen()
+                log.note("reminder: the camera asked for wasn't listed, so it won't be opened")
+            }
+            // A camera added (or given its Bluetooth identifier) while in front is checked by the scan from now on.
+            await wireless?.camerasChanged()
+        case .inactive:
+            break
+        }
     }
 
     /// Whether the app keeps the screen on (`UIApplication.isIdleTimerDisabled`): while a USB import runs.
@@ -102,15 +254,58 @@ public final class AppModel {
 
 /// The Wi-Fi half of the app, composed by the live root (W16): the cameras the person set up (`source`, which is also
 /// one of `CompositeDiscovery`'s sources) and the model of their connection's states (`status`). The onboarding and the
-/// typed-address sheet are made when their screens open (`OnboardingModel`, `TypedAddressModel`), over `source`.
+/// typed-address sheet are made when their screens open (`AppModel.makeOnboarding()`, `makeTypedAddress()`), over
+/// `source`. `recoverySession` gives the Wi-Fi recovery the session a camera's job runs over (W14).
 public struct WiFiSupport: Sendable {
     public let source: WiFiCameraSource
     public let status: WiFiImportModel
+    public let recoverySession: (@Sendable (CameraDescriptor.ID) -> (any WiFiRecoverySession)?)?
 
-    public init(source: WiFiCameraSource, status: WiFiImportModel) {
+    public init(source: WiFiCameraSource, status: WiFiImportModel,
+                recoverySession: (@Sendable (CameraDescriptor.ID) -> (any WiFiRecoverySession)?)? = nil) {
         self.source = source
         self.status = status
+        self.recoverySession = recoverySession
     }
+
+    /// The live composition's Wi-Fi half over `connections` (W16): the source, the status model, the Local Network
+    /// explanation before each new connection (`WiFiImportModel.beforeFirstConnection()`), each new link's events forwarded
+    /// to the source before it opens, and the recovery's sessions.
+    @MainActor
+    public static func make(catalogue: any CatalogueStore, connections: WirelessConnections,
+                            pending: any PendingWiFiCameraStore = InMemoryPendingWiFiCameraStore(),
+                            explained: any LocalNetworkExplainedRecord = InMemoryLocalNetworkExplainedRecord(),
+                            now: @escaping @Sendable () -> Date = { Date() },
+                            log: any BenchLog = SilentBenchLog()) -> WiFiSupport {
+        let gate = LocalNetworkGate()
+        let source = WiFiCameraSource(catalogue: catalogue, pending: pending, connecting: connections,
+                                      beforeFirstConnection: { await gate.ask() }, now: now, log: log)
+        let status = WiFiImportModel(source: source, record: explained, now: now, log: log)
+        gate.status = status
+        connections.attach(observer: source)
+        return WiFiSupport(source: source, status: status,
+                           recoverySession: { id in connections.recoverySession(for: id) })
+    }
+}
+
+/// The Local Network explanation the source asks before a new connection, reaching the status model once it exists (the
+/// source is made first, as the model reads the source's events).
+@MainActor
+final class LocalNetworkGate {
+    weak var status: WiFiImportModel?
+
+    /// True to go on; with no status model there is nothing to explain.
+    func ask() async -> Bool {
+        guard let status else { return true }
+        return await status.beforeFirstConnection()
+    }
+}
+
+/// The carrier of the job the Import model shows, for `WiFiOnlyBackgroundRun` (the model is made after the run it is given).
+@MainActor
+final class ImportJobCarrier {
+    weak var importer: ImportModel?
+    var carrier: CameraCarrier? { importer?.camera?.descriptor.carrier }
 }
 
 /// Opens the catalogue at launch and builds the app's models, or shows a clear error instead of crashing when the

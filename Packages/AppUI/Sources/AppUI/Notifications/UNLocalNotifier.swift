@@ -2,8 +2,9 @@
 import Foundation
 import UserNotifications
 
-/// The live `LocalNotifier`, over `UNUserNotificationCenter`. No delegate is set, so iOS shows nothing while the app is
-/// in front; the app posts only while it is away anyway. The centre is fetched in each call rather than kept, so the
+/// The live `LocalNotifier`, over `UNUserNotificationCenter`. The centre's delegate (LiveRoot.swift's `LiveLaunch`, W16)
+/// only hears responses and presents nothing, so iOS shows nothing while the app is in front; the app posts only while it
+/// is away anyway. The centre is fetched in each call rather than kept, so the
 /// notifier stays a plain `Sendable` value.
 public struct UNLocalNotifier: LocalNotifier {
     public init() {}

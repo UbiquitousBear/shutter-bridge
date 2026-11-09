@@ -15,8 +15,8 @@ import Foundation
 ///   `updateTitle(_:subtitle:)`, forwards the task's `expirationHandler` (an expiry, or Stop in the system's UI) to
 ///   `expired`, and ends the task with `setTaskCompleted(success:)`.
 ///
-/// One run at a time, as the app runs one import at a time. W16 hands it to the app's models; until then only the
-/// launch handler is registered.
+/// One run at a time, as the app runs one import at a time. The app's models get it for Wi-Fi jobs only
+/// (`WiFiOnlyBackgroundRun`, W16), so a USB import keeps its leaving rule.
 public final class ContinuedImportRunner: ImportBackgroundRun {
     /// The task identifier, prefixed with the bundle identifier as iOS requires.
     public static let identifier = "net.shamil.shutter-bridge.import"
