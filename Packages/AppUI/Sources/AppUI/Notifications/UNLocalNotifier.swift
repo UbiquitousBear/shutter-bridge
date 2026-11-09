@@ -34,6 +34,8 @@ public struct UNLocalNotifier: LocalNotifier {
         if !notification.title.isEmpty { content.title = notification.title }
         content.body = notification.body
         content.categoryIdentifier = notification.category.identifier
+        // The reminder's camera, handed back with the person's response (empty for the pause notification).
+        if !notification.userInfo.isEmpty { content.userInfo = notification.userInfo }
         content.sound = .default
         // No trigger: delivered now.
         let request = UNNotificationRequest(identifier: notification.identifier, content: content, trigger: nil)
@@ -55,7 +57,7 @@ public struct UNLocalNotifier: LocalNotifier {
                                          options: action.opensApp ? [.foreground] : [])
                 },
                 intentIdentifiers: [],
-                options: []
+                options: category.reportsDismissal ? [.customDismissAction] : []
             )
         }
         UNUserNotificationCenter.current().setNotificationCategories(Set(categories))

@@ -4,7 +4,8 @@
   Privacy manifest for Shutter Bridge. No tracking and nothing collected: photos go from the camera to this iPhone
   and nowhere else. The "required reason" APIs Iteration 1 is expected to call, declared now so the first TestFlight
   upload doesn't draw an ITMS-91053 warning:
-  - UserDefaults (import settings, such as downloads in flight): CA92.1, read and written only by the app itself.
+  - UserDefaults (import settings, such as downloads in flight; the destination setting; the proximity reminder's settings,
+    holds and snooze): CA92.1, read and written only by the app itself.
   - Disk space (checking there is room before a large import): E174.1. Only add 85F4.1 if the free space is ever
     shown to the person.
   - File timestamps of files in the app's container (sizes and dates of staged downloads and of imports to the
