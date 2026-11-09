@@ -13,8 +13,8 @@ public enum JoinFailure: Error, Sendable, Equatable, Hashable, CustomStringConve
     /// session pauses until the person comes back. The app going briefly inactive while iOS's prompt is up is not this:
     /// on 5 Nov 01:21 it was in the background for 8.9 s with the prompt up, and still joined.
     case notInForeground
-    /// iOS refused the name or the password (`invalidSSID`, `invalidWPAPassphrase`): what the camera gave is unusable, and
-    /// trying again won't change it.
+    /// iOS refused the name, the password or the configuration as a whole (`invalidSSID`, `invalidWPAPassphrase`,
+    /// `invalid`): what the camera gave is unusable, and trying again won't change it.
     case invalidCredentials
     /// Another configuration is being applied (`pending`). `unverified`: never seen. Counted as a failed try.
     case pending
