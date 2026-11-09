@@ -479,6 +479,9 @@ struct ContinuedImportTests {
         await b.model.scenePhaseChanged(.active)
         await link.release(Self.victim)
         await b.model.resume()
+        // Continue begins the new run in a task of its own, so wait for its handle before counting, as the other
+        // Continue tests do.
+        _ = try #require(await b.handle(1))
         #expect(b.run.begins.count == 2)
         #expect(await b.finished())
         #expect(b.model.state == .finished(.completed))
