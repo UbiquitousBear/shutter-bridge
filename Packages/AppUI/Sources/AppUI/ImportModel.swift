@@ -151,7 +151,7 @@ public final class ImportModel: BrowseImporting {
     /// is the same job.
     @ObservationIgnored public var onJobStarted: (@MainActor (ImportCamera) -> Void)?
     @ObservationIgnored public var onJobEnded: (@MainActor (ImportCamera) -> Void)?
-    /// Told when a Wi-Fi job has paused for an expiry with the app away, after the transfer's abort (W16: the app lets the
+    /// Told when a Wi-Fi job has paused for an expiry with the app away, before the transfer's abort (W16: the app lets the
     /// camera go, so the phone doesn't stay on its network until the person is back; Continue connects again).
     @ObservationIgnored public var onPausedAwayForExpiry: (@MainActor (ImportCamera) async -> Void)?
     /// The job last announced through `onJobStarted` and not yet through `onJobEnded`.

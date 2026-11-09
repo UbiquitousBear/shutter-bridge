@@ -3,6 +3,9 @@ import CameraTransport
 import Catalogue
 import Foundation
 import ImportEngine
+import PTPKit
+import PTPSimulator
+import SimulatedLink
 import Synchronization
 import Testing
 @testable import AppUI
@@ -436,6 +439,18 @@ struct WirelessConnectionsTests {
         #expect(await wifi.source.observerCount == 1)   // the new link's events went to the source before it opened
         #expect(wifi.recoverySession?(camera.id) == nil)
     }
+
+    @MainActor
+    @Test func theRecoveryReachesTheCamerasSessionThroughTheSource() throws {
+        let c = connections()
+        let wifi = WiFiSupport.make(catalogue: InMemoryCatalogue(), connections: c)
+        let camera = entry("wifi-recovered")
+        let made = c.session(for: camera)
+        let given = try #require(wifi.recoverySession?(camera.id) as? SourceAdoptingRecoverySession)
+        #expect((given.base as AnyObject) === (made as AnyObject))   // the session the source opened the job through
+        #expect(given.source === wifi.source)   // which is told of each link the recovery opens again
+        #expect(given.id == camera.id)
+    }
 }
 
 // MARK: - The app model
@@ -730,5 +745,262 @@ struct ConnectionHoldsTests {
         holds.keyed(link, as: CameraKeys.key(for: link.descriptor, material: nil))
         holds.closed(link)
         #expect(recorder.calls.isEmpty)
+    }
+}
+
+// MARK: - The source, the recovery, the continued task and the reminder together
+
+/// The scripted session as the recovery reaches it too, as the live `WirelessSession` is both.
+extension FakeSession: WiFiRecoverySession {
+    func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
+        try await prepareImport()
+    }
+}
+
+/// A background run that notes, at each finish, how many times the session had been told the import finished.
+private final class RunNotingTheSession: ImportBackgroundRun, @unchecked Sendable {
+    final class Handle: ImportBackgroundHandle, @unchecked Sendable {
+        let expired: AsyncStream<Void>
+        private let sink: AsyncStream<Void>.Continuation
+        private let lock = NSLock()
+        private var storedUpdates = 0
+        private let onFinish: @Sendable () -> Void
+
+        init(onFinish: @escaping @Sendable () -> Void) {
+            (expired, sink) = AsyncStream.makeStream(of: Void.self)
+            self.onFinish = onFinish
+        }
+
+        var updates: Int { lock.withLock { storedUpdates } }
+        func update(completedBytes: Int64, totalBytes: Int64, title: String?, subtitle: String?) {
+            lock.withLock { storedUpdates += 1 }
+        }
+        func finish(success: Bool) {
+            onFinish()
+            sink.finish()
+        }
+    }
+
+    private let lock = NSLock()
+    private var noted: [Int] = []
+    private var storedHandles: [Handle] = []
+    private let read: @Sendable () -> Int
+
+    init(read: @escaping @Sendable () -> Int) { self.read = read }
+
+    /// `importFinished` calls the session had had at each finish.
+    var finishesSaw: [Int] { lock.withLock { noted } }
+    var handles: [Handle] { lock.withLock { storedHandles } }
+
+    func begin(title: String, subtitle: String) async throws -> any ImportBackgroundHandle {
+        let read = self.read
+        let handle = Handle(onFinish: { [weak self] in
+            let count = read()
+            self?.lock.withLock { self?.noted.append(count) }
+        })
+        lock.withLock { storedHandles.append(handle) }
+        return handle
+    }
+}
+
+@MainActor
+@Suite("Live wiring: the Wi-Fi source with the recovery, the continued task and the reminder", .timeLimit(.minutes(1)))
+struct LiveWiFiTogetherTests {
+    fileprivate struct Bench {
+        let app: AppModel
+        let runtime: WirelessRuntime
+        let source: WiFiCameraSource
+        let session: FakeSession
+        let camera: CameraDescriptor
+        let key: CameraKey
+        let run: any ImportBackgroundRun
+
+        var importCamera: ImportCamera { ImportCamera(descriptor: camera, key: key) }
+
+        func finished() async -> Bool {
+            await eventuallyLong {
+                await app.importer.refresh()
+                return app.importer.isFinished
+            }
+        }
+    }
+
+    /// A Wi-Fi camera that has connected before (a catalogue row with its key), the source over scripted sessions, the
+    /// recovery reaching the same sessions through `WiFiSupport.recoverySessions`, and the app with the reminder.
+    fileprivate func bench(remindersOn: Bool = false,
+                           run makeRun: (FakeSession) -> any ImportBackgroundRun = { _ in FakeBackgroundRun() })
+        async throws -> Bench {
+        let store = InMemoryKeyValueStore()
+        if remindersOn { ReminderSettingsStore(store: store).save(ReminderSettings(enabled: true)) }
+        let central = FakeCentral()
+        let notifier = FakeNotifier(.authorised)
+        let runtime = WirelessRuntime(bluetooth: OnDemandBluetooth(existing: central, make: { central }),
+                                      refresh: NoRefresh(), notifier: notifier, store: store, now: { noon },
+                                      calendar: { utc })
+        let catalogue = InMemoryCatalogue()
+        let key = CameraKey(rawValue: "wifi-serial:together")
+        await catalogue.upsertCamera(CameraRecord(key: key, preferredCarrier: .wifi, ptpipGUID: UUID()))
+        let connecting = FakeConnecting()
+        let source = WiFiCameraSource(catalogue: catalogue, connecting: connecting)
+        try await source.start()
+        let entry = try #require(await source.cameras.first)
+        let session = try #require(connecting.session(for: entry) as? FakeSession)
+        let wifi = WiFiSupport(source: source, status: WiFiImportModel(source: source),
+                               recoverySession: WiFiSupport.recoverySessions({ connecting.fakeSession($0) },
+                                                                             source: source))
+        let run = makeRun(session)
+        let app = AppModel(
+            discovery: CompositeDiscovery(sources: [source]), services: services(), catalogue: catalogue,
+            engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
+            settingsStore: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(), destinations: FakeDestinations(),
+            cameraKey: CameraKeys.fromDescriptor, notifier: notifier, background: run, wifi: wifi, wireless: runtime)
+        return Bench(app: app, runtime: runtime, source: source, session: session, camera: entry.descriptor, key: key,
+                     run: run)
+    }
+
+    private static let chunk: UInt64 = 64 * 1024
+    private static let card = ScriptedCard(objects: [
+        .init(handle: PTPObjectHandle(rawValue: 1), folder: "DCIM/100MSDCF", filename: "DSC00001.ARW",
+              size: 4 * chunk + 11, captureDateRaw: "20261101T090000", format: .sonyARW),
+        .init(handle: PTPObjectHandle(rawValue: 2), folder: "DCIM/100MSDCF", filename: "DSC00002.ARW",
+              size: 8 * chunk + 13, captureDateRaw: "20261101T090002", format: .sonyARW),
+    ])
+    private static let victim = "DSC00002.ARW"
+    private static let cut: UInt64 = 3 * chunk
+
+    /// Whether a download of the victim is held part-way on `link` (a bounded poll).
+    private func held(_ link: SimulatedCameraLink) async -> Bool {
+        let flag = HeldFlag()
+        Task { await link.waitUntilHeld(Self.victim); flag.set() }
+        return await eventuallyLong { flag.isSet }
+    }
+
+    @Test func afterARecoveryTheJobsNewLinkStaysOpenAndTheRecoveredJobsEndStartsTheStay() async throws {
+        let b = try await bench()
+        let first = SimulatedCameraLink(card: Self.card, mode: .wifi(.cameraNetwork), honoursCancellation: true,
+                                        chunkSize: Self.chunk)
+        await first.script(Self.victim, .holdAfter(Self.cut))
+        let second = await first.replugged()
+        await second.script(Self.victim, .holdAfter(Self.cut + Self.chunk))
+        try await second.open()   // as `WirelessSession.prepareImport` gives it: open
+        b.session.script(.success(first), .success(second))
+
+        let opened = try await b.source.cameraLink(for: b.camera.id)
+        #expect((opened as AnyObject) === first)
+        try await first.open()
+        let items = try await first.list()
+        #expect(await b.app.importer.importItems(items, from: b.importCamera, link: first) == .started(2))
+        #expect(await held(first))
+        // Browse isn't open: the import holds the only lease. The session drops, and the recovery reopens through it.
+        await first.loseSession()
+        #expect(await held(second))
+        #expect(b.session.count("prepare") == 2)
+        // The old link's last holder letting go wasn't taken for the import's end: the job's new link is still open.
+        #expect(b.session.count("importFinished") == 0)
+        #expect(await b.source.hasLiveLink(for: b.camera.id))
+        let browsed = try await b.source.cameraLink(for: b.camera.id)   // Browse opened now gets the job's link
+        #expect((browsed as AnyObject) === second)
+        #expect(b.session.count("prepare") == 2)
+
+        _ = await second.release(Self.victim)
+        #expect(await b.finished())
+        #expect(b.app.importer.state == .finished(.completed))
+        // The recovered job's end, its link's last holder letting go, starts the stay.
+        #expect(await waitUntil { b.session.count("importFinished") == 1 })
+    }
+
+    @Test func aFinishedWiFiJobLetsTheCameraGoBeforeItsContinuedTaskIsFinished() async throws {
+        let b = try await bench(run: { session in RunNotingTheSession(read: { session.count("importFinished") }) })
+        let run = try #require(b.run as? RunNotingTheSession)
+        let link = FakeLink(items: [item("DSC00001.ARW")], mode: .wifi(.cameraNetwork), id: "wifi-together")
+        await link.set(writesListedSize: true)
+        await link.set(bytesHangs: true)   // the job runs until it is cancelled
+        b.session.script(.success(link))
+        _ = try await b.source.cameraLink(for: b.camera.id)
+        _ = await b.app.importer.importItems(try await link.list(), from: b.importCamera, link: link)
+        #expect(await eventuallyLong { run.handles.first.map { $0.updates > 0 } ?? false })   // the run is live
+        await b.app.importer.cancel()
+        await link.set(bytesHangs: false)
+        #expect(await b.finished())
+        #expect(await eventuallyLong { run.finishesSaw.count == 1 })
+        #expect(run.finishesSaw == [1])   // the session had been told the import finished before the run was
+    }
+
+    @Test func anExpiryWithTheAppAwayLetsTheCameraGoAndTheJobKeepsItsLease() async throws {
+        let b = try await bench(run: { _ in FakeBackgroundRun() })
+        let run = try #require(b.run as? FakeBackgroundRun)
+        let link = FakeLink(items: [item("DSC00001.ARW")], mode: .wifi(.cameraNetwork), id: "wifi-together")
+        await link.set(writesListedSize: true)
+        await link.set(bytesHangs: true)
+        b.session.script(.success(link), .success(FakeWiFiLink(serial: nil)))
+        _ = try await b.source.cameraLink(for: b.camera.id)
+        _ = await b.app.importer.importItems(try await link.list(), from: b.importCamera, link: link)
+        #expect(await eventuallyLong { run.handles.first.map { !$0.updates.isEmpty } ?? false })
+        await b.app.scenePhaseChanged(.background)
+        #expect(b.session.count("importFinished") == 0)   // the import runs on in the continued task
+
+        try #require(run.handles.first).expire()
+        #expect(await eventuallyLong {
+            await b.app.importer.refresh()
+            return b.app.importer.state == .paused(.taskExpired)
+        })
+        // The session was told, so in the background it leaves the camera's network; the job keeps its lease.
+        #expect(await waitUntil { b.session.count("importFinished") == 1 })
+        #expect(await !b.source.hasLiveLink(for: b.camera.id))
+        #expect(b.app.leases.holders(of: link) == 1)
+        // Back in front, the camera is connected again rather than handed out closed (Continue's lookup).
+        await b.app.scenePhaseChanged(.active)
+        _ = try await b.source.cameraLink(for: b.camera.id)
+        #expect(b.session.count("prepare") == 2)
+        await b.app.importer.cancel()
+        await link.set(bytesHangs: false)
+    }
+
+    @Test func browseLeftOpenOnAWiFiCameraNoLongerHoldsRemindersOnceTheAppHasLetItGo() async throws {
+        let b = try await bench(remindersOn: true)
+        b.session.script(.success(FakeWiFiLink(serial: nil, items: [item("DSC00001.ARW", at: 10, size: 1_000)])))
+        await b.app.scenePhaseChanged(.active)
+        #expect(await eventuallyLong { b.app.cameras.cameras.contains(b.camera) })
+        let browse = b.app.browseModel(for: b.camera)
+        let browsing = Task { await browse.run() }
+        #expect(await eventuallyLong { browse.phase == .listed })
+        let connection = ReminderActivityEntry(activity: .connection, camera: b.key)
+        #expect(await eventuallyLong {
+            await b.app.reminderActivitySettled()
+            return b.runtime.reminders.activities.contains(connection)
+        })
+
+        // Swiped home with Browse still open: the camera is let go, so it is no longer connected.
+        await b.app.scenePhaseChanged(.background)
+        #expect(b.session.count("importFinished") == 1)
+        #expect(await eventuallyLong {
+            await b.app.reminderActivitySettled()
+            return !b.runtime.reminders.isBusy
+        })
+        // Another camera arriving is reminded of.
+        let other = CameraKey(rawValue: "another-camera")
+        let arrival = ProximityArrival(camera: other, report: report(), match: .storedIdentifier)
+        #expect(await b.runtime.reminders.handle(arrival) == .posted(other))
+
+        browsing.cancel()
+        #expect(await bounded(browsing) != nil)
+    }
+
+    @Test func theReminderReadsItsSettingsAgainWhenItAppliesThem() async {
+        // Made while the store reads as empty (before the first unlock after a restart).
+        let store = InMemoryKeyValueStore()
+        let model = ReminderModel(settings: ReminderSettingsStore(store: store), holds: ReminderHoldStore(store: store),
+                                  notifier: FakeNotifier(.authorised), now: { noon }, calendar: { utc })
+        #expect(!model.settings.enabled)
+        let muted = CameraKey(rawValue: "muted-camera")
+        var stored = ReminderSettings(enabled: true)
+        stored.mutedCameras = [muted]
+        ReminderSettingsStore(store: store).save(stored)
+        await model.applyStoredSetting()
+        #expect(model.settings.enabled)
+        // A later save keeps what was stored.
+        model.setQuietHours(start: 60, end: 120)
+        let saved = ReminderSettingsStore(store: store).load()
+        #expect(saved.enabled && saved.mutedCameras == [muted])
     }
 }
