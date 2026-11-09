@@ -26,6 +26,23 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
     public var keepAlivesFailed = 0
     /// The codes of the latest events ignored (0xC201, 0xC225 and the like), newest last, at most `ignoredEventLimit`.
     public var ignoredEvents: [PTPEventCode] = []
+    /// The latest listing: the handles GetObjectHandles gave, the GetObjectInfo it asked, and the files it took from
+    /// the caller's known items without asking (`list(reusing:)`; 0 for `list()`). The time this saves against the
+    /// spike's 8.3 s relist is unmeasured; these are for the bench run.
+    public var listedHandles = 0
+    public var objectInfosAsked = 0
+    public var reusedHandles = 0
+    /// Partial files whose continuation with 0x9211 began over the link's life, and the 0x9211 reads sent for them.
+    public var resumes = 0
+    public var partialReads = 0
+    /// Resumes whose first 0x9211 read the camera refused (a non-OK answer, the session up and the card there), each
+    /// file then copied again from 0 with GetObject into the same file. 0x9211 is `unverified` beyond one spike run.
+    public var resumeFallbacks = 0
+    /// Downloads refused because a handle known from an earlier listing or session now names another file (not to be
+    /// confused with `reusedHandles`, the items a relist kept).
+    public var staleHandlesRefused = 0
+    /// Transfers cut off by `abortCurrentTransfer()`.
+    public var transfersAborted = 0
 
     public static let ignoredEventLimit = 64
 
@@ -61,13 +78,35 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
 /// download waits for that download (W6's interim answer to the single-transaction open point, B:102; the decision is
 /// Shamil's), then goes ahead of downloads queued after it; a listing holds the turn from GetStorageIDs to its last
 /// GetObjectInfo. Cancelling a call once its command is on the wire lets it finish, so a thumbnail scrolled away
-/// doesn't end the session; cancelling a download cuts the connection off (`.sessionLost`, then a reopen).
+/// doesn't end the session; cancelling a GetObject cuts the connection off (`.sessionLost`, then a reopen).
 /// `list()` asks GetObjectHandles and one GetObjectInfo per handle, newest first; `thumbnail` is GetThumb; `bytes` is
 /// GetObject streamed to a file. A file name that isn't a plain name (a `/`, `..`) is never listed or written.
 /// Every command has a time limit between reads (30 s, 60 s for GetObjectHandles); a download has none as a whole.
 ///
-/// **Resume.** Not yet: this link reads whole files with GetObject, so it reports `resumesPartialFiles` false, ignores
-/// `resuming` and never calls `checkpoint`. The 0x9211 resume, and reopening without relisting known handles, are W8.
+/// **Resume (W8).** When the camera's DeviceInfo lists SDIO_GetPartialLargeObject (0x9211), `capabilities` reports
+/// `resumesPartialFiles` (`.wifi`); before the first open, or for a camera that doesn't list it, it doesn't (never more
+/// than the link can do; the engine reads capabilities once the link is open). Then:
+/// - A new file is read with GetObject (the measured whole-file path; whether to read every file in 0x9211 chunks is
+///   still open, B:106), and `checkpoint` is called each time the copy crosses a multiple of the chunk size (4 MiB),
+///   and once more when the copy breaks off, with the bytes on disk; the partial file is kept for the resume.
+/// - A `resuming` partial is cut back to its offset and continued with 0x9211 reads of 4 MiB from there (the variant
+///   from `SonyCapabilities.partialReadVariant(objectSize:in: .wholeCardContentsTransfer)`: 0x101B and 0x9219 answer
+///   InvalidObjectHandle in this session and are never sent), with `checkpoint` after each chunk but the last, and on
+///   a break. Each chunk is a transfer of its own, so a thumbnail asked for meanwhile waits for one chunk, not the
+///   file, and a cancelled resume (a pause) lets the chunk on the wire finish and stops at its boundary, keeping the
+///   session. A first read the camera refuses with the session up and the card there is followed by a GetObject of
+///   the whole file into the same file (`resumeFallbacks`). A partial the link can't continue (missing, shorter than its offset, past the object's end) is copied
+///   again from 0 into the same file.
+/// Without 0x9211 the link ignores `resuming`, copies from the start and never checkpoints, as `USBLink` does.
+///
+/// **Reopen without relisting (W8).** `list(reusing:)` asks GetObjectHandles and runs GetObjectInfo only for handles
+/// the caller's items don't name (handles were stable across sessions on the bench, B:91). A handle known only from
+/// such a list, or from an earlier session, is a hint: `bytes` reads its ObjectInfo first and refuses a file whose
+/// name or size changed (`itemNotFound`), so a swapped card is never written under the old name (B:92); it keeps
+/// refusing it until a listing asks GetObjectInfo for that handle again, and from then on the link relists in full.
+///
+/// **Abort.** `abortCurrentTransfer()` (`TransferAborting`) cuts the connection off under a download in flight, for
+/// the continued task's expiry (W13).
 ///
 /// **Events.** StoreRemoved becomes `.storeRemoved`, StoreAdded that brings the card back `.storeAdded`
 /// (`IPEventMapper`); between them, and whenever a check of the storages finds the card gone, InvalidObjectHandle is
@@ -75,14 +114,24 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
 /// channel waiting for the Local Network prompt is `.waitingForLocalNetwork`. A connection that ends under the link (the
 /// camera's idle drop, iOS closing the sockets in the background, Wi-Fi gone) is `.sessionLost`: pending calls end as
 /// `disconnected`, `events` stays open, and `open()` reopens a new session (as a reopen, with the serial held).
-public actor IPLink: CameraLink {
-    /// What this link can do: `.wifi` without resume until W8 brings 0x9211 (a link reports less than its carrier's
-    /// baseline, never more than it does).
+public actor IPLink: CameraLink, TransferAborting {
+    /// What this link can do before DeviceInfo has shown 0x9211: `.wifi` without resume (a link reports less than its
+    /// carrier's baseline, never more than it does).
     public static let capabilitiesWithoutResume: CameraLinkCapabilities = {
         var capabilities = CameraLinkCapabilities.wifi
         capabilities.resumesPartialFiles = false
         return capabilities
     }()
+
+    /// What this link can do with a camera whose DeviceInfo is `deviceInfo` (nil: not opened yet): `.wifi`, with
+    /// `resumesPartialFiles` only when the camera is a Sony body that lists 0x9211
+    /// (`SonyCapabilities.largeObjectPartialRead`; the α7C II's PTP/IP DeviceInfo does).
+    public static func capabilities(for deviceInfo: PTPDeviceInfo?) -> CameraLinkCapabilities {
+        guard let deviceInfo, SonyCapabilities(deviceInfo: deviceInfo).largeObjectPartialRead else {
+            return capabilitiesWithoutResume
+        }
+        return .wifi
+    }
 
     /// The largest data phase kept in memory for each kind of answer, so a broken reply can't fill the phone: DeviceInfo
     /// and ExtDeviceInfo (970 B on the α7C II), ObjectInfo, the handle list (4 B per file), and a thumbnail (the
@@ -115,11 +164,33 @@ public actor IPLink: CameraLink {
     private var pinnedSerial: String?
     private var opening = false
     private var openWaiters: [CheckedContinuation<Result<Void, CameraLinkFailure>, Never>] = []
-    /// From the latest listing: the folders, and each file's name (for `bytes`, which writes under the camera's name).
+    /// From the latest listing: the folders, and each file's name and size (for `bytes`, which writes under the
+    /// camera's name and needs the size to resume), with whether this session's GetObjectInfo has confirmed it.
     private var folders: [PTPObjectHandle: IPListing.Folder] = [:]
-    private var names: [PTPObjectHandle: String] = [:]
+    private var objects: [PTPObjectHandle: KnownObject] = [:]
     private var recorded = IPLinkDiagnostics()
     private var retiredKeepAlives = (answered: 0, failed: 0)
+    /// `bytes` calls under way, for `abortCurrentTransfer()`.
+    private var activeDownloads = 0
+    /// A handle known from a caller's items or an earlier session has named another file (a swapped card): from then
+    /// on `list(reusing:)` ignores known items and asks GetObjectInfo for every handle, for the link's life.
+    private var knownItemsUntrusted = false
+    /// `capabilities`, readable from outside the actor: set from each DeviceInfo.
+    private nonisolated let capabilityState = CapabilityState()
+
+    /// A file the link has seen: its name and size, and whether a GetObjectInfo of this session gave them (false for
+    /// one taken from the caller's items by `list(reusing:)`, or listed in an earlier session: a hint).
+    struct KnownObject: Sendable, Equatable {
+        var name: String
+        var size: UInt64
+        var confirmed: Bool
+    }
+
+    final class CapabilityState: Sendable {
+        private let value = Mutex(IPLink.capabilitiesWithoutResume)
+        var current: CameraLinkCapabilities { value.withLock { $0 } }
+        func set(_ capabilities: CameraLinkCapabilities) { value.withLock { $0 = capabilities } }
+    }
 
     /// - Parameters:
     ///   - channels: Opens the TCP connections (Network.framework on the phone, in-memory pairs in tests).
@@ -136,7 +207,9 @@ public actor IPLink: CameraLink {
         self.connectionClock = connectionClock ?? clock
     }
 
-    public nonisolated var capabilities: CameraLinkCapabilities { Self.capabilitiesWithoutResume }
+    /// `capabilitiesWithoutResume` until the first DeviceInfo, then `capabilities(for:)` the latest one: resume is
+    /// reported only once the camera has shown it lists 0x9211.
+    public nonisolated var capabilities: CameraLinkCapabilities { capabilityState.current }
 
     public nonisolated var events: AsyncStream<CameraLinkEvent> { fanOut.subscribe() }
 
@@ -215,6 +288,8 @@ public actor IPLink: CameraLink {
             sessionReady = true
             hadSession = true
             recorded.sessionsOpened += 1
+            // What an earlier session listed is a hint in this one: a download reads the ObjectInfo again first.
+            for handle in objects.keys { objects[handle]?.confirmed = false }
             await session.startKeepAlive()
             // A loss signalled before `sessionReady` was set was ignored as part of opening; the session says whether
             // it is still up. A loss signalled from now on is reported as `.sessionLost` by `handle(_:epoch:)`.
@@ -334,6 +409,7 @@ public actor IPLink: CameraLink {
                     try pin(decoded)
                     info = decoded
                     deviceInfo = decoded
+                    capabilityState.set(Self.capabilities(for: decoded))
                 }
                 action = runner.next(outcome)
             case let .wait(duration):
@@ -417,6 +493,25 @@ public actor IPLink: CameraLink {
     // MARK: - Calls
 
     public func list() async throws(CameraLinkFailure) -> [CameraItem] {
+        try await list(reusing: [])
+    }
+
+    /// The card, reopening without relisting what is known (backlog B:91, wireless plan W8): GetStorageIDs and
+    /// GetObjectHandles as `list()` asks them, then GetObjectInfo only for the handles `known` doesn't name
+    /// (`SonyHandleSet.unseen`); a known item whose handle is listed again is returned as it is, and one whose handle
+    /// has gone is left out. Newest first, as `list()`. With no known items this is `list()`.
+    ///
+    /// A kept item is a hint (B:92): its name and size are checked when it is used. `bytes` reads its ObjectInfo first
+    /// and refuses a file whose name or size changed (`itemNotFound`), and `info(of:)` always asks the camera, which is
+    /// what the engine checks a partial file against before it resumes; neither turns a hint the camera contradicts
+    /// into a confirmed entry, so the refusal holds for every later `bytes`. Once a handle has been found naming
+    /// another file, `known` is ignored for the link's life and every handle's ObjectInfo is asked (the card was
+    /// swapped; a relist that kept its old items would hide the new files). Thumbnails of kept items aren't checked
+    /// (a wrong thumbnail writes nothing).
+    ///
+    /// - Parameter known: Items this link (or an earlier `IPLink` for the same camera) listed: the IDs carry the
+    ///   handles. Items of another link are ignored.
+    public func list(reusing known: [CameraItem]) async throws(CameraLinkFailure) -> [CameraItem] {
         let session = try readySession(.list)
         try requireListed(.getStorageIDs, during: .list)
         try requireListed(.getObjectHandles, during: .list)
@@ -431,7 +526,7 @@ public actor IPLink: CameraLink {
         }
         let result: Result<[CameraItem], CameraLinkFailure>
         do throws(CameraLinkFailure) {
-            result = .success(try await listing(on: session, within: hold))
+            result = .success(try await listing(on: session, within: hold, reusing: known))
         } catch {
             result = .failure(error)
         }
@@ -439,17 +534,54 @@ public actor IPLink: CameraLink {
         return try result.get()
     }
 
-    private func listing(on session: IPSession, within hold: IPSession.Hold) async throws(CameraLinkFailure)
-        -> [CameraItem] {
+    private func listing(on session: IPSession, within hold: IPSession.Hold, reusing known: [CameraItem])
+        async throws(CameraLinkFailure) -> [CameraItem] {
+        guard let handles = try await listedHandles(on: session, within: hold) else {
+            // A plain session lists nothing on this camera (measured on both networks): no files, not a failure.
+            folders = [:]
+            objects = [:]
+            recorded.listedHandles = 0
+            recorded.objectInfosAsked = 0
+            recorded.reusedHandles = 0
+            return []
+        }
+        let (kept, unseen) = IPListing.reuse(knownItemsUntrusted ? [] : known, listed: handles)
+        var infos: [(handle: PTPObjectHandle, info: PTPObjectInfo)] = []
+        for handle in unseen {
+            switch try await objectInfo(handle, during: .list, on: session, within: hold) {
+            case let .some(info): infos.append((handle, info))
+            case .none: continue  // gone between the two answers
+            }
+        }
+        recorded.listedHandles = handles.count
+        recorded.objectInfosAsked = unseen.count
+        recorded.reusedHandles = kept.count
+        // Folders are never kept items, so every folder of the card is among `infos`.
+        folders = IPListing.folders(in: infos)
+        var seen: [PTPObjectHandle: KnownObject] = [:]
+        for (handle, item) in kept {
+            // What this session's GetObjectInfo already confirmed stays confirmed when the kept item agrees with it.
+            if let current = objects[handle], current.confirmed, current.name == item.name, current.size == item.size {
+                seen[handle] = current
+            } else {
+                seen[handle] = KnownObject(name: item.name, size: item.size, confirmed: false)
+            }
+        }
+        for (handle, info) in infos where !info.isFolder && IPListing.isSafeFileName(info.filename) {
+            seen[handle] = KnownObject(name: info.filename, size: UInt64(info.objectCompressedSize), confirmed: true)
+        }
+        objects = seen
+        return (Array(kept.values) + IPListing.items(from: infos, timeZone: configuration.timeZone)).newestFirst()
+    }
+
+    /// GetStorageIDs, then GetObjectHandles (all levels) for each storage with a logical store: every handle, each
+    /// once, in listing order. Nil for a plain session's StoreNotAvailable, which means an empty card here.
+    private func listedHandles(on session: IPSession, within hold: IPSession.Hold)
+        async throws(CameraLinkFailure) -> [PTPObjectHandle]? {
         let ids = try await transact(.list, on: session, within: hold, limit: Self.datasetLimit) {
             PTPCommand.getStorageIDs(tx: $0)
         }
-        if ids.reply.code == .storeNotAvailable, sessionKind == .plain {
-            // A plain session lists nothing on this camera (measured on both networks): no files, not a failure.
-            folders = [:]
-            names = [:]
-            return []
-        }
+        if ids.reply.code == .storeNotAvailable, sessionKind == .plain { return nil }
         guard ids.reply.code == .ok else {
             throw await failure(ids.reply.code, during: .list, on: session, within: hold)
         }
@@ -474,31 +606,43 @@ public actor IPLink: CameraLink {
             }
             for handle in list where seen.insert(handle).inserted { handles.append(handle) }
         }
-        var infos: [(handle: PTPObjectHandle, info: PTPObjectInfo)] = []
-        for handle in handles {
-            switch try await objectInfo(handle, during: .list, on: session, within: hold) {
-            case let .some(info): infos.append((handle, info))
-            case .none: continue  // gone between the two answers
-            }
-        }
-        folders = IPListing.folders(in: infos)
-        names = Dictionary(infos.filter { !$0.info.isFolder && IPListing.isSafeFileName($0.info.filename) }
-                               .map { ($0.handle, $0.info.filename) },
-                           uniquingKeysWith: { first, _ in first })
-        return IPListing.items(from: infos, timeZone: configuration.timeZone)
+        return handles
     }
 
+    /// The camera's answer for the item's handle, always asked. A hint the answer contradicts stays an unconfirmed
+    /// hint (see `record(_:for:)`), so `bytes` still refuses it.
     public func info(of item: CameraItem.ID) async throws(CameraLinkFailure) -> CameraItem {
         let session = try readySession(.info)
-        try requireListed(.getObjectInfo, during: .info)
         let handle = try Self.handle(of: item, during: .info)
-        guard let info = try await objectInfo(handle, during: .info, on: session),
+        let found = try await askInfo(handle, during: .info, on: session)
+        record(found, for: handle)
+        return found
+    }
+
+    /// GetObjectInfo for a file's handle, as an item; `itemNotFound` for a handle that is gone or names no file.
+    private func askInfo(_ handle: PTPObjectHandle, during operation: IPFailureMapping.Operation,
+                         on session: IPSession) async throws(CameraLinkFailure) -> CameraItem {
+        try requireListed(.getObjectInfo, during: operation)
+        guard let info = try await objectInfo(handle, during: operation, on: session),
               let found = IPListing.item(handle: handle, info: info, folders: folders, timeZone: configuration.timeZone)
         else {
-            throw CameraLinkFailure(.itemNotFound, detail: "info: not a file on the card")
+            throw CameraLinkFailure(.itemNotFound, detail: "\(operation.rawValue): not a file on the card")
         }
-        names[handle] = found.name
         return found
+    }
+
+    /// Records the camera's answer for `handle` as confirmed, unless it contradicts a hint (an unconfirmed entry with
+    /// another name or size, from `list(reusing:)` or an earlier session): the card was swapped or the file replaced.
+    /// The hint is then left as it was, so `bytes` keeps refusing the caller's item until a listing asks GetObjectInfo
+    /// for the handle again, and `list(reusing:)` stops trusting known items. Returns whether it was recorded.
+    @discardableResult
+    private func record(_ found: CameraItem, for handle: PTPObjectHandle) -> Bool {
+        if let earlier = objects[handle], !earlier.confirmed, earlier.name != found.name || earlier.size != found.size {
+            knownItemsUntrusted = true
+            return false
+        }
+        objects[handle] = KnownObject(name: found.name, size: found.size, confirmed: true)
+        return true
     }
 
     public func thumbnail(of item: CameraItem.ID) async throws(CameraLinkFailure) -> Data {
@@ -516,9 +660,12 @@ public actor IPLink: CameraLink {
         return answer.data
     }
 
-    /// GetObject, streamed into `directory` under the camera's file name (overwriting what was there), with `progress`
-    /// called with the bytes written after each read. `resuming` is ignored and `checkpoint` never called: this link
-    /// doesn't resume yet (see the type's notes). A failed copy leaves no file behind.
+    /// Copies one file. A new file is GetObject, streamed into `directory` under the camera's file name (overwriting
+    /// what was there), with `progress` called with the bytes written after each read; a partial file is continued
+    /// with 0x9211 reads where the camera lists 0x9211 (see the type's notes, *Resume*), else ignored. A handle not
+    /// confirmed by this session's GetObjectInfo (`list(reusing:)`, or an earlier session's listing) is confirmed
+    /// first, and a file whose name or size changed is refused as `itemNotFound`. A failed fresh copy leaves no file
+    /// behind unless the link resumes and some of it is on disk, which is kept and checkpointed.
     public func bytes(
         of item: CameraItem.ID,
         into directory: URL,
@@ -527,51 +674,253 @@ public actor IPLink: CameraLink {
         progress: @escaping @Sendable (_ bytesWritten: UInt64) -> Void
     ) async throws(CameraLinkFailure) -> URL {
         let session = try readySession(.download)
-        try requireListed(.getObject, during: .download)
         let handle = try Self.handle(of: item, during: .download)
-        let name: String
-        if let known = names[handle] {
-            name = known
-        } else {
-            name = try await info(of: item).name
-        }
+        activeDownloads += 1
+        defer { activeDownloads -= 1 }
+        let object = try await confirmedObject(handle, on: session)
         // The name comes from the camera (or whatever answers at its address): only a plain file name is written,
         // never a path that leads out of `directory`.
-        guard IPListing.isSafeFileName(name) else {
+        guard IPListing.isSafeFileName(object.name) else {
             throw CameraLinkFailure(.unreadableItem, detail: "download: the camera's file name isn't a plain name")
         }
-        let url = directory.appendingPathComponent(name, isDirectory: false)
+        let variant = partialReadVariant(objectSize: object.size)
+        // Checkpoints only where a resume could start from them: 0x9211 listed and the object's end known.
+        let checkpointing = variant != nil && IPPartialReader.canResume(objectSize: object.size) ? checkpoint : nil
+        if let variant, let resuming {
+            let start = IPPartialReader.start(offset: resuming.bytesWritten, fileLength: Self.length(of: resuming.file),
+                                              objectSize: object.size)
+            switch start {
+            case let .resume(offset):
+                if let url = try await continueFile(handle, at: resuming.file, from: offset, objectSize: object.size,
+                                                    variant: variant, on: session, checkpoint: checkpoint,
+                                                    progress: progress) {
+                    return url
+                }
+                // The camera refused the first 0x9211 read with the session up and the card there: GetObject still
+                // reads the file, so it is copied again from 0 into the same file, as `.restart` does.
+                recorded.resumeFallbacks += 1
+                return try await getObject(handle, into: resuming.file, objectSize: object.size, on: session,
+                                           checkpoint: checkpointing, progress: progress)
+            case .complete:
+                do {
+                    let file = try FileHandle(forWritingTo: resuming.file)
+                    defer { try? file.close() }
+                    try file.truncate(atOffset: object.size)
+                } catch {
+                    throw Self.writeFailure(error)
+                }
+                progress(object.size)
+                return resuming.file
+            case .restart:
+                // Copied again from 0 into the same file, as the contract says.
+                return try await getObject(handle, into: resuming.file, objectSize: object.size, on: session,
+                                           checkpoint: checkpointing, progress: progress)
+            }
+        }
+        return try await getObject(handle, into: directory.appendingPathComponent(object.name, isDirectory: false),
+                                   objectSize: object.size, on: session, checkpoint: checkpointing, progress: progress)
+    }
+
+    /// The file's name and size, from this session's GetObjectInfo: as recorded when confirmed, else asked now. A
+    /// handle that names another file than the one recorded (another name or size) is refused: the card was swapped
+    /// or the file replaced since the handle was learnt, and the file the caller meant isn't under it.
+    private func confirmedObject(_ handle: PTPObjectHandle, on session: IPSession) async throws(CameraLinkFailure)
+        -> KnownObject {
+        if let known = objects[handle], known.confirmed { return known }
+        let found = try await askInfo(handle, during: .download, on: session)
+        guard record(found, for: handle) else {
+            recorded.staleHandlesRefused += 1
+            throw CameraLinkFailure(.itemNotFound, detail: "download: the handle names another file now")
+        }
+        return KnownObject(name: found.name, size: found.size, confirmed: true)
+    }
+
+    /// The byte-range variant for an object, from DeviceInfo: `.sonyLarge9211` when the camera lists 0x9211, else nil
+    /// (`SonyCapabilities.partialReadVariant` for the whole-card session, never `PTPPartialRead.variant`, which would
+    /// pick 0x101B: InvalidObjectHandle here).
+    private func partialReadVariant(objectSize: UInt64) -> PTPPartialRead.Variant? {
+        guard let deviceInfo,
+              let variant = SonyCapabilities(deviceInfo: deviceInfo)
+                  .partialReadVariant(objectSize: objectSize, in: .wholeCardContentsTransfer),
+              deviceInfo.supports(PTPPartialRead.operationCode(for: variant)) else { return nil }
+        return variant
+    }
+
+    /// GetObject into `url` (created or emptied). With `checkpoint` (the link resumes), a checkpoint each time the
+    /// copy crosses a multiple of the chunk size, and on a break the bytes on disk are kept and checkpointed; without
+    /// it, or with nothing on disk, a failed copy is removed.
+    private func getObject(_ handle: PTPObjectHandle, into url: URL, objectSize: UInt64, on session: IPSession,
+                           checkpoint: (@Sendable (PartialDownload) -> Void)?,
+                           progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL {
+        try requireListed(.getObject, during: .download)
         let file: IPFileSink
         do {
             file = try IPFileSink(url: url)
         } catch {
             throw Self.writeFailure(error)
         }
+        let stride = UInt64(max(1, configuration.partialReadChunkSize))
         let reply: PTPIPConnection.Reply
         do throws(PTPIPConnectionFailure) {
             reply = try await session.perform(.transfer, sink: { data in
-                if let total = file.write(data) { progress(total) }
+                guard let total = file.write(data) else { return }
+                progress(total)
+                if let checkpoint, file.reportCheckpoint(ifStreamCrosses: stride, objectSize: objectSize) {
+                    checkpoint(PartialDownload(file: url, bytesWritten: total))
+                }
             }) { counter in
                 PTPCommand.getObject(handle, tx: counter.take())
             }
         } catch {
-            file.discard()
+            keepOrDiscard(file, objectSize: objectSize, checkpoint: checkpoint)
             throw IPFailureMapping.failure(error, during: .download)
         }
         let written = file.finish()
         if let writeError = written.failure {
-            file.discard()
+            keepOrDiscard(file, objectSize: objectSize, checkpoint: checkpoint)
             throw Self.writeFailure(writeError)
         }
         guard reply.code == .ok else {
-            file.discard()
+            keepOrDiscard(file, objectSize: objectSize, checkpoint: checkpoint)
             throw await failure(reply.code, during: .download, on: session)
         }
         guard reply.dataIsComplete, reply.hadDataPhase else {
-            file.discard()
+            keepOrDiscard(file, objectSize: objectSize, checkpoint: checkpoint)
             throw CameraLinkFailure(.noAnswer, detail: "download: data phase short (\(written.bytes) bytes)")
         }
         return url
+    }
+
+    /// A fresh copy broke off: on a link that resumes, the bytes on disk are kept and checkpointed (TCP delivers them
+    /// in order, so they are the start of the file); otherwise, or with nothing written, the file is removed.
+    private func keepOrDiscard(_ file: IPFileSink, objectSize: UInt64,
+                               checkpoint: (@Sendable (PartialDownload) -> Void)?) {
+        let written = file.finish().bytes
+        guard let checkpoint, written > 0 else {
+            file.discard()
+            return
+        }
+        if file.reportCheckpoint(at: written, objectSize: objectSize) {
+            checkpoint(PartialDownload(file: file.url, bytesWritten: written))
+        }
+    }
+
+    /// Continues the partial file at `url` from `offset` with 0x9211 reads of the configured chunk size, each a
+    /// transfer of its own that runs to its end if the caller is cancelled (`IPSession.Kind.chunk`), so a pause stops
+    /// at a chunk boundary and keeps the session; `abortCurrentTransfer()` still cuts a chunk off. A checkpoint after
+    /// each chunk but the last, and on a break (what arrived of the chunk). The file is kept whatever happens: what it
+    /// holds up to the last checkpoint is good, and the next resume cuts it back to its offset.
+    ///
+    /// - Returns: The file, or nil when the camera refused the first read (a non-OK answer other than a missing card
+    ///   or a lost session, `unverified` as possible): nothing was read, and the caller copies the file again.
+    private func continueFile(_ handle: PTPObjectHandle, at url: URL, from offset: UInt64, objectSize: UInt64,
+                              variant: PTPPartialRead.Variant, on session: IPSession,
+                              checkpoint: @escaping @Sendable (PartialDownload) -> Void,
+                              progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL? {
+        let file: IPFileSink
+        do {
+            file = try IPFileSink(continuing: url, at: offset)
+        } catch {
+            throw Self.writeFailure(error)
+        }
+        recorded.resumes += 1
+        var reader = IPPartialReader(offset: offset, objectSize: objectSize,
+                                     chunkSize: configuration.partialReadChunkSize)
+        /// Ends the copy on a failure, with a checkpoint at `resumable` if it is further than the last.
+        func stop(at resumable: UInt64, _ failure: CameraLinkFailure) -> CameraLinkFailure {
+            _ = file.finish()
+            if file.reportCheckpoint(at: resumable, objectSize: objectSize) {
+                checkpoint(PartialDownload(file: url, bytesWritten: resumable))
+            }
+            return failure
+        }
+        while let chunk = reader.nextChunk {
+            recorded.partialReads += 1
+            let reply: PTPIPConnection.Reply
+            do throws(PTPIPConnectionFailure) {
+                reply = try await session.perform(.chunk, sink: { data in
+                    if let total = file.write(data) { progress(total) }
+                }) { counter in
+                    Self.partialRead(handle, chunk: chunk, variant: variant, tx: counter.take())
+                }
+            } catch {
+                let resumable = reader.checkpoint(afterBreakIn: chunk, written: file.written)
+                throw stop(at: resumable, IPFailureMapping.failure(error, during: .download))
+            }
+            if let writeError = file.writeFailure {
+                // Only bytes that were written count: `written` stops at the failed write.
+                let resumable = reader.checkpoint(afterBreakIn: chunk, written: file.written)
+                throw stop(at: resumable, Self.writeFailure(writeError))
+            }
+            guard reply.code == .ok else {
+                let mapped = await failure(reply.code, during: .download, on: session)
+                if reader.offset == offset, file.written == offset, Self.fallsBackToGetObject(after: mapped),
+                   sessionReady, self.session === session, await session.isUsable {
+                    _ = file.finish()
+                    return nil
+                }
+                throw stop(at: reader.offset, mapped)
+            }
+            guard reply.dataIsComplete else {
+                let resumable = reader.checkpoint(afterBreakIn: chunk, written: file.written)
+                throw stop(at: resumable, CameraLinkFailure(
+                    .noAnswer, detail: "download: 0x9211 data phase short at \(chunk.offset)"))
+            }
+            let arrived = file.written >= chunk.offset ? file.written - chunk.offset : 0
+            switch reader.received(arrived, of: chunk) {
+            case let .checkpoint(resumable):
+                if file.reportCheckpoint(at: resumable, objectSize: objectSize) {
+                    checkpoint(PartialDownload(file: url, bytesWritten: resumable))
+                }
+            case .complete:
+                break
+            case let .failed(reason):
+                throw stop(at: reader.offset, CameraLinkFailure(.noAnswer, detail: "download: \(reason)"))
+            }
+        }
+        if let closeError = file.finish().failure {
+            throw stop(at: reader.offset, Self.writeFailure(closeError))
+        }
+        return url
+    }
+
+    /// Whether a refused first 0x9211 read is worth a GetObject of the whole file: the camera refused the read itself
+    /// (InvalidObjectHandle with the card there, OperationNotSupported, another error), not a missing card, a lost
+    /// session, a busy camera or a short data phase, which the engine retries with the same partial.
+    static func fallsBackToGetObject(after failure: CameraLinkFailure) -> Bool {
+        switch failure.kind {
+        case .itemNotFound, .unreadableItem, .modeListsNoFiles: true
+        default: false
+        }
+    }
+
+    /// The 0x9211 command for one chunk (`PTPPartialRead.command`, which throws only for the 32-bit variant, never
+    /// chosen here; the five-parameter form is built directly should it ever).
+    static func partialRead(_ handle: PTPObjectHandle, chunk: PTPPartialRead.Chunk, variant: PTPPartialRead.Variant,
+                            tx: UInt32) -> PTPContainer {
+        if let command = try? PTPPartialRead.command(handle, chunk: chunk, variant: variant, tx: tx) { return command }
+        return PTPCommand.sonyGetPartialLargeObject(code: PTPOperationCode.sonySDIOGetPartialLargeObject.rawValue,
+                                                    handle, offset: chunk.offset, length: UInt64(chunk.length), tx: tx)
+    }
+
+    /// The length of the file at `url`, or nil when there is none.
+    static func length(of url: URL) -> UInt64? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber else { return nil }
+        return size.uint64Value
+    }
+
+    // MARK: - Abort
+
+    /// Cuts the connection off under the download in flight (the spike's `TransferAbort`, for the continued task's
+    /// expiry, W13): its transaction stops at once, the call throws `disconnected` (a fresh copy's bytes on disk kept
+    /// and checkpointed, a continued one's last chunk boundary or better), every other call waiting on the session
+    /// fails the same way, and `.sessionLost` follows, so the next `open()` reopens. Does nothing when no download is
+    /// under way, so an idle session survives.
+    public func abortCurrentTransfer() async {
+        guard activeDownloads > 0, sessionReady, let session, !closed else { return }
+        recorded.transfersAborted += 1
+        await session.abortTransfer()
     }
 
     // MARK: - Close
@@ -745,12 +1094,15 @@ final class IPDataCollector: Sendable {
 
 /// A file a download is written to, a read at a time, from the connection's context. A write error is kept, later
 /// writes are dropped, and the transfer runs to its end, so a full phone doesn't cut off the session; `finish()`
-/// reports it.
+/// reports it. It also remembers the last checkpoint reported for the file, so each is reported once and in order.
 final class IPFileSink: Sendable {
     private struct State {
         var handle: FileHandle?
+        /// Bytes of the camera's file in this file: the offset continued from, plus what has been written since.
         var written: UInt64 = 0
         var failure: (any Error)?
+        /// The last checkpoint reported (or the offset continued from).
+        var reported: UInt64 = 0
     }
 
     let url: URL
@@ -765,7 +1117,22 @@ final class IPFileSink: Sendable {
         state = Mutex(State(handle: try FileHandle(forWritingTo: url)))
     }
 
-    /// Appends `data`; returns the bytes written so far, or nil once a write has failed.
+    /// Opens an existing partial file to continue it: cut back to `offset` (whatever it held beyond is not trusted)
+    /// and written from there.
+    init(continuing url: URL, at offset: UInt64) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        do {
+            try handle.truncate(atOffset: offset)
+            try handle.seekToEnd()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        self.url = url
+        state = Mutex(State(handle: handle, written: offset, reported: offset))
+    }
+
+    /// Appends `data`; returns the bytes in the file so far, or nil once a write has failed.
     func write(_ data: Data) -> UInt64? {
         state.withLock { s in
             guard let handle = s.handle, s.failure == nil else { return nil }
@@ -779,6 +1146,34 @@ final class IPFileSink: Sendable {
                 s.handle = nil
                 return nil
             }
+        }
+    }
+
+    /// The bytes in the file so far (only writes that succeeded).
+    var written: UInt64 { state.withLock { $0.written } }
+
+    /// The first write error, if any.
+    var writeFailure: (any Error)? { state.withLock { $0.failure } }
+
+    /// Whether a checkpoint at the bytes written so far is due during a whole-file copy
+    /// (`IPPartialReader.streamCheckpointDue`); if so it counts as reported.
+    func reportCheckpoint(ifStreamCrosses stride: UInt64, objectSize: UInt64) -> Bool {
+        state.withLock { s in
+            guard s.failure == nil,
+                  IPPartialReader.streamCheckpointDue(previous: s.reported, current: s.written, objectSize: objectSize,
+                                                      stride: stride) else { return false }
+            s.reported = s.written
+            return true
+        }
+    }
+
+    /// Whether a checkpoint at `offset` is worth reporting: further than the last, inside the object, and on disk.
+    /// If so it counts as reported.
+    func reportCheckpoint(at offset: UInt64, objectSize: UInt64) -> Bool {
+        state.withLock { s in
+            guard offset > s.reported, offset < objectSize, offset <= s.written else { return false }
+            s.reported = offset
+            return true
         }
     }
 

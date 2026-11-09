@@ -108,13 +108,17 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     }
 
     /// Ends every connection, as the camera going out of range does: queued bytes are delivered, then each channel
-    /// fails with `failure` (POSIX 53, "Software caused connection abort", is what the spike saw).
-    public func dropAll(as failure: ByteChannelFailure = .linkLost(posix: 53)) {
+    /// fails with `failure` (POSIX 53, "Software caused connection abort", is what the spike saw). With
+    /// `losingUndelivered`, bytes the initiator hasn't read yet are lost instead, as a radio drop loses what was in
+    /// flight: a data phase stops where the initiator had read to, which cuts a download mid-file.
+    public func dropAll(as failure: ByteChannelFailure = .linkLost(posix: 53), losingUndelivered: Bool = false) {
         let wake = state.withLock { s -> [Wake] in
             let actions = s.core.dropAll()
             var wake: [Wake] = []
             for case let .close(id) in actions {
-                if let channel = s.channels.removeValue(forKey: id) { wake += channel.endOfStream(failure) }
+                if let channel = s.channels.removeValue(forKey: id) {
+                    wake += channel.endOfStream(failure, losingUndelivered: losingUndelivered)
+                }
             }
             return wake
         }
@@ -239,9 +243,12 @@ public final class InMemoryByteChannel: ByteChannel, Sendable {
         deliver { $0.queue.append(chunk) }
     }
 
-    /// The camera ended the stream: queued bytes first, then `failure`.
-    func endOfStream(_ failure: ByteChannelFailure) -> [InMemoryPTPIPCamera.Wake] {
-        deliver { s in if s.end == nil { s.end = failure } }
+    /// The camera ended the stream: queued bytes first (or, `losingUndelivered`, none of them), then `failure`.
+    func endOfStream(_ failure: ByteChannelFailure, losingUndelivered: Bool = false) -> [InMemoryPTPIPCamera.Wake] {
+        deliver { s in
+            if losingUndelivered { s.queue = [] }
+            if s.end == nil { s.end = failure }
+        }
     }
 
     private func deliver(_ change: (inout State) -> Void) -> [InMemoryPTPIPCamera.Wake] {

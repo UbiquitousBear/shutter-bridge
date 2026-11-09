@@ -34,6 +34,11 @@ actor IPSession {
         /// GetObject: queued behind brief transactions, and a caller cancelled mid-transfer cuts the connection off
         /// (the connection's rule), because stopping a long download at once is worth a reopen.
         case transfer
+        /// One piece of a transfer read in chunks (0x9211): queued behind brief transactions as a transfer is, but once
+        /// on the wire it runs to its end if its caller is cancelled, as a brief one does (a 4 MiB chunk ends within
+        /// about 0.3–0.6 s), so a pause stops at the chunk boundary and keeps the session. `abortTransfer()` still cuts
+        /// it off.
+        case chunk
     }
 
     /// The turn held across several transactions (`hold()`), such as a listing's GetObjectInfo per handle, so no
@@ -177,7 +182,7 @@ actor IPSession {
         switch kind {
         case .transfer:
             return try await connection.perform(container, timeout: timeout, into: sink)
-        case .brief:
+        case .brief, .chunk:
             // An unstructured task doesn't inherit the caller's cancellation, so the transaction runs to its end; the
             // caller still waits for it, so the next one never starts while this one is on the wire.
             let connection = connection
@@ -264,6 +269,14 @@ actor IPSession {
     }
 
     // MARK: - Ending
+
+    /// Cuts the connection off (`PTPIPConnection.abortTransfer()`): the transaction on the wire stops at once with
+    /// `.aborted`, waiting callers fail, and `Signal.lost(.aborted)` follows, as for any connection that ends under
+    /// the session. Does nothing once the session has ended or is closing.
+    func abortTransfer() async {
+        guard !ended, !closing else { return }
+        await connection.abortTransfer()
+    }
 
     /// Ends the session: `close` CloseSession first when `sendingCloseSession` and nothing is running or waiting (the
     /// spike sent it only when no transaction had been cut off; a transfer in flight is cut off instead), then
