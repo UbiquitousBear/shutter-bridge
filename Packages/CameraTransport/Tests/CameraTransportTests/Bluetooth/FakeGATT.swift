@@ -92,10 +92,10 @@ final class FakeGATTLink: GATTLink {
     }
 
     let peripheral: PeripheralID
-    let clock: ManualClock
+    let clock: VirtualClock
     private let box: Mutex<State>
 
-    init(clock: ManualClock, initialStatus: UInt8 = 0, peripheral: PeripheralID = PeripheralID(UUID())) {
+    init(clock: VirtualClock, initialStatus: UInt8 = 0, peripheral: PeripheralID = PeripheralID(UUID())) {
         self.clock = clock
         self.peripheral = peripheral
         box = Mutex(State(statusHistory: [(at: .zero, status: initialStatus)]))

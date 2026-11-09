@@ -4,7 +4,7 @@
 
 import Synchronization
 
-final class ManualClock: Clock, Sendable {
+final class VirtualClock: Clock, Sendable {
     struct Instant: InstantProtocol {
         var offset: Duration
         func advanced(by duration: Duration) -> Instant { Instant(offset: offset + duration) }
@@ -180,7 +180,7 @@ final class ManualClock: Clock, Sendable {
 }
 
 /// Runs `body` on its own task while the clock is driven, and returns its result.
-func driven<T: Sendable>(_ clock: ManualClock, _ body: @escaping @Sendable () async -> T) async -> T {
+func driven<T: Sendable>(_ clock: VirtualClock, _ body: @escaping @Sendable () async -> T) async -> T {
     let task = Task {
         let result = await body()
         clock.markFinished()

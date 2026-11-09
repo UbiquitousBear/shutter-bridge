@@ -14,7 +14,7 @@ struct WiFiHandoffTests {
     private let pause = HandoffTiming.afterSubscribe
 
     private func run(
-        _ link: FakeGATTLink, on clock: ManualClock, rewrite: Bool = false
+        _ link: FakeGATTLink, on clock: VirtualClock, rewrite: Bool = false
     ) async -> Result<HandoffResult, HandoffFailure> {
         await driven(clock) {
             let handoff = WiFiHandoff(clock: clock)
@@ -37,7 +37,7 @@ struct WiFiHandoffTests {
     // MARK: Order
 
     @Test func statusAlreadyTwoReadsTheDetailsAndWritesNothing() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         let result = try #require(success(await run(link, on: clock)))
         #expect(link.calls == fiveInOrder + [.read(.status), .read(.ssid), .read(.passphrase)])
@@ -48,7 +48,7 @@ struct WiFiHandoffTests {
 
     @Test func statusZeroSubscribesThenWritesThenWaitsForTwo() async throws {
         // 0 → 1 → 2, the typical timeline: acknowledged, then 1 at +0.09 s and 2 at +0.84 s.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { link in
             link.schedule(status: 1, after: .milliseconds(90))
@@ -69,7 +69,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func detailsAreReadWithTheirOwnTimeoutsAndNeverPrinted() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         let result = try #require(success(await run(link, on: clock)))
         #expect(link.timeouts(for: .status) == [HandoffTiming.statusRead])
@@ -82,7 +82,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func theWindowIsCountedFromStatusTwo() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { $0.schedule(status: 2, after: .seconds(1)) }
         let result = try #require(success(await run(link, on: clock)))
@@ -99,7 +99,7 @@ struct WiFiHandoffTests {
 
     @Test func theCameraGivingUpIsNoticedThreeSecondsAfterTheFallback() async {
         // 0 → 1 → 0: what the camera did without the five notifications (3 Nov 00:04).
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { link in
             link.schedule(status: 1, after: .milliseconds(90))
@@ -113,7 +113,7 @@ struct WiFiHandoffTests {
 
     @Test func aStatusThatBouncesBackAndForthDoesNotEndTheWaitEarly() async throws {
         // 0 → 1 → 0 → 1 → 2: the fallback timer is cancelled when the status leaves its earlier value again.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { link in
             link.schedule(status: 1, after: .milliseconds(90))
@@ -128,7 +128,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func silentNotificationsMeanReadingCC09OnceASecondFromThreeSecondsOn() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { link in
             link.schedule(status: 1, after: .milliseconds(90), notify: false)
@@ -144,7 +144,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aStatusThatNeverMovesTimesOutAtThirtySeconds() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         let outcome = await failure(run(link, on: clock))
         #expect(outcome == .timedOut(lastStatus: .terminated))
@@ -159,7 +159,7 @@ struct WiFiHandoffTests {
     @Test func aStatusNotificationFromTheSubscriptionsDoesNotCountAsSilenceBroken() async throws {
         // The camera sends status 0 while the switches go on, then nothing after the write: the polling still starts 3 s
         // after the acknowledgement, and status 2 at +4.2 s is found by the read at 5 s.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.schedule(status: 0, after: .milliseconds(300))
         link.onWrite { link in
@@ -176,7 +176,7 @@ struct WiFiHandoffTests {
     @Test func aStatusNotificationFromTheBaselineReadDoesNotCountAsSilenceBrokenEither() async throws {
         // The same, with the notification arriving while the baseline read is answered: queued when the write is due, and
         // emptied before it, as the spike did.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.announceDuringStatusReads([0])
         link.onWrite { link in
@@ -192,7 +192,7 @@ struct WiFiHandoffTests {
 
     @Test func aQueuedStatusTwoStopsTheWrite() async throws {
         // The read said 0, but a notification of status 2 came with it: the Wi-Fi is on, so nothing is written.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.announceDuringStatusReads([2])
         let result = try #require(success(await run(link, on: clock)))
@@ -202,7 +202,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aQueuedStatusOneSendsTheRunBackToWaiting() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.announceDuringStatusReads([1])
         link.schedule(status: 2, after: pause + .seconds(2))
@@ -214,7 +214,7 @@ struct WiFiHandoffTests {
 
     @Test func aFallbackToZeroDuringThePauseIsWrittenToAtOnce() async throws {
         // Status 1 at the start, 0 from 0.3 s: the baseline read after the pause sees 0, and the write follows it.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 1)
         link.schedule(status: 0, after: .milliseconds(300))
         link.onWrite { $0.schedule(status: 2, after: .milliseconds(800)) }
@@ -226,7 +226,7 @@ struct WiFiHandoffTests {
     // MARK: The pause after the switches
 
     @Test func aDropDuringThePauseEndsTheRunBeforeAnyReadOrWrite() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.scheduleDrop(after: .milliseconds(500))
         let outcome = await failure(run(link, on: clock))
@@ -237,14 +237,14 @@ struct WiFiHandoffTests {
     }
 
     @Test func theRewriteHasNoPauseBecauseItHasNoSwitches() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         _ = try #require(success(await run(link, on: clock, rewrite: true)))
         #expect(clock.elapsed == .zero)
     }
 
     @Test func launchingIsWaitedOutWithoutWriting() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 1)
         link.schedule(status: 2, after: pause + .seconds(1))
         let result = try #require(success(await run(link, on: clock)))
@@ -254,7 +254,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func launchingThatFallsBackToZeroIsThenWrittenTo() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 1)
         link.schedule(status: 0, after: pause + .milliseconds(500))
         link.onWrite { link in
@@ -268,7 +268,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func terminatingWaitsForZeroAndThenWrites() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 3)
         link.schedule(status: 0, after: .seconds(2))
         link.onWrite { link in
@@ -285,7 +285,7 @@ struct WiFiHandoffTests {
     // MARK: The link going away
 
     @Test func aDropAfterTheWriteIsAnOutcomeNotAGenericError() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { link in
             link.schedule(status: 1, after: .milliseconds(90))
@@ -298,7 +298,7 @@ struct WiFiHandoffTests {
 
     @Test func aDropThatTheWriteItselfReportsCountsAsAfterTheWrite() async {
         // Unknown whether the camera got it, so the caller must not assume the Wi-Fi is off.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.failWrite(with: .linkDropped)
         let outcome = await failure(run(link, on: clock))
@@ -306,7 +306,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aDropBeforeTheWriteSaysSo() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.failNotify(.battery, with: .linkDropped)
         let outcome = await failure(run(link, on: clock))
@@ -318,7 +318,7 @@ struct WiFiHandoffTests {
 
     @Test func aWiFiOffRefusalIsRetriedEveryTwoSecondsWhileTheStatusStaysTwo() async throws {
         // ATT 0x9D on CC06 means the Wi-Fi is off (5 Nov 02:21); the camera may need a moment after status 2.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.failReads(.ssid, with: [.wifiOff, .wifiOff])
         let result = try #require(success(await run(link, on: clock)))
@@ -327,7 +327,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func theDetailsGiveUpAfterTwentySecondsOfRetries() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.failReads(.ssid, with: Array(repeating: .wifiOff, count: 50))
         let outcome = await failure(run(link, on: clock))
@@ -340,7 +340,7 @@ struct WiFiHandoffTests {
 
     @Test func readsThatTimeOutAreTriedThreeTimesWhateverTheWindow() async {
         // Each read gets its 15 s, so the 20 s window would allow one or two tries: the guided run's minimum of three holds.
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.delayReads(.ssid, by: .seconds(20))
         let outcome = await failure(run(link, on: clock))
@@ -351,7 +351,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func theMinimumOfThreeTriesEndsWhenTheStatusLeavesTwo() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.delayReads(.ssid, by: .seconds(20))
         link.schedule(status: 3, after: pause + .seconds(16))
@@ -361,7 +361,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func detailsThatAreNotANetworkAreRetriedThenReportedByLengthOnly() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.set(Data([0x01, 0x02, 0x03]), for: .ssid) // the prefix and no text
         let outcome = await failure(run(link, on: clock))
@@ -370,7 +370,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func theStatusLeavingTwoDuringTheRetriesIsALapse() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.failReads(.ssid, with: Array(repeating: .wifiOff, count: 50))
         link.schedule(status: 3, after: pause + .seconds(1))
@@ -380,7 +380,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aTimedOutReadOfTheDetailsIsRetriedToo() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.failReads(.passphrase, with: [.timedOut])
         let result = try #require(success(await run(link, on: clock)))
@@ -391,7 +391,7 @@ struct WiFiHandoffTests {
     // MARK: Pairing problems, odd statuses, cancellation
 
     @Test func aRefusedBaselineReadIsNotPairedAndNothingIsWritten() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         link.failReads(.status, with: [.notPaired])
         let outcome = await failure(run(link, on: clock))
@@ -400,7 +400,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aRefusedWriteIsNotPaired() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.failWrite(with: .notPaired)
         let outcome = await failure(run(link, on: clock))
@@ -408,7 +408,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aSwitchThatTimesOutIsReportedAndTheRunGoesOn() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.failNotify(.battery, with: .timedOut)
         let result = try #require(success(await run(link, on: clock)))
@@ -417,7 +417,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aSwitchRefusedAsNotPairedStopsTheRun() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         link.failNotify(.media, with: .notPaired)
         let outcome = await failure(run(link, on: clock))
@@ -426,7 +426,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func statusBytesThatDontDecodeAreRefused() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         link.set(Data([0x00, 0x01]), for: .status) // a zero length byte: the strict decoder refuses it
         #expect(await failure(run(link, on: clock)) == .statusUnreadable)
@@ -434,7 +434,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aStatusWithoutTheWiFiTagIsRefused() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         link.set(Data([0x03, 0x00, 0x02, 0x01]), for: .status) // tag 0x0002 only
         #expect(await failure(run(link, on: clock)) == .statusUnreadable)
@@ -442,7 +442,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aStatusOutsideZeroToThreeIsNotGuessedAt() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 7)
         let outcome = await failure(run(link, on: clock))
         #expect(outcome == .unexpectedStatus(7))
@@ -450,7 +450,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func cancellingWhileWaitingEndsTheRunAsCancelled() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         let task = Task {
             do throws(HandoffFailure) {
@@ -471,7 +471,7 @@ struct WiFiHandoffTests {
     // MARK: Writing again
 
     @Test func rewriteDoesNotSubscribeAgainAndWritesWhenTheWiFiIsOff() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 0)
         link.onWrite { link in
             link.schedule(status: 1, after: .milliseconds(90))
@@ -483,7 +483,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func rewriteLeavesAWiFiThatIsStillOnAlone() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 2)
         let result = try #require(success(await run(link, on: clock, rewrite: true)))
         #expect(link.count(.write(.wifiOn)) == 0)
@@ -491,7 +491,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func rewriteWaitsOutTerminatingBeforeItWrites() async throws {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock, initialStatus: 3)
         link.schedule(status: 0, after: .milliseconds(1500))
         link.onWrite { $0.schedule(status: 2, after: .milliseconds(900)) }
@@ -502,7 +502,7 @@ struct WiFiHandoffTests {
     // MARK: Release
 
     @Test func releaseTurnsTheFiveOffInOrder() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         let report = await WiFiHandoff(clock: clock).release(link)
         #expect(report.turnedOff == CameraControlCharacteristic.sonyNotificationSet)
@@ -511,7 +511,7 @@ struct WiFiHandoffTests {
 
     @Test func unknownWhileAnotherAppHoldsTheLinkIsHarmless() async {
         // Measured with Creators' App: only CC0E confirmed off; the other four came back "unknown" (code 0).
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         link.setAnotherAppHoldsLink(true)
         for c in [CameraControlCharacteristic.status, .battery, .media, .pushTransfer] {
@@ -524,7 +524,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func unknownWithNoOtherAppIsAFailureNotAShrug() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         link.failNotify(.battery, with: .other(0))
         let report = await WiFiHandoff(clock: clock).release(link)
@@ -534,7 +534,7 @@ struct WiFiHandoffTests {
     }
 
     @Test func aDropEndsTheReleaseWithoutTryingTheRest() async {
-        let clock = ManualClock()
+        let clock = VirtualClock()
         let link = FakeGATTLink(clock: clock)
         link.failNotify(.media, with: .linkDropped)
         let report = await WiFiHandoff(clock: clock).release(link)
