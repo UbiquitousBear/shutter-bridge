@@ -77,6 +77,31 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
         return added
     }
 
+    /// Lets `elapsed` time go by for the whole-card behaviour (`PTPIPResponderCore.advance(by:)`): a held
+    /// Init_Command_Ack is sent, StoreAdded goes out when the card appears, and an idle session is dropped (both
+    /// channels end with `.closed`, as the camera closing them does). Time passes only through this, so a test that
+    /// drives a link on a virtual clock moves the camera with it.
+    public func advance(by elapsed: Duration) {
+        let wake = state.withLock { s in Self.apply(s.core.advance(by: elapsed), to: &s, packetSize: packetSize) }
+        wake.forEach { $0() }
+    }
+
+    /// The camera drops its card from the session: StoreRemoved on the event channel, and the card's operations
+    /// answer StoreNotAvailable from then on (`PTPResponder.dropCard()`).
+    public func dropCard() {
+        let wake = state.withLock { s in Self.apply(s.core.dropCard(), to: &s, packetSize: packetSize) }
+        wake.forEach { $0() }
+    }
+
+    /// The card comes back: StoreAdded on the event channel (`PTPResponder.restoreCard()`).
+    public func restoreCard() {
+        let wake = state.withLock { s in Self.apply(s.core.restoreCard(), to: &s, packetSize: packetSize) }
+        wake.forEach { $0() }
+    }
+
+    /// Every command the camera has answered, in order (`PTPResponder.commandsAnswered`).
+    public var commandsAnswered: [PTPOperationCode] { state.withLock { $0.core.responder.commandsAnswered } }
+
     /// Lets the caller script the responder (`PTPResponder.inject(_:forNext:times:)` and the like).
     public func withResponder<T: Sendable>(_ body: (inout PTPResponder) -> T) -> T {
         state.withLock { s in s.core.withResponder(body) }

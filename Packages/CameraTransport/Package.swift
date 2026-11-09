@@ -3,9 +3,10 @@ import PackageDescription
 
 // The camera links: the `CameraLink` protocol and the values it speaks in. `USBLink` and `USBCameraBrowser`
 // (ImageCaptureCore, section 2 of docs/iteration-1-backlog.md) sit behind `#if canImport(ImageCaptureCore) && os(iOS)`
-// with their pure logic outside it; `IPLink` (Network.framework, Iteration 3) and `BluetoothCentral` (CoreBluetooth,
-// behind `#if canImport(CoreBluetooth) && os(iOS)`, Iteration 4) follow the same rule, so the transport-neutral part
-// keeps building and testing on Linux.
+// with their pure logic outside it. `IPLink` (Wi-Fi, Iteration 3) is pure Swift over a `ByteChannel`; only its
+// Network.framework channel is Apple-only. `BluetoothCentral` (CoreBluetooth, behind
+// `#if canImport(CoreBluetooth) && os(iOS)`, Iteration 4) follows the same rule, so the transport-neutral part keeps
+// building and testing on Linux.
 let package = Package(
     name: "CameraTransport",
     platforms: [
