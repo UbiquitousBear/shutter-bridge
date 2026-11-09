@@ -57,7 +57,7 @@ struct IPLinkOverNetworkTests {
         /// Opens the link, moving the virtual clock through the plan's waits.
         func open() async throws {
             let link = link
-            let result = await clock.drive(within: IPLinkOverNetworkTests.horizon) {
+            let result = try await clock.drive(within: IPLinkOverNetworkTests.horizon) {
                 () async -> Result<Void, CameraLinkFailure> in
                 do throws(CameraLinkFailure) {
                     try await link.open()

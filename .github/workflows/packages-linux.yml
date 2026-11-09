@@ -25,6 +25,9 @@ jobs:
   test:
     name: ${{ matrix.package }}
     runs-on: ubuntu-latest
+    # A package's build and tests take about two minutes. The limit ends a hung test run in good time instead of
+    # GitHub's six-hour default (a Swift Testing time limit can't end a wait that ignores cancellation).
+    timeout-minutes: 20
     container: swift:6.4-noble   # Swift 6.4, the compiler in Xcode 27
     strategy:
       fail-fast: false

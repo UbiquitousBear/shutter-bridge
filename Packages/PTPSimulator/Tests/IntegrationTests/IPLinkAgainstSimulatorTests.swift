@@ -63,7 +63,7 @@ struct IPLinkAgainstSimulatorTests {
         /// Opens the link, moving the clock through the plan's waits.
         func open() async throws {
             let link = link
-            let result = await clock.drive(within: IPLinkAgainstSimulatorTests.openHorizon) {
+            let result = try await clock.drive(within: IPLinkAgainstSimulatorTests.openHorizon) {
                 () async -> Result<Void, CameraLinkFailure> in
                 do throws(CameraLinkFailure) {
                     try await link.open()
@@ -382,9 +382,9 @@ struct IPLinkAgainstSimulatorTests {
     @Test func theKeepAliveHoldsTheSessionPastTheIdleDrop() async throws {
         let bench = try Bench()
         try await bench.open()
-        await bench.clock.waitUntil { $0.sleepers > 0 }  // the keep-alive timer, armed as the open ended
+        try await bench.clock.waitUntil { $0.sleepers > 0 }  // the keep-alive timer, armed as the open ended
         // 40 s without a call: a GetDeviceInfo every 10 s keeps the camera's 30 s idle drop away.
-        for _ in 1 ... 4 { await bench.clock.tick(.seconds(10)) }
+        for _ in 1 ... 4 { try await bench.clock.tick(.seconds(10)) }
         #expect(bench.camera.isConnected)
         #expect(await bench.link.diagnostics.keepAlivesAnswered == 4)
         #expect(Array(bench.camera.commandsAnswered.suffix(4)) == Array(repeating: .getDeviceInfo, count: 4))
@@ -422,7 +422,7 @@ struct IPLinkAgainstSimulatorTests {
             _ = try await bench.link.thumbnail(of: item.id)
             _ = try await bench.link.bytes(of: item.id, into: bench.directory)
         }
-        await bench.clock.tick(.seconds(10))
+        try await bench.clock.tick(.seconds(10))
         await bench.link.close()
         let info = try #require(await bench.link.deviceInfo)
         let sent = bench.camera.commandsAnswered
