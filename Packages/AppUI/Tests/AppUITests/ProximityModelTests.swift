@@ -35,12 +35,18 @@ private final class FakeScanner: ProximityScanning, @unchecked Sendable {
     func send(_ power: BluetoothPower) { powerSink.yield(power) }
 }
 
-/// Records every ask: `.some(nil)` is a cancel.
+/// Records every ask: `.some(nil)` is a cancel. `settles` counts the asks made before each wait to settle.
 private final class FakeRefresh: ProximityRefreshScheduling, @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [Date?] = []
+    private var settled: [Int] = []
     var asks: [Date?] { lock.withLock { recorded } }
+    var settles: [Int] { lock.withLock { settled } }
     func scheduleRefresh(earliest date: Date?) { lock.withLock { recorded.append(date) } }
+    func settle(within limit: Duration) async {
+        #expect(limit == ProximityModel.refreshSettleLimit)
+        lock.withLock { settled.append(recorded.count) }
+    }
 }
 
 private final class ProximityRecordingLog: BenchLog, @unchecked Sendable {
@@ -160,6 +166,8 @@ struct ProximityModelTests {
         #expect(h.scanner.calls == [.start])
         // Asked again: running the task used the request up, and the first submit may have failed.
         #expect(h.refresh.asks == [nil, rearm, rearm])
+        // And it waited for that ask to settle before ending (iOS may suspend the app once the task is complete).
+        #expect(h.refresh.settles == [3])
         await h.model.appBecameActive()
         await h.model.handle(h.report())
         let second = h.now.date.addingTimeInterval(1800)
@@ -169,6 +177,8 @@ struct ProximityModelTests {
         await h.model.refreshTaskRan()
         #expect(h.scanner.calls == [.start, .restart, .restart])
         #expect(h.refresh.asks == [nil, rearm, rearm, nil, second, nil])
+        // Only the refresh task waits: the reports and coming to the front in between didn't.
+        #expect(h.refresh.settles == [3, 6])
     }
 
     @Test func comingToTheFrontRestarts() async {
@@ -204,6 +214,9 @@ struct ProximityModelTests {
         await h.model.refreshTaskRan()
         await h.model.handle(power: .poweredOn)
         #expect(h.scanner.calls == [.start, .stop])
+        // Switched off, the task still cancels the refresh and waits for that to settle.
+        #expect(h.refresh.asks.last == .some(nil))
+        #expect(h.refresh.settles == [h.refresh.asks.count])
     }
 
     @Test func launchReadsTheScannersReportsAndPower() async {

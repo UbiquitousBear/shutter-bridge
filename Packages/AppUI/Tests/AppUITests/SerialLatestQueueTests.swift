@@ -110,4 +110,63 @@ struct SerialLatestQueueTests {
         #expect(recorder.mostAtOnce == 1)
         #expect(recorder.applied.count <= 202)
     }
+
+    @Test("Idle at once when nothing was sent, or everything sent has been applied")
+    func idleWhenNothingIsWaiting() async {
+        let recorder = ApplyRecorder()
+        let queue = SerialLatestQueue<Int?> { await recorder.apply($0) }
+        #expect(await queue.idle(within: .seconds(1)))
+        queue.send(1)
+        #expect(await queue.idle(within: .seconds(5)))
+        #expect(recorder.applied == [1])
+    }
+
+    @Test("Idle waits for the value being applied and for the newest that replaced the waiting ones")
+    func idleWaitsForTheHeldApplyAndTheNewest() async {
+        let recorder = ApplyRecorder()
+        let queue = SerialLatestQueue<Int?> { await recorder.apply($0) }
+        recorder.hold()
+        queue.send(1)
+        #expect(await eventually { recorder.started == [1] })
+        queue.send(2)   // replaced by 3 before it is taken
+        queue.send(3)
+        let waiting = Task { await queue.idle(within: .seconds(20)) }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(recorder.applied.isEmpty)
+        recorder.release()
+        #expect(await waiting.value)
+        // Idle means the newest value has been applied, not just the one held.
+        #expect(recorder.applied == [1, 3])
+    }
+
+    @Test("Idle gives up after its limit, or when its task is cancelled, while an apply is held")
+    func idleGivesUp() async {
+        let recorder = ApplyRecorder()
+        let queue = SerialLatestQueue<Int?> { await recorder.apply($0) }
+        recorder.hold()
+        queue.send(1)
+        #expect(await eventually { recorder.started == [1] })
+        #expect(await queue.idle(within: .milliseconds(100)) == false)
+        let cancelled = Task { await queue.idle(within: .seconds(20)) }
+        cancelled.cancel()
+        #expect(await cancelled.value == false)
+        recorder.release()
+        #expect(await queue.idle(within: .seconds(5)))
+    }
+
+    @Test("Releasing the queue applies the value being applied and the newest one waiting, then nothing more")
+    func releasingTheQueue() async {
+        let recorder = ApplyRecorder()
+        var queue: SerialLatestQueue<Int?>? = SerialLatestQueue { await recorder.apply($0) }
+        recorder.hold()
+        queue?.send(1)
+        #expect(await eventually { recorder.started == [1] })
+        queue?.send(2)
+        queue?.send(3)
+        queue = nil
+        recorder.release()
+        #expect(await eventually { recorder.applied == [1, 3] })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(recorder.applied == [1, 3])
+    }
 }
