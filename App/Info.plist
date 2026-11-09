@@ -3,9 +3,10 @@
 <!--
   Info.plist for Shutter Bridge. It sits outside the synchronized ShutterBridge/ folder so it isn't copied into the
   app as a resource; the project points at it with INFOPLIST_FILE. Only what the built features need: Iteration 1's keys;
-  for the camera's Bluetooth link (Iteration 3, W10), the Bluetooth permission and the bluetooth-central background mode;
-  and for the proximity scan (Iteration 4, W17), the fetch background mode and the app-refresh task's identifier. No local
-  network, other background modes or Hotspot Configuration until the change that uses them.
+  for the camera's Bluetooth link (W10), the Bluetooth permission and the bluetooth-central background mode; for imports
+  that go on while the app is away (W13), the continued task's identifier; and for the proximity scan (W17), the fetch
+  background mode and the app-refresh task's identifier. No local network, other background modes or Hotspot
+  Configuration until the change that uses them.
 -->
 <plist version="1.0">
 <dict>
@@ -64,9 +65,11 @@
 		<string>fetch</string>
 	</array>
 	<!-- Every BGTaskScheduler identifier the app registers; registering one not listed here raises an exception. The
-	     proximity scan's app-refresh task (W17, ProximityModel.refreshTaskIdentifier). -->
+	     continued task each import runs in (W13, BGContinuedProcessingTask, ContinuedImportRunner.identifier; needs no
+	     background mode) and the proximity scan's app-refresh task (W17, ProximityModel.refreshTaskIdentifier). -->
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
+		<string>net.shamil.shutter-bridge.import</string>
 		<string>net.shamil.shutter-bridge.proximity-refresh</string>
 	</array>
 	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
