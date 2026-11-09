@@ -43,6 +43,9 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
     public var staleHandlesRefused = 0
     /// Transfers cut off by `abortCurrentTransfer()`.
     public var transfersAborted = 0
+    /// GetDevicePropValue commands sent over the link's life. Expected 0: the whole-card session never answers one, and
+    /// decision 6 sends only what DeviceInfo lists (wireless plan section 4, check 9).
+    public var devicePropValueReads = 0
 
     /// How many ignored event codes are kept for the log. A choice, `unverified`: no measurement or source gives 64; it
     /// only bounds the list, and the camera sent two 0xC225 events on a reopen in the whole spike.
@@ -174,6 +177,10 @@ public actor IPLink: CameraLink, TransferAborting {
     private var objects: [PTPObjectHandle: KnownObject] = [:]
     private var recorded = IPLinkDiagnostics()
     private var retiredKeepAlives = (answered: 0, failed: 0)
+    /// GetDevicePropValue commands sent by sessions already dropped.
+    private var retiredDevicePropValueReads = 0
+    /// The bench log's events (W20); `.none` records nothing.
+    private let trace: TransportTrace
     /// `bytes` calls under way, for `abortCurrentTransfer()`.
     private var activeDownloads = 0
     /// A handle known from a caller's items or an earlier session has named another file (a swapped card): from then
@@ -202,13 +209,18 @@ public actor IPLink: CameraLink, TransferAborting {
     ///     reopen pauses.
     ///   - connectionClock: The PTP/IP connection's time limits (connect, Init acks, replies) run on it; `clock` when
     ///     nil. Tests drive the session's waits on a virtual clock and leave the transport's limits on a real one.
+    ///   - trace: the bench log's events (W20): each open's times and listing poll, each keep-alive with its spacing, each
+    ///     0x9211 resume and its offset, a lost session, and the diagnostics at close. Recording changes nothing the link
+    ///     does or when.
     public init(descriptor: CameraDescriptor, configuration: Configuration, channels: any ByteChannelFactory,
-                clock: any Clock<Duration> = ContinuousClock(), connectionClock: (any Clock<Duration>)? = nil) {
+                clock: any Clock<Duration> = ContinuousClock(), connectionClock: (any Clock<Duration>)? = nil,
+                trace: TransportTrace = .none) {
         self.descriptor = descriptor
         self.configuration = configuration
         self.channels = channels
         self.clock = clock
         self.connectionClock = connectionClock ?? clock
+        self.trace = trace
     }
 
     /// `capabilitiesWithoutResume` until the first DeviceInfo, then `capabilities(for:)` the latest one: resume is
@@ -223,13 +235,16 @@ public actor IPLink: CameraLink, TransferAborting {
             var diagnostics = recorded
             var answered = retiredKeepAlives.answered
             var failed = retiredKeepAlives.failed
+            var propReads = retiredDevicePropValueReads
             if let session {
                 let counts = await session.keepAliveCounts
                 answered += counts.answered
                 failed += counts.failed
+                propReads += await session.devicePropValueReads
             }
             diagnostics.keepAlivesAnswered = answered
             diagnostics.keepAlivesFailed = failed
+            diagnostics.devicePropValueReads = propReads
             return diagnostics
         }
     }
@@ -265,6 +280,10 @@ public actor IPLink: CameraLink, TransferAborting {
     private func runOpen() async throws(CameraLinkFailure) {
         let reopening = hadSession
         let plan = configuration.plan(reopening: reopening)
+        // The plan reopens on a session this link had or on one the caller says the camera had (a new link inside the
+        // stay); the bench log labels both "reopening". Only the link's own earlier session earns the pause.
+        let tracedReopening = reopening || configuration.reopening
+        let started = ClockMark.now(on: clock)
         if reopening { try await pause(plan.reconnectPause) }
         var retried = false
         while true {
@@ -282,6 +301,7 @@ public actor IPLink: CameraLink, TransferAborting {
                 }
                 throw IPFailureMapping.failure(error, during: .open)
             }
+            trace(.linkConnected(after: started.elapsed, reopening: tracedReopening))
             do throws(CameraLinkFailure) {
                 try await runPlan(plan, on: session)
                 try requireCurrent(session)
@@ -301,6 +321,9 @@ public actor IPLink: CameraLink, TransferAborting {
                 await discard(session)
                 throw CameraLinkFailure(.disconnected, detail: "open: the session ended as it opened")
             }
+            trace(.linkOpened(after: started.elapsed, reopening: tracedReopening,
+                              wholeCard: sessionKind == .wholeCardContentsTransfer, polls: recorded.pollAttempts,
+                              listedAfter: recorded.timeToListing, pollTimedOut: recorded.pollTimedOut))
             return
         }
     }
@@ -321,7 +344,7 @@ public actor IPLink: CameraLink, TransferAborting {
         let session = IPSession(endpoint: configuration.endpoint, guid: configuration.guid,
                                 friendlyName: configuration.friendlyName, timing: configuration.timing,
                                 keepAlive: configuration.keepAlive, channels: channels, clock: clock,
-                                connectionClock: connectionClock)
+                                connectionClock: connectionClock, trace: trace)
         let signals = session.signals
         consumers[epoch] = Task { [weak self] in
             for await signal in signals { await self?.handle(signal, epoch: epoch) }
@@ -344,6 +367,7 @@ public actor IPLink: CameraLink, TransferAborting {
             let counts = await session.keepAliveCounts
             retiredKeepAlives.answered += counts.answered
             retiredKeepAlives.failed += counts.failed
+            retiredDevicePropValueReads += await session.devicePropValueReads
         }
         await session.close(sendingCloseSession: false)
     }
@@ -703,6 +727,7 @@ public actor IPLink: CameraLink, TransferAborting {
                 // The camera refused the first 0x9211 read with the session up and the card there: GetObject still
                 // reads the file, so it is copied again from 0 into the same file, as `.restart` does.
                 recorded.resumeFallbacks += 1
+                trace(.resumeRefused(offset: offset))
                 return try await getObject(handle, into: resuming.file, objectSize: object.size, on: session,
                                            checkpoint: checkpointing, progress: progress)
             case .complete:
@@ -828,6 +853,8 @@ public actor IPLink: CameraLink, TransferAborting {
             throw Self.writeFailure(error)
         }
         recorded.resumes += 1
+        trace(.resumeStarted(offset: offset, size: objectSize))
+        var reads = 0
         var reader = IPPartialReader(offset: offset, objectSize: objectSize,
                                      chunkSize: configuration.partialReadChunkSize)
         /// Ends the copy on a failure, with a checkpoint at `resumable` if it is further than the last.
@@ -840,6 +867,7 @@ public actor IPLink: CameraLink, TransferAborting {
         }
         while let chunk = reader.nextChunk {
             recorded.partialReads += 1
+            reads += 1
             let reply: PTPIPConnection.Reply
             do throws(PTPIPConnectionFailure) {
                 reply = try await session.perform(.chunk, sink: { data in
@@ -885,6 +913,7 @@ public actor IPLink: CameraLink, TransferAborting {
         if let closeError = file.finish().failure {
             throw stop(at: reader.offset, Self.writeFailure(closeError))
         }
+        trace(.resumeFinished(reads: reads))
         return url
     }
 
@@ -940,9 +969,14 @@ public actor IPLink: CameraLink, TransferAborting {
             let counts = await session.keepAliveCounts
             retiredKeepAlives.answered += counts.answered
             retiredKeepAlives.failed += counts.failed
+            retiredDevicePropValueReads += await session.devicePropValueReads
             await session.close(sendingCloseSession: true)
         }
         fanOut.finish()
+        if trace.isOn {
+            let seen = await diagnostics
+            trace(.linkClosed(seen))
+        }
     }
 
     // MARK: - Signals
@@ -959,16 +993,17 @@ public actor IPLink: CameraLink, TransferAborting {
             fanOut.send(.waitingForLocalNetwork)
         case let .lost(failure):
             guard let session else { return }
-            await lose(session, because: "\(failure)")
+            await lose(session, because: "\(failure)", failure: failure)
         }
     }
 
     /// The open session ended under the link: `.sessionLost`, and it is dropped so the next `open()` reopens. While
     /// opening, the open's own calls fail and say why; only the current, open session is reported lost.
-    private func lose(_ session: IPSession, because reason: String) async {
+    private func lose(_ session: IPSession, because reason: String, failure: PTPIPConnectionFailure? = nil) async {
         guard sessionReady, self.session === session, !closed else { return }
         recorded.sessionsLost += 1
         recorded.lastLoss = reason
+        trace(.linkLost(failure))
         fanOut.send(.sessionLost)
         await discard(session)
     }

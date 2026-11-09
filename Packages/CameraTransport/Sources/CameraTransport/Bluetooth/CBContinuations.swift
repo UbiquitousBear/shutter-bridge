@@ -24,12 +24,14 @@ enum GATTWaitKey: Hashable, Sendable {
     case write(UUID, CameraControlCharacteristic)
     /// `didUpdateNotificationStateFor`.
     case notify(UUID, CameraControlCharacteristic)
+    /// `didReadRSSI` (the bench log's RSSI read, W20).
+    case rssi(UUID)
 
     /// The peripheral the wait is about, or nil for `power` and `scan`.
     var peripheral: UUID? {
         switch self {
         case .power, .scan: nil
-        case .connect(let id), .services(let id), .characteristics(let id): id
+        case .connect(let id), .services(let id), .characteristics(let id), .rssi(let id): id
         case .read(let id, _), .write(let id, _), .notify(let id, _): id
         }
     }
@@ -43,6 +45,8 @@ enum GATTCallOutcome: Sendable, Equatable {
     case value(Data)
     /// A notification switch was answered; whether notifications are now on, as iOS reported it in the callback.
     case notifying(Bool)
+    /// An RSSI read was answered, in dBm as Core Bluetooth gave it (127: none).
+    case signal(Int)
     /// The callback's error, mapped; or `.timedOut` (the call's limit passed) or `.cancelled` (the calling task was cancelled).
     case failed(GATTFailure)
 }

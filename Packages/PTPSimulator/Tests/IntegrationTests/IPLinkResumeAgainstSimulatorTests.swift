@@ -23,9 +23,9 @@ struct IPLinkResumeAgainstSimulatorTests {
     static let chunk: UInt32 = 16 * 1024
 
     /// A bench whose link reads 16 KiB chunks.
-    static func bench(frames: [ScriptedCard.Frame] = [.rawPlusJPEG, .jpeg, .raw], deviceInfo: PTPDeviceInfo? = nil)
-        throws -> LinkBench {
-        try LinkBench(frames: frames, deviceInfo: deviceInfo) { $0.partialReadChunkSize = Self.chunk }
+    static func bench(frames: [ScriptedCard.Frame] = [.rawPlusJPEG, .jpeg, .raw], deviceInfo: PTPDeviceInfo? = nil,
+                      trace: TransportTrace = .none) throws -> LinkBench {
+        try LinkBench(frames: frames, deviceInfo: deviceInfo, trace: trace) { $0.partialReadChunkSize = Self.chunk }
     }
 
     /// The camera's whole content of `item`.

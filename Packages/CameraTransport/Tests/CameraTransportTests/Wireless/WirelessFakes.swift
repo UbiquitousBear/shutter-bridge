@@ -432,7 +432,7 @@ final class Rig: Sendable {
     let session: WirelessSession
     let phases: PhaseLog
 
-    init(knownPeripheral: Bool = true) {
+    init(knownPeripheral: Bool = true, trace: TransportTrace = .none) {
         link = FakeGATTLink(clock: clock, initialStatus: 2, peripheral: peripheral)
         connector = ScriptedConnector(clock: clock, [.success(link)])
         joiner = FakeJoiner(clock: clock, journal: journal)
@@ -446,7 +446,7 @@ final class Rig: Sendable {
             openLink: { (reopening: Bool) async throws(CameraLinkFailure) -> any CameraLink in
                 try await opener.open(reopening: reopening)
             },
-            clock: clock, handoff: handoff)
+            clock: clock, handoff: handoff, trace: trace)
         phases = PhaseLog(session.phases)
     }
 
@@ -508,4 +508,12 @@ func drive<T: Sendable>(_ clock: VirtualClock, _ body: @escaping @Sendable () as
         await clock.waitUntil { _, generation, _ in state.done || generation >= before + 2 }
     }
     return await task.value
+}
+
+/// Collects trace events in the order they were recorded.
+final class TraceRecorder: Sendable {
+    private let events = Mutex<[TransportTraceEvent]>([])
+
+    var trace: TransportTrace { TransportTrace { [self] event in events.withLock { $0.append(event) } } }
+    var all: [TransportTraceEvent] { events.withLock { $0 } }
 }

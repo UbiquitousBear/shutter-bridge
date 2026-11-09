@@ -26,6 +26,8 @@ extension WiFiCameraSource: WiFiLinkObserving {}
 ///   again when it doesn't open (so no half-open connection lingers between the session's tries).
 /// - No serial is given to the link (`knownSerial` nil): the app keeps only the serial's hash, as the key, and the source
 ///   compares that after the open; within one link's life the link holds every reopen to the first session's serial.
+/// - Every session and link records its steps to `trace` (W20; the app's is `TransportTrace.bench(_:)` over the bench log),
+///   which changes nothing they do.
 public final class WirelessConnections: WiFiConnecting, Sendable {
     private struct State {
         var sessions: [CameraDescriptor.ID: WirelessSession] = [:]
@@ -38,6 +40,7 @@ public final class WirelessConnections: WiFiConnecting, Sendable {
     private let foreground: any ForegroundSignal
     private let channels: any ByteChannelFactory
     private let clock: any Clock<Duration>
+    private let trace: TransportTrace
     private let state = Mutex(State())
 
     /// - Parameters:
@@ -47,15 +50,17 @@ public final class WirelessConnections: WiFiConnecting, Sendable {
     ///   - foreground: the scene (`SceneForegroundSignal`).
     ///   - channels: TCP (`NWByteChannelFactory`, Wi-Fi only).
     ///   - clock: the sessions' and the links' waits.
+    ///   - trace: the sessions' and the links' bench-log events (`TransportTrace.bench(_:)` in the app).
     public init(connector: any GATTConnector, joiner: any HotspotJoining, path: any WiFiPathWatching,
                 foreground: any ForegroundSignal, channels: any ByteChannelFactory,
-                clock: any Clock<Duration> = ContinuousClock()) {
+                clock: any Clock<Duration> = ContinuousClock(), trace: TransportTrace = .none) {
         self.connector = connector
         self.joiner = joiner
         self.path = path
         self.foreground = foreground
         self.channels = channels
         self.clock = clock
+        self.trace = trace
     }
 
     /// Forwards each new link's events to `observer` before the link opens (the source, once it exists). Held weakly.
@@ -73,7 +78,7 @@ public final class WirelessConnections: WiFiConnecting, Sendable {
                     guard let self else { throw CameraLinkFailure(.disconnected, detail: "wifi: the app let go") }
                     return try await self.openLink(for: camera, endpoint: .cameraNetwork, reopening: reopening)
                 },
-                clock: clock)
+                clock: clock, trace: trace)
             s.sessions[camera.id] = made
             return made
         }
@@ -97,7 +102,8 @@ public final class WirelessConnections: WiFiConnecting, Sendable {
         async throws(CameraLinkFailure) -> any CameraLink {
         var configuration = IPLink.Configuration(guid: camera.guid, endpoint: endpoint)
         configuration.reopening = reopening
-        let link = IPLink(descriptor: camera.descriptor, configuration: configuration, channels: channels, clock: clock)
+        let link = IPLink(descriptor: camera.descriptor, configuration: configuration, channels: channels, clock: clock,
+                          trace: trace)
         let observer = state.withLock { $0.observer }
         await observer?.observe(link, for: camera.id)
         do throws(CameraLinkFailure) {

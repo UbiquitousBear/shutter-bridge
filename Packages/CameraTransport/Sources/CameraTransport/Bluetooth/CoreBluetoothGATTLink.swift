@@ -13,7 +13,7 @@ import Foundation
 /// - `anotherAppHoldsLink` is what iOS listed when the link was made: the camera was connected to the system (Creators'
 ///   App) before this app connected. It isn't updated afterwards.
 /// - Notifications carry only characteristics of 8000CC00 whose notifications are on, and never CC06, CC07 or CC0C.
-final class CoreBluetoothGATTLink: GATTLink {
+final class CoreBluetoothGATTLink: GATTLink, GATTSignalReading {
     let peripheral: PeripheralID
     let anotherAppHoldsLink: Bool
     private let central: BluetoothCentral
@@ -44,6 +44,10 @@ final class CoreBluetoothGATTLink: GATTLink {
 
     func disconnect() async {
         await central.disconnect(self)
+    }
+
+    func readSignalStrength(timeout: Duration) async -> Int? {
+        await central.readSignalStrength(timeout: timeout, on: self)
     }
 
     // MARK: From the central

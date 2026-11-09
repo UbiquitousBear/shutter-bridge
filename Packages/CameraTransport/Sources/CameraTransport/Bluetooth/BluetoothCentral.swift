@@ -56,6 +56,8 @@ enum CentralSignal: Sendable {
     case value(UUID, CameraControlCharacteristic, Data?, isNotifying: Bool, CBErrorInfo?)
     case wrote(UUID, CameraControlCharacteristic, CBErrorInfo?)
     case notificationState(UUID, CameraControlCharacteristic, isNotifying: Bool, CBErrorInfo?)
+    /// `didReadRSSI`: the answer to the bench log's RSSI read (W20).
+    case signal(UUID, rssi: Int, CBErrorInfo?)
     /// `didModifyServices` invalidated service 8000CC00 (a firmware change, or the camera re-listing its services).
     case cameraControlInvalidated(UUID)
 }
@@ -139,6 +141,10 @@ final class CentralBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDeleg
         guard let code = Self.code(of: characteristic) else { return }
         signals.yield(.notificationState(peripheral.identifier, code, isNotifying: characteristic.isNotifying,
                                          CBErrorInfo(error)))
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: (any Error)?) {
+        signals.yield(.signal(peripheral.identifier, rssi: RSSI.intValue, CBErrorInfo(error)))
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
@@ -383,7 +389,7 @@ public actor BluetoothCentral: GATTConnector {
         switch outcome {
         case .value(let data): return data
         case .failed(let failure): throw failure
-        case .done, .notifying: return Data()
+        case .done, .notifying, .signal: return Data()
         }
     }
 
@@ -419,8 +425,22 @@ public actor BluetoothCentral: GATTConnector {
         switch outcome {
         case .notifying(let now): if now != on { throw .other(0) }
         case .failed(let failure): throw failure
-        case .done, .value: return
+        case .done, .value, .signal: return
         }
+    }
+
+    /// The link's RSSI (`readRSSI()`), for the bench log only (W20): nil when the link has ended or isn't connected, the read
+    /// failed or timed out, or Core Bluetooth gave none (127). Waits on the broker like any call, so a drop, Bluetooth going
+    /// off or `disconnect` ends it; it sends nothing to the camera's characteristics.
+    func readSignalStrength(timeout: Duration, on link: CoreBluetoothGATTLink) async -> Int? {
+        let id = link.peripheral.uuid
+        guard let record = links[id], record.link === link, record.peripheral.state == .connected else { return nil }
+        let peripheral = record.peripheral
+        let outcome = await broker.call(.rssi(id), timeout: timeout) {
+            peripheral.readRSSI()
+        }
+        guard case .signal(let value) = outcome else { return nil }
+        return ProximityReport.rssi(fromCoreBluetooth: value)
     }
 
     /// Closes a link: its calls end with `.cancelled`, its state stream says `.dropped(.cancelled)`, and notifications still
@@ -598,7 +618,7 @@ public actor BluetoothCentral: GATTConnector {
         if let found { connecting.insert(found.identifier) }
         switch outcome {
         case .failed(let failure): throw failure
-        case .done, .value, .notifying:
+        case .done, .value, .notifying, .signal:
             guard let found else { throw .timedOut }
             return found
         }
@@ -685,6 +705,8 @@ public actor BluetoothCentral: GATTConnector {
             }
             let answer = error == nil ? GATTCallOutcome.notifying(isNotifying) : outcome(error, reading: characteristic)
             broker.answer(.notify(id, characteristic), answer)
+        case .signal(let id, let rssi, let error):
+            broker.answer(.rssi(id), error == nil ? .signal(rssi) : .failed(.other(0)))
         case .cameraControlInvalidated(let id):
             // The characteristics the link holds are no longer valid. Close it; the next connect discovers again.
             guard let record = links[id] else { return }

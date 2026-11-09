@@ -16,7 +16,7 @@ extension ClockMark {
 
 /// The public sequencer entry: runs a hand-off on whatever clock it was given.
 func performHandoff(
-    clock: any Clock<Duration>, link: any GATTLink, subscribe: Bool
+    clock: any Clock<Duration>, link: any GATTLink, subscribe: Bool, trace: TransportTrace
 ) async throws(HandoffFailure) -> HandoffResult {
-    try await performHandoffOnConcrete(clock: clock, link: link, subscribe: subscribe)
+    try await performHandoffOnConcrete(clock: clock, link: link, subscribe: subscribe, trace: trace)
 }
