@@ -21,6 +21,7 @@ actor CancellableLink: CameraLink {
 
     nonisolated let descriptor = CameraDescriptor(id: .init(rawValue: "cancellable"), name: "Cancellable",
                                                   mode: .usb(.massStorage))
+    nonisolated let capabilities = CameraLinkCapabilities.usb
     nonisolated var events: AsyncStream<CameraLinkEvent> { AsyncStream { $0.finish() } }
 
     private let card: [CameraItem]
@@ -43,7 +44,8 @@ actor CancellableLink: CameraLink {
     func thumbnail(of item: CameraItem.ID) throws(CameraLinkFailure) -> Data { Data() }
     func close() {}
 
-    func bytes(of id: CameraItem.ID, into directory: URL,
+    func bytes(of id: CameraItem.ID, into directory: URL, resuming: PartialDownload?,
+               checkpoint: @escaping @Sendable (PartialDownload) -> Void,
                progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL {
         let item = try info(of: id)
         inFlight += 1

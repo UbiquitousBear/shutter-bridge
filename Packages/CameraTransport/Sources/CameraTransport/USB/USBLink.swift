@@ -35,6 +35,9 @@ public actor USBLink: CameraLink {
     /// on `close()`; a read after either gets a finished stream.
     public nonisolated var events: AsyncStream<CameraLinkEvent> { eventFanOut.subscribe() }
 
+    /// Two downloads at a time, no resume, IDs that last one session (`CameraLinkCapabilities.usb`).
+    public nonisolated var capabilities: CameraLinkCapabilities { .usb }
+
     private enum State { case idle, opening, open, closed }
 
     private let device: ICCameraDevice
@@ -200,9 +203,13 @@ public actor USBLink: CameraLink {
         return data
     }
 
+    /// `resuming` is ignored and `checkpoint` never called: ImageCaptureCore copies whole files, so an interrupted
+    /// file restarts from 0 and overwrites what is in `directory` (`capabilities.resumesPartialFiles` is false).
     public func bytes(
         of item: CameraItem.ID,
         into directory: URL,
+        resuming: PartialDownload?,
+        checkpoint: @escaping @Sendable (PartialDownload) -> Void,
         progress: @escaping @Sendable (_ bytesWritten: UInt64) -> Void
     ) async throws(CameraLinkFailure) -> URL {
         try requireOpen(.download)

@@ -18,6 +18,7 @@ func item(_ name: String, folder: String = "DCIM/100MSDCF", at seconds: TimeInte
 /// fail. Like `USBLink`, a closed link fails its calls as `disconnected`, and a cancelled fetch fails as `busy`.
 actor FakeLink: CameraLink {
     nonisolated let descriptor: CameraDescriptor
+    nonisolated let capabilities: CameraLinkCapabilities
     nonisolated let events: AsyncStream<CameraLinkEvent>
     private let eventSink: AsyncStream<CameraLinkEvent>.Continuation
 
@@ -36,6 +37,7 @@ actor FakeLink: CameraLink {
     init(items: [CameraItem], mode: CameraMode = .usb(.massStorage), id: String = "fake-camera",
          name: String = "Untitled") {
         descriptor = CameraDescriptor(id: .init(rawValue: id), name: name, mode: mode)
+        capabilities = .defaults(for: mode.carrier)
         self.items = items
         (events, eventSink) = AsyncStream.makeStream()
     }
@@ -62,7 +64,8 @@ actor FakeLink: CameraLink {
 
     func thumbnail(of item: CameraItem.ID) throws(CameraLinkFailure) -> Data { Data("thumb \(item)".utf8) }
 
-    func bytes(of item: CameraItem.ID, into directory: URL,
+    func bytes(of item: CameraItem.ID, into directory: URL, resuming: PartialDownload?,
+               checkpoint: @escaping @Sendable (PartialDownload) -> Void,
                progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL {
         bytesStarted += 1
         if closed { throw CameraLinkFailure(.disconnected, detail: "bytes: the link is closed") }

@@ -38,6 +38,7 @@ actor FakeCameraLink: CameraLink {
     }
 
     nonisolated let descriptor: CameraDescriptor
+    nonisolated let capabilities: CameraLinkCapabilities
     /// Live subscribers; nil once the stream has been finished.
     private nonisolated let subscribers = Mutex<[UUID: AsyncStream<CameraLinkEvent>.Continuation]?>([:])
 
@@ -58,9 +59,11 @@ actor FakeCameraLink: CameraLink {
     private var heldWaiters: [(name: String?, continuation: CheckedContinuation<HeldCall, Never>)] = []
     private var everHeld: [HeldCall] = []
 
-    init(card: [CameraItem], mode: CameraMode = .usb(.massStorage), name: String = "Fake") {
+    init(card: [CameraItem], mode: CameraMode = .usb(.massStorage), name: String = "Fake",
+         capabilities: CameraLinkCapabilities? = nil) {
         self.card = card
         descriptor = CameraDescriptor(id: .init(rawValue: UUID().uuidString), name: name, mode: mode)
+        self.capabilities = capabilities ?? .defaults(for: mode.carrier)
     }
 
     nonisolated var events: AsyncStream<CameraLinkEvent> {
@@ -125,7 +128,8 @@ actor FakeCameraLink: CameraLink {
 
     func thumbnail(of item: CameraItem.ID) throws(CameraLinkFailure) -> Data { Data() }
 
-    func bytes(of id: CameraItem.ID, into directory: URL,
+    func bytes(of id: CameraItem.ID, into directory: URL, resuming: PartialDownload?,
+               checkpoint: @escaping @Sendable (PartialDownload) -> Void,
                progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL {
         guard let item = card.first(where: { $0.id == id }) else { throw CameraLinkFailure(.itemNotFound) }
         bytesCalls.append(item.name)
