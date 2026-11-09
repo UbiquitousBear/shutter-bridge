@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Info.plist for Shutter Bridge. It sits outside the synchronized ShutterBridge/ folder so it isn't copied into the
-  app as a resource; the project points at it with INFOPLIST_FILE. Only what Iteration 1 needs: no Bluetooth, local
-  network, background modes or Hotspot Configuration until the iteration that uses them.
+  app as a resource; the project points at it with INFOPLIST_FILE. Only what the built features need: Iteration 1's keys,
+  and, for the camera's Bluetooth link (Iteration 3, W10), the Bluetooth permission and the bluetooth-central background
+  mode. No local network, other background modes or Hotspot Configuration until the change that uses them.
 -->
 <plist version="1.0">
 <dict>
@@ -48,6 +49,16 @@
 	     Like to Access the Camera", so the string says it isn't the iPhone's own (HIG Privacy). -->
 	<key>NSCameraUsageDescription</key>
 	<string>Shutter Bridge reads photos from a camera you connect by USB-C. It doesn't use this iPhone's cameras.</string>
+	<!-- Asked when the app first uses Bluetooth: onboarding's pairing step, or the first Import over Wi-Fi (backlog sections 6
+	     and 7). Never at launch: the central is made at launch only once Bluetooth is allowed (BluetoothLaunchRule). -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Connects to your camera over Bluetooth to pair with it, and to switch its Wi-Fi on when you import.</string>
+	<!-- bluetooth-central with state restoration (decided 9 Nov). Needed from the first central: BluetoothCentral is made
+	     with a restore identifier, and Core Bluetooth raises an exception for that without this mode. W17 adds fetch. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Saves the photos you import into an album. Limit Access with no photos selected is enough.</string>
