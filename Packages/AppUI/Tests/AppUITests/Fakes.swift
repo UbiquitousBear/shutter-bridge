@@ -3,6 +3,7 @@ import Catalogue
 import Foundation
 import ImportEngine
 import PhotosBridge
+import PTPKit
 @testable import AppUI
 
 /// A card for tests: name, folder, seconds after a fixed instant (nil: no date), size.
@@ -317,6 +318,12 @@ actor BrokenCatalogue: CatalogueStore {
     func upsert(_ record: CatalogueRecord) throws { throw Broken() }
     func saveListing(_ listing: CardListing) throws { throw Broken() }
     func lastListing(for camera: CameraKey) throws -> CardListing? { throw Broken() }
+    func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws {
+        throw Broken()
+    }
+    func camera(_ key: CameraKey) throws -> CameraRecord? { throw Broken() }
+    func cameras() throws -> [CameraRecord] { throw Broken() }
+    func upsertCamera(_ record: CameraRecord) throws { throw Broken() }
 }
 
 /// A fresh staging folder for an engine.

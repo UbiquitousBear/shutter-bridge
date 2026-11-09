@@ -1,5 +1,6 @@
 #if canImport(SwiftData)
 import Foundation
+import PTPKit
 import SwiftData
 
 /// The catalogue in SwiftData: a `ModelActor`, so every read and write runs on its own serial executor and none on
@@ -17,6 +18,13 @@ import SwiftData
 /// size, whatever their camera, and matches them with `ContentMatch`. Rows of one file under two cameras (build 17.1
 /// wrote them for a file imported in MSC and again in MTP) both count and are both kept: each records a real copy.
 /// No schema change was needed: every version-1 row already holds the file name, capture date and size.
+///
+/// **The Camera row and partial files** (Iteration 3, schema version 2): `camera(_:)`, `cameras()` and
+/// `upsertCamera(_:)` read and write the `Camera` row's fields through `CameraRecord` (never a password: there is no
+/// column for one), and `markPartial` writes a download checkpoint (`resumeOffset` and `tempURL`). A store written
+/// by an earlier build opens through `CatalogueMigrationPlan`'s lightweight V1 → V2 stage. Camera rows are unique by
+/// key by the same rule; should a key ever have two, every read picks the same one (`CameraOrder.preferred(_:)`) and
+/// `upsertCamera(_:)` writes the same fields to all of them.
 ///
 /// Each write is saved before the call returns. If any step of a write throws (a fetch, the save), every change it
 /// made is rolled back and the error thrown, so a failed write leaves nothing pending for later reads or writes.
@@ -105,23 +113,9 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
     static let sizesPerFetch = 500
 
     public func upsert(_ record: CatalogueRecord) throws {
-        let row = CatalogueRow(record)
         try write { context in
-            let existing = try objects(withKey: row.identityKey)
-            let object: CameraObject
-            if let kept = furthestAlong(existing) {
-                object = kept
-                object.apply(row)
-                for other in existing where other !== kept {
-                    context.delete(other)
-                }
-            } else {
-                object = CameraObject(row: row)
-                context.insert(object)
-            }
-            if object.camera?.serial != row.cameraKey {
-                object.camera = try cameraRow(serial: row.cameraKey, creating: true)
-            }
+            try upsertObject(CatalogueRow(record), existing: try objects(withKey: record.identity.storageKey),
+                             in: context)
         }
     }
 
@@ -139,6 +133,47 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         guard let stored = try cameraRow(serial: camera.rawValue, creating: false),
               let data = stored.lastListing, let listedAt = stored.lastListedAt else { return nil }
         return try StoredListing.decode(data, camera: camera, listedAt: listedAt)
+    }
+
+    /// Looks up the identity's row, applies `PartialMark`'s rule to it and writes the result, all in one actor call,
+    /// so a checkpoint and a commit of the same file never interleave. Duplicates for the identity are healed as by
+    /// `upsert`; an imported row is left as it is, duplicates and all.
+    public func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL,
+                            offset: UInt64) throws {
+        let existing = try objects(withKey: identity.storageKey)
+        guard let record = try PartialMark.record(for: identity, format: format, tempURL: tempURL, offset: offset,
+                                                  existing: furthestAlong(existing)?.row.record) else { return }
+        try write { context in
+            try upsertObject(CatalogueRow(record), existing: existing, in: context)
+        }
+    }
+
+    public func camera(_ key: CameraKey) throws -> CameraRecord? {
+        preferred(try cameraRows(serial: key.rawValue))?.columns.record
+    }
+
+    public func cameras() throws -> [CameraRecord] {
+        CameraOrder.sorted(try modelContext.fetch(FetchDescriptor<Camera>()).map(\.columns.record))
+    }
+
+    /// Writes every `CameraRecord` field to the key's `Camera` row (made if missing), keeping the later `lastSeen`;
+    /// the row's listing, files and jobs are left alone. Should the key have several rows (see the type's
+    /// documentation), every one gets the same fields, so whichever a later read picks answers the same. They are
+    /// not merged into one: each may own file rows and jobs (which a deleted row's cascade would take with it).
+    public func upsertCamera(_ record: CameraRecord) throws {
+        try write { context in
+            let rows = try cameraRows(serial: record.key.rawValue)
+            let stored = preferred(rows)
+            let columns = CameraColumns(record.written(over: stored?.columns.record))
+            if rows.isEmpty {
+                let camera = Camera(serial: record.key.rawValue)
+                context.insert(camera)
+                camera.apply(columns)
+            }
+            for camera in rows {
+                camera.apply(columns)
+            }
+        }
     }
 
     // MARK: Beyond the protocol
@@ -171,6 +206,25 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
 
     // MARK: Private
 
+    /// Inside a write: updates the furthest-along of `existing` (the identity's rows) to `row` and deletes the others,
+    /// or inserts a row when there are none, then links it to its camera's row.
+    private func upsertObject(_ row: CatalogueRow, existing: [CameraObject], in context: ModelContext) throws {
+        let object: CameraObject
+        if let kept = furthestAlong(existing) {
+            object = kept
+            object.apply(row)
+            for other in existing where other !== kept {
+                context.delete(other)
+            }
+        } else {
+            object = CameraObject(row: row)
+            context.insert(object)
+        }
+        if object.camera?.serial != row.cameraKey {
+            object.camera = try cameraRow(serial: row.cameraKey, creating: true)
+        }
+    }
+
     private func objects(withKey key: String) throws -> [CameraObject] {
         let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
             object.identityKey == key
@@ -178,17 +232,28 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         return try modelContext.fetch(descriptor)
     }
 
-    /// The camera's row; with `creating`, a new one when there is none. Unique by serial, by the same rule.
+    /// The camera's row (`preferred(_:)` of its rows); with `creating`, a new one when there is none. Unique by
+    /// serial, by the same rule.
     private func cameraRow(serial: String, creating: Bool) throws -> Camera? {
-        let descriptor = FetchDescriptor<Camera>(predicate: #Predicate<Camera> { camera in
-            camera.serial == serial
-        })
-        let found = try modelContext.fetch(descriptor)
-        if let first = found.first { return first }
+        if let found = preferred(try cameraRows(serial: serial)) { return found }
         guard creating else { return nil }
         let camera = Camera(serial: serial)
         modelContext.insert(camera)
         return camera
+    }
+
+    /// Every `Camera` row with this serial: one, by the store's rule, unless someone else wrote another.
+    private func cameraRows(serial: String) throws -> [Camera] {
+        let descriptor = FetchDescriptor<Camera>(predicate: #Predicate<Camera> { camera in
+            camera.serial == serial
+        })
+        return try modelContext.fetch(descriptor)
+    }
+
+    /// The row every read answers with among one serial's rows, by `CameraOrder.preferred(_:)`, so `camera(_:)`,
+    /// `cameras()`, the listing and the file rows' link all pick the same one.
+    private func preferred(_ rows: [Camera]) -> Camera? {
+        CameraOrder.preferred(rows.map(\.columns.record)).map { rows[$0] }
     }
 
     /// The row to answer with when there are several for one identity: the furthest along, the first of equals.
