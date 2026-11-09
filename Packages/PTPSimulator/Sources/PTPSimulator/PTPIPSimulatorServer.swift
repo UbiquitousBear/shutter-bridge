@@ -121,6 +121,25 @@ public actor PTPIPSimulatorServer {
         core.withResponder { $0.inject(code, forNext: operation, times: times) }
     }
 
+    /// Lets `elapsed` time go by for the whole-card behaviour (`PTPIPResponderCore.advance(by:)`): a held
+    /// Init_Command_Ack is sent, the card appears and StoreAdded goes out, an idle session is dropped. The server
+    /// keeps no clock of its own, so a test says exactly how much time has passed. Code compiled only by CI's
+    /// Xcode 27 job; the logic it calls is tested on Linux.
+    public func advance(by elapsed: Duration) async {
+        await perform(core.advance(by: elapsed))
+    }
+
+    /// The card drops: StoreRemoved on the event channel, StoreNotAvailable from the card's operations
+    /// (`PTPResponder.dropCard()`).
+    public func dropCard() async {
+        await perform(core.dropCard())
+    }
+
+    /// The card comes back: StoreAdded on the event channel (`PTPResponder.restoreCard()`).
+    public func restoreCard() async {
+        await perform(core.restoreCard())
+    }
+
     /// Closes both channels, as the camera going out of range does. The listener keeps listening.
     public func dropConnections() async {
         await perform(core.dropAll())

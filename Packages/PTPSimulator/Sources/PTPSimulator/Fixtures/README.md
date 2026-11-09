@@ -13,5 +13,6 @@ DeviceInfo files were already zeroed by `scripts/redact-fixtures.py` (the pre-co
 | `a7c2-ptpip-deviceinfo.bin` | `Fixtures/a7c2/ptpip/deviceinfo.bin` | GetDeviceInfo in the PTP/IP flavour (81 operations, 48 events, firmware string "2.01") |
 | `a7c2-usb-storageinfo.bin` | `Fixtures/a7c2/usb/storageinfo.bin` | GetStorageInfo in the MTP flavour (free space recomputed from the scripted card) |
 | `a7c2-ptpip-storageinfo.bin` | `Fixtures/a7c2/ptpip/storageinfo.bin` | GetStorageInfo in the PTP/IP flavour, as sent (capacity and free space 0) |
+| `a7c2-ptpip-sdio-extdeviceinfo.bin` | `Fixtures/a7c2/ptpip/sdio-extdeviceinfo.bin` | the reply to SDIO_GetExtDeviceInfo (0x9202) in the PTP/IP flavour: 970 bytes, version 0x12C (copied on 9 Nov 2026 for the whole-card session) |
 | `a7c2-usb-objectinfo-arw.bin` | `Fixtures/a7c2/usb/objectinfo-arw.bin` | the thumbnail and pixel fields of every ARW's ObjectInfo |
 | `a7c2-usb-objectinfo-jpg.bin` | `Fixtures/a7c2/usb/objectinfo-jpg.bin` | the same for every JPG (and, as a placeholder, every HIF: no HIF is captured) |

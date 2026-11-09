@@ -10,6 +10,9 @@ import PTPKit
 /// One initiator at a time, as the camera allows: a second Init_Command_Request while a session's command channel is
 /// up gets Init_Fail (busy). Closing the command channel ends the session and closes the event channel, as losing the
 /// camera does.
+///
+/// Time passes only through `advance(by:)`, so the whole-card behaviour's waits (`WholeCardBehaviour`: the held
+/// Init_Command_Ack, the card's arrival, the idle drop) are exact in a test and a loaded runner can't race them.
 public struct PTPIPResponderCore: Sendable {
     /// The caller's name for one TCP connection.
     public typealias ConnectionID = Int
@@ -44,6 +47,14 @@ public struct PTPIPResponderCore: Sendable {
     private var commandChannel: ConnectionID?
     private var eventChannel: ConnectionID?
     private var nextConnectionNumber: UInt32 = 1
+    /// The Init_Command_Ack held back for `WholeCardBehaviour.firstInitAckDelay` (or a delay `holdNextInitAck` set).
+    private var heldAck: (connection: ConnectionID, packet: PTPIP.Packet, remaining: Duration)?
+    /// The next Init_Command_Request is held for the behaviour's `firstInitAckDelay`: true at the start and after
+    /// `dropAll()`, false once a request has taken it. Read when the request arrives, so a behaviour changed through
+    /// `withResponder` before then counts.
+    private var initAckHoldArmed = true
+    /// A delay `holdNextInitAck(for:)` set for the next request, in place of the behaviour's.
+    private var initAckHoldOverride: Duration?
 
     /// - Parameters:
     ///   - name: The friendly name in Init_Command_Ack. The default is the camera's model name with a note that it
@@ -54,6 +65,12 @@ public struct PTPIPResponderCore: Sendable {
         self.responder = responder
         self.name = name
         self.guid = guid
+    }
+
+    /// The next Init_Command_Request is answered only after `delay` has gone by (`advance(by:)`), whatever the
+    /// behaviour says, for a test of a slow answer on a reconnect. Replaces any hold still waiting for a request.
+    public mutating func holdNextInitAck(for delay: Duration) {
+        initAckHoldOverride = delay
     }
 
     /// Whether an initiator has finished the handshake on both channels.
@@ -98,15 +115,53 @@ public struct PTPIPResponderCore: Sendable {
         eventActions(responder.add(objects))
     }
 
+    /// The card drops (`PTPResponder.dropCard()`): StoreRemoved goes out on the event channel, and the card's
+    /// operations answer StoreNotAvailable from then on.
+    public mutating func dropCard() -> [Action] {
+        eventActions(responder.dropCard())
+    }
+
+    /// The card comes back (`PTPResponder.restoreCard()`): StoreAdded `[0x00010001]` goes out on the event channel.
+    public mutating func restoreCard() -> [Action] {
+        eventActions(responder.restoreCard())
+    }
+
+    /// Lets `elapsed` time go by: releases a held Init_Command_Ack, sends StoreAdded when the card appears, and, when
+    /// the idle drop ends the session, closes both channels (after any event that fell due first).
+    public mutating func advance(by elapsed: Duration) -> [Action] {
+        var actions: [Action] = []
+        if var held = heldAck, connections[held.connection] != nil {
+            held.remaining -= elapsed
+            if held.remaining <= .zero {
+                heldAck = nil
+                actions.append(.send(held.packet, to: held.connection))
+            } else {
+                heldAck = held
+            }
+        }
+        let result = responder.advance(by: elapsed)
+        actions += eventActions(result.events)
+        // The idle drop ends the session on the camera; its Wi-Fi stays up, so the hold isn't armed again.
+        if result.sessionDropped { actions += closeAll() }
+        return actions
+    }
+
     /// Lets the caller script the responder (`inject(_:forNext:times:)`).
     public mutating func withResponder<T>(_ body: (inout PTPResponder) -> T) -> T { body(&responder) }
 
-    /// Closes every connection, as the camera going away does.
+    /// Closes every connection, as the camera going away does (the Wi-Fi restart of 4 Nov), and arms the behaviour's
+    /// `firstInitAckDelay` again for the next Init_Command_Request, the recovery's first answer.
     public mutating func dropAll() -> [Action] {
+        initAckHoldArmed = true
+        return closeAll()
+    }
+
+    private mutating func closeAll() -> [Action] {
         let ids = connections.keys.sorted()
         connections = [:]
         commandChannel = nil
         eventChannel = nil
+        heldAck = nil
         responder.endSession()
         return ids.map(Action.close)
     }
@@ -116,6 +171,7 @@ public struct PTPIPResponderCore: Sendable {
     private mutating func disconnected(_ id: ConnectionID, closing: Bool) -> [Action] {
         guard connections.removeValue(forKey: id) != nil else { return [] }
         var actions: [Action] = closing ? [.close(id)] : []
+        if heldAck?.connection == id { heldAck = nil }
         if commandChannel == id {
             commandChannel = nil
             responder.endSession()
@@ -161,7 +217,17 @@ public struct PTPIPResponderCore: Sendable {
             nextConnectionNumber = nextConnectionNumber == UInt32.max ? 1 : nextConnectionNumber + 1
             connections[id]?.role = .command(connectionNumber: number)
             commandChannel = id
-            return [.send(PTPIP.initCommandAck(connectionNumber: number, guid: guid, name: name), to: id)]
+            let ack = PTPIP.initCommandAck(connectionNumber: number, guid: guid, name: name)
+            // The camera's answer after a Wi-Fi restart can be slow (40.7 s on its own network, 4 Nov 01:08; whether it
+            // held the ack or the port was unreachable is unknown): hold only one, so a retry finds it ready.
+            let delay = initAckHoldOverride ?? (initAckHoldArmed ? responder.wholeCard.firstInitAckDelay : .zero)
+            initAckHoldOverride = nil
+            initAckHoldArmed = false
+            if delay > .zero {
+                heldAck = (id, ack, delay)
+                return []
+            }
+            return [.send(ack, to: id)]
 
         case (.initEventRequest, .unknown):
             var r = PTPReader(packet.payload)
@@ -203,9 +269,11 @@ public struct PTPIPResponderCore: Sendable {
         if let data = reply.data {
             actions.append(.sendData(transactionID: command.transactionID, data, to: id))
         }
+        // A silent reply sends nothing, not even a response: the initiator waits until its own timeout.
+        if reply.isSilent { return [] }
         actions.append(.send(PTPIP.cmdResponse(reply.code, transactionID: command.transactionID,
                                                parameters: reply.response.parameters), to: id))
-        return actions
+        return actions + eventActions(reply.events)
     }
 
     private mutating func refuse(_ id: ConnectionID, _ reason: PTPIP.InitFailReason) -> [Action] {

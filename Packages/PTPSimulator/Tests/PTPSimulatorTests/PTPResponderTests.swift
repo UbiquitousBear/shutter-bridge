@@ -57,10 +57,14 @@ struct PTPResponderTests {
         #expect(info.freeSpaceInBytes == info.maxCapacity - used)
         #expect(r.respond(to: PTPCommand.getStorageInfo(PTPStorageID(rawValue: 0x0002_0001), tx: 3)).code == .invalidStorageID)
 
-        // PTP/IP: sent as the camera sent it, capacity and free space 0.
-        var ip = try responder(.ptpIP)
+        // PTP/IP: sent as the camera sent it, capacity and free space 0, once the whole-card session offers the card
+        // (a plain session answers StoreNotAvailable: WholeCardSessionTests).
+        var ip = try responder(.ptpIP, open: false)
+        #expect(ip.respond(to: PTPCommand.sonySDIOOpenSession(functionMode: 1, tx: 1)).code == .ok)
+        #expect(ip.respond(to: PTPCommand.sonySetContentsTransferMode(2, 1, 0, tx: 2)).code == .ok)
+        _ = ip.advance(by: .seconds(2))
         let ipInfo = try PTPStorageInfo.decode(
-            try #require(ip.respond(to: PTPCommand.getStorageInfo(ScriptedCard.defaultStorageID, tx: 1)).data).allBytes)
+            try #require(ip.respond(to: PTPCommand.getStorageInfo(ScriptedCard.defaultStorageID, tx: 3)).data).allBytes)
         #expect(ipInfo.maxCapacity == 0 && ipInfo.freeSpaceInBytes == 0 && ipInfo.storageDescription == "Storage Media 1")
     }
 
@@ -151,8 +155,10 @@ struct PTPResponderTests {
         #expect(r.deviceInfo.supports(.getObjectPropList))
         #expect(r.respond(to: PTPCommand.getAllObjectProps(tx: 1)).code == .operationNotSupported)
         #expect(r.respond(to: PTPCommand.getNumObjects(tx: 2)).code == .operationNotSupported)
-        // Not listed in the MTP DeviceInfo: Sony's SDIO operations.
+        // Not listed in the MTP DeviceInfo: Sony's SDIO operations, and the property read.
         #expect(r.respond(to: PTPCommand.sonySDIOOpenSession(functionMode: 1, tx: 3)).code == .operationNotSupported)
+        #expect(r.respond(to: PTPCommand.sonySDIOConnect(phase: 1, tx: 3)).code == .operationNotSupported)
+        #expect(r.respond(to: PTPCommand.getDevicePropValue(.batteryLevel, tx: 3)).code == .operationNotSupported)
         // A non-command container.
         let event = PTPContainer(type: .event, code: 0x4002, transactionID: 4, parameters: [1])
         #expect(r.respond(to: event).code == .generalError)
