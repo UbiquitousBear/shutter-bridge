@@ -22,6 +22,8 @@ public actor PTPIPSimulatorServer {
     private let packetSize: Int
     private let queue = DispatchQueue(label: "PTPIPSimulatorServer")
     private var listener: NWListener?
+    /// Set when the listener reaches `.cancelled` (or `.failed`): its socket is closed. `stop()` awaits it.
+    private var listenerEnded: Once<Void>?
     private var connections: [Int: NWConnection] = [:]
     private var nextID = 1
     /// The port the listener is on, once `start()` has returned.
@@ -57,7 +59,14 @@ public actor PTPIPSimulatorServer {
             throw .listenerFailed("\(error)")
         }
         let ready = Once<Result<UInt16, Failure>>()
+        let ended = Once<Void>()
         listener.stateUpdateHandler = { [weak listener] state in
+            switch state {
+            case .cancelled, .failed:
+                ended.resolve(())
+            default:
+                break
+            }
             switch state {
             case .ready:
                 if let port = listener?.port?.rawValue {
@@ -85,6 +94,7 @@ public actor PTPIPSimulatorServer {
             Task { await self.accept(connection) }
         }
         self.listener = listener
+        listenerEnded = ended
         listener.start(queue: queue)
         switch await ready.value {
         case let .success(port):
@@ -93,18 +103,23 @@ public actor PTPIPSimulatorServer {
         case let .failure(failure):
             listener.cancel()
             self.listener = nil
+            listenerEnded = nil
             throw failure
         }
     }
 
-    /// Stops listening and closes every connection.
-    public func stop() {
+    /// Stops listening and closes every connection. Returns once the listener has reported `.cancelled`, so its port
+    /// refuses connections from then on (a test of a refused port needs no sleep).
+    public func stop() async {
+        let ended = listenerEnded
         listener?.cancel()
         listener = nil
+        listenerEnded = nil
         port = nil
         _ = core.dropAll()
         for connection in connections.values { connection.cancel() }
         connections = [:]
+        await ended?.value
     }
 
     /// Shoots `frames` onto the card and sends ObjectAdded on the event channel (`PTPResponder.ObjectAddedStyle`).

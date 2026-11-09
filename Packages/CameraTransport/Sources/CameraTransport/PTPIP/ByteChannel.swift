@@ -2,8 +2,8 @@ import Foundation
 
 // The seam between `PTPIPConnection` and the network: one TCP connection as a byte pipe. `PTPIPConnection` is written
 // against these protocols only, so the whole PTP/IP initiator builds and is tested on Linux (plan decision 3). The
-// Network.framework adapter (`NWByteChannel`, a later PR) is the only Apple-only part; tests use scripted fakes and
-// `SimulatedLink`'s in-memory channel wired to the simulated camera.
+// Network.framework adapter (`NWByteChannelFactory`, `IP/NWByteChannel.swift`) is the only Apple-only part; tests use
+// scripted fakes and `SimulatedLink`'s in-memory channel wired to the simulated camera.
 
 /// What a connection that is being opened is doing, passed through to `PTPIPConnection.states` so the app can explain
 /// a wait instead of showing a failure.
