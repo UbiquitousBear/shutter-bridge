@@ -65,7 +65,10 @@ extension AppModel {
             joiner: NEHotspotJoiner(),
             path: NWPathGateway(),
             foreground: wireless.foreground,
-            channels: NWByteChannelFactory(interface: .wifi)
+            channels: NWByteChannelFactory(interface: .wifi),
+            // The bench lines for the wireless checks (W20): step times, CC09 and CC08, the RSSI, the poll, keep-alives,
+            // GetDevicePropValue, 0x9211 resumes. Times, counts and statuses only.
+            trace: .bench(wifiLog)
         )
         let wifi = WiFiSupport.make(
             catalogue: catalogue,

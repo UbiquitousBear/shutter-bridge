@@ -23,6 +23,19 @@ private let otherCamera = UUID()
 
 @Suite("GATT call broker")
 struct GATTCallBrokerTests {
+    @Test func anRSSIReadIsAnsweredWithItsValueAndFailsWhenItsPeripheralGoes() async {
+        let broker = GATTCallBroker(clock: VirtualClock())
+        let answered = await broker.call(.rssi(camera), timeout: .seconds(5)) {
+            broker.answer(.rssi(camera), .signal(-61))
+        }
+        #expect(answered == .signal(-61))
+        #expect(GATTWaitKey.rssi(camera).peripheral == camera)
+        let pending = Task { await broker.call(.rssi(camera), timeout: .seconds(5)) {} }
+        await until { broker.isWaiting(.rssi(camera)) }
+        #expect(broker.fail(.linkDropped) { $0.peripheral == camera } == 1)
+        #expect(await pending.value == .failed(.linkDropped))
+    }
+
     @Test func anAnswerEndsTheCallAndTheRequestIsSentOnceAfterTheCallIsRegistered() async {
         let broker = GATTCallBroker(clock: VirtualClock())
         let started = Counter()

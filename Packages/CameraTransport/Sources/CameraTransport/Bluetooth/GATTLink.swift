@@ -62,6 +62,20 @@ public protocol GATTLink: Sendable {
     func disconnect() async
 }
 
+/// A link that can read its own signal strength, for the bench log only (W20). `CoreBluetoothGATTLink` reads it with Core
+/// Bluetooth's `readRSSI()`, which asks the phone's radio and sends nothing to the camera's characteristics; test links
+/// don't conform, so nothing is read in tests.
+public protocol GATTSignalReading: Sendable {
+    /// The link's RSSI in dBm now; nil when the link has ended, iOS gave none (127), the read failed or `timeout` passed.
+    func readSignalStrength(timeout: Duration) async -> Int?
+}
+
+/// How long the trace's RSSI read may take. A choice, `unverified`: Core Bluetooth answers within a connection interval or
+/// two; the read only feeds the log.
+public enum GATTSignalTiming {
+    public static let read: Duration = .seconds(5)
+}
+
 /// Finds the camera and connects to it: by the stored identifier first, then a scan (W10). Throws `.timedOut` when the
 /// camera isn't found in time, `.bluetoothOff`, `.unauthorised`, or `.serviceMissing`.
 public protocol GATTConnector: Sendable {

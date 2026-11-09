@@ -92,9 +92,13 @@ public struct HandoffResult: Sendable {
 /// Switches the camera's Wi-Fi on over Bluetooth and reads the network's details.
 public struct WiFiHandoff: Sendable {
     private let clock: any Clock<Duration>
+    private let trace: TransportTrace
 
-    public init(clock: any Clock<Duration> = ContinuousClock()) {
+    /// - Parameter trace: gets each change of CC09's Wi-Fi status, the CC08 write and the details' read, with times since
+    ///   the run began (W20). Recording changes nothing the sequencer does.
+    public init(clock: any Clock<Duration> = ContinuousClock(), trace: TransportTrace = .none) {
         self.clock = clock
+        self.trace = trace
     }
 
     /// The whole hand-off on a connected, paired link:
@@ -111,7 +115,7 @@ public struct WiFiHandoff: Sendable {
     ///
     /// Writes CC08 at most once. Nothing here logs a value: the credentials print as lengths.
     public func run(on link: any GATTLink) async throws(HandoffFailure) -> HandoffResult {
-        try await performHandoff(clock: clock, link: link, subscribe: true)
+        try await performHandoff(clock: clock, link: link, subscribe: true, trace: trace)
     }
 
     /// The status fell to 3 or 0 during the join (the camera's 50 s elapsed, or it dropped its Wi-Fi): look again and, when
@@ -122,7 +126,7 @@ public struct WiFiHandoff: Sendable {
     /// that it does), so a status that still reads 2 is not written to. What a write during status 3 does is unknown
     /// (`unverified`), so the sequencer waits for 0 first.
     public func rewriteIfLapsed(on link: any GATTLink) async throws(HandoffFailure) -> HandoffResult {
-        try await performHandoff(clock: clock, link: link, subscribe: false)
+        try await performHandoff(clock: clock, link: link, subscribe: false, trace: trace)
     }
 
     /// Turns Sony's five notifications off, best effort, before the link is closed (the spike's release path).
@@ -135,9 +139,9 @@ public struct WiFiHandoff: Sendable {
 
 /// The sequencer on a concrete clock; `performHandoff` (ClockOpening.swift) opens the public type's `any Clock` into it.
 func performHandoffOnConcrete<C: Clock<Duration>>(
-    clock: C, link: any GATTLink, subscribe: Bool
+    clock: C, link: any GATTLink, subscribe: Bool, trace: TransportTrace
 ) async throws(HandoffFailure) -> HandoffResult {
-    try await HandoffRunner<C>.run(clock: clock, link: link, subscribe: subscribe)
+    try await HandoffRunner<C>.run(clock: clock, link: link, subscribe: subscribe, trace: trace)
 }
 
 /// One hand-off on one link. Confined to the task that calls `run`.
@@ -149,15 +153,23 @@ private final class HandoffRunner<C: Clock<Duration>> {
     private var wroteWiFiOn = false
     private var launchedAt: C.Instant?
     private var launchedBeforeLooking = false
+    /// For the trace only: when the run began, and the last Wi-Fi status it recorded.
+    private let trace: TransportTrace
+    private let startedAt: C.Instant
+    private var tracedStatus: UInt8??
 
-    private init(clock: C, link: any GATTLink) {
+    private init(clock: C, link: any GATTLink, trace: TransportTrace) {
         self.clock = clock
         self.link = link
+        self.trace = trace
+        startedAt = clock.now
         events = HandoffEvents(clock: clock)
     }
 
-    static func run(clock: C, link: any GATTLink, subscribe: Bool) async throws(HandoffFailure) -> HandoffResult {
-        let runner = HandoffRunner(clock: clock, link: link)
+    static func run(
+        clock: C, link: any GATTLink, subscribe: Bool, trace: TransportTrace
+    ) async throws(HandoffFailure) -> HandoffResult {
+        let runner = HandoffRunner(clock: clock, link: link, trace: trace)
         let pumps = LinkPumps(link: link, into: runner.events)
         defer { pumps.stop() }
         return try await runner.execute(subscribe: subscribe)
@@ -200,6 +212,7 @@ private final class HandoffRunner<C: Clock<Duration>> {
             wroteWiFiOn = true // set first: a drop during the write counts as a drop after it
             do throws(GATTFailure) { try await link.write(.wifiOn, timeout: HandoffTiming.wifiOnAck) }
             catch { throw failure(error, during: .writeWiFiOn) }
+            trace(.handoffWroteWiFiOn(after: elapsed))
             try await waitForStatus([.launched], silentFrom: clock.now, fellBackFrom: before)
             break settling
         }
@@ -233,7 +246,21 @@ private final class HandoffRunner<C: Clock<Duration>> {
         let value: Data
         do throws(GATTFailure) { value = try await link.read(.status, timeout: HandoffTiming.statusRead) }
         catch { throw failure(error, during: .readStatus) }
-        guard (try? status.merge(value)) != nil else { throw HandoffFailure.statusUnreadable }
+        let decoded = (try? status.merge(value)) != nil
+        traceStatus()
+        guard decoded else { throw HandoffFailure.statusUnreadable }
+    }
+
+    /// Time since the run began, for the trace.
+    private var elapsed: Duration { startedAt.duration(to: clock.now) }
+
+    /// Records the Wi-Fi status when it differs from the last one recorded (the first reading included). Reads only.
+    private func traceStatus() {
+        guard trace.isOn else { return }
+        let current = status.wifiStatus?.rawValue
+        if let traced = tracedStatus, traced == current { return }
+        tracedStatus = .some(current)
+        trace(.handoffStatus(current, after: elapsed))
     }
 
     /// Records when status 2 was first seen.
@@ -274,6 +301,7 @@ private final class HandoffRunner<C: Clock<Duration>> {
             case .notification(.status, let value):
                 sawStatusNotification = true
                 _ = try? status.merge(value) // a notification that doesn't decode says nothing; the next one will
+                traceStatus()
             case .notification:
                 break
             case .linkDropped:
@@ -305,6 +333,7 @@ private final class HandoffRunner<C: Clock<Duration>> {
         do throws(GATTFailure) {
             let value = try await link.read(.status, timeout: HandoffTiming.pollRead)
             _ = try? status.merge(value)
+            traceStatus()
         } catch {
             switch error {
             case .timedOut, .other: break
@@ -337,6 +366,7 @@ private final class HandoffRunner<C: Clock<Duration>> {
             attempts += 1
             switch await attemptCredentials() {
             case .credentials(let credentials):
+                trace(.handoffDetailsRead(after: elapsed, tries: attempts))
                 return credentials
             case .gatt(let error):
                 switch error {
@@ -379,6 +409,7 @@ private final class HandoffRunner<C: Clock<Duration>> {
         switch event {
         case .notification(.status, let value):
             _ = try? status.merge(value)
+            traceStatus()
             return nil
         case .notification:
             return nil

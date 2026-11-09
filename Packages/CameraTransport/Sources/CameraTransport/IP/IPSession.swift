@@ -79,17 +79,27 @@ actor IPSession {
     private var keepAlive: IPKeepAlive
     private var keepAliveStarted = false
     private var monitors: [Task<Void, Never>] = []
+    /// GetDevicePropValue commands sent (decision 6 says none: this session never answers one), for the diagnostics.
+    private(set) var devicePropValueReads = 0
+    /// The bench log's events (W20), and for it only: when the keep-alive was last armed (the last command's end) and when
+    /// the previous keep-alive went out.
+    private let trace: TransportTrace
+    private var keepAliveArmedAt: ClockMark?
+    private var lastKeepAliveAt: ClockMark?
+    private var keepAlivesSent = 0
 
     /// - Parameters:
     ///   - keepAlive: The idle time before a GetDeviceInfo keep-alive, once `startKeepAlive()` is called; nil for none.
     ///   - clock: The keep-alive timer's clock.
     ///   - connectionClock: The clock the connection's own time limits run on.
+    ///   - trace: gets each keep-alive with its spacing (W20).
     init(endpoint: PTPIPEndpoint, guid: UUID, friendlyName: String, timing: PTPIPConnection.Timing,
          keepAlive: Duration?, channels: any ByteChannelFactory, clock: any Clock<Duration>,
-         connectionClock: any Clock<Duration>) {
+         connectionClock: any Clock<Duration>, trace: TransportTrace = .none) {
         connection = PTPIPConnection(endpoint: endpoint, guid: guid, friendlyName: friendlyName, timing: timing,
                                      channels: channels, clock: connectionClock)
         self.clock = clock
+        self.trace = trace
         self.keepAlive = IPKeepAlive(interval: keepAlive)
         (signals, signalSink) = AsyncStream.makeStream(of: Signal.self, bufferingPolicy: .unbounded)
     }
@@ -179,6 +189,7 @@ actor IPSession {
         // Checked before the command takes a transaction ID; the unstructured task below wouldn't see it.
         if Task.isCancelled { throw .cancelledBeforeStart }
         let container = command(&counter)
+        if container.code == PTPOperationCode.getDevicePropValue.rawValue { devicePropValueReads += 1 }
         switch kind {
         case .transfer:
             return try await connection.perform(container, timeout: timeout, into: sink)
@@ -250,6 +261,7 @@ actor IPSession {
 
     private func armKeepAlive() {
         guard keepAliveStarted, !ended, !closing else { return }
+        if trace.isOn { keepAliveArmedAt = ClockMark.now(on: clock) }
         keepAlive.arm(on: clock) { [weak self] generation in
             await self?.keepAliveDue(generation)
         }
@@ -260,12 +272,22 @@ actor IPSession {
     private func keepAliveDue(_ generation: Int) async {
         guard keepAlive.isCurrent(generation), !running, queue.isEmpty, !ended, !closing else { return }
         keepAlive.firing()
+        // Measured as it goes out, for the trace: the spacing is that of the sends.
+        let idle = keepAliveArmedAt?.elapsed ?? .zero
+        let sincePrevious = lastKeepAliveAt?.elapsed
+        if trace.isOn { lastKeepAliveAt = ClockMark.now(on: clock) }
+        keepAlivesSent += 1
+        let number = keepAlivesSent
+        let answered: Bool
         do {
             let reply = try await perform { counter in SonyContentsTransferPlan.keepAliveCommand(tx: counter.take()) }
             keepAlive.recordAnswer(ok: reply.code == .ok)
+            answered = reply.code == .ok
         } catch {
             keepAlive.recordFailure()
+            answered = false
         }
+        trace(.keepAlive(number: number, answered: answered, idle: idle, sincePrevious: sincePrevious))
     }
 
     // MARK: - Ending

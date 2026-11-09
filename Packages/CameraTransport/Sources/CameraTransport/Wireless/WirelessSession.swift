@@ -146,6 +146,8 @@ public actor WirelessSession {
     private let handoff: any WiFiHandingOff
     private let clock: SessionClock
     private let broadcast = PhaseBroadcast()
+    /// The bench log's events (W20); `.none` records nothing.
+    private let trace: TransportTrace
 
     /// The current phase. `phases` reports each change.
     public private(set) var phase: WirelessPhase = .idle
@@ -186,6 +188,8 @@ public actor WirelessSession {
     private var leaveTask: Task<Void, Never>?
     /// Bumped by every call that changes what is held, so a call that resumes after an await can tell it was overtaken.
     private var epoch = 0
+    /// The preparation under way's time in each phase, for the trace only; nil when the trace is off or none is running.
+    private var timeline: StepTimeline?
 
     /// - Parameters:
     ///   - camera: the camera's Bluetooth identity from the catalogue.
@@ -198,6 +202,9 @@ public actor WirelessSession {
     ///     switched on since, so the link may reopen with what it knows (W8); false after a join whose hand-off switched
     ///     the camera's Wi-Fi on (CC08 written: the camera starts its contents mode again), and after a first join.
     ///   - clock: every wait in the join and the stay runs on it.
+    ///   - trace: the bench log's events (W20): each step's time, the hand-off's CC09 statuses and CC08 writes, the RSSI
+    ///     during the hand-off. Recording changes nothing the session does or when; with `.none` nothing is recorded and the
+    ///     RSSI isn't read.
     public init(
         camera: WirelessCamera,
         connector: any GATTConnector,
@@ -205,10 +212,11 @@ public actor WirelessSession {
         path: any WiFiPathWatching,
         foreground: any ForegroundSignal,
         openLink: @escaping @Sendable (_ reopening: Bool) async throws(CameraLinkFailure) -> any CameraLink,
-        clock: any Clock<Duration> = ContinuousClock()
+        clock: any Clock<Duration> = ContinuousClock(),
+        trace: TransportTrace = .none
     ) {
         self.init(camera: camera, connector: connector, joiner: joiner, path: path, foreground: foreground,
-                  openLink: openLink, clock: clock, handoff: WiFiHandoff(clock: clock))
+                  openLink: openLink, clock: clock, handoff: WiFiHandoff(clock: clock, trace: trace), trace: trace)
     }
 
     init(
@@ -219,7 +227,8 @@ public actor WirelessSession {
         foreground: any ForegroundSignal,
         openLink: @escaping @Sendable (_ reopening: Bool) async throws(CameraLinkFailure) -> any CameraLink,
         clock: any Clock<Duration>,
-        handoff: any WiFiHandingOff
+        handoff: any WiFiHandingOff,
+        trace: TransportTrace = .none
     ) {
         self.camera = camera
         self.connector = connector
@@ -228,6 +237,7 @@ public actor WirelessSession {
         self.foreground = foreground
         self.openLink = openLink
         self.handoff = handoff
+        self.trace = trace
         self.clock = SessionClock(clock)
         peripheral = camera.peripheral
     }
@@ -335,11 +345,26 @@ public actor WirelessSession {
 
     private func runPreparation() async -> Result<any CameraLink, WirelessFailure> {
         defer { operation = nil }
+        if trace.isOn {
+            timeline = StepTimeline(start: clock.now(), phase: phase)
+            trace(.preparationStarted(joined: network != nil, bluetoothFirst: network != nil && bluetoothFirst))
+        }
         do throws(WirelessFailure) {
-            return .success(try await prepare())
+            let opened = try await prepare()
+            endTimeline(succeeded: true)
+            return .success(opened)
         } catch {
+            endTimeline(succeeded: false)
             return .failure(error)
         }
+    }
+
+    /// Records the preparation's step times and forgets them (trace only).
+    private func endTimeline(succeeded: Bool) {
+        guard var ended = timeline else { return }
+        timeline = nil
+        ended.move(to: phase, at: clock.now())
+        trace(.preparationEnded(succeeded: succeeded, times: ended.times))
     }
 
     private func prepare() async throws(WirelessFailure) -> any CameraLink {
@@ -351,6 +376,7 @@ public actor WirelessSession {
             }
             set(.openingSession)
             if !bluetoothFirst {
+                let reopenStart = clock.now()
                 switch await openSession(reopening: openedSinceLeave, within: WirelessTiming.wifiRetryBeforeBluetooth) {
                 case .opened(let opened):
                     link = opened
@@ -364,7 +390,8 @@ public actor WirelessSession {
                     await abandon()
                     throw .cancelled
                 case .gaveUp:
-                    break // back to Bluetooth (Shamil, 9 Nov)
+                    trace(.stayReopenGaveUp(after: clock.now() - reopenStart))
+                    // back to Bluetooth (Shamil, 9 Nov)
                 }
             }
             bluetoothFirst = false
@@ -418,15 +445,20 @@ public actor WirelessSession {
 
         var failedTries = 0
         var rewrites = 0
+        var applies = 0
         var lastFailure: JoinFailure?
         joining: while true {
             try checkCancelled()
             held.ssid = handed.credentials.ssid // set first: whatever `apply` did, a leave removes it
             var applied = false
+            applies += 1
+            let applyStart = clock.now()
             do throws(JoinFailure) {
                 try await joiner.apply(handed.credentials)
                 applied = true
+                trace(.joinApplied(attempt: applies, after: clock.now() - applyStart, failure: nil))
             } catch {
+                trace(.joinApplied(attempt: applies, after: clock.now() - applyStart, failure: error))
                 switch error {
                 case .userDenied: throw .paused(.joinDeclined)
                 case .notInForeground: throw .paused(.needsJoin)
@@ -441,9 +473,11 @@ public actor WirelessSession {
             if applied {
                 if clock.now() >= windowEnd { camera = await cameraWiFi(held.gatt, windowEnd: windowEnd) }
                 if camera?.isOff != true {
-                    if await path.waitForGateway(WirelessCamera.cameraNetworkGateway, timeout: WirelessTiming.gatewayWait) {
-                        break joining
-                    }
+                    let waitStart = clock.now()
+                    let found = await path.waitForGateway(WirelessCamera.cameraNetworkGateway,
+                                                          timeout: WirelessTiming.gatewayWait)
+                    trace(.gateway(found: found, after: clock.now() - waitStart))
+                    if found { break joining }
                     camera = nil
                 }
                 try checkCancelled()
@@ -455,6 +489,7 @@ public actor WirelessSession {
             case .off(let linkDown):
                 rewrites += 1
                 guard rewrites <= WirelessTiming.rewritesPerJoin else { throw .cameraWiFiLapsed }
+                trace(.rewriteStarted(number: rewrites, limit: WirelessTiming.rewritesPerJoin))
                 set(.handingOff)
                 if linkDown, let current = held.gatt {
                     await current.disconnect()
@@ -506,7 +541,9 @@ public actor WirelessSession {
         set(.joining)
         // Nobody joined yet, so the camera's Wi-Fi goes off 50 s after status 2: no point waiting past that.
         let wait = min(WiFiRecoveryTiming.rejoinWhileAway, handed.windowRemaining)
+        let waitStart = clock.now()
         let rejoined = await path.waitForGateway(WirelessCamera.cameraNetworkGateway, timeout: wait)
+        trace(.rejoinedWhileAway(found: rejoined, after: clock.now() - waitStart))
         try checkCancelled()
         guard rejoined else { throw .paused(.needsJoin) }
         set(.openingSession)
@@ -530,6 +567,7 @@ public actor WirelessSession {
     ) async throws(WirelessFailure) -> (result: HandoffResult, switchedOn: Bool) {
         var reconnects = 0
         var wrote = false
+        let started = clock.now()
         while true {
             try checkCancelled()
             let current: any GATTLink
@@ -542,15 +580,24 @@ public actor WirelessSession {
                 held.gatt = current
                 fresh = true
             }
+            readSignal(of: current, since: started)
             do throws(HandoffFailure) {
                 let result = rewriting && !fresh
                     ? try await handoff.rewriteIfLapsed(on: current) : try await handoff.run(on: current)
+                if trace.isOn {
+                    trace(.handoffFinished(after: clock.now() - started, rewrite: rewriting,
+                                           wroteWiFiOn: wrote || result.wroteWiFiOn,
+                                           statusTwoAlready: result.launchedBeforeLooking,
+                                           windowLeft: result.windowRemaining))
+                    readSignal(of: current, since: started)
+                }
                 return (result, wrote || result.wroteWiFiOn)
             } catch {
                 switch error {
                 case .linkDropped(let afterWrite):
                     wrote = wrote || afterWrite
                     reconnects += 1
+                    trace(.bluetoothDropped(afterWrite: afterWrite, reconnect: reconnects))
                     await current.disconnect()
                     held.gatt = nil
                     guard reconnects <= WirelessTiming.handoffReconnects else { throw .handoff(error) }
@@ -562,10 +609,24 @@ public actor WirelessSession {
         }
     }
 
+    /// For the trace only: reads the link's RSSI on a task of its own, so the hand-off never waits for it, and records it with
+    /// the time since `since` (the hand-off's start). Does nothing when the trace is off or the link can't read it.
+    private func readSignal(of link: any GATTLink, since: Duration) {
+        guard trace.isOn, let reader = link as? any GATTSignalReading else { return }
+        let trace = trace
+        let clock = clock
+        Task {
+            let dBm = await reader.readSignalStrength(timeout: GATTSignalTiming.read)
+            trace(.bluetoothSignal(dBm: dBm, after: clock.now() - since))
+        }
+    }
+
     private func connect() async throws(WirelessFailure) -> any GATTLink {
+        let started = clock.now()
         do throws(GATTFailure) {
             let link = try await connector.connect(known: peripheral ?? camera.peripheral)
             peripheral = link.peripheral
+            trace(.bluetoothConnected(after: clock.now() - started))
             return link
         } catch {
             switch error {
@@ -590,16 +651,23 @@ public actor WirelessSession {
     /// Reads CC09 to see whether the camera's Wi-Fi is still on. With the link down, the camera's 50 s from status 2 decide.
     private func cameraWiFi(_ link: (any GATTLink)?, windowEnd: Duration) async -> CameraWiFi {
         let windowPassed = clock.now() >= windowEnd
-        guard let link else { return windowPassed ? .off(linkDown: true) : .on }
+        let (decision, check) = await lookAtCamera(link, windowPassed: windowPassed)
+        trace(.cameraWiFiChecked(check, windowPassed: windowPassed, off: decision.isOff))
+        return decision
+    }
+
+    /// `cameraWiFi`'s decision, with what it saw for the trace.
+    private func lookAtCamera(_ link: (any GATTLink)?, windowPassed: Bool) async -> (CameraWiFi, CameraWiFiCheck) {
+        guard let link else { return (windowPassed ? .off(linkDown: true) : .on, .noLink) }
         do throws(GATTFailure) {
             let value = try await link.read(.status, timeout: HandoffTiming.pollRead)
             var status = SonyStatus()
             _ = try? status.merge(value)
-            return status.wifiStatus == .launched ? .on : .off(linkDown: false)
+            return (status.wifiStatus == .launched ? .on : .off(linkDown: false), .read(status.wifiStatus?.rawValue))
         } catch {
             switch error {
-            case .linkDropped: return windowPassed ? .off(linkDown: true) : .on
-            default: return windowPassed ? .off(linkDown: false) : .on
+            case .linkDropped: return (windowPassed ? .off(linkDown: true) : .on, .linkDown)
+            default: return (windowPassed ? .off(linkDown: false) : .on, .readFailed)
             }
         }
     }
@@ -616,21 +684,31 @@ public actor WirelessSession {
     /// Opens the session, trying again every `WirelessTiming.portRetryEvery` while the failure is one a retry can fix, until
     /// `window` has passed since the first try.
     private func openSession(reopening: Bool, within window: Duration) async -> Opening {
-        let deadline = clock.now() + window
+        let started = clock.now()
+        let deadline = started + window
+        var tries = 0
         while true {
             if Task.isCancelled { return .cancelled }
             let failure: CameraLinkFailure
+            tries += 1
             do throws(CameraLinkFailure) {
-                return .opened(try await openLink(reopening))
+                let opened = try await openLink(reopening)
+                trace(.sessionOpened(after: clock.now() - started, tries: tries, reopening: reopening))
+                return .opened(opened)
             } catch {
                 failure = error
             }
             switch failure.outcome {
             case .retryNow, .retryOnReconnect: break
-            case .skipFile, .stopJob: return .refused(failure)
+            case .skipFile, .stopJob:
+                trace(.sessionNotOpened(after: clock.now() - started, tries: tries, refused: true))
+                return .refused(failure)
             }
             let next = clock.now() + WirelessTiming.portRetryEvery
-            guard next <= deadline else { return .gaveUp(failure) }
+            guard next <= deadline else {
+                trace(.sessionNotOpened(after: clock.now() - started, tries: tries, refused: false))
+                return .gaveUp(failure)
+            }
             do { try await clock.sleep(until: next) } catch { return .cancelled }
         }
     }
@@ -804,6 +882,7 @@ public actor WirelessSession {
     // MARK: - Helpers
 
     private func set(_ next: WirelessPhase) {
+        timeline?.move(to: next, at: clock.now())
         phase = next
         broadcast.send(next)
     }
@@ -824,5 +903,34 @@ public actor WirelessSession {
     private func isConnected(_ link: any GATTLink) async -> Bool {
         for await state in link.state { return state == .connected }
         return false
+    }
+}
+
+/// One preparation's time in each phase, summed (the trace's step times). Phases outside the three steps count only towards
+/// the total.
+struct StepTimeline: Sendable {
+    private let start: Duration
+    private var phase: WirelessPhase
+    private var since: Duration
+    private var spent: [WirelessPhase: Duration] = [:]
+    private var end: Duration?
+
+    init(start: Duration, phase: WirelessPhase) {
+        self.start = start
+        self.phase = phase
+        since = start
+    }
+
+    /// The phase changed (or the preparation ended) at `now`.
+    mutating func move(to next: WirelessPhase, at now: Duration) {
+        spent[phase, default: .zero] += now - since
+        phase = next
+        since = now
+        end = now
+    }
+
+    var times: WirelessStepTimes {
+        WirelessStepTimes(total: (end ?? start) - start, handingOff: spent[.handingOff] ?? .zero,
+                          joining: spent[.joining] ?? .zero, openingSession: spent[.openingSession] ?? .zero)
     }
 }

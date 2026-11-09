@@ -31,8 +31,9 @@ struct IPLinkAgainstSimulatorTests {
         let directory: URL
 
         /// - Parameter deviceInfo: The camera's DeviceInfo, for a camera unlike the α7C II (the captured one when nil).
+        /// - Parameter trace: the link's bench-log events (W20).
         init(frames: [ScriptedCard.Frame] = [.rawPlusJPEG, .jpeg, .raw], deviceInfo: PTPDeviceInfo? = nil,
-             configure: (inout IPLink.Configuration) -> Void = { _ in }) throws {
+             trace: TransportTrace = .none, configure: (inout IPLink.Configuration) -> Void = { _ in }) throws {
             let card = try #require(ScriptedCard.shoot(frames)).scaled(down: 100)
             // Small Data packets, so a download spans many packets and reads.
             let camera: InMemoryPTPIPCamera
@@ -53,7 +54,7 @@ struct IPLinkAgainstSimulatorTests {
                                               mode: .wifi(.cameraNetwork))
             gate = ChannelGate(camera)
             link = IPLink(descriptor: descriptor, configuration: configuration, channels: gate, clock: clock,
-                          connectionClock: ContinuousClock())
+                          connectionClock: ContinuousClock(), trace: trace)
             directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("IPLinkTests-\(UUID().uuidString)", isDirectory: true)
         }
