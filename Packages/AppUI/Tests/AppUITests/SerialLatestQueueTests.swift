@@ -163,7 +163,9 @@ struct SerialLatestQueueTests {
         #expect(await eventually { recorder.started == [1] })
         queue?.send(2)
         queue?.send(3)
+        weak let released = queue
         queue = nil
+        #expect(released == nil)   // the queue's task holds the stream, not the queue
         recorder.release()
         #expect(await eventually { recorder.applied == [1, 3] })
         try? await Task.sleep(for: .milliseconds(50))

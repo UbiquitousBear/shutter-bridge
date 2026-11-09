@@ -52,7 +52,10 @@ public struct BackgroundRefreshScheduler: ProximityRefreshScheduling {
 
     public func settle(within limit: Duration) async {
         let reached = await asks.idle(within: limit)
-        if !reached {
+        if reached { return }
+        if Task.isCancelled {
+            log.note("proximity: the app-refresh task expired before its ask reached iOS")
+        } else {
             log.note("proximity: the app-refresh ask hadn't reached iOS after \(limit); the task ends anyway")
         }
     }
