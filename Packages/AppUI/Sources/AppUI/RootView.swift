@@ -8,7 +8,7 @@ public struct RootView: View {
     public init() {}
 
     public var body: some View {
-        #if canImport(UIKit) && canImport(ImageCaptureCore) && canImport(Photos) && canImport(SwiftData) && os(iOS)
+        #if canImport(UIKit) && canImport(ImageCaptureCore) && canImport(Photos) && canImport(SwiftData) && canImport(BackgroundTasks) && canImport(UserNotifications) && canImport(CoreBluetooth) && canImport(Network) && canImport(NetworkExtension) && os(iOS)
         LiveRoot()
         #else
         ContentUnavailableView(CamerasWording.title, systemImage: "cable.connector",

@@ -157,10 +157,12 @@ jobs:
             if ! (cd "$dir" && xcodebuild test -scheme "$scheme" -destination "platform=iOS Simulator,id=$SIM" \
                     "${parallel[@]}" | tee "$raw" | xcbeautify --renderer github-actions); then
               failed+=("$pkg")
-              # xcbeautify shortens Swift Testing failures to "Recorded an issue", so print the raw lines that
-              # name the test and the expectation that failed.
+              # xcbeautify shortens Swift Testing failures to "Recorded an issue" and drops compiler crashes, so
+              # print the raw lines that name the test and the expectation that failed, any compile error, and a
+              # crashed compiler's stack dump (which names the file and declaration it was type-checking).
               echo "--- $pkg: failures from the raw xcodebuild output ---"
               grep -E 'recorded an issue|Expectation failed|failed after|error:' "$raw" | head -n 80 || true
+              grep -E -A 12 'Stack dump:|Please submit a bug report|Assertion failed|Segmentation fault|While (evaluating|type-checking|emitting|SILGen)' "$raw" | head -n 120 || true
             fi
             echo "::endgroup::"
           done

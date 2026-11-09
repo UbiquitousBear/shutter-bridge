@@ -77,7 +77,14 @@ public final class WiFiRecoveryCoordinator {
     /// the background was never measured.
     public var bluetoothSwitchOnWhenAway: Bool
     /// The recovery's state.
-    public private(set) var plan: WiFiRecoveryPlan
+    public private(set) var plan: WiFiRecoveryPlan {
+        didSet {
+            if plan.phase != oldValue.phase { onPhaseChanged?(plan.phase) }
+        }
+    }
+    /// Told each time the plan's phase changes, so a screen can follow it (the Import model keeps it as
+    /// `wifiRecoveryPhase`, which is observed; this class isn't).
+    var onPhaseChanged: (@MainActor (WiFiRecoveryPlan.Phase) -> Void)?
 
     weak var host: (any WiFiRecoveryHost)?
 
@@ -142,10 +149,12 @@ public final class WiFiRecoveryCoordinator {
     public var isRecovering: Bool { plan.isRecovering }
 
     /// The person asks to try again (W16's button): runs the recovery from the front when it gave up or waits for a join,
-    /// or when the job is left paused for its camera or card with no recovery under way.
+    /// or when the job is left paused for its camera, its card or a join with no recovery under way (a new `session`, or
+    /// a step's error, forgets the recovery but leaves the job paused).
     public func tryAgain() {
         if plan.phase == .idle, session != nil, host?.recoveryCarrier == .wifi,
-           lastState == .paused(.cameraUnreachable) || lastState == .paused(.cardUnavailable) {
+           lastState == .paused(.cameraUnreachable) || lastState == .paused(.cardUnavailable)
+            || lastState == .paused(.needsJoin) {
             reset()
             feed(.sessionLost)
             return

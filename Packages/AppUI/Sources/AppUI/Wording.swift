@@ -681,18 +681,32 @@ public enum OnboardingWording {
     /// What the camera menu path and its two settings are. Both settings are named until it is known whether the
     /// hand-off needs *Bluetooth Rmt Ctrl* (backlog section 6: *Bluetooth Function* was on in every run, *Bluetooth
     /// Rmt Ctrl* in the runs that record their settings).
+    ///
+    /// `unverified`: the path is the one the spike's runs recorded; Shamil reads it off the camera before 1.0 (B:144).
     public static let cameraPath = "MENU › Network › Bluetooth › Pairing"
     public static let settingsToCheck = "Bluetooth Function and Bluetooth Rmt Ctrl"
 
+    /// PLACEHOLDER, `unverified` (B:144): the words the camera shows when it asks to confirm the pairing, to be read off
+    /// the camera by Shamil and put here word for word. Until then it is nil and the copy says only that the camera asks
+    /// you to confirm: a quoted prompt the camera doesn't show would be worse than none. Whether either prompt shows a
+    /// code to compare isn't recorded either.
+    public static let cameraConfirmationWording: String? = nil
+
     public static let explainTitle = "Pair Over Bluetooth"
-    /// The steps, in order. The camera's confirmation wording and whether either prompt shows a code to compare aren't
-    /// recorded yet (`unverified`), so the copy says only that the camera asks for a confirmation.
-    public static let explainSteps: [String] = [
-        "On the camera, open \(cameraPath) and leave that screen open.",
-        "Check that \(settingsToCheck) are on.",
-        "Tap Start Pairing. Two prompts follow: iOS asks to pair this iPhone with the camera, and the camera asks you "
-            + "to confirm. Accept both.",
-    ]
+    /// The steps, in order: the camera's Pairing screen, its two Bluetooth settings, and the two prompts that follow
+    /// (iOS's Bluetooth pairing request first, then the camera's confirmation).
+    public static let explainSteps: [String] = steps(cameraConfirmation: cameraConfirmationWording)
+
+    /// The steps with the camera's confirmation quoted when its wording is known (`cameraConfirmationWording`).
+    public static func steps(cameraConfirmation wording: String?) -> [String] {
+        let cameraAsks = wording.map { "the camera asks \u{2018}\($0)\u{2019}" } ?? "the camera asks you to confirm"
+        return [
+            "On the camera, open \(cameraPath) and leave that screen open.",
+            "Check that \(settingsToCheck) are on.",
+            "Tap Start Pairing. Two prompts follow: first iOS asks to pair this iPhone with the camera over Bluetooth, "
+                + "then \(cameraAsks). Accept both.",
+        ]
+    }
     /// iOS asks for Bluetooth access at this step, with its own wording.
     public static let bluetoothPrompt = "iOS also asks whether Shutter Bridge may use Bluetooth."
 
@@ -900,4 +914,127 @@ public enum WiFiWording {
             BrowseWording.listingFailed(kind)
         }
     }
+}
+
+// MARK: - Wireless screens (W16)
+//
+// The copy the wireless screens add over the W15 models: the Cameras screen's way in to Wi-Fi, the Import screen's Try
+// Again for a Wi-Fi job that needs the person, and the Settings row for the reminder. Same house style as above.
+
+extension CamerasWording {
+    /// The toolbar menu that sets a Wi-Fi camera up, and its two choices.
+    public static let addWiFiCamera = "Add Wi-Fi Camera"
+    public static let addWiFiCameraHint = "Pair a camera over Bluetooth, or add one on this iPhone's Wi-Fi network by "
+        + "its address."
+    /// The menu's hint when the app can't pair (no Bluetooth pairing in this build): Type an Address is the only choice.
+    public static let addWiFiCameraByAddressHint = "Add a camera on this iPhone's Wi-Fi network by its address."
+    public static let pairOverBluetooth = "Pair Over Bluetooth"
+    public static let typeAddress = "Type an Address"
+
+    /// The badge on a camera's row when the proximity scan has reported it lately (`ReminderModel.isNearby(_:)`).
+    public static let nearbyBadge = "Nearby"
+
+    /// The line under a camera's name. A USB camera's mode in the camera's wording (`modeLine(_:)`); a Wi-Fi camera's
+    /// route, as its badge already says Wi-Fi.
+    public static func detailLine(_ mode: CameraMode) -> String {
+        switch mode {
+        case .usb: modeLine(mode)
+        case .wifi(.cameraNetwork): "Joins the camera's Wi-Fi when opened"
+        case .wifi(.otherNetwork): "On this iPhone's Wi-Fi network"
+        }
+    }
+
+    /// A camera row's VoiceOver hint: what opening it does. A Wi-Fi camera is joined first, which takes a while.
+    public static func rowHint(_ mode: CameraMode) -> String {
+        switch mode {
+        case .usb: "Opens the camera's card."
+        case .wifi(.cameraNetwork): "Switches on the camera's Wi-Fi, joins it and opens the camera's card."
+        case .wifi(.otherNetwork): "Connects to the camera and opens its card."
+        }
+    }
+
+    /// Under the empty state, when the app can set up a Wi-Fi camera.
+    public static let wifiEmptyHint = "Or set up a camera over Wi-Fi."
+
+    /// Said once a camera has been added, by pairing or by address.
+    public static func added(_ camera: CameraDescriptor) -> String {
+        let name = displayName(for: camera)
+        return name == genericName ? "Camera added. Tap it to open its card." : "\(name) added. Tap it to open its card."
+    }
+}
+
+extension ImportWording {
+    /// A Wi-Fi job paused for a join with the app in front: the session couldn't join from where it was, so the person
+    /// tries again (W14's `.needsJoin`, which with the app away says "open Shutter Bridge").
+    public static let needsJoinInFront = "Paused: Shutter Bridge couldn't join the camera's Wi-Fi. Tap Try Again, then "
+        + "tap Join if iOS asks."
+    /// The button that runs the Wi-Fi recovery again (`ImportModel.tryAgainWiFi()`).
+    public static let tryAgain = "Try Again"
+    public static let tryAgainHint = "Switches on the camera's Wi-Fi over Bluetooth if needed, joins it and carries on "
+        + "with the import."
+    /// While the recovery reaches the camera again by itself, for a job paused for a join (whose own line, with the app
+    /// away, says to open Shutter Bridge).
+    public static let reconnecting = "Reaching the camera again…"
+
+    /// A Wi-Fi job paused for its camera, its card or a join once the recovery has given up or waits for the person, in
+    /// front: only Try Again carries it on now, so the line ends with it rather than "resumes by itself".
+    public static func pausedTryAgain(_ reason: PauseReason) -> String {
+        switch reason {
+        case .needsJoin: needsJoinInFront
+        case .cameraUnreachable:
+            "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on, then tap Try Again."
+        case .cardUnavailable:
+            "Paused: the camera isn't offering its card. Check that the card is in the camera, then tap Try Again."
+        case .appInBackground, .cameraRemoved, .stalled, .byPerson, .taskExpired: paused(reason)
+        }
+    }
+    /// The Wi-Fi section's header on the Import screen.
+    public static let wifiHeader = "Wi-Fi"
+}
+
+extension WiFiWording {
+    /// The countdown's label while the phone stays on the camera's network after an import.
+    public static let stayCountdownPrefix = "Leaves the camera's Wi-Fi in"
+    /// The close button on the notes, for VoiceOver.
+    public static let dismissNotes = "Close"
+    public static let dismissNotesHint = "Hides these notes."
+    public static let localNetworkContinueHint = "Shows iOS's Local Network prompt next."
+    public static let localNetworkNotNowHint = "Doesn't connect to the camera now."
+
+    /// The join's line on the screens, which show only with the app in front (`WiFiImportModel.activityLine`): a pause
+    /// for a join says nothing (the Import summary says to tap Try Again, and a connection from Browse says why it failed
+    /// in Browse), a declined join says to try again rather than to open the camera, and the others are as in `step(_:)`.
+    public static func stepInFront(_ phase: WirelessPhase) -> String? {
+        switch phase {
+        case .paused(.needsJoin): nil
+        case .paused(.joinDeclined):
+            "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Try again, and choose Join when iOS asks."
+        default: step(phase)
+        }
+    }
+}
+
+extension SettingsWording {
+    /// The row that opens the reminder's settings (`ReminderSettingsView`), with whether it is on.
+    public static func remindersValue(on: Bool) -> String { on ? "On" : "Off" }
+    public static let remindersHint = "Opens the settings for the reminder when your camera is nearby."
+}
+
+extension OnboardingWording {
+    public static let startHint = "Starts looking for the camera over Bluetooth."
+    public static let cancelHint = "Stops pairing and goes back to the steps."
+    public static let tryAgainHint = "Looks for the camera over Bluetooth again."
+    public static let openSettingsHint = "Opens Shutter Bridge's page in Settings."
+    public static let doneHint = "Closes pairing. The camera is in the list."
+
+    /// A numbered step as VoiceOver reads it: "Step 1 of 3. On the camera, open …".
+    public static func stepLabel(_ number: Int, of count: Int, _ step: String) -> String {
+        "Step \(number) of \(count). \(step)"
+    }
+}
+
+extension TypedAddressWording {
+    /// The field's placeholder: an example of the usual kind of address.
+    public static let fieldPrompt = "10.0.0.12"
+    public static let connectHint = "Adds the camera to the list. Tap it there to connect."
 }

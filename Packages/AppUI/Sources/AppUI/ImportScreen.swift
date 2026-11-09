@@ -12,10 +12,17 @@ import UIKit
 /// the camera is back. The job runs on whether the sheet is up or not, so it closes with the system close button, not
 /// Done (HIG Sheets); closing it and swiping it down do the same: the app clears a finished job when the sheet closes
 /// either way (`LiveApp`).
+///
+/// A Wi-Fi job (wireless plan W16) adds, from the `WiFiImportModel` the app puts in the environment: the Local Network
+/// explanation if a connection waits for it, the step of the join or the stay, the note that the phone's internet uses
+/// mobile data while joined, and the note that the camera's Wi-Fi may stay on for a while after leaving. When the Wi-Fi
+/// recovery (W14) gave up or needs a join it couldn't make from where it was, *Try Again* takes the pause button's place
+/// (`ImportModel.wifiRecoveryControl`); while it reaches the camera by itself the summary shows a spinner instead.
 struct ImportScreen: View {
     let model: ImportModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(WiFiImportModel.self) private var wifiStatus: WiFiImportModel?
     @State private var confirmsCancel = false
 
     var body: some View {
@@ -43,6 +50,19 @@ struct ImportScreen: View {
                             Label(control.title, systemImage: control.systemImage)
                                 .labelStyle(.titleAndIcon)
                         }
+                    }
+                }
+                // A Wi-Fi job paused for its camera, its card or a join, once the recovery waits for the person: never
+                // alongside Pause or Continue, which don't apply then.
+                if model.hasJob, model.pauseControl == nil, model.wifiRecoveryControl == .tryAgain {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button {
+                            model.tryAgainWiFi()
+                        } label: {
+                            Label(ImportWording.tryAgain, systemImage: "arrow.clockwise")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .accessibilityHint(ImportWording.tryAgainHint)
                     }
                 }
                 if model.hasJob, model.canCancel {
@@ -74,6 +94,17 @@ struct ImportScreen: View {
         List {
             Section {
                 ImportSummary(model: model)
+            }
+            if let wifiStatus, model.camera?.descriptor.carrier == .wifi {
+                if wifiStatus.isExplainingLocalNetwork {
+                    Section {
+                        LocalNetworkExplanationView(status: wifiStatus, compact: true)
+                    }
+                } else if wifiStatus.hasStatus(for: model.camera?.descriptor.id) {
+                    Section(ImportWording.wifiHeader) {
+                        JoinStatusView(status: wifiStatus, style: .row)
+                    }
+                }
             }
             if model.destinationLine != nil || model.filesReasonLine != nil {
                 Section {
@@ -120,7 +151,8 @@ struct ImportSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if model.isAskingForPhotosAccess || model.isWaitingForCamera {
+                if model.isAskingForPhotosAccess || model.isWaitingForCamera
+                    || model.wifiRecoveryControl == .reconnecting {
                     ProgressView()
                 }
                 Text(model.statusLine ?? "")

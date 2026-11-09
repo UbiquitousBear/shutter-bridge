@@ -701,3 +701,138 @@ struct WiFiRecoveryTests {
         #expect(try await WiFiRecoveryCoordinator.listNewHandles(plain, known: card) == card.newestFirst())
     }
 }
+
+// MARK: - What the Import screen offers (W16)
+
+extension WiFiRecoveryTests {
+    @Test func theScreenOffersTryAgainOnceTheRecoveryGivesUp() async throws {
+        let b = await bench()
+        #expect(b.model.wifiRecoveryControl == nil)
+        await b.session.script([.failure(.cameraNotFound), .link(b.link)])
+        try await startAndLoseTheSession(b)
+        #expect(await b.phase(.gaveUp))
+        #expect(b.model.wifiRecoveryPhase == .gaveUp)
+        #expect(b.model.state == .paused(.cameraUnreachable))
+        #expect(b.model.wifiRecoveryControl == .tryAgain)
+        #expect(b.model.pauseControl == nil)   // Try Again takes the pause button's place, never beside it
+        // Given up: the line names Try Again, not "resumes when it's back in reach".
+        #expect(b.model.statusLine == ImportWording.pausedTryAgain(.cameraUnreachable))
+
+        b.model.tryAgainWiFi()
+        #expect(await b.sessionCalls(2))
+        #expect(await b.finished())
+        #expect(b.model.wifiRecoveryControl == nil)
+        #expect(b.model.wifiRecoveryPhase == .idle)
+    }
+
+    @Test func whileTheRecoveryReachesTheCameraTheScreenShowsItWorking() async throws {
+        let b = await bench()
+        await b.session.script([.linkAfter(.seconds(10), b.link)])
+        try await startAndLoseTheSession(b)
+        #expect(await b.phase(.reopening))
+        #expect(await eventually { b.model.wifiRecoveryControl == .reconnecting })
+        // The camera's own line is right while the recovery reaches it by itself.
+        #expect(b.model.statusLine == ImportWording.paused(.cameraUnreachable))
+        #expect(await b.sessionCalls(1))
+        b.model.tryAgainWiFi()   // not offered: does nothing
+        #expect(await holdsThroughout { await b.session.calls.count == 1 })
+        #expect(await eventually { b.clock.sleepers == 1 })
+        b.clock.advance(by: .seconds(10))
+        #expect(await b.finished())
+        #expect(b.model.wifiRecoveryControl == nil)
+    }
+
+    @Test func aJoinRefusedInFrontSaysTryAgainNotOpenTheApp() async throws {
+        let b = await bench()
+        await b.session.script([.failure(.paused(.needsJoin)), .link(b.link)])
+        try await startAndLoseTheSession(b)
+        #expect(await b.phase(.gaveUp))
+        #expect(b.model.state == .paused(.needsJoin))
+        #expect(b.model.statusLine == ImportWording.needsJoinInFront)
+        #expect(b.model.wifiRecoveryControl == .tryAgain)
+        b.model.tryAgainWiFi()
+        #expect(await b.sessionCalls(2))
+        #expect(await b.finished())
+    }
+
+    /// B:211's return: the job paused for a join with the app away stays paused for it until the reopen from the front
+    /// finishes, and meanwhile the line says the recovery is at work, not to tap a Try Again the screen doesn't show.
+    @Test func backInFrontTheReopenForAJoinSaysItIsWorkingNotTryAgain() async throws {
+        let b = await bench()
+        await b.session.script([.failure(.paused(.needsJoin)), .linkAfter(.seconds(10), b.link)])
+        #expect(try await b.importAll() == .started(3))
+        #expect(await b.victimHeld())
+        await b.model.scenePhaseChanged(.background)
+        await b.link.loseSession()
+        #expect(await b.state(.paused(.needsJoin)))
+        #expect(await b.phase(.pausedForJoin))
+
+        await b.model.scenePhaseChanged(.active)
+        #expect(await b.sessionCalls(2))
+        #expect(await eventually { b.model.wifiRecoveryControl == .reconnecting })
+        #expect(b.model.state == .paused(.needsJoin))
+        #expect(b.model.statusLine == ImportWording.reconnecting)
+        #expect(b.model.statusLine != ImportWording.needsJoinInFront)
+
+        #expect(await eventually { b.clock.sleepers == 1 })
+        b.clock.advance(by: .seconds(10))
+        #expect(await b.finished())
+        #expect(await b.importedNames == Self.allNames)
+    }
+
+    /// A job left paused for a join with the recovery forgotten (here: the session set again, as the app may) still
+    /// offers Try Again, and Try Again takes it up.
+    @Test func tryAgainTakesUpAJobLeftPausedForAJoin() async throws {
+        let b = await bench()
+        await b.session.script([.failure(.paused(.needsJoin)), .link(b.link)])
+        try await startAndLoseTheSession(b)
+        #expect(await b.phase(.gaveUp))
+        #expect(b.model.state == .paused(.needsJoin))
+        b.coordinator.session = b.session
+        #expect(b.coordinator.plan.phase == .idle)
+        #expect(b.model.wifiRecoveryPhase == .idle)
+        #expect(b.model.wifiRecoveryControl == .tryAgain)
+        #expect(b.model.statusLine == ImportWording.needsJoinInFront)
+
+        b.model.tryAgainWiFi()
+        #expect(await b.sessionCalls(2))
+        #expect(await b.finished())
+        #expect(await b.importedNames == Self.allNames)
+    }
+
+    @Test func awayTheNeededJoinStillSaysOpenTheApp() async throws {
+        let b = await bench()
+        await b.session.script([.failure(.paused(.needsJoin))])
+        #expect(try await b.importAll() == .started(3))
+        #expect(await b.victimHeld())
+        await b.model.scenePhaseChanged(.background)
+        await b.link.loseSession()
+        #expect(await b.state(.paused(.needsJoin)))
+        #expect(b.model.statusLine == ImportWording.status(b.model.progress, mode: nil))
+        #expect(b.model.statusLine != ImportWording.needsJoinInFront)
+        await b.model.cancel()
+    }
+
+    @Test func noTryAgainForAJobWithoutASession() async throws {
+        let b = await bench()
+        b.coordinator.session = nil
+        try await startAndLoseTheSession(b)
+        #expect(await b.state(.paused(.cameraUnreachable)))
+        #expect(b.model.wifiRecoveryControl == nil)
+        await b.model.cancel()
+    }
+
+    @Test func noTryAgainOverUSB() async throws {
+        let b = await bench()
+        let usb = FakeLink(items: [item("DSC00001.JPG", at: 10, size: 2_000)])
+        await usb.set(writesListedSize: true)
+        await usb.set(bytesHangs: true)
+        let camera = ImportCamera(descriptor: usb.descriptor, key: CameraKeys.key(for: usb.descriptor, material: nil))
+        #expect(await b.model.importItems([item("DSC00001.JPG", at: 10, size: 2_000)], from: camera, link: usb)
+            == .started(1))
+        try await b.engine.pause(.cameraUnreachable)
+        #expect(await b.state(.paused(.cameraUnreachable)))
+        #expect(b.model.wifiRecoveryControl == nil)
+        await b.model.cancel()
+    }
+}

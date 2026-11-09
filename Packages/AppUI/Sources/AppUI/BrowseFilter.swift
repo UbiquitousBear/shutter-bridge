@@ -115,12 +115,17 @@ public final class LinkLeases {
     /// background (`WiFiCameraSource.linkReleased(_:activeImport:)`), where Browse being open must not keep the phone on
     /// the camera's network once the import is over.
     public var onReleased: (@MainActor (any CameraLink) async -> Void)?
+    /// Called when a link gets its first holder. Nil by default. The reminder's connection hold uses it (W16,
+    /// `ConnectionHolds`): a camera is connected while someone holds its link.
+    public var onAcquired: (@MainActor (any CameraLink) -> Void)?
 
     public init() {}
 
     public func acquire(_ link: any CameraLink) {
         let key = ObjectIdentifier(link)
-        holders[key] = (link, (holders[key]?.count ?? 0) + 1)
+        let count = (holders[key]?.count ?? 0) + 1
+        holders[key] = (link, count)
+        if count == 1 { onAcquired?(link) }
     }
 
     /// Lets go of `link`; closes it when no one else holds it. Releasing a link that isn't held closes it.
