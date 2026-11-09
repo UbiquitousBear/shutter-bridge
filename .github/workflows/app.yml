@@ -48,6 +48,42 @@ jobs:
           uname -m
           xcodebuild -version
 
+      - name: Entitlements are wired into the app target
+        # The unsigned builds below can't see entitlements (CODE_SIGNING_ALLOWED=NO drops them), so a lost
+        # CODE_SIGN_ENTITLEMENTS or a lost key would only show at TestFlight time, or on the bench as every join
+        # refused. Both of the app target's configurations must point at App/ShutterBridge.entitlements, and the file
+        # must hold exactly the keys ticked on the App ID: today Hotspot Configuration only (docs/ci.md). Adding a key
+        # (Multicast Networking, once Apple grants it) means ticking it on the App ID first, then updating this list.
+        run: |
+          python3 - <<'EOF'
+          import plistlib, re, sys
+          problems = []
+          pbxproj = open("App/ShutterBridge.xcodeproj/project.pbxproj", encoding="utf-8").read()
+          # The app target's configurations are the ones that name its Info.plist.
+          configs = {}
+          for body, name in re.findall(r"isa = XCBuildConfiguration;\s*buildSettings = \{(.*?)\n\t\t\t\};\s*name = (\w+);", pbxproj, re.S):
+              if re.search(r"^\s*INFOPLIST_FILE = Info\.plist;", body, re.M):
+                  m = re.search(r"^\s*CODE_SIGN_ENTITLEMENTS = (.+?);", body, re.M)
+                  configs[name] = m.group(1).strip('"') if m else None
+          for name in ("Debug", "Release"):
+              if name not in configs:
+                  problems.append(f"no {name} configuration of the app target found in project.pbxproj")
+              elif configs[name] != "ShutterBridge.entitlements":
+                  problems.append(f"{name}: CODE_SIGN_ENTITLEMENTS is {configs[name]!r}, expected 'ShutterBridge.entitlements'")
+          expected = {"com.apple.developer.networking.HotspotConfiguration": True}
+          try:
+              with open("App/ShutterBridge.entitlements", "rb") as f:
+                  entitlements = plistlib.load(f)
+          except Exception as error:
+              problems.append(f"App/ShutterBridge.entitlements can't be read as a property list: {error}")
+          else:
+              if entitlements != expected:
+                  problems.append(f"App/ShutterBridge.entitlements holds {entitlements!r}, expected {expected!r}")
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          EOF
+
       - name: Pick an iPhone simulator
         id: sim
         # The first available iPhone on the newest iOS runtime this Xcode can run: no newer than its iOS Simulator

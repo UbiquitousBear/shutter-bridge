@@ -3,10 +3,14 @@
 <!--
   Info.plist for Shutter Bridge. It sits outside the synchronized ShutterBridge/ folder so it isn't copied into the
   app as a resource; the project points at it with INFOPLIST_FILE. Only what the built features need: Iteration 1's keys;
-  for the camera's Bluetooth link (W10), the Bluetooth permission and the bluetooth-central background mode; for imports
-  that go on while the app is away (W13), the continued task's identifier; and for the proximity scan (W17), the fetch
-  background mode and the app-refresh task's identifier. No local network, other background modes or Hotspot
-  Configuration until the change that uses them.
+  for the camera's Bluetooth link (W10), the Bluetooth permission and the bluetooth-central background mode; for the
+  camera's Wi-Fi (W12), the Local Network permission; for imports that go on while the app is away (W13), the continued
+  task's identifier; and for the proximity scan (W17), the fetch background mode and the app-refresh task's identifier.
+  No other background modes until the change that uses them. Joining the camera's network needs no key here: it is the
+  Hotspot Configuration entitlement, in ShutterBridge.entitlements.
+  Left out on purpose: NSBonjourServices (the camera advertised no _ptp._tcp; the app connects to its fixed address,
+  backlog section 5) and the ATS NSAllowsLocalNetworking exception (only the SSDP description fetch over plain HTTP would
+  need it, and that stays off).
 -->
 <plist version="1.0">
 <dict>
@@ -72,6 +76,11 @@
 		<string>net.shamil.shutter-bridge.import</string>
 		<string>net.shamil.shutter-bridge.proximity-refresh</string>
 	</array>
+	<!-- Asked the first time the app connects to the camera over Wi-Fi (port 15740: 192.168.122.1 on the camera's own
+	     network after the join, or a typed address), never at launch. Until it is allowed the connection waits; it doesn't
+	     fail (backlog section 1). Says why, and that nothing else on the network is touched (HIG Privacy). -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connects to your camera over Wi-Fi to import your photos. It doesn't connect to other devices on your network.</string>
 	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Saves the photos you import into an album. Limit Access with no photos selected is enough.</string>
