@@ -186,8 +186,12 @@ public final class ReminderModel {
         }
     }
 
-    /// Tells the scan the stored setting and reads the permission. At launch.
+    /// Reads the stored settings again, tells the scan the setting and reads the permission. At launch, once the setting
+    /// can be read: the model may have been made before the first unlock after a restart, when the store reads as empty,
+    /// and a later save would otherwise write those defaults over the person's choices.
     public func applyStoredSetting() async {
+        settings = settingsStore.load()
+        snoozedUntil = holds.snoozedUntil(now: now())
         authorisation = await notifier.authorisation()
         await scanEnabled(settings.enabled)
     }

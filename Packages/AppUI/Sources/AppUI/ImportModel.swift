@@ -151,8 +151,13 @@ public final class ImportModel: BrowseImporting {
     /// is the same job.
     @ObservationIgnored public var onJobStarted: (@MainActor (ImportCamera) -> Void)?
     @ObservationIgnored public var onJobEnded: (@MainActor (ImportCamera) -> Void)?
+    /// Told when a Wi-Fi job has paused for an expiry with the app away, after the transfer's abort (W16: the app lets the
+    /// camera go, so the phone doesn't stay on its network until the person is back; Continue connects again).
+    @ObservationIgnored public var onPausedAwayForExpiry: (@MainActor (ImportCamera) async -> Void)?
     /// The job last announced through `onJobStarted` and not yet through `onJobEnded`.
     @ObservationIgnored private(set) var announcedJob: ImportCamera?
+    /// A finished job's link is being let go (`refresh()`): its background run is finished once that is done.
+    @ObservationIgnored private var releasingFinishedLink = false
     /// Where the Wi-Fi recovery is, followed from the coordinator so the screen redraws when it changes (W16: the Import
     /// screen's Try Again, `wifiRecoveryControl`).
     public internal(set) var wifiRecoveryPhase: WiFiRecoveryPlan.Phase = .idle
@@ -574,9 +579,10 @@ public final class ImportModel: BrowseImporting {
     /// iOS ended the background run early (an expiry, or Stop in the system's UI; backlog Iteration 3, section 9,
     /// *Expiry is normal*). On Wi-Fi: flush the checkpoints, pause with `.taskExpired`, and post one pause
     /// notification while the app is away (not when the person had paused the job); then, once the coordinator has
-    /// finished the run, stop the link's transfer (the returned step). The abort may wait on a camera whose Wi-Fi has
-    /// faded, as it usually has at an expiry, so it never holds the run past its end or the notification back. Over
-    /// USB nothing changes: the job pauses at the app's leaving, as before (decision 1).
+    /// finished the run, let the camera go if the app is away (`onPausedAwayForExpiry`) and stop the link's transfer (the
+    /// returned step). Both may wait on a camera whose Wi-Fi has faded, as it usually has at an expiry, so they never hold
+    /// the run past its end or the notification back. Over USB nothing changes: the job pauses at the app's leaving, as
+    /// before (decision 1).
     private func backgroundRunEnded() async -> (@MainActor () async -> Void)? {
         guard await engine.state.isActive else { return nil }
         guard !pausesWhenTheAppLeaves else {
@@ -590,7 +596,14 @@ public final class ImportModel: BrowseImporting {
         if !pausedByPerson { await notifyPausedWhileAway() }
         guard let link else { return nil }
         let abort = abortTransfer
-        return { await abort(link) }
+        // Away, the camera is let go first (W16): its session closes the link, which stops the transfer as the abort would,
+        // and leaves the camera's network, so the phone isn't left on it until the person is back.
+        let letGo = onPausedAwayForExpiry
+        let away = isAway ? camera : nil
+        return {
+            if let away { await letGo?(away) }
+            await abort(link)
+        }
     }
 
     /// Posts the pause notification, once per stay away, and only when iOS allows it (a notification posted while
@@ -638,10 +651,20 @@ public final class ImportModel: BrowseImporting {
         guard mine > refreshesApplied else { return }
         refreshesApplied = mine
         apply(s)
+        // A job that has ended lets its link go before its background run is finished: a Wi-Fi camera's session leaves
+        // the network as the run's last step (`WirelessSession.importFinished()`), and iOS may suspend the app as soon as
+        // the run is finished.
+        if case .finished = s.progress.state, let link {
+            self.link = nil
+            releasingFinishedLink = true
+            await leases.release(link)
+            releasingFinishedLink = false
+        }
         // As `apply`: while a job starts, a finished snapshot is the last job's, not this one's.
         if !starting || s.progress.state.isActive {
             if case let .finished(outcome) = s.progress.state {
-                background.finish(success: outcome == .completed)
+                // A read that comes in while the link is let go leaves the finishing to the read letting it go.
+                if !releasingFinishedLink { background.finish(success: outcome == .completed) }
             } else if s.progress.state.isActive {
                 background.update(s.progress)
             }
@@ -652,10 +675,6 @@ public final class ImportModel: BrowseImporting {
             pauseNotificationShown = false
             await notifier.withdraw(.importPaused)
             log.note("import: withdrew the pause notification")
-        }
-        if case .finished = s.progress.state, let link {
-            self.link = nil
-            await leases.release(link)
         }
         if s.progress.state == .paused(.cameraRemoved) {
             await cameraConnected()   // the camera may already be back

@@ -41,7 +41,9 @@ public protocol PairedCameraRegistering: Sendable {
 /// it: `scenePhaseChanged(_:activeImport:)` finishes every camera with a live link whose import isn't running, and
 /// `linkReleased(_:activeImport:)` does the same when an import's lease goes while Browse still holds the link. In the
 /// foreground the stay still starts only when the last holder lets go (open for Shamil: it differs from "one timer from the
-/// end of the import" while Browse stays open). Scene changes reach every session.
+/// end of the import" while Browse stays open). Scene changes reach every session. A link the Wi-Fi recovery opened
+/// through the session is adopted as the camera's (`adoptRecovered(_:for:)`), and an import paused away for an expiry
+/// lets the camera go (`importPausedAway(_:)`).
 ///
 /// **Failures.** The reason a connection failed is kept for the camera (`openFailureText(for:)`, with a next step) and
 /// reported (`WiFiConnectionEvent.failed`); the open itself fails with the nearest `CameraLinkFailure` kind. A person who
@@ -235,28 +237,56 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// A holder let `link` go but another still holds it (Browse, on screen). In the foreground nothing changes: the stay
     /// starts when the last one lets go. In the background the camera is let go at once if no import is running over it
     /// (`activeImport`: the key of the import that is active, if any), since the phone must not stay on the camera's
-    /// network because a screen is still open: the import's last step in the background is `importFinished()`.
-    public func linkReleased(_ link: any CameraLink, activeImport: CameraKey? = nil) async {
-        guard inBackground, let id = handedOutID(of: link), !isImporting(id, activeImport) else { return }
-        await finish(id)
+    /// network because a screen is still open: the import's last step in the background is `importFinished()`. Returns
+    /// whether the camera's session let it go (the link is then closed, though still held).
+    @discardableResult
+    public func linkReleased(_ link: any CameraLink, activeImport: CameraKey? = nil) async -> Bool {
+        guard inBackground, let id = handedOutID(of: link), !isImporting(id, activeImport) else { return false }
+        return await finish(id) != nil
+    }
+
+    /// The Wi-Fi recovery (W14) opened the camera again through its session, not through `cameraLink(for:)`: the new link
+    /// is the camera's live link from now on, so the old link's last holder letting go isn't taken for the end of the
+    /// import (which would close the link the job has just moved to), and the recovered job's end is.
+    public func adoptRecovered(_ link: any CameraLink, for id: CameraDescriptor.ID) {
+        guard entries[id] != nil else { return }
+        live[id] = link
+        handedOut[id] = link
+        watch(link, for: id)
+    }
+
+    /// The import over the camera paused for an expiry with the app away (W13): iOS ended the continued task, so the phone
+    /// doesn't stay on the camera's network until the person comes back. The camera is let go as at an import's end (in
+    /// the background its session leaves); the job keeps its lease on the closed link, and Continue opens a fresh one.
+    /// Returns the link let go, if one was.
+    @discardableResult
+    public func importPausedAway(_ id: CameraDescriptor.ID) async -> (any CameraLink)? {
+        guard inBackground, handedOut[id] != nil else { return nil }
+        return await finish(id)
     }
 
     /// The scene changed: every session is told, as `WirelessSession` expects (in the stay it leaves at once on the way
     /// to the background, and it checks the stay on the way back). On the way to the background every camera with a live
     /// link and no import running over it is let go too (`activeImport`: the key of the import that is active, if any):
-    /// Browse may still be open, but nothing is being imported, so the phone leaves the camera's network.
-    public func scenePhaseChanged(_ phase: AppScenePhase, activeImport: CameraKey? = nil) async {
+    /// Browse may still be open, but nothing is being imported, so the phone leaves the camera's network. Returns the
+    /// links let go (closed, though Browse may still hold them).
+    @discardableResult
+    public func scenePhaseChanged(_ phase: AppScenePhase, activeImport: CameraKey? = nil) async -> [any CameraLink] {
+        var letGo: [any CameraLink] = []
         switch phase {
         case .background:
             inBackground = true
             for session in sessions.values { await session.appMovedToBackground() }
-            for id in Array(handedOut.keys) where !isImporting(id, activeImport) { await finish(id) }
+            for id in Array(handedOut.keys) where !isImporting(id, activeImport) {
+                if let link = await finish(id) { letGo.append(link) }
+            }
         case .active:
             inBackground = false
             for session in sessions.values { await session.appBecameActive() }
         case .inactive:
             break
         }
+        return letGo
     }
 
     // MARK: - Private
@@ -275,12 +305,15 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     }
 
     /// The camera's import is over: forget its link and tell the session (a typed-address camera joined nothing, so
-    /// there is no stay to start or leave).
-    private func finish(_ id: CameraDescriptor.ID) async {
+    /// there is no stay to start or leave). Returns the link it forgot when the session closed it: none for a typed-address
+    /// camera, whose link stays open for whoever still holds it.
+    @discardableResult
+    private func finish(_ id: CameraDescriptor.ID) async -> (any CameraLink)? {
         live[id] = nil
-        handedOut[id] = nil
-        guard entries[id]?.typed == nil else { return }
+        let link = handedOut.removeValue(forKey: id)
+        guard entries[id]?.typed == nil else { return nil }
         await sessions[id]?.importFinished()
+        return link
     }
 
     /// A cached link is handed out again only while its session is `.ready`; a typed camera has no session, and its

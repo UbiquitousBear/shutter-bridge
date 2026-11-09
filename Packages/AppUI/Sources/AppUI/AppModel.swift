@@ -65,7 +65,10 @@ public final class AppModel {
         log = services.log
         let leases = LinkLeases()
         self.leases = leases
-        let connectionHolds = wireless == nil ? nil : ConnectionHolds(isHeld: { leases.holders(of: $0) > 0 })
+        // Weakly: the leases' hooks hold the connection holds.
+        let connectionHolds = wireless == nil ? nil : ConnectionHolds(isHeld: { [weak leases] link in
+            (leases?.holders(of: link) ?? 0) > 0
+        })
         self.connectionHolds = connectionHolds
         // A Wi-Fi camera that has connected before is keyed by the key its discovery kept for it, so Browse and the
         // import always write under the catalogue row's key; a name-hash fallback only ever shows for one that has none
@@ -107,10 +110,16 @@ public final class AppModel {
         cameras.importModel = importer
         importer.cameraFinder = cameras
         // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).
-        // In the background it doesn't wait for Browse: an import's lease going with no import running is its end.
+        // In the background it doesn't wait for Browse: an import's lease going with no import running is its end, and the
+        // camera is no longer connected for the reminder, though Browse still holds the closed link.
         if let source = wifi?.source {
             leases.onReleased = { [weak self] link in
-                await source.linkReleased(link, activeImport: self?.activeImportKey)
+                if await source.linkReleased(link, activeImport: self?.activeImportKey) { connectionHolds?.closed(link) }
+            }
+            // iOS ended the continued task with the app away: the camera is let go rather than kept until the person is
+            // back (W13).
+            importer.onPausedAwayForExpiry = { camera in
+                if let link = await source.importPausedAway(camera.descriptor.id) { connectionHolds?.closed(link) }
             }
         }
         if wifi != nil || connectionHolds != nil {
@@ -210,6 +219,8 @@ public final class AppModel {
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
         // First, so the Wi-Fi sessions reading the scene and the reminder's rules see it before anything acts on it (W16).
         wireless?.sceneChanged(phase)
+        // The reminder's request as it stood when the app left, so one made while this runs (Import Now) isn't dropped.
+        let requestOnLeaving = phase == .background ? wireless?.reminders.cameraToOpen : nil
         if phase == .active {
             wifi?.status.start()
             await cameras.becameActive()
@@ -223,14 +234,16 @@ public final class AppModel {
         await importer.scenePhaseChanged(phase)
         // After the import's own rule: the sessions leave the camera's network on the way to the background and check
         // the stay on the way back (`WirelessSession`). The caller holds the app's background time until this returns.
-        await wifi?.source.scenePhaseChanged(phase, activeImport: activeImportKey)
+        // A camera let go is no longer connected for the reminder, though Browse may still hold its closed link (W18).
+        let letGo = await wifi?.source.scenePhaseChanged(phase, activeImport: activeImportKey) ?? []
+        for link in letGo { connectionHolds?.closed(link) }
         switch phase {
         case .active:
             // After the import's rule and the sessions, so a paused USB import carries on as soon as it did before (W16).
             await wireless?.becameActive()
         case .background:
             // A reminder's camera that never showed up isn't opened the next time the person happens to open the app.
-            if let reminders = wireless?.reminders, reminders.cameraToOpen != nil {
+            if let reminders = wireless?.reminders, let asked = requestOnLeaving, reminders.cameraToOpen == asked {
                 _ = reminders.takeCameraToOpen()
                 log.note("reminder: the camera asked for wasn't listed, so it won't be opened")
             }
@@ -277,7 +290,33 @@ public struct WiFiSupport: Sendable {
         gate.status = status
         connections.attach(observer: source)
         return WiFiSupport(source: source, status: status,
-                           recoverySession: { id in connections.recoverySession(for: id) })
+                           recoverySession: recoverySessions({ id in connections.recoverySession(for: id) },
+                                                             source: source))
+    }
+
+    /// `sessions`' sessions as the recovery uses them, each handing the link it opens again to `source`
+    /// (`WiFiCameraSource.adoptRecovered(_:for:)`): the recovery reopens through the session, not through the source, and
+    /// the source must know the job's new link, or the old link's last holder letting go would end the import.
+    static func recoverySessions(_ sessions: @escaping @Sendable (CameraDescriptor.ID) -> (any WiFiRecoverySession)?,
+                                 source: WiFiCameraSource) -> @Sendable (CameraDescriptor.ID) -> (any WiFiRecoverySession)? {
+        { id in sessions(id).map { SourceAdoptingRecoverySession(base: $0, source: source, id: id) } }
+    }
+}
+
+/// A camera's session for the Wi-Fi recovery, telling the source of each link it opens again (`WiFiSupport.make`).
+struct SourceAdoptingRecoverySession: WiFiRecoverySession {
+    let base: any WiFiRecoverySession
+    let source: WiFiCameraSource
+    let id: CameraDescriptor.ID
+
+    func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
+        let link = try await base.prepareImport(bluetoothSwitchOnWhenAway: bluetoothSwitchOnWhenAway)
+        await source.adoptRecovered(link, for: id)
+        return link
+    }
+
+    func importFinished() async {
+        await base.importFinished()
     }
 }
 

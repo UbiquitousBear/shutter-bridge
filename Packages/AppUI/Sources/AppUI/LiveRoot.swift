@@ -248,13 +248,19 @@ struct LiveApp: View {
         // A reminder's Import Now (or a tap) opens Browse on its camera once it is listed (W18); a Wi-Fi camera's import
         // then starts with the join.
         .onChange(of: model.wireless?.reminders.cameraToOpen, initial: true) { _, _ in
-            let model = self.model
-            Task { await model.openCameraFromReminder() }
+            Task { @MainActor in await openCameraFromReminder() }
         }
         .onChange(of: model.cameras.cameras) { _, _ in
-            let model = self.model
-            Task { await model.openCameraFromReminder() }
+            Task { @MainActor in await openCameraFromReminder() }
         }
+    }
+
+    /// Opens the reminder's camera in Browse, if it is listed, and closes the sheets that would hide it: Settings, and
+    /// Import unless its job is that camera's.
+    private func openCameraFromReminder() async {
+        guard await model.openCameraFromReminder() else { return }
+        showsSettings = false
+        if model.importer.camera?.descriptor.id != model.cameras.path.last?.id { showsImport = false }
     }
 }
 
