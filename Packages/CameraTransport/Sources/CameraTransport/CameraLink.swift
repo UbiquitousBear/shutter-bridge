@@ -46,8 +46,8 @@ public protocol CameraLink: Actor {
     /// the file back to that offset first), and returns that URL; `directory` is not used. The caller has already
     /// checked the item's name and size against what the partial was started from (the ID is a hint, not an
     /// identity). A link that can't resume ignores `resuming` and copies the file from its start into `directory`;
-    /// the engine is to offer a partial file only when `capabilities.resumesPartialFiles` is true (Iteration 3,
-    /// section 2; nothing offers one yet). Resuming a file the
+    /// the engine offers a partial file only when `capabilities.resumesPartialFiles` is true (`ImportEngine`, W7).
+    /// Resuming a file the
     /// camera no longer has throws `itemNotFound` like any other call. A partial the link can't continue from (the
     /// file is missing or shorter than the offset) is copied again from 0 into the same file.
     ///

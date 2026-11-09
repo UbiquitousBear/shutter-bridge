@@ -46,10 +46,13 @@ extension ImportEngine {
         guard let job = current(id) else { return }
         let link = job.link
         let generation = job.linkGeneration
+        // The card as the app just listed it, handed over by `reconnect` (taken once: a relist asks the link).
+        let known = job.pendingListing
+        job.pendingListing = nil
         let listed: [CameraItem]
         do throws(CameraLinkFailure) {
             try await link.open()
-            listed = try await link.list()
+            if let known { listed = known } else { listed = try await link.list() }
         } catch {
             await listingFailed(error, id: id, generation: generation)
             return
@@ -72,7 +75,7 @@ extension ImportEngine {
             trace(.retrying(EngineTrace.listingName, retry: job.listRetries, until: until))
             try? await clock.sleep(until: until)
         case .retryOnReconnect:
-            cameraRemoved(job)
+            if failure.kind == .cardUnavailable { cardLost(job) } else { cameraLost(job, job.cameraLossReason) }
         case .retryNow, .skipFile, .stopJob:
             end(job, .stopped(failure.kind))
         }
@@ -136,6 +139,14 @@ extension ImportEngine {
             if let job = currentListing(id, generation) { end(job, .catalogueUnavailable) }
             return
         }
+        // Partial files an earlier job left (its checkpoints, `markPartial`), for the files about to be queued.
+        var partials: [ObjectIdentity: CatalogueRecord] = [:]
+        for p in planned where states[p.identity] == .partial {
+            if case .queue = p.plan, let record = try? await catalogue.record(for: p.identity),
+               record.state == .partial, record.tempURL != nil {
+                partials[p.identity] = record
+            }
+        }
         guard let job = currentListing(id, generation) else { return }
 
         // Listed files go before anything appended during the listing; a duplicate of an appended file takes the
@@ -157,6 +168,7 @@ extension ImportEngine {
             job.add(entry)   // replaces a file of the same content appended during the listing
             switch p.plan {
             case .queue:
+                if let record = partials[p.identity] { adopt(record, into: entry, of: job) }
                 queued.append(p.identity)
             case let .skip(reason):
                 entry.phase = .done(.skipped(reason))
@@ -192,6 +204,23 @@ extension ImportEngine {
         job.phase = .downloading
         trace(.listed(onCard: listed.count, queued: job.queue.count))
         refreshState()
+    }
+
+    /// An earlier job's partial file for `entry`, from its catalogue row: continued on a link that resumes (once the
+    /// attempt has checked it), deleted on one that doesn't, which copies the file from its start (USB, as before).
+    /// Only a file inside the staging folder's `Partials` folder is touched.
+    func adopt(_ record: CatalogueRecord, into entry: FileEntry, of job: Job) {
+        guard let file = record.partialFile(in: stagingDirectory)?.standardizedFileURL else { return }
+        let folder = file.deletingLastPathComponent()
+        guard folder.deletingLastPathComponent().pathComponents == partialsDirectory.standardizedFileURL.pathComponents
+        else { return }
+        guard job.link.capabilities.resumesPartialFiles else {
+            try? FileManager.default.removeItem(at: folder)
+            return
+        }
+        let seed = PartialSeed(download: PartialDownload(file: file, bytesWritten: record.resumeOffset),
+                               name: record.identity.filename, size: record.identity.size)
+        entry.resumable = ResumableFile(folder: folder, adopted: seed, persistedOffset: record.resumeOffset)
     }
 
     /// A listing's dated files by content key; the first listed wins when one file is listed twice.
@@ -259,17 +288,40 @@ extension ImportEngine {
         return identity
     }
 
-    /// A fresh `bytes` call into a new folder: an interrupted file is always copied again from its start.
+    /// A new `bytes` call. On a link that can't resume, into a new folder: an interrupted file is always copied
+    /// again from its start. On one that can, into the file's own folder, continuing from the latest checkpoint
+    /// once the camera confirms the file's name and size (`DownloadAttempt`).
     func beginAttempt(_ entry: FileEntry, of job: Job) {
-        let directory = job.jobDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var onDiscard: (@Sendable () -> Void)?
         if let hook = traceHook { onDiscard = { hook(.discardedLateFile) } }
-        let attempt = DownloadAttempt(directory: directory, clock: clock, onDiscard: onDiscard)
+        let origin = (name: entry.item.name, size: entry.item.size)
+        let attempt: DownloadAttempt
+        var resume: DownloadAttempt.Resume?
+        if job.link.capabilities.resumesPartialFiles {
+            let resumable = entry.resumable
+                ?? ResumableFile(folder: partialsDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true))
+            entry.resumable = resumable
+            try? FileManager.default.createDirectory(at: resumable.folder, withIntermediateDirectories: true)
+            let id = job.id
+            let identity = entry.identity
+            attempt = DownloadAttempt(
+                directory: resumable.folder, clock: clock, origin: origin, keepsFiles: true,
+                checkpointInterval: policy.checkpointInterval, onDiscard: onDiscard,
+                onCheckpoint: { [weak self] attempt, seed in
+                    await self?.checkpointCrossed(seed, by: attempt, of: identity, in: id)
+                })
+            resume = DownloadAttempt.Resume(previous: resumable.previous, adopted: resumable.adopted)
+            resumable.previous = attempt
+            resumable.adopted = nil
+        } else {
+            let directory = job.jobDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            attempt = DownloadAttempt(directory: directory, clock: clock, origin: origin, onDiscard: onDiscard)
+        }
         entry.attempts += 1
         entry.phase = .downloading(Download(attempt: attempt, startedAt: clock.now))
         trace(.started(entry.item.name, attempt: entry.attempts))
-        attempt.start(link: job.link, item: entry.item.id)
+        attempt.start(link: job.link, item: entry.item.id, resume: resume)
         refreshState()
     }
 }

@@ -478,6 +478,15 @@ public enum ImportWording {
                 : "The camera stopped sending, so the file is being copied again."
         case .byPerson:
             "Paused. Tap Continue to resume."
+        // Wi-Fi's reasons (W7). Placeholder copy until the wireless screens (W15) word them.
+        case .taskExpired:
+            "Paused while Shutter Bridge was in the background. Tap Continue to resume."
+        case .cardUnavailable:
+            "Paused: the camera isn't offering its card. The import resumes when the card is back."
+        case .cameraUnreachable:
+            "Paused: the camera can't be reached. The import resumes when it's back in reach."
+        case .needsJoin:
+            "Paused: open Shutter Bridge to join the camera's network and resume."
         }
     }
 

@@ -1,3 +1,4 @@
+import CameraTransport
 import PhotosBridge
 
 /// Where a job is, counted in bytes (decision 4): what the Import screen and, later, the Live Activity show. The
@@ -25,8 +26,10 @@ public struct ImportProgress: Sendable, Hashable {
     public var filesSkipped: Int
     /// Files that failed after their retries (part of `filesDone`).
     public var filesFailed: Int
-    /// Whether a USB import is running, so the app keeps the screen on (decision 1).
-    public var isUSBImportRunning: Bool
+    /// The carrier of an import that is running, or paused only for what it gets over without the person (a
+    /// removal, a lost card or session, a stall it retries by itself); nil otherwise
+    /// (`ImportEngine.importRunning(carrier:)`).
+    public var runningCarrier: CameraCarrier?
     /// A file stalled more often than the automatic retries allow, so the stall pause waits for the person's
     /// Continue rather than lifting itself after 5 s (decision 4). False otherwise.
     public var stallWaitsForPerson: Bool
@@ -34,7 +37,7 @@ public struct ImportProgress: Sendable, Hashable {
     public init(
         filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil,
         state: ImportJobState = .idle, destination: DestinationDecision? = nil, filesSkipped: Int = 0,
-        filesFailed: Int = 0, isUSBImportRunning: Bool = false, stallWaitsForPerson: Bool = false
+        filesFailed: Int = 0, runningCarrier: CameraCarrier? = nil, stallWaitsForPerson: Bool = false
     ) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
@@ -45,9 +48,16 @@ public struct ImportProgress: Sendable, Hashable {
         self.destination = destination
         self.filesSkipped = filesSkipped
         self.filesFailed = filesFailed
-        self.isUSBImportRunning = isUSBImportRunning
+        self.runningCarrier = runningCarrier
         self.stallWaitsForPerson = stallWaitsForPerson
     }
+
+    /// Whether an import over `carrier` is running (`runningCarrier`).
+    public func importRunning(carrier: CameraCarrier) -> Bool { runningCarrier == carrier }
+
+    /// Whether a USB import is running, so the app keeps the screen on (decision 1); the screen-on rule stays
+    /// USB-only, since a Wi-Fi import runs inside the continued task with the phone locked.
+    public var isUSBImportRunning: Bool { importRunning(carrier: .usb) }
 
     public static let none = ImportProgress(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)
 

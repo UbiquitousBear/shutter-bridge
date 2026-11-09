@@ -20,8 +20,10 @@ public enum ImportSelection: Sendable, Hashable {
 
 /// Settings the engine reads at the start of a job.
 public struct ImportSettings: Sendable, Hashable, Codable {
-    /// Downloads in flight on USB: 1 or 2. Two gained 2 % in MTP and 5 % in MSC (one run each), so the default is
-    /// 1 (backlog section 3). Values outside 1...2 are clamped.
+    /// Downloads in flight: 1 or 2. Two gained 2 % in MTP and 5 % in MSC (one run each), so the default is 1
+    /// (backlog section 3). Values outside 1...2 are clamped. A job runs at most
+    /// `min(this, link.capabilities.maxDownloadsInFlight)`, so Wi-Fi's single transaction keeps it at 1 whatever
+    /// this says (backlog Iteration 3, section 1, *One transaction at a time*).
     public var downloadsInFlight: Int {
         didSet { downloadsInFlight = Self.clamp(downloadsInFlight) }
     }

@@ -27,6 +27,11 @@ enum EngineTrace: Sendable, Hashable {
     case tick(Duration)
     case published(Duration)
     case discardedLateFile
+    /// A resumable download's checkpoint was written to the catalogue (`markPartial`) at this offset.
+    case checkpointSaved(String, offset: UInt64)
+    /// The camera's file under this item's ID has another name or size than the partial file was begun from: the
+    /// partial was dropped and the card is listed again.
+    case identityChanged(String)
     case finished(JobOutcome)
 }
 

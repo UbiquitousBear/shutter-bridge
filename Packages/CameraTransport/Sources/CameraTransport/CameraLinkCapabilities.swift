@@ -6,12 +6,11 @@ import Foundation
 /// `CameraLinkCapabilities.defaults(for:)` is each carrier's baseline, from the bench; a link may report less
 /// (a Wi-Fi link whose camera lacks 0x9211 would say `resumesPartialFiles: false`), never more than it can do.
 public struct CameraLinkCapabilities: Sendable, Hashable {
-    /// Downloads the link can run at once. The engine is to run `min(its setting, this)` (Iteration 3, section 2;
-    /// today it ignores `capabilities`). USB 2: the setting's range is 1–2 and ImageCaptureCore takes both. Wi-Fi 1:
-    /// a PTP/IP session carries one transaction at a time (backlog Iteration 3, "One transaction at a time"), and
-    /// the spike's client threw `.busy` on a second `perform`. Two in flight on a real camera was never tried
-    /// (`unverified`; the test was dropped). Never below 1, whatever is assigned: a limit of 0 would start no
-    /// download and hang the job.
+    /// Downloads the link can run at once. The engine runs `min(its setting, this)` (`ImportEngine`, W7). USB 2:
+    /// the setting's range is 1–2 and ImageCaptureCore takes both. Wi-Fi 1: a PTP/IP session carries one
+    /// transaction at a time (backlog Iteration 3, "One transaction at a time"), and the spike's client threw
+    /// `.busy` on a second `perform`. Two in flight on a real camera was never tried (`unverified`; the test was
+    /// dropped). Never below 1, whatever is assigned: a limit of 0 would start no download and hang the job.
     public var maxDownloadsInFlight: Int {
         didSet { maxDownloadsInFlight = max(1, maxDownloadsInFlight) }
     }

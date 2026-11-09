@@ -109,6 +109,12 @@ struct OutcomeFeedbackTests {
         #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.stalled), automaticRetry: true)) == nil)
         #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.byPerson))) == nil)
         #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.appInBackground))) == nil)
+        // Wi-Fi's reasons (W7): waiting for the camera, its card or a join is a warning; iOS ending the background
+        // time is the app's leaving, so nothing plays.
+        #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.cameraUnreachable))) == .warning)
+        #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.cardUnavailable))) == .warning)
+        #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.needsJoin))) == .warning)
+        #expect(OutcomeFeedback.forImport(from: running, to: state(.paused(.taskExpired))) == nil)
         // Starting and carrying on are progress, not outcomes; the same state twice plays nothing.
         #expect(OutcomeFeedback.forImport(from: state(.idle), to: running) == nil)
         #expect(OutcomeFeedback.forImport(from: state(.paused(.cameraRemoved)), to: running) == nil)

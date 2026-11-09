@@ -21,9 +21,10 @@ public enum OutcomeFeedback: Sendable, Hashable {
     }
 
     /// For the import, when its state changes kind: success when it finishes with every file imported or skipped, a
-    /// warning when it finishes with failed files or stops to wait for the person (a removed camera, a stall only
-    /// they can lift), an error when it stops. Nothing for starting, carrying on, a pause the person or the app's
-    /// leaving made, a stall the engine retries by itself, or a cancel.
+    /// warning when it finishes with failed files or stops to wait for the person or the camera (a removed or
+    /// unreachable camera, a card it stopped offering, a network to join, a stall only they can lift), an error when
+    /// it stops. Nothing for starting, carrying on, a pause the person or the app's leaving made (including iOS
+    /// ending its background time), a stall the engine retries by itself, or a cancel.
     public static func forImport(from old: ImportFeedbackState, to new: ImportFeedbackState) -> OutcomeFeedback? {
         guard old.state != new.state else { return nil }
         switch new.state.state {
@@ -31,9 +32,9 @@ public enum OutcomeFeedback: Sendable, Hashable {
             return nil
         case let .paused(reason):
             switch reason {
-            case .cameraRemoved: return .warning
+            case .cameraRemoved, .cameraUnreachable, .cardUnavailable, .needsJoin: return .warning
             case .stalled: return new.state.isAutomaticRetry ? nil : .warning
-            case .byPerson, .appInBackground: return nil
+            case .byPerson, .appInBackground, .taskExpired: return nil
             }
         case let .finished(outcome):
             switch outcome {

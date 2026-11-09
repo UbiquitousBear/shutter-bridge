@@ -200,6 +200,7 @@ struct EngineAgainstSimulatorTests {
         bench.expectImported(card.objects.map(\.filename), from: card)
         // The interrupted file was asked for again, on the new link, from its start (decision 7).
         #expect(await again.bytesCalls.first == victim)
+        #expect(await again.resumes.isEmpty) // USB doesn't resume: nothing continued a partial file
         #expect(await again.openCount == 1)
         #expect(await again.listCount == 1)
         #expect(await !link.delivered.contains(victim))

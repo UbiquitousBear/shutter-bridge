@@ -1,8 +1,9 @@
 /// What a link reports on its side channel (backlog section 2, *Events* and *Lifecycle*). No camera events reach
 /// the phone over USB in either mode, and a USB link never sends the four Wi-Fi events at the end; `IPLink`
 /// (Iteration 3) sends them. Events are facts about the session, not failures: the engine decides what each one
-/// means for a job. The engine is to pause on `.storeRemoved` and `.sessionLost` and only inform on
-/// `.waitingForLocalNetwork` (Iteration 3, section 2); until that work lands it logs all four and acts on none.
+/// means for a job. The engine pauses on `.storeRemoved` (`cardUnavailable`) and `.sessionLost`
+/// (`cameraUnreachable`), lists the card again on `.storeAdded`, and only informs on `.waitingForLocalNetwork`
+/// (`ImportEngine`, W7).
 public enum CameraLinkEvent: Sendable, Hashable {
     /// The camera went away: cable pulled, camera switched off or the session lost. Pending calls end with a
     /// failure whose outcome is `.retryOnReconnect`.
