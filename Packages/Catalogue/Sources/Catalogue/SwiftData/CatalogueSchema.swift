@@ -7,8 +7,10 @@ import SwiftData
 // Simulator; Linux builds the rest of the package without it.
 //
 // Versioned from the first release, so every later change is a planned migration (`CatalogueMigrationPlan`), never an
-// inferred one. Iteration 2's cull marks, Iteration 3's Bluetooth peripheral identifier and the like arrive as
-// `CatalogueSchemaV2` and a stage.
+// inferred one. Version 1 (this file) is what every build before Catalogue V2 (17.1 and 18.1) shipped, and is frozen:
+// its models' stored properties must never change, or a store written by those builds stops opening ("Shutter Bridge
+// couldn't start"). Version 2 (`CatalogueSchemaV2.swift`, Iteration 3) adds the Camera row's Bluetooth peripheral
+// identifier through a lightweight stage. Iteration 2's cull marks and the like arrive as a further version and stage.
 //
 // Kept CloudKit-compatible for a later opt-in (proposal): no `@Attribute(.unique)` (the store enforces identity, see
 // `SwiftDataCatalogue`), every attribute optional or defaulted, every relationship optional with an inverse.
@@ -25,19 +27,29 @@ public enum CatalogueSchemaV1: VersionedSchema, Sendable {
     }
 }
 
-/// Every version of the schema, oldest first, and the stages between them. One version so far.
+/// Every version of the schema, oldest first, and the stages between them.
+///
+/// - V1 → V2 (Iteration 3): lightweight. V2 adds one optional attribute, `Camera.bluetoothPeripheralID`, which reads
+///   nil on every migrated row; nothing else changes, so every V1 row, listing and camera field is carried as it is.
 public enum CatalogueMigrationPlan: SchemaMigrationPlan, Sendable {
-    public static var schemas: [any VersionedSchema.Type] { [CatalogueSchemaV1.self] }
+    public static var schemas: [any VersionedSchema.Type] { [CatalogueSchemaV1.self, CatalogueSchemaV2.self] }
 
-    public static var stages: [MigrationStage] { [] }
+    public static var stages: [MigrationStage] { [v1ToV2] }
+
+    /// V1 → V2: the peripheral identifier, optional, so no row needs a value and no custom stage is needed.
+    static var v1ToV2: MigrationStage {
+        MigrationStage.lightweight(fromVersion: CatalogueSchemaV1.self, toVersion: CatalogueSchemaV2.self)
+    }
 }
 
 // The current version's models, so the store's code names no version.
-typealias CatalogueCurrentSchema = CatalogueSchemaV1
+typealias CatalogueCurrentSchema = CatalogueSchemaV2
 typealias Camera = CatalogueCurrentSchema.Camera
 typealias CameraObject = CatalogueCurrentSchema.CameraObject
 typealias ImportJob = CatalogueCurrentSchema.ImportJob
 
+// Frozen: what every build before Catalogue V2 (17.1 and 18.1) shipped. Change nothing stored here; add a version
+// instead.
 extension CatalogueSchemaV1 {
     /// One camera body.
     @Model
@@ -53,7 +65,7 @@ extension CatalogueSchemaV1 {
         var autoImport: Bool = false
         var wifiSSID: String?
         var lastIP: String?
-        /// The camera's PTP/IP GUID, once a Wi-Fi connection has given it (Iteration 3).
+        /// The PTP/IP initiator GUID the app uses with this camera (Iteration 3; `CameraRecord.ptpipGUID`).
         var ptpipGUID: UUID?
         /// When `lastListing` was listed.
         var lastListedAt: Date?
@@ -92,7 +104,7 @@ extension CatalogueSchemaV1 {
         var state: String = "new"
         /// 0 over USB in Iteration 1 (decision 7: a file restarts); for Wi-Fi.
         var resumeOffset: Int64 = 0
-        /// The partial file of a resumable download (Wi-Fi, Iteration 3); nothing writes it yet.
+        /// The partial file of a resumable download (Wi-Fi, Iteration 3). No build before Catalogue V2 wrote it.
         var tempURL: URL?
         /// The Photos asset, for an import to Photos.
         var assetLocalID: String?
@@ -137,28 +149,4 @@ extension CatalogueSchemaV1 {
     }
 }
 
-extension CatalogueSchemaV1.CameraObject {
-    /// The row's columns as plain values.
-    var row: CatalogueRow {
-        CatalogueRow(cameraKey: cameraKey, identityKey: identityKey, folder: folder, filename: filename,
-                     captureDate: captureDate, size: size, format: format, state: state, resumeOffset: resumeOffset,
-                     assetLocalID: assetLocalID, fileRelativePath: fileRelativePath, pairStem: pairStem)
-    }
-
-    /// Overwrites every column the row carries; the relationship to the camera is the store's to set.
-    func apply(_ row: CatalogueRow) {
-        cameraKey = row.cameraKey
-        identityKey = row.identityKey
-        folder = row.folder
-        filename = row.filename
-        captureDate = row.captureDate
-        size = row.size
-        format = row.format
-        state = row.state
-        resumeOffset = row.resumeOffset
-        assetLocalID = row.assetLocalID
-        fileRelativePath = row.fileRelativePath
-        pairStem = row.pairStem
-    }
-}
 #endif

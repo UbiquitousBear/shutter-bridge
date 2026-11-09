@@ -1,6 +1,7 @@
 import CameraTransport
 import Catalogue
 import Foundation
+import PTPKit
 import Testing
 @testable import AppUI
 
@@ -458,4 +459,10 @@ actor StatesFailAfterCatalogue: CatalogueStore {
     func upsert(_ record: CatalogueRecord) throws { throw Unreadable() }
     func saveListing(_ listing: CardListing) { listings[listing.camera] = listing }
     func lastListing(for camera: CameraKey) -> CardListing? { listings[camera] }
+    func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws {
+        throw Unreadable()
+    }
+    func camera(_ key: CameraKey) throws -> CameraRecord? { throw Unreadable() }
+    func cameras() throws -> [CameraRecord] { throw Unreadable() }
+    func upsertCamera(_ record: CameraRecord) throws { throw Unreadable() }
 }

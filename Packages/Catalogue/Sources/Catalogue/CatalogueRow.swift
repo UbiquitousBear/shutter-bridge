@@ -55,6 +55,8 @@ struct CatalogueRow: Sendable, Hashable {
     var format: String
     var state: String
     var resumeOffset: Int64
+    /// The `.partial` file of a resumable download (`CatalogueRecord.tempURL`); nil on every other row.
+    var tempURL: URL? = nil
     var assetLocalID: String?
     /// Where an import to Files put the file, relative to the app's Documents folder (PhotosBridge's `FileLocation`).
     var fileRelativePath: String?
@@ -74,8 +76,8 @@ extension CatalogueRow {
         self.init(cameraKey: id.camera.rawValue, identityKey: id.storageKey, folder: id.folder, filename: id.filename,
                   captureDate: id.captureDate.rawValue, size: Int64(bitPattern: id.size),
                   format: record.format.rawValue, state: record.state.rawValue,
-                  resumeOffset: Int64(bitPattern: record.resumeOffset), assetLocalID: assetLocalID,
-                  fileRelativePath: fileRelativePath, pairStem: id.pairStem)
+                  resumeOffset: Int64(bitPattern: record.resumeOffset), tempURL: record.tempURL,
+                  assetLocalID: assetLocalID, fileRelativePath: fileRelativePath, pairStem: id.pairStem)
     }
 
     /// The record this row holds; nil when its capture date isn't one (a row no version of this code writes).
@@ -92,7 +94,7 @@ extension CatalogueRow {
         }
         return CatalogueRecord(identity: identity, format: PTPMediaKind(rawValue: format) ?? .other,
                                state: objectState, location: location,
-                               resumeOffset: UInt64(bitPattern: resumeOffset))
+                               resumeOffset: UInt64(bitPattern: resumeOffset), tempURL: tempURL)
     }
 
     var objectState: ObjectState { ObjectState(rawValue: state) ?? .new }
@@ -174,5 +176,73 @@ enum StoredListing {
                               format: PTPMediaKind(rawValue: $0.format) ?? .other)
         }
         return CardListing(camera: camera, listedAt: listedAt, entries: entries)
+    }
+}
+
+/// One `Camera` row's columns as plain values (the counterpart of `CatalogueRow` for `CameraRecord`), so the mapping
+/// is unit-tested on Linux; the SwiftData model only copies these. The carrier is its raw string, so a value a later
+/// version adds reads back as `.usb` (the column's default since build 17.1), not a failure.
+struct CameraColumns: Sendable, Hashable {
+    /// The `CameraKey`'s value (`CameraRecord.key`); the column has had this name since build 17.1.
+    var serial: String
+    var model: String
+    var friendlyName: String
+    var lastSeen: Date
+    var preferredCarrier: String
+    var autoImport: Bool
+    var wifiSSID: String?
+    var lastIP: String?
+    var ptpipGUID: UUID?
+    /// New in `CatalogueSchemaV2`.
+    var bluetoothPeripheralID: UUID?
+}
+
+extension CameraColumns {
+    init(_ record: CameraRecord) {
+        self.init(serial: record.key.rawValue, model: record.model, friendlyName: record.friendlyName,
+                  lastSeen: record.lastSeen, preferredCarrier: record.preferredCarrier.rawValue,
+                  autoImport: record.autoImport, wifiSSID: record.wifiSSID, lastIP: record.lastIP,
+                  ptpipGUID: record.ptpipGUID, bluetoothPeripheralID: record.bluetoothPeripheralID)
+    }
+
+    var record: CameraRecord {
+        CameraRecord(key: CameraKey(rawValue: serial), model: model, friendlyName: friendlyName, lastSeen: lastSeen,
+                     preferredCarrier: CameraRecord.Carrier(rawValue: preferredCarrier) ?? .usb,
+                     autoImport: autoImport, wifiSSID: wifiSSID, lastIP: lastIP, ptpipGUID: ptpipGUID,
+                     bluetoothPeripheralID: bluetoothPeripheralID)
+    }
+}
+
+/// The order `cameras()` answers in, for both stores: the most recently seen first, then by key, one per key.
+///
+/// A store should hold one row per key, by its own rule, but a second store on the same file or a later sync could
+/// leave two. Every read then answers with the same one (`preferred(_:)`), whatever order the rows were fetched in.
+enum CameraOrder {
+    static func sorted(_ cameras: some Sequence<CameraRecord>) -> [CameraRecord] {
+        var best: [CameraKey: CameraRecord] = [:]
+        for camera in cameras {
+            if let kept = best[camera.key], !prefers(camera, over: kept) { continue }
+            best[camera.key] = camera
+        }
+        return best.values.sorted {
+            $0.lastSeen != $1.lastSeen ? $0.lastSeen > $1.lastSeen : $0.key.rawValue < $1.key.rawValue
+        }
+    }
+
+    /// The index of the row to answer with among rows of one key: the most recently seen, then one with a Bluetooth
+    /// peripheral, then the first of equals. `SwiftDataCatalogue.upsertCamera` writes the same fields to every row
+    /// of the key, so rows that tie hold the same fields once any camera write has run. Nil when there are none.
+    static func preferred(_ rows: [CameraRecord]) -> Int? {
+        guard var best = rows.indices.first else { return nil }
+        for index in rows.indices.dropFirst() where prefers(rows[index], over: rows[best]) {
+            best = index
+        }
+        return best
+    }
+
+    /// Whether `a` is to be answered with rather than `b`, two rows of the same key.
+    static func prefers(_ a: CameraRecord, over b: CameraRecord) -> Bool {
+        if a.lastSeen != b.lastSeen { return a.lastSeen > b.lastSeen }
+        return a.bluetoothPeripheralID != nil && b.bluetoothPeripheralID == nil
     }
 }

@@ -1,4 +1,6 @@
 import Catalogue
+import Foundation
+import PTPKit
 
 /// A catalogue whose reads or writes can be made to fail.
 actor FailingCatalogue: CatalogueStore {
@@ -27,6 +29,16 @@ actor FailingCatalogue: CatalogueStore {
 
     func saveListing(_ listing: CardListing) throws {}
     func lastListing(for camera: CameraKey) throws -> CardListing? { nil }
+
+    // The Camera row and partial files (Catalogue V2): not exercised by the engine yet (W7 writes checkpoints).
+    func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws {
+        if failUpserts { throw Broken() }
+        records[identity] = CatalogueRecord(identity: identity, format: format, state: .partial,
+                                            resumeOffset: offset, tempURL: tempURL)
+    }
+    func camera(_ key: CameraKey) throws -> CameraRecord? { nil }
+    func cameras() throws -> [CameraRecord] { [] }
+    func upsertCamera(_ record: CameraRecord) throws {}
 
     var allRecords: [CatalogueRecord] { Array(records.values) }
 }
