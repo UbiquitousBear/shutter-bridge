@@ -10,11 +10,16 @@ import Synchronization
 ///
 /// iOS runs a refresh task no earlier than asked, when it chooses, or not at all (the person can turn Background App Refresh
 /// off); how often it ran on the bench is unmeasured, so the scan never depends on it alone.
+///
+/// Asks go to iOS through `submitTaskRequest` (iOS 27 deprecates `submit(_:)`; the new call reports every error
+/// condition). It is asynchronous, so the asks pass through a `SerialLatestQueue`: each reaches iOS only after the one
+/// before it has, and a cancel can't overtake the submit it follows. Asks made while one is with iOS replace each other,
+/// as every ask replaces the one before. The app makes one scheduler (`LiveRoot.wireless`); copies share its queue.
 public struct BackgroundRefreshScheduler: ProximityRefreshScheduling {
-    private let log: any BenchLog
+    private let asks: SerialLatestQueue<Date?>
 
     public init(log: any BenchLog = SilentBenchLog()) {
-        self.log = log
+        asks = SerialLatestQueue { date in await Self.apply(date, log: log) }
     }
 
     /// Registers the task's launch handler. Call once, before the app finishes launching (Apple's rule: a registration after
@@ -38,6 +43,11 @@ public struct BackgroundRefreshScheduler: ProximityRefreshScheduling {
     }
 
     public func scheduleRefresh(earliest date: Date?) {
+        asks.send(date)
+    }
+
+    /// Hands one ask to iOS; the queue calls it for one ask at a time.
+    private static func apply(_ date: Date?, log: any BenchLog) async {
         let identifier = ProximityModel.refreshTaskIdentifier
         guard let date else {
             BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
@@ -46,8 +56,9 @@ public struct BackgroundRefreshScheduler: ProximityRefreshScheduling {
         let request = BGAppRefreshTaskRequest(identifier: identifier)
         request.earliestBeginDate = date
         do {
-            // Replaces an earlier request with the same identifier that hasn't run yet.
-            try BGTaskScheduler.shared.submit(request)
+            // Replaces an earlier request with the same identifier that hasn't run yet (as `submit(_:)` did; unverified
+            // for `submitTaskRequest`).
+            try await BGTaskScheduler.shared.submitTaskRequest(request)
         } catch {
             // Refused in the Simulator, with Background App Refresh off, or with too many requests pending.
             let code = (error as NSError).code

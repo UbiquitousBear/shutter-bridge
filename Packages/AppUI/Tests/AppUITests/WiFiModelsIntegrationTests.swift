@@ -415,7 +415,7 @@ struct WiFiAppModelTests {
         #expect(browse.canImport)
         await browse.importSelected()
         #expect(app.importer.camera?.key == known)   // not `wifi-name:…`, though the link gave no serial
-        #expect(try await catalogue.lastListing(for: known) != nil)
+        #expect(await catalogue.lastListing(for: known) != nil)
         run.cancel()
         #expect(await bounded(run) != nil)
     }
@@ -440,7 +440,7 @@ struct WiFiAppModelTests {
         #expect(await browse.importSelected() == nil)
         #expect(app.importer.camera == nil)
         let name = CameraKeys.key(for: camera, material: nil)
-        #expect(try await catalogue.lastListing(for: name) == nil)   // nothing saved under the shared name-hash key
+        #expect(await catalogue.lastListing(for: name) == nil)   // nothing saved under the shared name-hash key
         #expect(log.lines.contains { $0.contains("no key of its own") })
         run.cancel()
         #expect(await bounded(run) != nil)

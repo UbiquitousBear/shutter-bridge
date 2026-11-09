@@ -33,12 +33,12 @@ struct EngineResumeAgainstSimulatorTests {
                             _ condition: @Sendable (CatalogueRecord?) -> Bool) async throws -> CatalogueRecord? {
         let identity = try #require(item.identity(camera: bench.camera, timeZone: Bench.zone))
         for _ in 0 ..< 1000 {
-            let row = try await bench.catalogue.record(for: identity)
+            let row = await bench.catalogue.record(for: identity)
             if condition(row) { return row }
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("timed out waiting for \(what)")
-        return try await bench.catalogue.record(for: identity)
+        return await bench.catalogue.record(for: identity)
     }
 
     /// The 2 Nov 23:10 run: a read cut at 54 % by the Wi-Fi going, a reopen that finds the same handle, and the
@@ -104,7 +104,7 @@ struct EngineResumeAgainstSimulatorTests {
         try await bench.waitFor("the lost session") { $0 == .paused(.cameraUnreachable) }
         await bench.engine.flushCheckpoints()
         let identity = try #require(raw.identity(camera: bench.camera, timeZone: Bench.zone))
-        #expect(try await bench.catalogue.record(for: identity)?.resumeOffset == 22 * mib)
+        #expect(await bench.catalogue.record(for: identity)?.resumeOffset == 22 * mib)
         try await bench.engine.pause(.taskExpired)
         #expect(await bench.engine.state == .paused(.taskExpired))
 
@@ -113,7 +113,7 @@ struct EngineResumeAgainstSimulatorTests {
         bench.expectImported(["DSC00001.ARW", "DSC00002.JPG"], from: card)
         #expect(await link.resumes == [SimulatedCameraLink.Resume(filename: "DSC00001.ARW", offset: 22 * mib)])
         #expect(await link.delivered.sorted() == ["DSC00001.ARW", "DSC00002.JPG"])
-        #expect(try await bench.catalogue.record(for: identity)?.state == .imported)
+        #expect(await bench.catalogue.record(for: identity)?.state == .imported)
         #expect(bench.stagedFiles() == 0)
     }
 
