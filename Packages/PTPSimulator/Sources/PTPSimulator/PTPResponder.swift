@@ -155,6 +155,13 @@ public struct PTPResponder: Sendable {
         return fresh.map(objectAddedEvent(for:))
     }
 
+    /// Puts another card in, with no event: the card swapped between sessions (the fault matrix's case). A new card
+    /// numbers its handles from the same start, so a handle can name another file than it did. Do it with no session
+    /// open, as a swap needs the camera off.
+    public mutating func replaceCard(with card: ScriptedCard) {
+        self.card = card
+    }
+
     /// Ends the session without a CloseSession, as the camera does when the initiator's connection drops.
     public mutating func endSession() {
         sessionID = nil

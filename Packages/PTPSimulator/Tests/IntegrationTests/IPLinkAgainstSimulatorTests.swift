@@ -30,11 +30,19 @@ struct IPLinkAgainstSimulatorTests {
         let link: IPLink
         let directory: URL
 
-        init(frames: [ScriptedCard.Frame] = [.rawPlusJPEG, .jpeg, .raw],
+        /// - Parameter deviceInfo: The camera's DeviceInfo, for a camera unlike the α7C II (the captured one when nil).
+        init(frames: [ScriptedCard.Frame] = [.rawPlusJPEG, .jpeg, .raw], deviceInfo: PTPDeviceInfo? = nil,
              configure: (inout IPLink.Configuration) -> Void = { _ in }) throws {
             let card = try #require(ScriptedCard.shoot(frames)).scaled(down: 100)
             // Small Data packets, so a download spans many packets and reads.
-            let camera = try InMemoryPTPIPCamera(card: card, flavour: .ptpIP, packetSize: 4096)
+            let camera: InMemoryPTPIPCamera
+            if let deviceInfo {
+                let responder = PTPResponder(card: card, flavour: .ptpIP, deviceInfo: deviceInfo,
+                                             storageInfo: try CapturedA7C2.storageInfo(.ptpIP))
+                camera = InMemoryPTPIPCamera(core: PTPIPResponderCore(responder: responder), packetSize: 4096)
+            } else {
+                camera = try InMemoryPTPIPCamera(card: card, flavour: .ptpIP, packetSize: 4096)
+            }
             self.camera = camera
             clock = CameraClock { camera.advance(by: $0) }
             var configuration = IPLink.Configuration(guid: IPLinkAgainstSimulatorTests.guid)

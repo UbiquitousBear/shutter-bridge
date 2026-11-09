@@ -5,8 +5,9 @@ import PackageDescription
 // and filter rules, the destination setting's store, the Copy as JPEG source rule and its temporary folders are plain
 // Swift and Foundation, so they build and test on Linux against fakes (links, discovery, catalogue, Photos access,
 // destinations). The SwiftUI screens, the pasteboard, the share sheet, Core Image and ImageIO, OSLog, UIKit, the
-// `USBCameraBrowser` conformance and the composition root's live half (the SwiftData catalogue, the Photos library,
-// the USB camera key) sit behind `#if canImport(...)`. Section 6 of docs/iteration-1-backlog.md: Cameras,
+// `USBCameraBrowser` conformance, the composition root's live half (the SwiftData catalogue, the Photos library,
+// the USB camera key) and the proximity scan's app-refresh task (BackgroundTasks) sit behind `#if canImport(...)`.
+// Section 6 of docs/iteration-1-backlog.md: Cameras,
 // Browse (selection, filters, the last-known card, the already-imported badge, Copy as JPEG and Share as JPEG…),
 // Import and Settings.
 let package = Package(

@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a link can do, so the engine and the screens follow the link's rules and never `if carrier == .usb`
-/// (wireless plan, decision 5). Every field is a fact about the link, read once when the engine takes it.
+/// (wireless plan, decision 5). Every field is a fact about the link, read by the engine once the link is open.
 ///
 /// `CameraLinkCapabilities.defaults(for:)` is each carrier's baseline, from the bench; a link may report less
 /// (a Wi-Fi link whose camera lacks 0x9211 would say `resumesPartialFiles: false`), never more than it can do.
@@ -56,8 +56,9 @@ public struct CameraLinkCapabilities: Sendable, Hashable {
         itemIDsSurviveReopen: false)
 
     /// `IPLink`'s capabilities over Sony's whole-card session: one transaction at a time, 0x9211 resume, nothing
-    /// read from the device, no deletion, handles that outlive the session. Until its 0x9211 resume lands (plan W8),
-    /// `IPLink` reports this without `resumesPartialFiles` (`IPLink.capabilitiesWithoutResume`).
+    /// read from the device, no deletion, handles that outlive the session. `IPLink` reports this once the camera's
+    /// DeviceInfo lists 0x9211, and without `resumesPartialFiles` before its first open or for a camera that doesn't
+    /// (`IPLink.capabilities(for:)`).
     public static let wifi = CameraLinkCapabilities(
         maxDownloadsInFlight: 1, resumesPartialFiles: true, reportsBatteryAndFreeSpace: false, deletes: false,
         itemIDsSurviveReopen: true)

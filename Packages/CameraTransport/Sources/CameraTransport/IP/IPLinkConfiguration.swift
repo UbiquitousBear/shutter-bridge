@@ -35,6 +35,11 @@ extension IPLink {
         /// The zone the camera's clock is in. The α7C II's DateTime strings carry none (`YYYYMMDDThhmmss`), so its
         /// wall-clock time is read in this zone, as Photos reads the same EXIF value.
         public var timeZone: TimeZone = .current
+        /// The size of each SDIO_GetPartialLargeObject (0x9211) read when a partial file is continued, and the stride
+        /// of the checkpoints a whole-file GetObject reports: 4 MiB, the spike's chunk (`PTPPartialRead
+        /// .defaultChunkSize`; the 2 Nov 23:10 resume ran in 4 MiB chunks at 12.9 MB/s before its drop). Whether
+        /// another size is faster is unmeasured. The engine keeps a checkpoint in the catalogue every 16 MiB.
+        public var partialReadChunkSize: UInt32 = PTPPartialRead.defaultChunkSize
 
         public init(guid: UUID, endpoint: PTPIPEndpoint = .cameraNetwork, friendlyName: String = "Shutter Bridge",
                     knownSerial: String? = nil) {

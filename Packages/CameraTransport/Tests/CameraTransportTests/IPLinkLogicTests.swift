@@ -199,7 +199,7 @@ struct IPLinkLogicTests {
         #expect(IPSession.nextTurn(among: [.brief, .transfer]) == 0)
     }
 
-    @Test func capabilitiesAreWiFisWithoutResumeUntil0x9211() {
+    @Test func capabilitiesAreWiFisWithoutResumeBeforeDeviceInfo() {
         let capabilities = IPLink.capabilitiesWithoutResume
         #expect(capabilities.maxDownloadsInFlight == 1)
         #expect(!capabilities.resumesPartialFiles)
