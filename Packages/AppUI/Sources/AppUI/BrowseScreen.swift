@@ -23,18 +23,17 @@ struct BrowseScreen: View {
 
     var body: some View {
         content
-            .navigationTitle(model.camera.name)
+            .navigationTitle(CamerasWording.displayName(for: model.camera))
+            .navigationSubtitle(CamerasWording.modeLine(model.camera.mode))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbar }
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 8) {
                     ActionStrip(model: model)
-                    if let notice = model.importNotice {
-                        NoticeStrip(text: notice, systemImage: "square.and.arrow.down") { model.dismissImportNotice() }
-                            .task(id: notice) {
-                                try? await Task.sleep(for: .seconds(5))
-                                if model.importNotice == notice { model.dismissImportNotice() }
-                            }
+                    if let notice = model.importStatus {
+                        NoticeStrip(notice: notice) {
+                            if model.importStatus == notice { model.dismissImportNotice() }
+                        }
                     }
                     if let importer, importer.hasJob {
                         ImportStatusStrip(importer: importer, action: showImport)
@@ -48,8 +47,10 @@ struct BrowseScreen: View {
                 }
             }
             .animation(.default, value: model.action)
-            .animation(.default, value: model.importNotice)
+            .animation(.default, value: model.importStatus)
             .animation(.default, value: model.isSelecting)
+            .onChange(of: model.importStatus) { _, notice in notice?.announcement.post() }
+            .onChange(of: model.actionNotice) { _, notice in notice?.announcement.post() }
             .sheet(isPresented: $showsFilters) {
                 BrowseFilterSheet(model: model)
                     .presentationDetents([.medium, .large])
@@ -416,7 +417,10 @@ struct CardCell: View {
         let selected = model.isSelected(item)
         let block = model.selectionBlock(for: item)
         let imported = model.isImported(item)
+        // Only the picture is dimmed: the labels that explain a greyed-out cell stay readable (HIG Colour and
+        // contrast).
         let cell = thumbnail
+            .opacity(opacity(selecting: selecting, selectable: block == nil))
             .overlay(alignment: .topTrailing) { badge }
             .overlay(alignment: .bottomLeading) { label(imported: imported) }
             .overlay(alignment: .bottomTrailing) {
@@ -430,7 +434,6 @@ struct CardCell: View {
                         .strokeBorder(Color.accentColor, lineWidth: 3)
                 }
             }
-            .opacity(opacity(selecting: selecting, selectable: block == nil))
             .contentShape(Rectangle())
             .onTapGesture {
                 if selecting { model.toggleSelection(item) }
@@ -499,12 +502,7 @@ struct CardCell: View {
 
     @ViewBuilder private var badge: some View {
         if case let .photo(text?) = kind {
-            Text(text)
-                .font(.caption2.weight(.bold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                .padding(4)
+            CellLabel(text: text)
         }
     }
 
@@ -536,11 +534,17 @@ struct SelectionMark: View {
     }
 }
 
+/// A badge or label over a thumbnail (RAW, HEIF, Imported, "Video: from 1.1", "Not a photo"): white semibold text
+/// on a dark capsule in both appearances, as Photos does, so it reads over any picture. Opaque with Increase Contrast
+/// or Reduce Transparency. The text keeps the size the person chose (no scaling down).
 struct CellLabel: View {
     let text: String
     var systemImage: String?
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
+        let opaque = contrast == .increased || reduceTransparency
         HStack(spacing: 3) {
             if let systemImage {
                 Image(systemName: systemImage)
@@ -548,12 +552,12 @@ struct CellLabel: View {
             }
             Text(text)
                 .lineLimit(2)
-                .minimumScaleFactor(0.75)
         }
         .font(.caption2.weight(.semibold))
-        .padding(.horizontal, 5)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .background(Color.black.opacity(opaque ? 1 : 0.55), in: Capsule())
         .padding(4)
     }
 }
@@ -614,19 +618,21 @@ struct ActionStrip: View {
                 Text(work.statusLine)
                     .font(.subheadline)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                // A large bordered button is at least 44 pt tall (HIG Buttons).
                 Button(JPEGWording.cancel) { model.cancelAction() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                     .disabled(work.cancelling)
             }
             .padding(12)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        case let .finished(message):
-            NoticeStrip(text: message, systemImage: "checkmark.circle") { model.dismissMessage() }
-                .task(id: message) {
-                    try? await Task.sleep(for: .seconds(5))
-                    if case .finished(message) = model.action { model.dismissMessage() }
+        case .finished, .failed:
+            // A confirmation closes itself (not while VoiceOver runs); an error stays until closed.
+            if let notice = model.actionNotice {
+                NoticeStrip(notice: notice) {
+                    if model.actionNotice == notice { model.dismissMessage() }
                 }
-        case let .failed(message):
-            NoticeStrip(text: message, systemImage: "exclamationmark.triangle") { model.dismissMessage() }
+            }
         }
     }
 }

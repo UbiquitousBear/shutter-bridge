@@ -36,12 +36,15 @@ struct CamerasScreen: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                if let notice = model.notice {
-                    NoticeStrip(text: notice) { model.notice = nil }
-                        .padding(.horizontal)
+                if let notice = model.noticeStatus {
+                    NoticeStrip(notice: notice) {
+                        if model.noticeStatus == notice { model.notice = nil }
+                    }
+                    .padding(.horizontal)
                 }
             }
-            .animation(.default, value: model.notice)
+            .animation(.default, value: model.noticeStatus)
+            .onChange(of: model.noticeStatus) { _, notice in notice?.announcement.post() }
     }
 
     @ViewBuilder private var content: some View {
@@ -78,7 +81,7 @@ struct CameraRow: View {
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(camera.name)
+                Text(CamerasWording.displayName(for: camera))
                     .font(.headline)
                 Text(CamerasWording.modeLine(camera.mode))
                     .font(.subheadline)
@@ -124,27 +127,46 @@ struct CamerasEmptyView: View {
     }
 }
 
-/// A one-line message with a close button, for the top of a screen.
+/// A one-line message with a close button, for the top of a screen. A problem shows `exclamationmark.triangle` and
+/// stays until closed; a confirmation closes itself after `StatusNotice.autoDismissDelay`, except while VoiceOver is
+/// running. The close button's target is 44 × 44 pt (HIG Buttons); it is borderless, not glass, because the strip is
+/// already a material surface.
 struct NoticeStrip: View {
-    let text: String
-    var systemImage = "info.circle"
+    let notice: StatusNotice
     let dismiss: () -> Void
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    private struct TimerID: Hashable {
+        var notice: StatusNotice
+        var voiceOverEnabled: Bool
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: systemImage)
+            Image(systemName: notice.systemImage)
                 .accessibilityHidden(true)
-            Text(text)
+            Text(notice.text)
+                .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: dismiss) {
-                Image(systemName: "xmark")
+                Label(BrowseWording.close, systemImage: "xmark")
+                    .labelStyle(.iconOnly)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Dismiss")
         }
         .font(.subheadline)
-        .padding(12)
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .padding(.vertical, 4)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .task(id: TimerID(notice: notice, voiceOverEnabled: voiceOverEnabled)) {
+            guard let delay = notice.dismissDelay(voiceOverRunning: voiceOverEnabled) else { return }
+            // Cancelled when the notice changes or goes, or VoiceOver starts: then it isn't closed here.
+            guard (try? await Task.sleep(for: delay)) != nil else { return }
+            dismiss()
+        }
     }
 }
 #endif
