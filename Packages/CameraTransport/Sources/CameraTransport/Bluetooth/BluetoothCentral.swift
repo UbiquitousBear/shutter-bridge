@@ -39,9 +39,13 @@ struct CBErrorInfo: Sendable, Equatable {
 /// What the delegates report to `BluetoothCentral`, read off Core Bluetooth's objects inside the callback.
 enum CentralSignal: Sendable {
     case power(BluetoothPower)
-    /// `willRestoreState`: the peripherals iOS hands back after relaunching the app (W17 acts on the scan).
-    case restored([CBObject<CBPeripheral>])
-    case discovered(CBObject<CBPeripheral>, manufacturerData: Data?, name: String?)
+    /// `willRestoreState`: the peripherals iOS hands back after relaunching the app, and the services of the scan it kept
+    /// running (full UUIDs; the proximity scan's is 1800).
+    case restored([CBObject<CBPeripheral>], scanServices: [UUID])
+    /// `didDiscover`. The RSSI is Core Bluetooth's, 127 when it had none.
+    case discovered(CBObject<CBPeripheral>, manufacturerData: Data?, name: String?, rssi: Int)
+    /// `connectionEventDidOccur` for a peer matching the proximity scan's registration (W17; never relied on).
+    case connectionEvent(UUID, name: String?, peerConnected: Bool)
     case connected(UUID)
     case failedToConnect(UUID, CBErrorInfo?)
     case disconnected(UUID, CBErrorInfo?)
@@ -76,14 +80,24 @@ final class CentralBridge: NSObject, CBCentralManagerDelegate, CBPeripheralDeleg
         // Set here, on the central's queue, as Apple asks, so no callback for them reaches a nil delegate before the signal
         // has reached the actor.
         for peripheral in peripherals { peripheral.delegate = self }
-        signals.yield(.restored(peripherals.map { CBObject(object: $0) }))
+        // Core Bluetooth's text form of a 16-bit UUID is the short one ("1800"), which `SonyBluetooth.uuid(bluetoothString:)`
+        // takes as well as the full form.
+        let services = dict[CBCentralManagerRestoredStateScanServicesKey] as? [CBUUID] ?? []
+        let scanServices = services.compactMap { SonyBluetooth.uuid(bluetoothString: $0.uuidString) }
+        signals.yield(.restored(peripherals.map { CBObject(object: $0) }, scanServices: scanServices))
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        signals.yield(.discovered(CBObject(object: peripheral), manufacturerData: manufacturerData, name: name))
+        signals.yield(.discovered(CBObject(object: peripheral), manufacturerData: manufacturerData, name: name,
+                                  rssi: RSSI.intValue))
+    }
+
+    func centralManager(_ central: CBCentralManager, connectionEventDidOccur event: CBConnectionEvent,
+                        for peripheral: CBPeripheral) {
+        signals.yield(.connectionEvent(peripheral.identifier, name: peripheral.name, peerConnected: event == .peerConnected))
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -190,7 +204,11 @@ extension BluetoothAuthorisation {
 /// - **One link per camera.** A second `connect` to a camera that already has a link closes the first (its calls fail with
 ///   `.cancelled`). Connects are meant to be made one at a time (the pairing check and the hand-off never overlap).
 /// - **The scan replaces any other.** Core Bluetooth runs one scan per central, so the connect's scan replaces the proximity
-///   scan while it runs; W17 restarts its scan afterwards.
+///   scan while it runs, and the proximity scan starts again when it ends (`BluetoothCentral+Proximity.swift`).
+/// - **The proximity scan** (W17, backlog section 11): `startProximityScan()` scans for service 1800 without duplicates, and
+///   `proximityReports` carries what it finds, unconfirmed. A scan iOS hands back after relaunching the app
+///   (`willRestoreState`, reported on `restored`) is kept, not restarted; after Bluetooth comes back on, the scan starts again
+///   by itself while it is wanted.
 /// - Nothing here logs a value. The network name and password read through a link never leave the call that read them, and
 ///   are never put on a notification stream (`GATTValueRoute`).
 public actor BluetoothCentral: GATTConnector {
@@ -250,11 +268,16 @@ public actor BluetoothCentral: GATTConnector {
     }
 
     private nonisolated let queue: DispatchSerialQueue
-    private nonisolated let broker: GATTCallBroker
+    nonisolated let broker: GATTCallBroker
     private nonisolated let power: LatestValueFanOut<BluetoothPower>
+    /// The proximity scan's reports, held until the proximity model subscribes (`BluetoothCentral+Proximity.swift`).
+    nonisolated let proximityFan = HoldingEventFanOut<ProximityReport>()
+    /// What `willRestoreState` handed back at this launch, if anything (`restored`).
+    nonisolated let restoredFan = LatestValueFanOut<RestoredState?>(nil)
     private let clock: any Clock<Duration>
     private let bridge: CentralBridge
-    private let manager: CBCentralManager
+    /// Internal for the proximity extension (`BluetoothCentral+Proximity.swift`); used only on the central's queue.
+    let manager: CBCentralManager
     private var links: [UUID: LinkRecord] = [:]
     /// Links closed by `disconnect` that stay up for `BluetoothTiming.disconnectGrace`, so the camera sees the notification
     /// switches go off.
@@ -268,8 +291,18 @@ public actor BluetoothCentral: GATTConnector {
     private var pendingOffs: [UUID: Set<CameraControlCharacteristic>] = [:]
     /// What the connect's scan found.
     private var scanFound: CBPeripheral?
-    /// Peripherals iOS handed back in `willRestoreState` (the bridge sets their delegate there, as Apple asks). W17 acts on them.
-    private var restored: [UUID: CBPeripheral] = [:]
+    /// Peripherals the connect under way has found or is opening; emptied when `connect` returns.
+    private var connecting: Set<UUID> = []
+    /// Peripherals iOS handed back in `willRestoreState` (the bridge sets their delegate there, as Apple asks). Held so they
+    /// stay alive; the proximity scan needs none (the 5 Nov relaunch handed back none).
+    private var restoredPeripherals: [UUID: CBPeripheral] = [:]
+    /// The app wants the proximity scan: it starts when Bluetooth is on and the connect's scan isn't running.
+    var proximityWanted = false
+    /// The proximity scan is running (this central's, or the one iOS handed back): its discoveries are reports.
+    var proximityScanning = false
+    /// iOS handed back the proximity scan and Bluetooth hasn't reported `poweredOn` since: that report keeps it rather than
+    /// starting a new one.
+    var restoredProximityScan = false
 
     init(clock: any Clock<Duration> = ContinuousClock()) {
         let queue = DispatchSerialQueue(label: "net.shamil.shutter-bridge.central", qos: .userInitiated)
@@ -308,6 +341,7 @@ public actor BluetoothCentral: GATTConnector {
     /// `.cancelled` (the calling task was cancelled), `.notPaired` (Core Bluetooth said the pairing is gone), `.timedOut`
     /// (not found, or no answer to discovery), or `.serviceMissing` (no 8000CC00).
     public func connect(known: PeripheralID?) async throws(GATTFailure) -> any GATTLink {
+        defer { connecting.removeAll() }
         try await waitForPower()
         let service = CBUUID(nsuuid: SonyService.cameraControl.uuid)
         let stored = known.map { manager.retrievePeripherals(withIdentifiers: [$0.uuid]) } ?? []
@@ -434,6 +468,12 @@ public actor BluetoothCentral: GATTConnector {
         manager.cancelPeripheralConnection(peripheral)
     }
 
+    /// Whether this app is connecting to, connected to, or disconnecting from the peripheral: the proximity scan's reports
+    /// leave these out (`BluetoothCentral+Proximity.swift`).
+    func isOwnConnection(_ id: UUID) -> Bool {
+        connecting.contains(id) || links[id] != nil || closing[id] != nil || ownCancels.contains(id)
+    }
+
     private func finishClosing(_ id: UUID, token: UInt64) {
         // A connect to the same camera since then took the link over (`open` removes the entry).
         guard let entry = closing[id], entry.token == token else { return }
@@ -460,6 +500,7 @@ public actor BluetoothCentral: GATTConnector {
         _ peripheral: CBPeripheral, timeout: Duration, anotherAppHoldsLink: Bool
     ) async throws(GATTFailure) -> CoreBluetoothGATTLink? {
         let id = peripheral.identifier
+        connecting.insert(id)
         // Only a connection that is still up (this app's closing link) keeps valid services and characteristics: after a
         // disconnect Apple documents them as invalid, even when the same `CBPeripheral` still lists them.
         let wasConnected = peripheral.state == .connected
@@ -543,12 +584,18 @@ public actor BluetoothCentral: GATTConnector {
 
     private func scanForCamera() async throws(GATTFailure) -> CBPeripheral {
         scanFound = nil
+        // Core Bluetooth runs one scan per central: this one replaces the proximity scan, which starts again afterwards if it
+        // is still wanted (a restored scan the app never asked for isn't: the app is in front by now, and has said).
+        proximityScanning = false
+        restoredProximityScan = false
         let outcome = await broker.call(.scan, timeout: BluetoothTiming.scan) {
             manager.scanForPeripherals(withServices: nil, options: nil)
         }
         manager.stopScan()
+        if proximityWanted, manager.state == .poweredOn { issueProximityScan() }
         let found = scanFound
         scanFound = nil
+        if let found { connecting.insert(found.identifier) }
         switch outcome {
         case .failed(let failure): throw failure
         case .done, .value, .notifying:
@@ -578,15 +625,23 @@ public actor BluetoothCentral: GATTConnector {
         switch signal {
         case .power(let state):
             powerChanged(state)
-        case .restored(let peripherals):
+        case .restored(let peripherals, let scanServices):
             // The bridge has already made itself their delegate (`willRestoreState`).
-            for box in peripherals { restored[box.object.identifier] = box.object }
-        case .discovered(let box, let manufacturerData, let name):
-            guard scanFound == nil, broker.isWaiting(.scan),
+            for box in peripherals { restoredPeripherals[box.object.identifier] = box.object }
+            proximityRestored(RestoredState(scanServices: scanServices,
+                                            peripherals: peripherals.map { PeripheralID($0.object.identifier) }))
+        case .discovered(let box, let manufacturerData, let name, let rssi):
+            guard broker.isWaiting(.scan) else {
+                proximityDiscovered(box.object.identifier, manufacturerData: manufacturerData, name: name, rssi: rssi)
+                return
+            }
+            guard scanFound == nil,
                   BluetoothConnectPlan.scanMatches(manufacturerData: manufacturerData, name: name) else { return }
             scanFound = box.object
             manager.stopScan()
             broker.answer(.scan, .done)
+        case .connectionEvent(let id, let name, let peerConnected):
+            proximityConnectionEvent(id, name: name, peerConnected: peerConnected)
         case .connected(let id):
             broker.answer(.connect(id), .done)
         case .failedToConnect(let id, let error):
@@ -643,14 +698,17 @@ public actor BluetoothCentral: GATTConnector {
         switch state {
         case .poweredOn:
             broker.answerAll(.power, .done)
+            proximityPoweredOn()
         case .unknown:
             break
         case .resetting:
             // Every link has gone; a wait for the power goes on until Bluetooth is back.
             dropEverything(.linkDropped)
+            proximityPoweredDown()
         case .poweredOff, .unauthorised, .unsupported:
             broker.answerAll(.power, .failed(state.dropReason))
             dropEverything(state.dropReason)
+            proximityPoweredDown()
         }
     }
 
