@@ -17,11 +17,17 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../PTPKit"),
+        // Sony's Bluetooth values (CC09's entries, the network details, the CC08 write): the pure sequencers in
+        // `Bluetooth/` are written against them (Iteration 3, W5).
+        .package(path: "../BLEKit"),
     ],
     targets: [
         .target(
             name: "CameraTransport",
-            dependencies: [.product(name: "PTPKit", package: "PTPKit")]
+            dependencies: [
+                .product(name: "PTPKit", package: "PTPKit"),
+                .product(name: "BLEKit", package: "BLEKit"),
+            ]
         ),
         .testTarget(name: "CameraTransportTests", dependencies: ["CameraTransport"]),
     ],
