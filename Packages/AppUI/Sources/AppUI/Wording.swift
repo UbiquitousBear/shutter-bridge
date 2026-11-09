@@ -191,8 +191,8 @@ public enum JPEGWording {
             case .notAuthorised: CamerasWording.notAllowedDetail
             case .modeListsNoFiles: BrowseWording.noFilesDetail
             case .cardUnavailable: "The camera isn't offering its card right now. Try again in a moment."
-            case .refused: "The camera refused the connection."
-            case .identityChanged: "This isn't the camera that was connected before."
+            case .refused: "The camera refused the connection. Close any other app connected to it, then try again."
+            case .identityChanged: "This isn't the camera that was connected before. Connect that camera again, then try again."
             }
         case .conversion:
             "This photo couldn't be made into a JPEG on this iPhone. Import it to keep the original."
