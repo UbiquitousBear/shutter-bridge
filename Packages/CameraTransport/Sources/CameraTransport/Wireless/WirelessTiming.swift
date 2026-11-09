@@ -35,6 +35,12 @@ public enum WirelessTiming {
     /// `unverified`: no run lapsed during a join; two allows a person slow at iOS's prompt twice.
     public static let rewritesPerJoin = 2
 
+    /// How many times, in one preparation, the camera's Wi-Fi is switched on again after a lapse that followed time away
+    /// (not counted against `rewritesPerJoin`, as it isn't the person's slowness at the prompt). Each needs the person to
+    /// come back within the hold's limit; this bounds a join the person keeps leaving during iOS's prompt, which then
+    /// pauses with `.needsJoin`. `unverified`: twice `rewritesPerJoin`, chosen, not measured.
+    public static let switchOnsAfterAway = 4
+
     /// How many times a hand-off whose Bluetooth link dropped is started again from a new connection, in one join. Once,
     /// as the pairing check does: the link dropped by itself 11.2 s after a join on 5 Nov (CBInternalErrorDomain 13).
     public static let handoffReconnects = 1

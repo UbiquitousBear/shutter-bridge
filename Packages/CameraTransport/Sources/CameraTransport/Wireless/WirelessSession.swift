@@ -497,6 +497,8 @@ public actor WirelessSession {
 
         var failedTries = 0
         var rewrites = 0
+        /// Switch-ons after a lapse that followed time away (`WirelessTiming.switchOnsAfterAway`).
+        var switchOnsAfterAway = 0
         var applies = 0
         var lastFailure: JoinFailure?
         /// iOS refused `apply` as not in front while the scene read active: once more after a second, then pause.
@@ -514,6 +516,8 @@ public actor WirelessSession {
                 // Not the person's slowness at the prompt, so not counted against `rewritesPerJoin`.
                 if case .off(let linkDown) = await cameraWiFi(held.gatt, windowEnd: windowEnd) {
                     try checkCancelled()
+                    guard switchOnsAfterAway < WirelessTiming.switchOnsAfterAway else { throw .paused(.needsJoin) }
+                    switchOnsAfterAway += 1
                     let again = try await switchOnAgain(&held, linkDown: linkDown,
                                                         .rewrite(sameLink: false, lapsedWhileAway: true))
                     handed = again.result
@@ -598,6 +602,9 @@ public actor WirelessSession {
                 if counted, !wasAway {
                     rewrites += 1
                     trace(.rewriteStarted(number: rewrites, limit: WirelessTiming.rewritesPerJoin))
+                } else {
+                    guard switchOnsAfterAway < WirelessTiming.switchOnsAfterAway else { throw .paused(.needsJoin) }
+                    switchOnsAfterAway += 1
                 }
                 // `appliedInFront` false: the app went away while iOS's prompt was up, and the camera's 50 s ran out.
                 let rewritten = try await switchOnAgain(&held, linkDown: linkDown,

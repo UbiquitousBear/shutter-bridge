@@ -1178,9 +1178,10 @@ public actor IPLink: CameraLink, TransferAborting {
     }
 }
 
-/// Collects a small data phase, up to a limit; beyond it the bytes are dropped and `overflowed` is set (the sink never
-/// throws, which would cut off the connection for a reply that is merely too big).
-/// Whether a transaction's command was built, so sent (`IPLink.thumbnail(of:)`'s counts).
+/// Whether a transaction's command was built, for `IPLink.thumbnail(of:)`'s counts. `IPSession` builds it only once the
+/// turn has come and the call wasn't cancelled, then hands it to the connection, so a set flag means "handed to the
+/// connection": in the rare case that the connection ends between the two, a thumbnail counts as asked and failed
+/// although no bytes went out.
 final class IPSentFlag: Sendable {
     private let state = Mutex(false)
 
@@ -1189,6 +1190,8 @@ final class IPSentFlag: Sendable {
     var isSet: Bool { state.withLock { $0 } }
 }
 
+/// Collects a small data phase, up to a limit; beyond it the bytes are dropped and `overflowed` is set (the sink never
+/// throws, which would cut off the connection for a reply that is merely too big).
 final class IPDataCollector: Sendable {
     private struct State {
         var data = Data()

@@ -492,6 +492,8 @@ public final class BrowseModel {
                 if showsListedCard { return "back in front" }
                 if await opensAgainOnReturn?() == true {
                     if Task.isCancelled { return nil }
+                    // A tap during that suspension is answered by this reopen; don't let it start another later.
+                    reopenTapped = false
                     return "back in front after a join that needed the app"
                 }
                 // A tap or a scene change during that suspension found no one parked: look again before parking.
