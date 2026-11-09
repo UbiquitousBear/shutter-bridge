@@ -25,14 +25,14 @@ struct CameraDisplayNameTests {
     @Test func volumeDefaultsAndEmptyNamesAreCameraInAnyMode() {
         for name in ["Untitled", "untitled", "UNTITLED", "NO NAME", "No Name", "no name", "", "   ", " Untitled "] {
             #expect(CamerasWording.displayName(for: camera(name, .usb(.mtp))) == "Camera", "\(name)")
-            #expect(CamerasWording.displayName(for: camera(name, .wifi)) == "Camera", "\(name)")
+            #expect(CamerasWording.displayName(for: camera(name, .wifi(.cameraNetwork))) == "Camera", "\(name)")
         }
     }
 
     @Test func otherwiseTheCamerasOwnName() {
         #expect(CamerasWording.displayName(for: camera("ILCE-7CM2", .usb(.mtp))) == "ILCE-7CM2")
         #expect(CamerasWording.displayName(for: camera("ILCE-7CM2", .usb(.remoteShoot))) == "ILCE-7CM2")
-        #expect(CamerasWording.displayName(for: camera(" ILCE-7CM2 ", .wifi)) == "ILCE-7CM2")
+        #expect(CamerasWording.displayName(for: camera(" ILCE-7CM2 ", .wifi(.cameraNetwork))) == "ILCE-7CM2")
         #expect(CamerasWording.displayName(for: camera("Untitled 2", .usb(.mtp))) == "Untitled 2")
     }
 
