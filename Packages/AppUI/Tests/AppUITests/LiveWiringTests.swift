@@ -387,11 +387,16 @@ struct WirelessConnectionsTests {
         let a = entry("wifi-a")
         let first = c.session(for: a)
         let again = c.session(for: a)
-        #expect((first as AnyObject) === (again as AnyObject))
+        // Identities are compared outside #expect: Xcode 27's compiler crashes lowering a protocol value cast to
+        // AnyObject inside the macro (SILGen "invalid conformance"); Linux never takes that path.
+        let sameAgain = (first as AnyObject) === (again as AnyObject)
+        #expect(sameAgain)
         let other = c.session(for: entry("wifi-b"))
-        #expect((first as AnyObject) !== (other as AnyObject))
+        let sameAsOther = (first as AnyObject) === (other as AnyObject)
+        #expect(!sameAsOther)
         #expect(c.sessionCount == 2)
-        #expect((c.recoverySession(for: a.id) as AnyObject?) === (first as AnyObject))
+        let recoveryReachesIt = (c.recoverySession(for: a.id) as AnyObject?) === (first as AnyObject)
+        #expect(recoveryReachesIt)
         #expect(c.recoverySession(for: .init(rawValue: "never-opened")) == nil)
     }
 
@@ -447,7 +452,8 @@ struct WirelessConnectionsTests {
         let camera = entry("wifi-recovered")
         let made = c.session(for: camera)
         let given = try #require(wifi.recoverySession?(camera.id) as? SourceAdoptingRecoverySession)
-        #expect((given.base as AnyObject) === (made as AnyObject))   // the session the source opened the job through
+        let sameBase = (given.base as AnyObject) === (made as AnyObject)   // compared outside #expect, as above
+        #expect(sameBase)   // the session the source opened the job through
         #expect(given.source === wifi.source)   // which is told of each link the recovery opens again
         #expect(given.id == camera.id)
     }
@@ -551,7 +557,8 @@ struct LiveAppModelWiringTests {
         let camera = ImportCamera(descriptor: link.descriptor, key: CameraKey(rawValue: "wifi-serial:abc"))
         _ = await b.app.importer.importItems(try await link.list(), from: camera, link: link)
         #expect(await eventuallyLong { b.app.wifiRecovery?.session != nil })
-        #expect((b.app.wifiRecovery?.session as AnyObject?) === b.session)
+        let recoveryHasTheSession = (b.app.wifiRecovery?.session as AnyObject?) === b.session   // outside #expect, as above
+        #expect(recoveryHasTheSession)
         await b.app.reminderActivitySettled()
         #expect(b.runtime.reminders.isBusy)
         await b.app.importer.cancel()
@@ -886,7 +893,8 @@ struct LiveWiFiTogetherTests {
         b.session.script(.success(first), .success(second))
 
         let opened = try await b.source.cameraLink(for: b.camera.id)
-        #expect((opened as AnyObject) === first)
+        let openedIsFirst = (opened as AnyObject) === first   // outside #expect, as above
+        #expect(openedIsFirst)
         try await first.open()
         let items = try await first.list()
         #expect(await b.app.importer.importItems(items, from: b.importCamera, link: first) == .started(2))
@@ -899,7 +907,8 @@ struct LiveWiFiTogetherTests {
         #expect(b.session.count("importFinished") == 0)
         #expect(await b.source.hasLiveLink(for: b.camera.id))
         let browsed = try await b.source.cameraLink(for: b.camera.id)   // Browse opened now gets the job's link
-        #expect((browsed as AnyObject) === second)
+        let browsedIsSecond = (browsed as AnyObject) === second   // outside #expect, as above
+        #expect(browsedIsSecond)
         #expect(b.session.count("prepare") == 2)
 
         _ = await second.release(Self.victim)
