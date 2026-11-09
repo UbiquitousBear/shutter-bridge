@@ -37,9 +37,30 @@ public enum CamerasWording {
         + "can't be changed here."
     public static let openSettings = "Open Settings"
 
+    /// What the app calls a camera whose own name isn't known: in Image Transfer (MSC) discovery gives the card's
+    /// volume name, not the camera's.
+    public static let genericName = "Camera"
+
+    /// Volume names a card is given when nobody named it, compared ignoring case (the α7C II's card is "Untitled";
+    /// FAT cards formatted elsewhere read "NO NAME").
+    static let volumeDefaultNames: Set<String> = ["untitled", "no name"]
+
+    /// The one name the app shows and files under for a camera: the Browse title, the Cameras row, the disconnect
+    /// message, and the album and Files folder made for a new import. In Image Transfer (MSC) ImageCaptureCore names
+    /// the device after the card's volume ("Untitled"), which reads like a placeholder, so the app says "Camera"
+    /// there, and for a volume default or an empty name in any mode; otherwise the camera's own name.
+    public static func displayName(for camera: CameraDescriptor) -> String {
+        if camera.mode == .usb(.massStorage) { return genericName }
+        let name = camera.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty || volumeDefaultNames.contains(name.lowercased()) { return genericName }
+        return name
+    }
+
     /// After Browse closes because the camera went away.
-    public static func disconnected(_ name: String) -> String {
-        "\(name) was disconnected. Connect it again to see its card."
+    public static func disconnected(_ camera: CameraDescriptor) -> String {
+        let name = displayName(for: camera)
+        let subject = name == genericName ? "The camera" : name
+        return "\(subject) was disconnected. Connect it again to see its card."
     }
 }
 
@@ -90,6 +111,9 @@ public enum BrowseWording {
     public static let videoLabel = "Video: from 1.1"
     /// On anything else that isn't a still, greyed out too.
     public static let otherLabel = "Not a photo"
+
+    /// The close button on a message strip (iOS calls this control Close).
+    public static let close = "Close"
 
     public static let rawBadge = "RAW"
     public static let heifBadge = "HEIF"

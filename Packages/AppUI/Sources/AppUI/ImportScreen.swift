@@ -51,6 +51,12 @@ struct ImportScreen: View {
                 Text(ImportWording.cancelConfirmDetail)
             }
         }
+        // VoiceOver hears the job's state when it changes kind (paused, carrying on, finished, stopped), never each
+        // byte or file; pauses and stops are urgent, except a stall the engine retries by itself.
+        .onChange(of: model.announcedState) { old, new in
+            ImportWording.stateAnnouncement(from: old, to: new, statusLine: model.statusLine,
+                                            counts: model.countsLine)?.post()
+        }
     }
 
     private var job: some View {
@@ -202,7 +208,7 @@ struct ImportRowView: View {
                     Text(row.name)
                 } icon: {
                     Image(systemName: symbol)
-                        .foregroundStyle(row.isProblem ? Color.orange : Color.secondary)
+                        .foregroundStyle(symbolColour)
                 }
                 if !dynamicTypeSize.isAccessibilitySize {
                     Spacer(minLength: 8)
@@ -212,9 +218,11 @@ struct ImportRowView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
+            // The reason a file was skipped or failed is the line people most need to read: primary, not orange
+            // (HIG Colour and contrast); the symbol carries the colour.
             Text(row.stateText)
                 .font(.subheadline)
-                .foregroundStyle(row.isProblem ? Color.orange : Color.secondary)
+                .foregroundStyle(row.isProblem ? HierarchicalShapeStyle.primary : HierarchicalShapeStyle.secondary)
             if row.isInFlight {
                 ProgressView(value: row.fraction)
             }
@@ -222,6 +230,15 @@ struct ImportRowView: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.accessibilityLabel)
+    }
+
+    private var symbolColour: Color {
+        switch row.tone {
+        case .neutral: .secondary
+        case .done: .green
+        case .skipped: .orange
+        case .failed: .red
+        }
     }
 
     private var symbol: String {

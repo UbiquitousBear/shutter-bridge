@@ -77,7 +77,25 @@ struct CamerasModelTests {
         model.path = [camera]
         await discovery.send(.disappeared(camera.id))
         #expect(await eventually { model.path.isEmpty })
-        #expect(model.notice == CamerasWording.disconnected("Untitled"))
+        #expect(model.notice == "The camera was disconnected. Connect it again to see its card.")
+    }
+
+    @Test func aSecondDisconnectWithTheSameTextIsANewNotice() {
+        let model = CamerasModel(discovery: FakeDiscovery(link: FakeLink(items: [])), services: services())
+        model.path = [camera]
+        model.cameraWentAway(camera.id)
+        let first = model.noticeStatus
+        // The camera came back under a new ID and was browsed again while the first notice was still up.
+        let again = CameraDescriptor(id: .init(rawValue: "again"), name: camera.name, mode: camera.mode)
+        model.path = [again]
+        model.cameraWentAway(again.id)
+        let second = model.noticeStatus
+        #expect(first?.text == "The camera was disconnected. Connect it again to see its card.")
+        #expect(second?.text == first?.text)
+        #expect(second != first)
+        #expect(second?.announcement.priority == .high)
+        model.notice = nil
+        #expect(model.noticeStatus == nil)
     }
 
     @Test func theDisconnectedNoticeGoesWhenTheCameraComesBack() async {
@@ -93,7 +111,7 @@ struct CamerasModelTests {
         #expect(await eventually { model.notice != nil })
         await discovery.send(.appeared(other))   // another camera: the notice is still about this one
         #expect(await eventually { model.cameras == [other] })
-        #expect(model.notice == CamerasWording.disconnected("Untitled"))
+        #expect(model.notice == "The camera was disconnected. Connect it again to see its card.")
         await discovery.send(.appeared(camera))
         #expect(await eventually { model.cameras == [other, camera] })
         #expect(model.notice == nil)
@@ -326,6 +344,27 @@ struct BrowseModelTests {
         await h.model.waitForAction()
         #expect(h.model.action == .failed("This photo couldn't be made into a JPEG on this iPhone."))
         #expect(actionFolders(in: h.scratch).isEmpty)
+        h.run.cancel()
+        await h.run.value
+    }
+
+    @Test func theSameFailureTwiceInARowIsANewNotice() async throws {
+        let h = await start()
+        #expect(await listed(h))
+        // A file where the temporary folders go: the action's folder can't be made, so it fails before any work, and
+        // the second tap goes from the first failure straight to the same one.
+        let fm = FileManager.default
+        try fm.createDirectory(at: h.scratch.root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.removeItem(at: h.scratch.root)
+        try Data().write(to: h.scratch.root)
+        defer { try? fm.removeItem(at: h.scratch.root.deletingLastPathComponent()) }
+        h.model.copyAsJPEG(named("DSC00003.JPG"))
+        let first = try #require(h.model.actionNotice)
+        h.model.copyAsJPEG(named("DSC00003.JPG"))
+        let second = try #require(h.model.actionNotice)
+        #expect(first.tone == .problem)
+        #expect(second.text == first.text)
+        #expect(second != first)   // so the screen's onChange announces it again
         h.run.cancel()
         await h.run.value
     }

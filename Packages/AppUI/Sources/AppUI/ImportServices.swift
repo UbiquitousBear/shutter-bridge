@@ -14,8 +14,11 @@ public struct ImportCamera: Sendable, Hashable {
         self.key = key
     }
 
-    /// What the camera calls itself (in MSC, the card's volume name); it names the Files folder and the album.
-    public var name: String { descriptor.name }
+    /// The name a new Files folder and a new album are given: the app's display name for the camera
+    /// (`CamerasWording.displayName(for:)`), so in Image Transfer (MSC), where discovery gives the card's volume name
+    /// ("Untitled"), they are called "Camera". An album made before is found by its stored identifier and keeps its
+    /// title; a folder made before stays where it is.
+    public var name: String { CamerasWording.displayName(for: descriptor) }
 }
 
 /// Reading and asking for Photos access (`.readWrite`), behind a protocol so the Import screen's model is tested on
@@ -63,8 +66,9 @@ public protocol ImportDestinationMaking: Sendable {
 
 /// The app's destinations (backlog section 5): Photos through PhotosBridge's `PhotosLibraryDestination`, with the
 /// person's album and original choices (defaults: one album per camera, RAW as the original), and the Files folder
-/// in Documents, one folder per camera, named for the camera (`FilesFolderDestination`). Pure Foundation; the app
-/// passes the real library (`SystemPhotoLibrary`), `ImageIOMetadataReader` and its Documents folder.
+/// in Documents, one folder per camera, named for the camera (`ImportCamera.name`, `FilesFolderDestination`). Pure
+/// Foundation; the app passes the real library (`SystemPhotoLibrary`), `ImageIOMetadataReader` and its Documents
+/// folder.
 public struct StandardImportDestinations: ImportDestinationMaking {
     private let library: any PhotoLibraryClient
     private let albumStore: any AlbumIdentifierStore
