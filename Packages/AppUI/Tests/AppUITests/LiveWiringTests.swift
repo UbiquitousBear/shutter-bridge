@@ -453,9 +453,10 @@ struct LiveAppModelWiringTests {
         let catalogue: InMemoryCatalogue
         let session: StubRecoverySession
         let store: InMemoryKeyValueStore
+        let central: FakeCentral
     }
 
-    fileprivate func bench(wifi withWiFi: Bool = true) -> Bench {
+    fileprivate func bench(wifi withWiFi: Bool = true, wireless withWireless: Bool = true) -> Bench {
         let central = FakeCentral()
         let store = InMemoryKeyValueStore()
         let catalogue = InMemoryCatalogue()
@@ -474,9 +475,9 @@ struct LiveAppModelWiringTests {
             catalogue: catalogue, engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
             settingsStore: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(), destinations: FakeDestinations(),
             cameraKey: CameraKeys.fromDescriptor, notifier: notifier, background: run,
-            wifi: withWiFi ? wifi : nil, wireless: runtime)
+            wifi: withWiFi ? wifi : nil, wireless: withWireless ? runtime : nil)
         return Bench(app: app, runtime: runtime, notifier: notifier, run: run, usb: usb, source: source,
-                     catalogue: catalogue, session: session, store: store)
+                     catalogue: catalogue, session: session, store: store, central: central)
     }
 
     @Test func theSceneReachesTheWirelessPartsFirst() async {
@@ -560,6 +561,10 @@ struct LiveAppModelWiringTests {
         #expect(await b.app.openCameraFromReminder())
         #expect(b.app.cameras.path == [descriptor])
         #expect(b.runtime.reminders.cameraToOpen == nil)
+        // Asked again while it is being browsed: left as it is.
+        await b.runtime.reminders.respond(.importNow, camera: key)
+        #expect(await b.app.openCameraFromReminder())
+        #expect(b.app.cameras.path == [descriptor])
     }
 
     @Test func aUSBCameraWithNoKnownKeyIsOpenedFromAReminderByItsLinksKey() async throws {
@@ -626,13 +631,32 @@ struct LiveAppModelWiringTests {
         #expect(b.runtime.reminders.cameraChoices.map(\.camera) == [key])
     }
 
-    @Test func theScreensModelsAreMadeOverTheWirelessParts() {
+    @Test func theSetupSheetsPairOverTheAppsOneCentralAndListATypedCamera() async throws {
         let b = bench()
-        #expect(b.app.makeOnboarding() != nil)
-        #expect(b.app.makeTypedAddress() != nil)
+        let setup = try #require(b.app.wirelessSetup)
+        #expect(setup.canPair)
+        setup.showPairing()
+        let onboarding = try #require(setup.onboarding)
+        await onboarding.start()
+        #expect(b.central.calls.contains(.connect))   // the pairing check went through the one central
+        setup.close()
+
+        await b.app.scenePhaseChanged(.active)
+        setup.showTypedAddress()
+        let typed = try #require(setup.typedAddress)
+        typed.text = "10.0.0.12"
+        #expect(await typed.add())
+        #expect(setup.sheet == nil)
+        #expect(await eventuallyLong { b.app.cameras.cameras.contains { $0.carrier == .wifi } })
+    }
+
+    @Test func withoutBluetoothThereIsNoPairingAndWithoutWiFiNoSetupAtAll() {
+        let noBluetooth = bench(wireless: false)
+        let setup = noBluetooth.app.wirelessSetup
+        #expect(setup != nil)
+        #expect(setup?.canPair == false)
         let usbOnly = bench(wifi: false)
-        #expect(usbOnly.app.makeOnboarding() == nil)
-        #expect(usbOnly.app.makeTypedAddress() == nil)
+        #expect(usbOnly.app.wirelessSetup == nil)
         #expect(usbOnly.app.wifiRecovery == nil)
     }
 }

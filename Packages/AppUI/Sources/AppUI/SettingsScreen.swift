@@ -9,8 +9,12 @@ import UIKit
 /// do), with Open Settings after a denial (HIG Privacy); the access is read when the screen appears and when the app
 /// comes back to the foreground. The footer says where files go in Files. Shown as a sheet from the Cameras screen's
 /// toolbar; the choice is saved at once, so the sheet closes with the system close button, not Done (HIG Sheets).
+///
+/// When the app has the proximity reminder (W18, placed by W16), a Reminders row pushes `ReminderSettingsView` inside this
+/// sheet's navigation stack and says whether the reminder is on; the `ReminderModel` comes from the environment.
 struct SettingsScreen: View {
     @Bindable var model: SettingsModel
+    @Environment(ReminderModel.self) private var reminders: ReminderModel?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
@@ -40,6 +44,17 @@ struct SettingsScreen: View {
                     Text(SettingsWording.destinationHeader)
                 } footer: {
                     Text(SettingsWording.destinationFooter)
+                }
+                if let reminders {
+                    Section {
+                        NavigationLink {
+                            ReminderSettingsView(model: reminders)
+                        } label: {
+                            LabeledContent(ReminderWording.title,
+                                           value: SettingsWording.remindersValue(on: reminders.remindsWhenNearby))
+                        }
+                        .accessibilityHint(SettingsWording.remindersHint)
+                    }
                 }
             }
             .navigationTitle(SettingsWording.title)

@@ -21,6 +21,9 @@ struct BrowseScreen: View {
     /// The cell VoiceOver was last on, restored when the Import sheet closes (HIG Accessibility > VoiceOver: return
     /// to a logical place after a modal view closes).
     @State private var lastFocusedCell: CameraItem.ID?
+    /// The Wi-Fi connection's status, when the app has Wi-Fi (W16): its strip for this camera, and the Local Network
+    /// explanation before the first connection, which begins as Browse opens a Wi-Fi camera.
+    @Environment(WiFiImportModel.self) private var wifiStatus: WiFiImportModel?
 
     init(model: @autoclosure () -> BrowseModel, importer: ImportModel? = nil, isImportShown: Bool = false,
          showImport: @escaping @MainActor () -> Void = {}) {
@@ -42,6 +45,9 @@ struct BrowseScreen: View {
             .toolbar { toolbar }
             .safeAreaBar(edge: .top) {
                 StatusStrips {
+                    if let wifiStatus, wifiStatus.hasStatus(for: model.camera.id) {
+                        JoinStatusView(status: wifiStatus)
+                    }
                     ActionStrip(model: model)
                     if let notice = model.importStatus {
                         NoticeStrip(notice: notice) {
@@ -57,6 +63,9 @@ struct BrowseScreen: View {
             .animation(.default, value: model.importStatus)
             .animation(.default, value: model.isSelecting)
             .animation(.default, value: importer?.hasJob)
+            .animation(.default, value: wifiStatus?.activityLine)
+            .animation(.default, value: wifiStatus?.notes)
+            .localNetworkExplanation(model.camera.carrier == .wifi ? wifiStatus : nil)
             // Ticks as files are picked, not when Done or Import ends selecting and clears the selection (as Photos).
             .sensoryFeedback(.selection, trigger: model.selection) { _, _ in isSelecting }
             .sensoryFeedback(trigger: model.action) { _, new in

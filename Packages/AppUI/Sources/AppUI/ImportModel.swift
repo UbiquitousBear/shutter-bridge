@@ -153,6 +153,9 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored public var onJobEnded: (@MainActor (ImportCamera) -> Void)?
     /// The job last announced through `onJobStarted` and not yet through `onJobEnded`.
     @ObservationIgnored private(set) var announcedJob: ImportCamera?
+    /// Where the Wi-Fi recovery is, followed from the coordinator so the screen redraws when it changes (W16: the Import
+    /// screen's Try Again, `wifiRecoveryControl`).
+    public internal(set) var wifiRecoveryPhase: WiFiRecoveryPlan.Phase = .idle
 
     public init(
         engine: ImportEngine,
@@ -271,6 +274,16 @@ public final class ImportModel: BrowseImporting {
         guard camera != nil else { return nil }
         if isAskingForPhotosAccess { return ImportWording.askingForPhotos }
         if let reason = notificationPermission.reasonLine { return reason }
+        // In front, a Wi-Fi job the recovery waits on the person for ends with Try Again, the button the screen shows
+        // then; while the recovery reaches the camera by itself a job paused for a join says so, not "open Shutter
+        // Bridge" (W16). The card's and the camera's own lines are right while it reaches the camera, so they stay.
+        if !isAway, let control = wifiRecoveryControl, case let .paused(reason) = state {
+            switch control {
+            case .tryAgain: return ImportWording.pausedTryAgain(reason)
+            case .reconnecting where reason == .needsJoin: return ImportWording.reconnecting
+            case .reconnecting: break
+            }
+        }
         return ImportWording.status(progress, mode: usbMode)
     }
 

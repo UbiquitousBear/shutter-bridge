@@ -24,9 +24,13 @@ public final class AppModel {
     /// The wireless parts that live for the app's whole run (the central, the scene signal, the proximity scan and the
     /// reminder), when the app has them; made before launch finishes (W16).
     public let wireless: WirelessRuntime?
-    /// Gets a Wi-Fi job back after the camera drops its card or the session (W14), when the app has Wi-Fi. The Import
-    /// screen's Try Again calls `tryAgain()` on it.
+    /// Gets a Wi-Fi job back after the camera drops its card or the session (W14), when the app has Wi-Fi. Attached to
+    /// `importer`, whose `tryAgainWiFi()` is the Import screen's Try Again.
     public let wifiRecovery: WiFiRecoveryCoordinator?
+    /// The Cameras screen's way in to setting a Wi-Fi camera up (the pairing and typed-address sheets), when the app has
+    /// Wi-Fi; nil leaves the screen as the USB screen it was. It pairs over the app's one central
+    /// (`BluetoothPairingChecker` over `wireless.bluetooth`) and offers no pairing without one (W16).
+    public let wirelessSetup: WirelessSetupModel?
     @ObservationIgnored private let notifier: any LocalNotifier
     @ObservationIgnored private let discovery: any CameraDiscovery
     @ObservationIgnored private let log: any BenchLog
@@ -89,12 +93,15 @@ public final class AppModel {
                                    abortTransfer: { link in await TransferAbort.abort(link) })
         self.importer = importer
         jobShown.importer = importer
-        if wifi != nil {
+        if let wifi {
             let recovery = WiFiRecoveryCoordinator(engine: engine, log: services.log)
             importer.attachWiFiRecovery(recovery)
             wifiRecovery = recovery
+            let checker = wireless.map { BluetoothPairingChecker(connector: $0.bluetooth) }
+            wirelessSetup = WirelessSetupModel(source: wifi.source, checker: checker, log: services.log)
         } else {
             wifiRecovery = nil
+            wirelessSetup = nil
         }
         settings = SettingsModel(store: settingsStore, photos: photos)
         cameras.importModel = importer
@@ -188,20 +195,6 @@ public final class AppModel {
         return await cameraKeying(camera, link) == key
     }
 
-    /// The onboarding's model for pairing a camera over Bluetooth (W15), over the app's one central and the Wi-Fi cameras;
-    /// nil without wireless. Made when its screen opens.
-    public func makeOnboarding(known: PeripheralID? = nil) -> OnboardingModel? {
-        guard let source = wifi?.source, let bluetooth = wireless?.bluetooth else { return nil }
-        return OnboardingModel(checker: BluetoothPairingChecker(connector: bluetooth), registry: source, known: known,
-                               log: log)
-    }
-
-    /// The typed-address sheet's model (W15): adding lists the camera among the Wi-Fi cameras. Nil without Wi-Fi.
-    public func makeTypedAddress() -> TypedAddressModel? {
-        guard let source = wifi?.source else { return nil }
-        return TypedAddressModel(onAdd: { address in _ = await source.addTypedCamera(address) })
-    }
-
     /// The key of the camera whose import is running (or paused, which still holds its link), if one is.
     private var activeImportKey: CameraKey? { importer.isActive ? importer.camera?.key : nil }
 
@@ -253,8 +246,8 @@ public final class AppModel {
 }
 
 /// The Wi-Fi half of the app, composed by the live root (W16): the cameras the person set up (`source`, which is also
-/// one of `CompositeDiscovery`'s sources) and the model of their connection's states (`status`). The onboarding and the
-/// typed-address sheet are made when their screens open (`AppModel.makeOnboarding()`, `makeTypedAddress()`), over
+/// one of `CompositeDiscovery`'s sources) and the model of their connection's states (`status`). The pairing and
+/// typed-address sheets' models are made by `AppModel.wirelessSetup` (`WirelessSetupModel`) when their sheets open, over
 /// `source`. `recoverySession` gives the Wi-Fi recovery the session a camera's job runs over (W14).
 public struct WiFiSupport: Sendable {
     public let source: WiFiCameraSource

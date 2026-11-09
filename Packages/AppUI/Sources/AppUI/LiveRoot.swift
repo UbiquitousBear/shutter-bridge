@@ -185,6 +185,10 @@ private struct DelayedSpinner: View {
 ///   the background is handled.
 /// - The screen stays on while a USB import runs (`UIApplication.isIdleTimerDisabled`), and goes back to normal
 ///   otherwise.
+/// - Wi-Fi (W16): the Wi-Fi status (`WiFiImportModel`), the setup sheets' model (`WirelessSetupModel`) and the reminder
+///   (`ReminderModel`) go in the environment for the screens. The Local Network explanation is presented by Browse (a
+///   sheet) or, while the Import sheet covers Browse, inline in the Import screen; nothing here presents it. A reminder's
+///   Import Now opens its camera here (`AppModel.openCameraFromReminder()`), USB or Wi-Fi.
 struct LiveApp: View {
     let model: AppModel
     @Environment(\.scenePhase) private var scenePhase
@@ -214,6 +218,11 @@ struct LiveApp: View {
         }) {
             ImportScreen(model: model.importer)
         }
+        // The wireless screens' models (W16), each optional so a screen without one is the USB screen it was. Applied
+        // outside the sheets so the Settings and Import sheets, and Browse in the stack, read them too.
+        .environment(model.wifi?.status)
+        .environment(model.wirelessSetup)
+        .environment(model.wireless?.reminders)
         // The job's outcome is felt wherever the person is in the app (HIG Playing haptics): success, a warning when
         // it needs them, an error when it stopped.
         .sensoryFeedback(trigger: model.importer.feedbackState) { old, new in
