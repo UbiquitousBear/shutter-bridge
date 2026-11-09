@@ -60,9 +60,17 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
 - **Export compliance:** `ITSAppUsesNonExemptEncryption = false` in `App/Info.plist`.
 - **Versions:** `MARKETING_VERSION` 0.1 and `CURRENT_PROJECT_VERSION` 1 in the project; `Info.plist` reads both from
   build settings, so CI sets the build number.
-- **No entitlements in Iteration 1:** the app has no entitlements file, so nothing checks for one. Hotspot
-  Configuration (Iteration 3) and Multicast Networking get one, and a check like the spike's, when a build first
-  signs with them.
+- **Entitlements (from Iteration 3, W12):** `App/ShutterBridge.entitlements` holds only Hotspot Configuration (joining
+  the camera's network). Like `Info.plist` it sits outside the synchronised `ShutterBridge/` folder, and the target
+  points at it with `CODE_SIGN_ENTITLEMENTS = ShutterBridge.entitlements` in Debug and Release: the build setting, not a
+  generator's entitlements key (the lesson of the spike's XcodeGen rewrite above). Two checks keep it there:
+  `app.yml` fails a PR whose app target lacks the setting in either configuration or whose file holds anything but
+  that one key (its unsigned builds can't see entitlements), and `testflight.yml` fails a production archive that
+  isn't signed with it, before anything is uploaded. Multicast Networking stays out until Apple grants it and it is
+  ticked on the App ID; adding it means ticking it first, then adding the key and updating `app.yml`'s list.
+- **Local Network:** `NSLocalNetworkUsageDescription` in `App/Info.plist`, asked at the first connection to the
+  camera over Wi-Fi. No `NSBonjourServices` (the camera advertises no `_ptp._tcp`) and no ATS exception (the SSDP
+  description fetch stays off).
 
 ## Xcode Cloud: one-time setup (Shamil; about 30 minutes, needs the Mac)
 
@@ -145,7 +153,8 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   first iPhone simulator on the newest iOS runtime that the pinned Xcode can run (from 27.0, the deployment target,
   up to its iOS Simulator SDK; picked at run time from `xcrun simctl list -j`). This is where the code behind
   `canImport` is compiled and tested. The project has no remote packages, so there is no `Package.resolved` to
-  commit; the first remote dependency (none is planned: Apple frameworks only) would need one.
+  commit; the first remote dependency (none is planned: Apple frameworks only) would need one. Before building, it
+  checks the app target's entitlements wiring (see *Entitlements* above), which the unsigned builds can't.
 
 If a ruleset on `main` requires status checks by name, replace the old `ptpkit.yml` check with these jobs.
 
@@ -211,8 +220,10 @@ browser:
 
 1. **App ID.** Certificates, IDs & Profiles → Identifiers → + → App IDs → App: description "Shutter Bridge",
    Bundle ID **Explicit** `net.shamil.shutter-bridge`, and under Capabilities tick **Hotspot Configuration** and
-   **Access Wi-Fi Information**. Iteration 1 signs with neither (the app has no entitlements yet), but cloud signing
-   won't add a capability to an App ID later, so they're ticked now for Iteration 3. Tick **Multicast Networking**
+   **Access Wi-Fi Information**. From Iteration 3 (W12) the app signs with Hotspot Configuration, and cloud signing
+   won't add a capability to an App ID, so a build without it ticked fails at signing or export. Access Wi-Fi
+   Information is ticked but unused (only "only when on home Wi-Fi" would need it, and that is left out); ticking a
+   capability the app doesn't sign with does no harm. Tick **Multicast Networking**
    too when Apple grants the request (reference 7BDQ7FRVM8, submitted 8 Nov); it has to be on the App ID before any
    build that signs with it.
 2. **App record.** App Store Connect → Apps → + → New App: iOS, name **"Shutter Bridge"**, primary language
@@ -231,8 +242,9 @@ then:
 - **`production`:** reads the `ShutterBridge` target's bundle ID and `MARKETING_VERSION` from `xcodebuild
   -showBuildSettings` and stops unless the bundle ID is `net.shamil.shutter-bridge` (before the signing step, the only
   one given the secrets); archives with an ad-hoc signature; and stops before the upload unless the archived app has that bundle ID,
-  that version, the run's build number and a `CFBundleIconName` with a compiled asset catalogue. No entitlement is
-  required. No Homebrew or XcodeGen step runs.
+  that version, the run's build number, a `CFBundleIconName` with a compiled asset catalogue and a signature carrying
+  the Hotspot Configuration entitlement (from Iteration 3, W12; the same `codesign` check as the spike's). No Homebrew
+  or XcodeGen step runs.
 - **`spike`:** as before 8 Nov: installs XcodeGen, generates the project, archives with an ad-hoc signature and
   fails if the archive lost the Hotspot Configuration entitlement.
 
@@ -261,7 +273,10 @@ Cloud counts from 1.
     mode for this; ask for it if the ad-hoc run fails.
 - **Export fails with a permission or "cloud signing" error:** the key must be a Team key with the Admin role.
 - **Export fails over a capability or profile:** check the App ID (spike: step 2, Hotspot Configuration ticked;
-  production: its step 1, the App ID `net.shamil.shutter-bridge` exists).
+  production: its step 1, the App ID `net.shamil.shutter-bridge` exists with Hotspot Configuration ticked).
+- **"Signed without com.apple.developer.networking.HotspotConfiguration" (production):** the archive lost the
+  entitlement; check `CODE_SIGN_ENTITLEMENTS` in both configurations and `App/ShutterBridge.entitlements` (`app.yml`
+  checks both on every PR).
 - **Export fails with no app record found (production):** create the "Shutter Bridge" record (its step 2) first.
 - **"CFBundleIconName is missing" (production):** the archive has no app icon, which App Store Connect would
   reject (ITMS-90713); check `ASSETCATALOG_COMPILER_APPICON_NAME` and the AppIcon set in the asset catalogue.

@@ -227,12 +227,17 @@ jobs:
               exit 1
             fi
           else
-            # The production app has no entitlements in Iteration 1, so none is required. Its bundle ID, version and
+            # The production app must be signed with Hotspot Configuration (App/ShutterBridge.entitlements, from
+            # Iteration 3: joining the camera's network), as the spike's check above. Its bundle ID, version and
             # build number must be the expected ones, and it must name its icon: an upload without CFBundleIconName
             # fails validation (ITMS-90713). On iOS, actool writes it under CFBundleIcons > CFBundlePrimaryIcon, not at
             # the top level, so read the nested key first and fall back to the top-level one.
             plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Info.plist" 2>/dev/null || true; }
             problems=()
+            entitlements="$(codesign -d --entitlements - --xml "$app" 2>/dev/null || true)"
+            if ! grep -q com.apple.developer.networking.HotspotConfiguration <<<"$entitlements"; then
+              problems+=("it is signed without com.apple.developer.networking.HotspotConfiguration (check CODE_SIGN_ENTITLEMENTS and App/ShutterBridge.entitlements)")
+            fi
             v="$(plist CFBundleIdentifier)"
             [ "$v" = "$BUNDLE_ID" ] || problems+=("CFBundleIdentifier is '$v', expected $BUNDLE_ID")
             v="$(plist CFBundleShortVersionString)"

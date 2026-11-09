@@ -5,8 +5,9 @@ import PackageDescription
 // (ImageCaptureCore, section 2 of docs/iteration-1-backlog.md) sit behind `#if canImport(ImageCaptureCore) && os(iOS)`
 // with their pure logic outside it. `IPLink` (Wi-Fi, Iteration 3) is pure Swift over a `ByteChannel`; only its
 // Network.framework channel is Apple-only. `BluetoothCentral` (CoreBluetooth, behind
-// `#if canImport(CoreBluetooth) && os(iOS)`, Iteration 4) follows the same rule, so the transport-neutral part keeps
-// building and testing on Linux.
+// `#if canImport(CoreBluetooth) && os(iOS)`, Iteration 4) and `NEHotspotJoiner` (NetworkExtension, behind
+// `#if canImport(NetworkExtension) && os(iOS)`, with its error mapping outside it) follow the same rule, so the
+// transport-neutral part keeps building and testing on Linux.
 let package = Package(
     name: "CameraTransport",
     platforms: [
