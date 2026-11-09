@@ -2,14 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Privacy manifest for Shutter Bridge. No tracking and nothing collected: photos go from the camera to this iPhone
-  and nowhere else. The "required reason" APIs Iteration 1 is expected to call, declared now so the first TestFlight
-  upload doesn't draw an ITMS-91053 warning:
+  and nowhere else. The "required reason" APIs the app calls, checked against the code on 9 Nov (W19's sweep):
   - UserDefaults (import settings, such as downloads in flight; the destination setting; the proximity reminder's settings,
-    holds and snooze): CA92.1, read and written only by the app itself.
-  - Disk space (checking there is room before a large import): E174.1. Only add 85F4.1 if the free space is ever
-    shown to the person.
-  - File timestamps of files in the app's container (sizes and dates of staged downloads and of imports to the
-    Files folder): C617.1.
+    holds and snooze; the Wi-Fi cameras' pending list and the Local Network explanation's record): CA92.1, read and
+    written only by the app itself.
+  - File timestamps of files in the app's container (sizes and dates of staged downloads, of imports to the Files
+    folder and of the JPEGs made for Copy and Share): C617.1.
+  Not declared, because nothing calls them: disk space (no free-space check exists; it would be E174.1, or 85F4.1 if
+  the free space were shown to the person) and system boot time (no uptime or mach_absolute_time call).
   Keep this in step with the code: remove an entry the app stops using and add one for each new required-reason API
   (developer.apple.com, "Describing use of required reason API").
 -->
@@ -29,14 +29,6 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>CA92.1</string>
-			</array>
-		</dict>
-		<dict>
-			<key>NSPrivacyAccessedAPIType</key>
-			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
-			<key>NSPrivacyAccessedAPITypeReasons</key>
-			<array>
-				<string>E174.1</string>
 			</array>
 		</dict>
 		<dict>

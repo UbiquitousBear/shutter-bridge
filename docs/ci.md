@@ -1,14 +1,14 @@
 # CI and TestFlight
 
-Nov 1, 2026 (updated 8 Nov for the production app) · How the apps get built, tested and onto the iPhone. Researched against Apple's and GitHub's
+Nov 1, 2026 (updated 8 Nov for the production app, and 9 Nov for the wireless switch-on) · How the apps get built, tested and onto the iPhone. Researched against Apple's and GitHub's
 documentation on this date; the claims that rest only on forum reports are marked.
 
 ## Summary
 
 | Job | Where | Trigger | Secrets |
 | --- | --- | --- | --- |
-| Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov) | PRs touching `Packages/` | none |
-| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
+| Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov; each job stops after 20 minutes, #105) | PRs touching `Packages/` | none |
+| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator (AppUI's one at a time, #109) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
 | Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`), kept until the spike is retired | PRs touching `Spike/` or `Packages/PTPKit` | none |
 | Archive → TestFlight (internal testing), **now**: the production app by default, or the spike | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`, "App to TestFlight") | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
 | Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
@@ -56,7 +56,10 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
   `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`; `testflight.yml` fails before the upload if the archived app has
   no `CFBundleIconName` (ITMS-90713; on iOS it sits under `CFBundleIcons` › `CFBundlePrimaryIcon`) or no compiled
   asset catalogue.
-- **Privacy manifest:** `App/ShutterBridge/PrivacyInfo.xcprivacy` (UserDefaults, disk space, file timestamps).
+- **Privacy manifest:** `App/ShutterBridge/PrivacyInfo.xcprivacy` declares UserDefaults (CA92.1: the import settings, the
+  reminder's holds and the Wi-Fi cameras' records) and file timestamps (C617.1). The 9 Nov sweep removed disk space
+  (E174.1): nothing in the app asks for free space, so declaring it was unused. Add an entry when a new
+  required-reason API is called, with its reason code.
 - **Export compliance:** `ITSAppUsesNonExemptEncryption = false` in `App/Info.plist`.
 - **Versions:** `MARKETING_VERSION` 0.1 and `CURRENT_PROJECT_VERSION` 1 in the project; `Info.plist` reads both from
   build settings, so CI sets the build number.
@@ -71,6 +74,13 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
 - **Local Network:** `NSLocalNetworkUsageDescription` in `App/Info.plist`, asked at the first connection to the
   camera over Wi-Fi. No `NSBonjourServices` (the camera advertises no `_ptp._tcp`) and no ATS exception (the SSDP
   description fetch stays off).
+- **Bluetooth and background keys (from W10, W13 and W17):** `NSBluetoothAlwaysUsageDescription`; the
+  `bluetooth-central` and `fetch` background modes (state restoration for the camera's one Core Bluetooth central, and
+  the app-refresh task that restarts the proximity scan); and `BGTaskSchedulerPermittedIdentifiers` for the continued
+  import task and the proximity refresh task (`net.shamil.shutter-bridge.import`, `.proximity-refresh`). Registering a
+  task identifier missing from that list raises an exception at launch, so the list must match the code. CI compiles
+  the code that needs these keys but can't run it: the wireless path is first proved on the bench iPhone
+  ([iteration-3-4-bench.md](iteration-3-4-bench.md)). No Live Activity key: the app has no Live Activity.
 
 ## Xcode Cloud: one-time setup (Shamil; about 30 minutes, needs the Mac)
 
@@ -146,13 +156,19 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
 
 - **`packages-linux.yml`:** one job per package under `Packages/`, `swift build` then `swift test` in `swift:6.4-noble`.
   Apple-only code is behind `#if canImport(...)`, so this covers each package's transport-neutral part. A new package
-  is added to the matrix by hand (BLEKit when its branch lands).
+  is added to the matrix by hand (all eight are in it). Each job stops after 20 minutes: a package takes about two
+  minutes, and a hung test run (a Swift Testing time limit can't end a wait that ignores cancellation) otherwise runs
+  to GitHub's six-hour default (#105).
 - **`app.yml`:** on the `xcode-27` runner with `DEVELOPER_DIR` pinned as in `spike-build.yml`, it builds
   `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and `generic/platform=iOS`
   (Release), then runs `xcodebuild test` in every folder under `Packages/` that has a `Package.swift`, against the
   first iPhone simulator on the newest iOS runtime that the pinned Xcode can run (from 27.0, the deployment target,
-  up to its iOS Simulator SDK; picked at run time from `xcrun simctl list -j`). This is where the code behind
-  `canImport` is compiled and tested. The project has no remote packages, so there is no `Package.resolved` to
+  up to its iOS Simulator SDK; picked at run time from `xcrun simctl list -j`). AppUI's run uses
+  `-parallel-testing-enabled NO` (#109): nearly all its tests are main-actor bound and Swift Testing starts every test
+  at once, so in the Simulator they queued for the main actor and the wait counted against each test's own time limit
+  (a passing run of about 240 tests already had a slowest of 56 s against the 60 s limits). One at a time, a limit
+  measures the test alone; the other packages stay parallel. The job's limit is 60 minutes. This is where the code
+  behind `canImport` is compiled and tested, the wireless screens and live wiring (W16) included. The project has no remote packages, so there is no `Package.resolved` to
   commit; the first remote dependency (none is planned: Apple frameworks only) would need one. Before building, it
   checks the app target's entitlements wiring (see *Entitlements* above), which the unsigned builds can't.
 

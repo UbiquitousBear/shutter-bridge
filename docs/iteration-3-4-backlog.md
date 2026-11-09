@@ -20,6 +20,19 @@ Iterations 3 and 4 run in parallel in weeks 10–13 (18 Jan – 12 Feb 2027) and
 
 **Not in these iterations:** video (1.1), transfer-while-shooting (later; ObjectAdded arrives, section 4), the 1.1 differential check on a Bluetooth wake, on the home network with the camera already on it ("Bluetooth wake" itself is dropped from 1.1, Shamil, 8 Nov), multiple cameras and other brands, and culling with on-device models (a 1.1 feature, built after a short spike on Shamil's own photos that runs during Iterations 2–3, alongside these iterations' work and outside their exit criteria; Shamil, 8 Nov). Nothing from `Spike/` is carried in. The spike's sources are named below only as a reference for what was measured.
 
+## Status of each item (9 Nov 2026, after W16, #110, in CI)
+
+Each section below starts with a status table, one row per acceptance criterion, checked on 9 Nov against the merged code (not against the wireless plan). The pull requests: W1 #89, W2 #90, W3 #91, W4 #92, W5 #93, W6 #96, W7 #98, W8 #100, W9 #101, W10 #99, W11 #97, W12 #102, W13 #103, W14 #106, W15 #107, W16 #110, W17 #104, W18 #108. Nothing has run against the camera in the product app yet, so what depends on the camera's or iOS's behaviour is *Bench*, not *Built*; the checks are in [iteration-3-4-bench.md](iteration-3-4-bench.md).
+
+| Status | Means |
+| --- | --- |
+| **Built** | Merged, and tested on Linux or in CI's Simulator run. Nothing left for the camera to prove beyond the bench's ordinary run. |
+| **Bench** | Built, but only the camera (or the iPhone's real iOS) can prove it. The note says which bench check. |
+| **Open** | Waiting on a decision or an action by someone; the note says who. |
+| **Later** | Left out of this round (the plan's section 5), with its reason. |
+
+Sections 10 and 13 to 16 have no table: section 10 is *Later* as a whole, and sections 13 to 16 are outside this close-out (see the plan's section 5 for 13 to 15).
+
 ## Sony-specific pieces in plain terms
 
 The proposal planned on standard PTP only. The spike found that this camera lists its card over Wi-Fi only through Sony's own operations, and that Sony's Bluetooth service can switch its Wi-Fi on. The open-source ZV-E10 code (mvpzac/Imagedge) and reverse-engineered notes on Sony's apps were the starting point, and each piece below has been checked on this α7C II (firmware 2.01). The SDIO operations, ObjectAdded 0xC201 and the 8000CC00 characteristics rest on reverse-engineered behaviour, which is why decision 6 weighs firmware fragility and App Store review. The SSDP announcements and service 1800 are standard (UPnP and Bluetooth's Generic Access).
@@ -35,6 +48,19 @@ The proposal planned on standard PTP only. The spike found that this camera list
 | Advertised service 1800 | The only service UUID the camera advertises, on, asleep and off. It is Bluetooth's generic *Generic Access*, not a Sony service. | *Proximity reminder in 1.0*; *BLE advertisement* |
 
 ## 0. Shared ground between the two iterations
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Transport-neutral pause, continue, stall and retry rules | **Built** | Iteration 1 (#81), then W7 #98: four Wi-Fi pause reasons, read from link capabilities. The Wi-Fi triggers are Bench (checks 8 to 10). |
+| One owner for Core Bluetooth | **Built** | W10 #99: `BluetoothCentral` is the only place a `CBCentralManager` is made; W16 #110 shares it between the hand-off and the scan. State restoration is Bench (check 11). |
+| One owner for the continued task and the Live Activity | **Built / Later** | Continued task: W13 #103, Wi-Fi jobs only. The Live Activity's paused state is *Later*: no ActivityKit code exists (plan section 5, section 13). |
+| Catalogue fields | **Built** | W4 #92: `Camera.bluetoothPeripheralID` and `wifiSSID`; the password is never stored (stated in `CatalogueSchemaV2`). |
+| Sony code in one place | **Built** | The 0x92xx operations in `PTPKit` (`SonyContentsTransfer`, gated by `SonyCapabilities`), the CC characteristics in `BLEKit`; the links use them only after DeviceInfo or the service list shows they exist. |
+| BLEKit, a sibling package | **Built** | #74 (Iteration 1). |
+| `PTPSimulator` gains the Wi-Fi behaviour | **Built** | W1 #89: whole-card session, 0x9211, 0xC201, PC Remote's DeviceInfo. |
+| Hotspot Configuration ticked on the App ID | **Open** | Shamil. The entitlement, the wiring and CI's two checks are built (W12 #102); that the App ID has the capability is not recorded anywhere in the repository, and the first signed TestFlight build proves it (`testflight.yml` fails an archive without it). The real join is Bench (checks 3, 6). |
 
 Two engineers work on `CameraTransport` and `ImportEngine` in parallel, so agree on these in week 10.
 
@@ -60,6 +86,21 @@ Could change with: decision 6, if it is reopened (without the hand-off, Iteratio
 
 ## 1. IPLink: the PTP/IP connection
 
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Handshake with a stable GUID | **Built** | W3 #91 (`PTPIPConnection`, one GUID per camera); the golden tests settle the bytes. The camera's no-prompt behaviour for a new GUID is Bench (check 3). |
+| Fixed address 192.168.122.1 | **Built** | W9 #101 and W11 #97; the typed address is the only other route. |
+| Local Network permission | **Bench** | W9 #101 reports `.waitingForLocalNetwork`, never a failure; W16 #110 shows the explanation first. The prompt itself is check 2. |
+| Camera pinning by serial | **Built** | W6 #96: a session whose serial differs from the known one fails as `identityChanged` and stops the job. The serial is hashed for the key and never logged. |
+| Read the operation list before any Sony operation; never `GetDevicePropValue` | **Built** | `SonyCapabilities` gates the session (W6 #96). That the log shows no `GetDevicePropValue` is Bench (check 9). |
+| Battery and free space hidden on Wi-Fi | **Built** | W2 #90 capabilities; W16 #110's `deviceStatusLines` shows neither on Wi-Fi. |
+| Firmware strings compared within one mode | **Open** | `PTPFirmwareVersion` exists in `PTPKit`, but no app code compares firmware, so nothing breaks across modes today. Shamil decides whether 1.0 needs a firmware-change check; otherwise it is *Later*. |
+| A time limit on every command | **Built** | W3 #91 and W6 #96: a timeout maps to retry on reconnect. |
+| One transaction at a time; one download in flight | **Built** | W3 #91 (a second call is `.busy`); W2 #90's Wi-Fi capability is 1. |
+| No private data in logs, diagnostics or fixtures | **Built** | Serial, name and password are kept out by construction (`JoinFailure` carries no text; keys are hashed; `CameraKeyTags`). The run's logs are Bench (the bench file's note). |
+
 The `CameraLink` over Wi-Fi, in `CameraTransport`: an actor that owns a command connection and an event connection to TCP port 15740 on `Network.framework`, and answers list, info, thumb, bytes and events like `USBLink`.
 
 Already in `PTPKit` from the spike: PTP/IP framing, a stream decoder that never buffers a data phase, the transaction state machine, and builders for SDIO_OpenSession, SDIO_Connect, SDIO_GetExtDeviceInfo, SDIO_SetContentsTransferMode and SDIO_GetPartialLargeObject, and a `.sonyLarge9211` variant in `PTPPartialRead` that builds the 0x9211 command (still marked `unverified` in the code). `PTPPartialRead.variant(objectSize:device:)` picks 0x101B whenever DeviceInfo lists it, and it does over PTP/IP. In the whole-card session, where 0x101B answers InvalidObjectHandle, the link doesn't use that chooser: it asks `SonyCapabilities.partialReadVariant(objectSize:in: .wholeCardContentsTransfer)` (PR #64, also `unverified`), which returns `.sonyLarge9211` when DeviceInfo lists 0x9211 and never 0x101B. No fixture the spike saves records a 0x9210–0x9212 exchange (the PTP/IP fixtures are DeviceInfo, storage IDs and info, handles, ObjectInfo, events and Sony's ExtDeviceInfo). No fixture will hold a 0x9211 exchange, so, as iteration-1-backlog.md section 1 says, the comment records the 2 Nov results as measured (`ptpip.ap.partial.sonyLarge9211` yes, the 23:10 resume's SHA-256 match) and keeps `unverified` until a test is built from a captured exchange; the PTP/IP DeviceInfo fixture shows only that 0x9210–0x9212 and 0xC201 are listed.
@@ -83,6 +124,19 @@ Could change with: decision 6, if it is reopened; the fixtures, committed on 8 N
 
 ## 2. Sony's whole-card session: open, list and stay listed
 
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Open with SDIO_OpenSession [1, 1] | **Built** | W6 #96, from the PTPKit plan (#64); the golden tests show the codes. |
+| Init sequence in Imagedge's order | **Built** | W6 #96. Order and parameters stay `unverified` until a capture of the product app proves them (Bench, check 3). |
+| Contents transfer mode, two steps | **Bench** | W6 #96. The pauses between the steps are the spike's; shorter pauses are untested. |
+| Poll for the list | **Bench** | W6 #96. Ready times (about 2 to 3 s) are check 3's step times. |
+| List newest first, one GetObjectInfo per handle | **Bench** | W6 #96. The 2,000 and 5,000-file projections stay unmeasured. |
+| Handles stable across sessions; only the first import lists everything | **Built** | W8 #100: `list(reusing:)` runs GetObjectInfo only for unseen handles (`SonyHandleSet`). Confirmed on the camera in checks 5 and 8. |
+| Identity still decides | **Built** | W8 #100: a reused handle is confirmed by name and size before use; a changed file is `itemNotFound`. |
+| No delete path over Wi-Fi | **Built** | W2 #90: the Wi-Fi capability's deletes are off. |
+
 **In plain terms:** this camera only shows its card over Wi-Fi once the session is opened Sony's way. The app opens it with Sony's operation instead of the standard one, runs a short handshake Sony's apps use, switches the session into "contents transfer" mode in two steps, then asks for the handle list until the card appears. (Findings: *Wireless browsing in 1.0*; *PTP/IP and join facts*, "Sony SDIO connect".)
 
 Starting point (7 Nov): PTPKit already describes this session as pure values, `SonyContentsTransferPlan.wholeCard()` with `SonySessionRunner` to walk it one answer at a time and `SonyCapabilities` to gate it on DeviceInfo (PR #64). It follows the spike app's sequence and is `unverified` until fixtures prove it; the link's job is to send what the runner says, feed the answers back and run the listing poll.
@@ -104,6 +158,20 @@ Could change with: decision 6, if it is reopened; a firmware update (keep fixtur
 
 ## 3. Thumbnails, downloads and 0x9211 resume
 
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Thumbnails, newest first | **Bench** | W6 #96. The first screen of 60 projects to 2.1 to 2.3 s against the 1 s budget; Browse shows the last-known card first. |
+| Copy and Share as JPEG over Wi-Fi | **Bench** | `JPEGAction` takes any `CameraLink`, and W16 #110 puts Wi-Fi cameras in Browse. Not run over Wi-Fi. |
+| Downloads with GetObject, streamed to a file | **Bench** | W6 #96. Exit criterion is check 4 (at least 8 MB/s). |
+| Memory inside 150 MB | **Bench** | Check 4. |
+| Resume with 0x9211 | **Bench** | W8 #100: 4 MiB chunks, only the variant `SonyCapabilities` names, never 0x101B or 0x9219. Checks 8 and 9. |
+| The file in flight resumes from its offset | **Bench** | W7 #98 (the engine) and W8 #100 (the link). Checks 8 and 9. |
+| Open choice: chunked 0x9211 or GetObject for new files | **Open** | Shamil, after a whole-file 0x9211 throughput measurement. New files use GetObject for now. |
+| The same file gives the same bytes across sessions | **Bench** | Check 8's SHA-256 comparison. |
+| The `CameraLink` contract for Wi-Fi | **Built** | W2 #90; no behaviour change over USB. |
+
 Acceptance criteria:
 
 - **Thumbnails** with GetThumb, newest first: 38.74 ms and 35.35 ms on average for 50 (slowest about 100 ms) on the camera's network, and 48.09 ms on the home network. At 35–39 ms the proposal's first screen of the newest 60 takes about 2.1–2.3 s, against its 1 s budget (spike-remaining.md section 4), so Browse shows the last-known card while they come.
@@ -121,6 +189,15 @@ Could change with: a measurement of 0x9211 throughput over a whole file; decisio
 
 ## 4. Keep-alive, the idle drop, and events
 
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Keep-alive: GetDeviceInfo every 10 s while idle | **Bench** | W6 #96 (`IPKeepAlive`). Check 9: the keep-alive spacing is in `IPLink.diagnostics` only and isn't logged yet, so it is *blocked* until the app logs the diagnostics (see the bench sheet's "What the log holds"). |
+| A lost session reconnects by itself | **Bench** | W6 #96 and W14 #106. Checks 9 and 10. |
+| Events: StoreAdded, StoreRemoved, ObjectAdded decoded; 0xC225 counted in `IPLink.diagnostics` and ignored | **Built** | W6 #96 (`IPEventMapper`); the golden tests cover the codes. The diagnostics struct isn't written to the log. |
+| ObjectAdded isn't acted on in 1.0 | **Built** | Ignored and logged by design (`IPEventMapper`); *Later* for a transfer-while-shooting feature (plan section 5). |
+
 **In plain terms:** the Imagedge code, written for a ZV-E10, reports that the camera drops an idle PTP/IP session after about 30 s, and it sends GetDeviceInfo every 10 s to prevent that. On this body, that drop hasn't been separated from iOS closing a suspended app's sockets. (Findings: *PTP/IP and join facts*, "An idle session with the app in the background"; *BLE advertisement*, *With Creators' App paired again*.)
 
 Acceptance criteria:
@@ -133,6 +210,18 @@ Acceptance criteria:
 Could change with: a measurement that separates the camera's idle drop from iOS; ObjectAdded on the whole-card session.
 
 ## 5. Finding the camera: fixed address, passive SSDP and a typed address
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| On the camera's network, no discovery | **Built** | W9 #101. |
+| Passive SSDP elsewhere | **Later** | Built and tested (`SSDPListener`, W9 #101) but off behind `WirelessFeatures.passiveSSDPDiscovery = false`, with no ATS exception and no `NSBonjourServices` (plan section 5: the home route, §10). |
+| Plan on passive listening plus the typed address | **Later** | As above: only the typed address is offered in 1.0. |
+| A typed address, always offered | **Built** | W15 #107 and W16 #110 (`TypedAddressSheet`); the 60 s first-ack timeout covers the 40 s first ack. Not run on the bench. |
+| An announcement doesn't mean the camera will accept a session | **Later** | Section 10's concern; the typed-address path opens a session and reports a refusal. |
+| The multicast entitlement is requested | **Open** | Apple (request 7BDQ7FRVM8, pending). Nothing waits on it; the entitlement stays out of `ShutterBridge.entitlements` (CI checks the file holds only Hotspot Configuration). |
+| "Discovery 5 s" isn't shown | **Later** | Not needed on the camera's own network; the exit criterion is 25 s from *Start* (check 3). The announcement interval stays unmeasured. |
 
 Acceptance criteria:
 
@@ -149,6 +238,18 @@ Done (9 Nov), W9: the Network.framework channel and the Wi-Fi camera location, i
 Could change with: the entitlement (granted, it would allow active search for the home route); a measured announcement interval; decision 5, if it is reopened (without the home network, only a typed address for unusual setups is left).
 
 ## 6. Bluetooth pairing at onboarding (decision 6, decided)
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| The onboarding screen says what is coming | **Open** | Shamil: the menu path and the two settings' names are `unverified` placeholders (B:144) until read off the camera. The screen and steps are built (W16 #110). |
+| The pairing read gets no short timeout | **Built** | W5 #93: `PairingCheck` reads CC09 with no timeout. The two prompts are Bench (check 1). |
+| Store the peripheral identifier | **Built** | W4 #92 (the column) and W16 #110 (stored when the check returns it). Reconnect with no prompt is check 1. |
+| Already paired skips the explanation | **Bench** | W5 #93 returns `alreadyPaired`; against iOS's real pairing in check 1 and Creators' App. |
+| Unpaired errors are recognised | **Built** | W5 #93 and W10 #99 map the ATT errors to `notPaired` and send the person to *Pairing* with no retry loop. Check 1 confirms no loop. |
+| A drop during onboarding is retried once | **Built** | W5 #93, with W16 #110's wording for the second drop. |
+| Untested: reinstall, declined confirmation, confirmation every time | **Bench** | Handled defensively; not in the quick run. The camera's confirmation wording is `nil` until read off the camera (Open, Shamil). |
 
 **In plain terms:** the camera refuses the hand-off to a phone it isn't paired with. Pairing happens once, from the app, with the camera's Bluetooth *Pairing* screen open. Creators' App isn't needed (one run, 4 Nov 13:06). iOS keeps one pairing per device and shares it between apps. (Findings: *BLE advertisement*, *Without Creators' App's pairing* and *With Creators' App paired again*; *α7C II menu wording*, the Bluetooth *Pairing* row.)
 
@@ -167,6 +268,22 @@ Done (9 Nov), W5, in `Packages/CameraTransport/Sources/CameraTransport/Bluetooth
 Could change with: decision 6, if it is reopened (without it there is no pairing step, and the proposal's "Link Bluetooth" step for proximity stays); the camera's prompt wording.
 
 ## 7. Bluetooth hand-off: switch the camera's Wi-Fi on and read its details (decision 6, decided)
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Connect by the stored identifier, with a scan fallback | **Bench** | W5 #93 and W10 #99. Check 3's total time, by stopwatch (the step times aren't logged). |
+| Subscribe to the five notifications before the write | **Built** | W5 #93, in the spike's order; the 1 s pause after subscribing (`HandoffTiming.afterSubscribe`) is `unverified`. |
+| Parse CC09 as the α7C II lays it out | **Built** | `BLEKit` (#74) and W5 #93, tested on the captured bytes. |
+| Switch on only when needed | **Built** | W5 #93 (status 2 reads details; 0 writes CC08; 0x9D is not a pairing error). |
+| Read CC06 and CC07 only after status 2; never log them | **Built** | W5 #93; `BLEKit`'s credentials type keeps them out of descriptions and logs. |
+| With PC Remote Function on | **Bench** | Unconfirmed in the spike; the 1.0 route has it off. Not in the quick run. |
+| Don't switch on early | **Built** | W11 #97 and W16 #110: the write waits for *Import* or an allowed recovery. |
+| Don't count on the link after the join | **Built** | W11 #97 reconnects every 5 s during the stay (`bluetoothReconnectEvery`, `unverified`). |
+| Turning the notifications off at the end | **Bench** | W5 #93 treats CoreBluetooth's "unknown" error as harmless when another app holds a link. Needs Creators' App. |
+| With Creators' App open in the background | **Bench** | Not run; section 9's recovery covers the drops either way. |
+| Fallback when the service is missing | **Open** | Shamil. The link reports `.serviceMissing` and the check ends `unavailable` (W5 #93, W10 #99), but the app has no copy for the manual route (*PC Remote Function* on, join in Settings). Add it, or leave it *Later* until a firmware change makes it matter. |
 
 **In plain terms:** the app connects to the camera over Bluetooth, subscribes to Sony's five notifications, and writes 0x01 to CC08. The camera then brings its Wi-Fi up, with nothing shown on its screen, and reports this through CC09. Once CC09 says "launched", the app reads the network name (CC06) and password (CC07) and joins (section 8). (Findings: *BLE advertisement*, the third run and *The 1.0 route, end to end*.)
 
@@ -191,6 +308,22 @@ Done (9 Nov), W10: BluetoothCentral and the Core Bluetooth GATT link, in `Packag
 Could change with: decision 6, if it is reopened; a firmware update.
 
 ## 8. Join, stay and leave (stay then leave: decision 2 = (d), decided; how long, and leaving from the background: decided 8 Nov; joining: decision 3, decided)
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Join with `NEHotspotConfiguration` | **Bench** | W12 #102 (`NEHotspotJoiner`, `joinOnce = false`). The prompt, and whether leave removes a configuration the person already had ("already associated", `unverified`), are checks 3 and 6. |
+| `apply` returning is not a join; confirm by the gateway | **Built** | W9 #101 (`NWPathGateway`) and W11 #97 wait up to 20 s for 192.168.122.1. |
+| Join as soon as CC09 reports status 2, inside the 50 s | **Bench** | W11 #97 applies the moment the details are read. Check 3 and check 7. |
+| Watch CC09 during the join prompt | **Bench** | W11 #97 rewrites CC08 at most twice (`rewritesPerJoin`, `unverified`). Check 7: the CC09 sequence isn't logged yet (*blocked*, see the bench sheet); whether a second write restarts the count stays unknown. |
+| A join needs the app in front | **Built** | W11 #97 pauses with `.needsJoin` when away; W16 #110 feeds it the scene. |
+| Then the session; 25 s from *Start* | **Bench** | Check 3. |
+| Say the internet uses mobile data while joined | **Built** | W16 #110's Import line. |
+| Stay then leave: 3 minutes, in front only; leave at once from the background; a leave as the continued task's last step | **Bench** | W11 #97 and W16 #110. The week-1 removal test is check 6(b); if it fails, the stay rule returns to Shamil (option (b)). |
+| Expect the camera's Wi-Fi to stay on after the leave | **Bench** | The copy is built (W16 #110, closable); check 6(c) records when it goes off. |
+| A second import inside the stay reopens with no join | **Bench** | W11 #97 and W16 #110. Check 5. |
+| iOS moving the phone away starts the camera's 50 s count | **Built** | W11 #97 goes to Bluetooth at once when the app was away longer than 50 s after the phone left; W14 #106 uses it. |
 
 Acceptance criteria:
 
@@ -218,6 +351,22 @@ Done (9 Nov), W16: the wireless feature switches on, as the SwiftUI screens over
 Could change with: a test of leaving from the background (Iteration 3, week 1; if removing the configuration fails there, the stay rule goes back to Shamil, and the decision pack's recommendation 1 names option (b) as the alternative); the camera's battery cost of a Wi-Fi left on, if it proves large; decision 3, if it is reopened. The Bluetooth trace is skipped and option (c) is closed for 1.0.
 
 ## 9. Recovery, pause and continue over Wi-Fi
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Every Wi-Fi import runs inside `BGContinuedProcessingTask` | **Bench** | W13 #103 and W16 #110 (Wi-Fi jobs only). Check 8. A USB job has none: Open, Shamil (W13's question, see below). |
+| Expiry is normal: flush, pause, notify, continue | **Bench** | W7 #98 (`taskExpired`) and W13 #103. The *Paused* state in a Live Activity is *Later* (no Live Activity code); the pause notification stands in. Check 8. |
+| Continue: new task, reopen, new handles only, resume with 0x9211 | **Bench** | W13 #103, W16 #110 (`listNewHandles`) and W8 #100. Check 8. |
+| Ask for notification permission once, at the first *Import* | **Built** | W13 #103 (`NotificationPermissionModel`); W18 #108 asks only if still undetermined. |
+| Progress in bytes, to the system's continued-task UI | **Built** | W13 #103 (`ImportBackgroundRun`). The Live Activity half is *Later*. |
+| The Live Activity records Stop separately from an expiry | **Later** | No Live Activity exists, and iOS's handler doesn't say which ended the run; the log notes only "an expiry, or Stop". |
+| A stall pauses and retries; "failed" is for real errors | **Built** | W7 #98: limited retries, `cardUnavailable` counts nothing as failed. |
+| Recover from the camera dropping its card, with the app in front | **Bench** | W14 #106 (`WiFiRecoveryPlan`): no second 30 s wait. Check 10(a). The wait before Bluetooth (`waitBeforeBluetooth`) is cited to the spike; decided (Shamil, 9 Nov): 30 s (`decision-pack.md`, `WiFiRecoveryTiming`). |
+| With the app away, do only what needs no join; pause and notify | **Bench** | W14 #106 (`bluetoothSwitchOnWhenAway`). Check 10(b); a Bluetooth switch-on from the background is unmeasured. |
+| A camera restart alone is no reason to delay the join | **Built** | W14 #106. |
+| Exit criterion: 100 files at least 8 MB/s; 25 s from *Start* | **Bench** | Checks 3 and 4. |
 
 The engine's transport-neutral rules (section 0) with the Wi-Fi triggers. Wi-Fi needs the continued task and the Live Activity's *Paused* state from the start of Iteration 3; section 0 records Shamil's decision (8 Nov) that the second engineer builds both in the first week and that this section uses them (see the top of this file). (Findings: *Wireless browsing in 1.0*, the whole-card copies table and the bullets under it; decisions 3 and 4 in spike-remaining.md.)
 
@@ -264,6 +413,20 @@ Could change with: group B's runs; the security answer (either can end this rout
 
 ## 11. Proximity scan, wake and confirm
 
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Background scan for service 1800 with restore | **Bench** | W17 #104 and W10 #99; `bluetooth-central` is in Info.plist. Check 11. |
+| Confirm after every wake | **Built** | W17 #104 (`ProximityConfirmer`): stored identifier, else company 0x012D plus the model as a whole word; nothing else reminds. |
+| The identifier comes from onboarding | **Built** | W4 #92, W5 #93 and W16 #110. |
+| "Nearby", never "switched on" | **Built** | W16 #110's wording and *nearby* badge (`ReminderPolicy.nearbyWindow`, 120 s, `unverified`). |
+| Measured latency | **Bench** | Check 11(a); a walk into range is untried. |
+| Restart from a wake, not a timer | **Bench** | W17 #104. The arrival reminder rests on the app-refresh task, which iOS may run rarely (`rearmAfterReport`, 30 minutes, `unverified`): check 11(a). |
+| Restart the scan when Bluetooth comes back on | **Built** | W17 #104 and W10 #99; on a real device, Bench. |
+| Low Power Mode copy says "may stop" | **Built** | W17 #104 (`ProximityWording`). |
+| Core Bluetooth state restoration | **Bench** | W17 #104 keeps a scan iOS hands back at `poweredOn`. Check 11(d); swipe-away and reboot stay untested. |
+
 **In plain terms:** the camera keeps advertising over Bluetooth even when switched off, so the phone can notice it nearby. The only thing it advertises that iOS can filter a background scan on is service 1800, which isn't Sony's (*Generic Access*), so other devices can wake the app too. After each wake the app confirms it is really this camera. (Findings: *Proximity reminder in 1.0*; *BLE advertisement*.)
 
 Acceptance criteria:
@@ -287,6 +450,17 @@ Done (9 Nov), W17: the proximity scan, its restore and restarts, and the confirm
 Could change with: a walk into range; the Creators' App connected and quit rows (not run); decision 6, if it is reopened (where the identifier comes from).
 
 ## 12. Reminder rules: hold, one per arrival, quiet hours
+
+**Status (9 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| Ask for permission when the reminder is switched on, if undetermined | **Built** | W18 #108 (`ReminderModel`). |
+| Hold while connected or importing, over USB too | **Built** | W18 #108 and W16 #110 (`ConnectionHolds`, `begin`/`end`). Check 11(b) on the camera. |
+| One reminder per arrival, with a long hold | **Built** | W18 #108: 4 hours per camera, stored across relaunches (`UserDefaults`, covered by the privacy manifest). Check 11(c); the quiet-gap comparison is for Shamil. |
+| The proposal's rules: actions, quiet hours, snooze, per-camera mute, nearby badge | **Built** | W18 #108 and W16 #110: Import Now, Not Now, Snooze 1 Hour, quiet hours 22:00 to 08:00, per-camera mute, badge. The snooze is fixed at 1 hour, not a setting (decided, Shamil, 9 Nov; `ReminderPolicy`). "Only when on home Wi-Fi" is *Later*. |
+| Tapping the reminder opens the right camera | **Bench** | W16 #110 (`openCameraFromReminder`), including a cold start while the catalogue opens. |
+| The count is the last known one | **Built** | W16 #110 (`NotImportedCount`). |
 
 Acceptance criteria:
 

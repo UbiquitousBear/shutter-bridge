@@ -1,7 +1,7 @@
 # Shutter Bridge
 
-Import photos from a Sony α7C II to an iPhone over USB-C or Wi-Fi, with differential sync, resume, a
-proximity reminder over Bluetooth LE, and direct delivery into Photos. iPhone only, iOS 27, Swift 6, SwiftUI.
+Import photos from a Sony α7C II to an iPhone over USB-C or Wi-Fi (switched on and joined from the app over Bluetooth LE),
+with differential sync, resume, a proximity reminder over Bluetooth LE, and direct delivery into Photos. iPhone only, iOS 27, Swift 6, SwiftUI.
 Working title; no Sony marks in the name or icon.
 
 The technical bet: speak the open standards the camera already supports — PTP (ISO 15740) over USB via
@@ -18,10 +18,12 @@ proprietary phone protocol.
 | [`docs/spike-runbook.md`](docs/spike-runbook.md) | How to run each step of the plan: the spike app's tab and button (or the Mac command), what the log shows, the measurements recorded and the fixtures saved; the checklist before day 1 and the day-10 export. |
 | [`docs/spike-findings.md`](docs/spike-findings.md) | The findings page, to fill during the spike: one section per go/no-go question, the camera's menu wording, the measurements table, the day-6 mode matrix, BLE, `ImageCaptureCore` facts and the decision record. |
 | [`docs/iteration-1-backlog.md`](docs/iteration-1-backlog.md) | The Iteration 1 backlog (wired import), the current phase: acceptance criteria per package and screen, and the spike findings that could change each item; section 0 records how the workspace was set up. |
+| [`docs/iteration-3-4-backlog.md`](docs/iteration-3-4-backlog.md) | The Iteration 3 and 4 backlog (Wi-Fi, Bluetooth, background and proximity): acceptance criteria per section, what the spike measured, and a status table per section (Built, Bench, Open or Later, with the pull request) checked against the merged code on 9 Nov. |
+| [`docs/iteration-3-4-bench.md`](docs/iteration-3-4-bench.md) | The results checklist for the wireless bench run (eleven checks, with what to record and an empty result for each), and the camera wording still to read off the camera. |
 | [`docs/remote-shoot-notes.md`](docs/remote-shoot-notes.md) | Later scope: design notes for remote shoot and a live-view monitor, from the reference apps Shamil shared, and the level guide (horizontal and vertical) neither of them has. |
 | [`docs/ci.md`](docs/ci.md) | How the apps are built and tested on every pull request (GitHub Actions: Xcode 27 builds, every package's tests on Linux and in the iOS Simulator) and delivered to TestFlight, with the one-time setup. |
-| `App/` | The iPhone app: a hand-written, committed `ShutterBridge.xcodeproj` whose target is only the `@main` shim, the app icon and the privacy manifest, on top of `AppUI`. `make app` opens it. |
-| `Packages/` | The Swift packages, each building and testing alone, on Linux too: `PTPKit` (pure PTP and PTP/IP codec, from the spike), `BLEKit` (pure Bluetooth parsers), `CameraTransport` (the `CameraLink` protocol; USB and Wi-Fi links), `Catalogue` (what has been imported), `PhotosBridge` (Photos and the Files folder), `ImportEngine` (the import job), `AppUI` (the screens) and the test-only `PTPSimulator` (a fake camera). Apple-only code sits behind `#if canImport(...)`. |
+| `App/` | The iPhone app: a hand-written, committed `ShutterBridge.xcodeproj` whose target is only the `@main` shim, the app icon and the privacy manifest, on top of `AppUI`, with `Info.plist` (Bluetooth, Local Network and Photos strings, the `bluetooth-central` and `fetch` background modes, the background task identifiers) and `ShutterBridge.entitlements` (Hotspot Configuration, for joining the camera's Wi-Fi) beside it. `make app` opens it. |
+| `Packages/` | The Swift packages, each building and testing alone, on Linux too: `PTPKit` (pure PTP and PTP/IP codec, from the spike), `BLEKit` (pure Bluetooth parsers), `CameraTransport` (the `CameraLink` protocol; the USB and Wi-Fi links, the Bluetooth hand-off, the join and the proximity scan), `Catalogue` (what has been imported), `PhotosBridge` (Photos and the Files folder), `ImportEngine` (the import job), `AppUI` (the screens) and the test-only `PTPSimulator` (a fake camera). Apple-only code sits behind `#if canImport(...)`. |
 | `Spike/` | The spike's throwaway iPhone app, archived and still built by CI until it is retired, one tab per area: Wired (ImageCaptureCore browser and session, PTP pass-through, resume over USB), Wi-Fi (PTP/IP client, port, Bonjour and SSDP probes, QR scan and join), Bluetooth (advertisement scanner, proximity reminder test), Background (`BGContinuedProcessingTask` test) and Log (measurements with export, fixtures). |
 | `Fixtures/` | Bytes captured from the real camera; ground truth for the codec tests. The spike app saves them on the phone; [`Fixtures/README.md`](Fixtures/README.md) lists every file. Holds the captures exported on 8 Nov (USB in MTP mode; PTP/IP from the camera's own network and from PC Remote on the home network); the golden tests decode and re-encode every one PTPKit has a decoder for. |
 | `Spike/ci_scripts/` | Xcode Cloud post-clone step (generates the spike project). It must sit next to `Spike.xcodeproj` for Xcode Cloud to find it. The production app needs none: its project is committed. |
@@ -69,7 +71,7 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
 - [x] Spike runbook, findings template and a draft Iteration 1 backlog
 - [x] Multicast entitlement requested (8 Nov, reference 7BDQ7FRVM8; pending) and its status noted
 - [ ] Spike findings (day 10, 13 Nov 2026)
-- [ ] Go / no-go on wireless scope for 1.0
+- [x] Go / no-go on wireless scope for 1.0 (8 Nov, Shamil: Go on all six questions)
 - [x] Iteration 1 started (8 Nov, Shamil's decision, ahead of the go/no-go record): the production workspace, with
       the packages' public shapes and their tests on Linux, the hand-written app project showing a placeholder
       Cameras screen, and CI building the app and testing every package on Linux and in the iOS Simulator
@@ -79,11 +81,21 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
       folder, and the app wired end to end over them (Cameras, Browse with selection, filters and the last-known
       card, Import, and the destination setting in Settings); the models are tested on Linux, the screens only
       compiled by CI
+- [x] Iterations 3 and 4, built ahead of plan (9 Nov): the Wi-Fi link (`IPLink`: Sony's whole-card session over PTP/IP,
+      resume over 0x9211), Bluetooth pairing and the Wi-Fi hand-off, the join, stay and leave, recovery, pause and
+      continue with the app away, the continued task, the proximity scan and its reminder rules, and the screens and
+      live wiring that switch wireless on (W1 to W18; W16, the switch-on, #110, was in CI at the time of writing). The
+      models and rules are tested on Linux, the screens and Apple-only code only compiled by CI
+- [ ] Wireless bench run on the iPhone and the camera ([`docs/iteration-3-4-bench.md`](docs/iteration-3-4-bench.md)):
+      nothing wireless has run against the camera in the product app yet
+- [ ] Open for Shamil: the camera's pairing wording and menu path read off the camera, Hotspot Configuration ticked on the
+      App ID, and the multicast entitlement (Apple's answer pending)
 
 ## Decisions so far
 
 Paid one-off app, English only at launch, stills only in 1.0 (video in 1.1), RAW+JPEG/HEIF pairs saved as
-one Photos asset, Browse-and-pick on connect (auto-import is opt-in), both Wi-Fi setups (camera AP and home
-LAN) first-class, BLE proximity reminder (dismissible alert with quiet hours) in 1.0, Bluetooth camera wake and
-credential hand-off first after 1.0, plain SwiftUI with `@Observable` over an actor-based engine, Xcode Cloud
+one Photos asset, Browse-and-pick on connect (auto-import is opt-in), the camera's own Wi-Fi network,
+switched on and joined from the app over Bluetooth, as the 1.0 wireless route (the home network by a typed address;
+passive discovery is built but off), BLE proximity reminder (dismissible alert with quiet hours) in 1.0, Bluetooth
+camera wake dropped, plain SwiftUI with `@Observable` over an actor-based engine, Xcode Cloud
 for CI, one engineer through Iteration 2 and a second from week 10.
