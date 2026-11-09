@@ -102,7 +102,8 @@ public final class BrowseModel {
     public private(set) var imported: Set<CameraItem.ID> = []
     /// The picked files, which the sticky bar counts and Import hands over.
     public private(set) var selection: Set<CameraItem.ID> = []
-    /// The selecting mode of the grid: taps select instead of opening anything. Leaving it clears the selection.
+    /// The selecting mode of the grid: taps select instead of opening anything. Leaving it clears the selection, so
+    /// the screen hides Back while selecting (a stray tap would throw a hand-built selection away).
     public var isSelecting = false {
         didSet { if !isSelecting { selection = [] } }
     }
@@ -693,6 +694,10 @@ public final class BrowseModel {
 
     public func isSelected(_ item: CameraItem) -> Bool { selection.contains(item.id) }
 
+    /// Whether `tap(_:)` would do anything with this file: select it, start selecting with it, or deselect it. A cell
+    /// that doesn't isn't announced as a button.
+    public func respondsToTap(_ item: CameraItem) -> Bool { isSelected(item) || canSelect(item) }
+
     /// Selects or deselects one file; files that can't be imported aren't selected.
     public func toggleSelection(_ item: CameraItem) {
         if selection.contains(item.id) {
@@ -714,6 +719,57 @@ public final class BrowseModel {
     }
 
     public func clearSelection() { selection = [] }
+
+    /// A tap on a cell (and VoiceOver's default action, which does the same): while selecting it selects or
+    /// deselects the file; otherwise, on a file that can be imported, it enters the selecting mode with that file
+    /// selected (until Iteration 2's loupe opens it instead). A file that can't be imported does nothing outside the
+    /// selecting mode; its VoiceOver value says why.
+    public func tap(_ item: CameraItem) {
+        if isSelecting {
+            toggleSelection(item)
+        } else if canSelect(item) {
+            isSelecting = true
+            selection = [item.id]
+        }
+    }
+
+    /// The files the filters show that could be selected now.
+    private var selectableShown: [CameraItem.ID] {
+        sections.flatMap { section in section.items.filter { canSelect($0) }.map(\.id) }
+    }
+
+    /// True when every file the filters show that could be selected is selected (and there is one): the leading
+    /// button then reads *Deselect All*, as Select All does in Photos and Files.
+    public var allNewSelected: Bool {
+        let shown = selectableShown
+        return !shown.isEmpty && selection.isSuperset(of: shown)
+    }
+
+    /// Whether the leading button does anything: something to select, or a selection to clear.
+    public var canToggleSelectAllNew: Bool { !selection.isEmpty || !selectableShown.isEmpty }
+
+    /// The leading button while selecting: *Select All New*, or *Deselect All* once all of them are selected.
+    /// Deselecting keeps the selecting mode, so clearing a selection doesn't mean leaving it.
+    public func toggleSelectAllNew() {
+        if allNewSelected { clearSelection() } else { selectAllNew() }
+    }
+
+    // MARK: - The bar
+
+    /// The bar's title: the camera's name, or while selecting "Select Items" and then "3 Selected" (HIG: the title
+    /// reports the selection).
+    public var navigationTitle: String {
+        isSelecting ? BrowseWording.selectingTitle(selectionSummary) : CamerasWording.displayName(for: camera)
+    }
+
+    /// The bar's subtitle: the selection's size while selecting something, "Reading the card…" while the last-known
+    /// card is shown, otherwise the mode in the camera's wording.
+    public var navigationSubtitle: String {
+        let summary = selectionSummary
+        if isSelecting, summary.count > 0 { return ByteWording.size(summary.bytes) }
+        if case .reading = phase, lastKnownListedAt != nil { return BrowseWording.readingSubtitle }
+        return CamerasWording.modeLine(camera.mode)
+    }
 
     /// The selected files in the card's order (newest first), as Import hands them over.
     public var selectedItems: [CameraItem] {
@@ -762,11 +818,16 @@ public final class BrowseModel {
 
     public func dismissImportNotice() { importStatus = nil }
 
-    /// The grid cell's VoiceOver label (`date` formatted by the screen).
+    /// The grid cell's VoiceOver label (`date` formatted by the screen). Whether it is selected is the cell's
+    /// `.isSelected` trait.
     public func accessibilityLabel(for item: CameraItem, date: String?) -> String {
         BrowseWording.cellAccessibility(name: item.name, date: date, kind: CardLayout.kind(of: item),
-                                        isImported: isImported(item), isSelected: isSelected(item),
-                                        selectable: isSelecting && canSelect(item))
+                                        isImported: isImported(item))
+    }
+
+    /// The grid cell's VoiceOver value: why it can't be selected, when the label doesn't already say so.
+    public func accessibilityValue(for item: CameraItem) -> String? {
+        BrowseWording.cellAccessibilityValue(selectionBlock(for: item))
     }
 
     // MARK: - For tests

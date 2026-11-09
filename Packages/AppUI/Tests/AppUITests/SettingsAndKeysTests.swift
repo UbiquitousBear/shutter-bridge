@@ -43,10 +43,15 @@ struct SettingsTests {
         #expect(SettingsModel.label(for: .photos) == "Photos")
         #expect(SettingsModel.label(for: .filesFolder) == "Files")
         let footer = SettingsWording.destinationFooter
-        #expect(footer.contains("Photos access is off"))
-        #expect(footer.contains("restricted"))
         #expect(footer.contains("On My iPhone › Shutter Bridge"))
         #expect(footer.contains("a folder for each camera"))
+        #expect(footer.contains("The next import follows this setting."))
+        // What Photos access does is said in its own row, only when it applies.
+        #expect(!footer.contains("Photos access"))
+        #expect(SettingsWording.forcedFiles(.chosen) == nil)
+        #expect(SettingsWording.forcedFiles(.photosDenied) == "Photos access is off, so imports go to Files.")
+        #expect(SettingsWording.forcedFiles(.photosRestricted)
+            == "Photos is restricted on this iPhone, so imports go to Files.")
     }
 
     @Test func albumIdentifiersAreKeptPerKey() async {

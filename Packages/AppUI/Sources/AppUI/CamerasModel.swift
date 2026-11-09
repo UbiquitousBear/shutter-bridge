@@ -44,6 +44,9 @@ public final class CamerasModel: CameraFinding {
         case allowed
         /// ImageCaptureCore's access is denied or restricted.
         case notAllowed
+        /// Discovery couldn't start for another reason: no camera would ever appear, so the screen says so with Try
+        /// Again (`becameActive()`) rather than look like "No Camera Connected".
+        case failed
     }
 
     /// The connected cameras, in the order they appeared.
@@ -96,8 +99,8 @@ public final class CamerasModel: CameraFinding {
         if removed > 0 { services.log.note("copy-as-jpeg removed \(removed) leftover temporary folder(s) at launch") }
     }
 
-    /// The app became active: watch discoveries (once) and start discovery, again if access was refused before
-    /// (the person may have changed it in Settings).
+    /// The app became active, or Try Again was tapped: watch discoveries (once) and start discovery, again if access
+    /// was refused or starting failed before (the person may have changed it in Settings).
     public func becameActive() async {
         watchDiscoveries()
         guard !isLooking, !starting else {
@@ -111,7 +114,7 @@ public final class CamerasModel: CameraFinding {
             isLooking = true
             access = .allowed
         } catch {
-            access = error.kind == .notAuthorised ? .notAllowed : .unknown
+            access = error.kind == .notAuthorised ? .notAllowed : .failed
             services.log.note("cameras: discovery didn't start: \(error)")
         }
     }

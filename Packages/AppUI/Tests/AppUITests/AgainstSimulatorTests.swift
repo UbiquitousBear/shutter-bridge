@@ -92,7 +92,7 @@ struct BrowseAndImportAgainstSimulatorTests {
         #expect(bench.importer.camera?.key == bench.key)
         try await bench.untilImport(.finished(.completed))
         #expect(bench.importer.countsLine == "5 files imported.")
-        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Saved to Files" })
+        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Imported to Files" })
         await bench.expectInFiles(importableStills)
         #expect(await bench.link.bytesCalls.sorted() == importableStills.sorted())   // each file fetched once
 
@@ -231,7 +231,7 @@ struct SceneAndCableAgainstSimulatorTests {
         await bench.importer.refresh()
         #expect(bench.importer.state == .paused(.byPerson))
         #expect(bench.importer.canResume)
-        #expect(bench.importer.statusLine == "Paused. Tap Continue to carry on.")
+        #expect(bench.importer.statusLine == "Paused. Tap Continue to resume.")
 
         await bench.importer.resume()
         #expect(bench.importer.state == .running)

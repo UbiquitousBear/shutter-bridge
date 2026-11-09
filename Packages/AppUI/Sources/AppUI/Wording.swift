@@ -5,8 +5,9 @@ import ImportEngine
 import PhotosBridge
 
 // The app's copy (backlog section 6), in British English and in the camera's own wording for its modes. No maker's
-// marks: "works with" wording only. Numbers are the bench's measurements, never promises. Plain strings until the
-// String Catalog arrives.
+// marks: "works with" wording only. Numbers are the bench's measurements, never promises. Sizes and times go through
+// the system's formatters for the person's region (`ByteWording`); the rest are plain strings until the String
+// Catalog arrives.
 
 /// The Cameras screen.
 public enum CamerasWording {
@@ -14,8 +15,6 @@ public enum CamerasWording {
     public static let usbBadge = "USB-C"
     /// The toolbar button that opens Settings.
     public static let settingsButton = "Settings"
-    /// The toolbar button that opens the Import screen while a job exists.
-    public static let importButton = "Import"
 
     /// The mode line under a camera's name. `ICTransportTypeUSB` is MTP or Remote Shoot (PC Remote), and nothing
     /// tells them apart before the card is read (`USBModeClassifier`), so the line says both until Browse finds out.
@@ -28,10 +27,16 @@ public enum CamerasWording {
         }
     }
 
+    /// When discovery couldn't start for a reason other than access (`CamerasModel.Access.failed`): the camera would
+    /// never appear, so the screen says so with Try Again rather than show "No Camera Connected".
+    public static let discoveryFailedTitle = "Can't Look for Cameras"
+    public static let discoveryFailedDetail = "Shutter Bridge couldn't start looking for a camera on the USB-C port. "
+        + "Tap Try Again."
+
     /// When ImageCaptureCore's access is denied or restricted (`USBCameraBrowser.start()` throws `notAuthorised`).
     /// `unverified`: which Settings switch governs it. ImageCaptureCore reuses the camera privacy string, and iOS 27.2
     /// never asked on the bench, so the copy names the Camera setting and allows for a restriction.
-    public static let notAllowedTitle = "Camera access is off"
+    public static let notAllowedTitle = "Camera Access Is Off"
     public static let notAllowedDetail = "Shutter Bridge isn't allowed to read from a connected camera. Check "
         + "Shutter Bridge's Camera setting in Settings. If Screen Time or a profile restricts it on this iPhone, it "
         + "can't be changed here."
@@ -66,46 +71,45 @@ public enum CamerasWording {
 
 /// The Browse screen.
 public enum BrowseWording {
-    public static let readingTitle = "Reading the card"
+    // Titles are in title case, as system empty states are ("No Results"); descriptions in sentence case (HIG
+    // Writing).
+    public static let readingTitle = "Reading the Card"
 
-    /// What to expect while ImageCaptureCore reads the card, from the bench's measurements (decision 7).
+    /// What to expect while ImageCaptureCore reads the card, from the bench's measurements (decision 7). The times
+    /// were measured on cards of 391–549 (MSC) and 391–825 (MTP) files; the copy keeps the times only (HIG Writing).
     public static func readingDetail(_ mode: CameraMode) -> String {
         switch mode {
         case .usb(.massStorage):
-            "In \(USBMode.massStorage.cameraWording) this takes about 7–12 seconds for a card of 391–549 files."
+            "In \(USBMode.massStorage.cameraWording) this takes about 7–12 seconds."
         case .usb(.mtp), .usb(.remoteShoot):
-            "In \(USBMode.mtp.cameraWording) it takes longer: about 65–123 seconds for a card of 391–825 files, "
-                + "and the photos all appear at the end. \(USBMode.massStorage.cameraWording) reads the card much "
-                + "sooner."
+            "In \(USBMode.mtp.cameraWording) it takes longer, about 65–123 seconds, and the photos all appear at the "
+                + "end. \(USBMode.massStorage.cameraWording) reads the card much sooner."
         case .wifi:
             "This can take a while on a full card."
         }
     }
 
-    /// "12 s so far", "2 min 5 s so far".
-    public static func elapsed(seconds: Int) -> String {
-        let seconds = max(0, seconds)
-        if seconds < 60 { return "\(seconds) s so far" }
-        return "\(seconds / 60) min \(seconds % 60) s so far"
-    }
+    /// After the time the card has been read for, which the screen shows as a system timer ("0:12 so far",
+    /// `Text(timerInterval:)`), so it counts in the person's own notation.
+    public static let elapsedSuffix = "so far"
 
     /// The catalogue completed at once with no files: Remote Shoot (PC Remote), or an empty card in MTP, which looks
     /// the same, so the copy doesn't claim either (`USBModeClassifier`).
-    public static let noFilesTitle = "No files over USB"
-    public static let noFilesDetail = "The camera listed no files. In \(USBMode.remoteShoot.cameraWording) it shares "
-        + "none over USB. Unplug the cable, plug it in again and choose \(USBMode.massStorage.cameraWording) or "
-        + "\(USBMode.mtp.cameraWording) when the camera asks you to Select USB Connect Mode. If it doesn't ask, change "
-        + "the USB connection mode in the camera's menu."
+    public static let noFilesTitle = "No Files over USB"
+    /// Short, as it is also the one-line failure of *Copy as JPEG* (HIG Writing: lead with what matters). The modes
+    /// in detail are behind the Cameras empty state's *Which USB Mode?*.
+    public static let noFilesDetail = "The camera is sharing no files over USB. Reconnect it and choose "
+        + "\(USBMode.massStorage.cameraWording) or \(USBMode.mtp.cameraWording)."
 
-    public static let emptyCardTitle = "No photos on the card"
-    public static let emptyCardDetail = "The camera listed no files on its card."
+    public static let emptyCardTitle = "No Photos on the Card"
+    public static let emptyCardDetail = "There are no files on the card."
 
-    public static let goneTitle = "Camera disconnected"
+    public static let goneTitle = "Camera Disconnected"
     public static let goneDetail = "Connect the camera again to see its card."
 
-    public static let listingFailedTitle = "Couldn't read the card"
+    public static let listingFailedTitle = "Couldn't Read the Card"
     public static let tryAgain = "Try Again"
-    public static let undatedHeader = "No date"
+    public static let undatedHeader = "No Date"
 
     /// On a greyed-out video (Shamil, 8 Nov).
     public static let videoLabel = "Video: from 1.1"
@@ -178,72 +182,84 @@ public enum JPEGWording {
             nil
         case let .link(linkFailure):
             switch linkFailure.kind {
-            case .disconnected: "The camera was disconnected."
+            case .disconnected: "The camera was disconnected. Connect it again, then try again."
             case .busy, .noAnswer: "The camera didn't answer. Try again."
-            case .itemNotFound: "This file is no longer on the card."
-            case .unreadableItem: "The camera couldn't read this file."
-            case .unsupportedFormat: "This file can't be made into a JPEG."
+            case .itemNotFound: "This file is no longer on the card. Go back to Cameras and open the camera again."
+            case .unreadableItem: "The camera couldn't read this file. Check the card in the camera, then try again."
+            case .unsupportedFormat: "This file can't be made into a JPEG. Import it to keep the original."
             case .phoneStorageFull: "This iPhone is out of space. Free some space, then try again."
             case .notAuthorised: CamerasWording.notAllowedDetail
             case .modeListsNoFiles: BrowseWording.noFilesDetail
             case .cardUnavailable: "The camera isn't offering its card right now. Try again in a moment."
-            case .refused: "The camera refused the connection."
-            case .identityChanged: "This isn't the camera that was connected before."
+            case .refused: "The camera refused the connection. Close any other app connected to it, then try again."
+            case .identityChanged: "This isn't the camera that was connected before. Connect that camera again, then try again."
             }
         case .conversion:
-            "This photo couldn't be made into a JPEG on this iPhone."
+            "This photo couldn't be made into a JPEG on this iPhone. Import it to keep the original."
         case .storage:
             "The JPEG couldn't be prepared. Check that this iPhone has free space, then try again."
         case .clipboard:
-            "The JPEG couldn't be put on the clipboard."
+            "The JPEG couldn't be copied. Try again, or use Share as JPEG."
         case .shareUnavailable:
             "The share sheet couldn't be shown. Try again."
         }
     }
 }
 
-/// Sizes, rates and times, in decimal units as the bench measured them (1 MB = 10^6 bytes). Fixed formatting, so the
-/// copy reads the same on every locale until the String Catalog takes over.
+/// Sizes, rates and times through the system's formatters (HIG Writing; Apple's localisation guidance), so the
+/// decimal separator, the units and their spacing follow the person's region, as everywhere else in iOS. Sizes are
+/// the file style's decimal units (1 MB = 10^6 bytes), as the bench measured them. `locale` is for tests; the app
+/// passes nothing. Counted words ("1 file", "3 files") stay plain until the String Catalog's plural variants.
 public enum ByteWording {
-    /// "512 bytes", "640 KB", "42.3 MB", "1.24 GB".
-    public static func size(_ bytes: UInt64) -> String {
-        let b = Double(bytes)
-        if bytes < 1_000 { return bytes == 1 ? "1 byte" : "\(bytes) bytes" }
-        if bytes < 1_000_000 { return "\(Int((b / 1_000).rounded())) KB" }
-        if bytes < 1_000_000_000 { return "\(decimal(b / 1_000_000, places: 1)) MB" }
-        return "\(decimal(b / 1_000_000_000, places: 2)) GB"
+    /// "512 bytes", "640 kB", "42.3 MB", "1.24 GB" (in en-GB; "42,3 MB" in de-DE). Zero is "0 bytes"-style digits, not
+    /// "Zero KB".
+    public static func size(_ bytes: UInt64, locale: Locale = .autoupdatingCurrent) -> String {
+        Int64(clamping: bytes).formatted(.byteCount(style: .file, spellsOutZero: false).locale(locale))
     }
 
     /// "1.2 GB of 4.5 GB".
-    public static func progress(_ done: UInt64, of total: UInt64) -> String {
-        "\(size(done)) of \(size(total))"
+    public static func progress(_ done: UInt64, of total: UInt64, locale: Locale = .autoupdatingCurrent) -> String {
+        "\(size(done, locale: locale)) of \(size(total, locale: locale))"
     }
 
-    /// "41.8 MB/s".
-    public static func rate(megabytesPerSecond: Double) -> String {
-        "\(decimal(megabytesPerSecond, places: 1)) MB/s"
+    /// "41.8 MB/s": the size the bench measures each second, with "/s" as the system writes data rates.
+    public static func rate(megabytesPerSecond: Double, locale: Locale = .autoupdatingCurrent) -> String {
+        "\(size(bytesPerSecond(megabytesPerSecond), locale: locale))/s"
     }
 
-    /// "About 40 s left", "About 3 min left", "About 1 h 5 min left". Rounded up, so it never reads 0.
-    public static func timeLeft(_ duration: Duration) -> String {
-        let total = max(1, Int((Double(duration.components.seconds)
-            + Double(duration.components.attoseconds) / 1e18).rounded(.up)))
-        if total < 60 { return "About \(total) s left" }
-        let minutes = (total + 59) / 60
-        if minutes < 60 { return "About \(minutes) min left" }
-        return "About \(minutes / 60) h \(minutes % 60) min left"
+    /// The rate as VoiceOver says it: "41.8 MB per second", so "/s" isn't read as a letter.
+    public static func rateSpoken(megabytesPerSecond: Double, locale: Locale = .autoupdatingCurrent) -> String {
+        "\(size(bytesPerSecond(megabytesPerSecond), locale: locale)) per second"
     }
 
-    /// `value` with `places` decimals, rounded half up, with a "." separator.
-    static func decimal(_ value: Double, places: Int) -> String {
-        guard value.isFinite else { return "?" }
-        var scale = 1.0
-        for _ in 0 ..< places { scale *= 10 }
-        let scaled = Int((value * scale).rounded())
-        let whole = scaled / Int(scale)
-        guard places > 0 else { return "\(whole)" }
-        let fraction = String(abs(scaled % Int(scale)))
-        return "\(whole)." + String(repeating: "0", count: places - fraction.count) + fraction
+    /// "About 40 secs left", "About 3 min left", "About 1 hr, 5 min left" (abbreviated units, as the system writes
+    /// them). Rounded up, so it never reads 0: to the second under a minute, then to the minute.
+    public static func timeLeft(_ duration: Duration, locale: Locale = .autoupdatingCurrent) -> String {
+        "About \(roundedTimeLeft(duration).formatted(timeLeftStyle(.abbreviated, locale: locale))) left"
+    }
+
+    /// The same as VoiceOver says it, in whole words: "About 3 minutes left".
+    public static func timeLeftSpoken(_ duration: Duration, locale: Locale = .autoupdatingCurrent) -> String {
+        "About \(roundedTimeLeft(duration).formatted(timeLeftStyle(.wide, locale: locale))) left"
+    }
+
+    /// The time left as shown: at least a second, whole seconds under a minute, whole minutes above.
+    static func roundedTimeLeft(_ duration: Duration) -> Duration {
+        let seconds = Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+        let total = seconds.isFinite ? max(1, Int64(min(seconds, 1e9).rounded(.up))) : 1
+        if total < 60 { return .seconds(total) }
+        return .seconds((total + 59) / 60 * 60)
+    }
+
+    private static func timeLeftStyle(_ width: Duration.UnitsFormatStyle.UnitWidth,
+                                      locale: Locale) -> Duration.UnitsFormatStyle {
+        Duration.UnitsFormatStyle(allowedUnits: [.hours, .minutes, .seconds], width: width, maximumUnitCount: 2)
+            .locale(locale)
+    }
+
+    private static func bytesPerSecond(_ megabytesPerSecond: Double) -> UInt64 {
+        guard megabytesPerSecond.isFinite, megabytesPerSecond > 0 else { return 0 }
+        return UInt64(min(megabytesPerSecond, 1e9) * 1_000_000)
     }
 
     /// "1 file", "3 files".
@@ -259,27 +275,36 @@ extension BrowseWording {
     public static let deselectAll = "Deselect All"
     public static let importAction = "Import"
     public static let importedBadge = "Imported"
-    public static let selected = "Selected"
-    public static let notSelected = "Not selected"
     public static let new = "New"
 
-    /// The sticky bar: "3 files · 142.5 MB".
+    /// The title while selecting, as Photos and Files report the selection: "Select Items", then "3 Selected".
+    public static func selectingTitle(_ summary: SelectionSummary) -> String {
+        summary.count == 0 ? selectItems : "\(summary.count) Selected"
+    }
+
+    public static let selectItems = "Select Items"
+
+    /// The bottom bar's status while selecting: "3 files · 142.5 MB".
     public static func selectionSummary(_ summary: SelectionSummary) -> String {
         summary.count == 0 ? noSelection : "\(ByteWording.files(summary.count)) · \(ByteWording.size(summary.bytes))"
     }
 
     public static let noSelection = "No files selected"
 
-    /// Why a file can't be selected, for VoiceOver's hint and the cell; nil when it can.
+    /// Why a file can't be selected, as a sentence. The cell's VoiceOver value says it, not a hint (people can turn
+    /// hints off, and they are read last); `cellAccessibilityValue(_:)` leaves out what the label already says.
     public static func notSelectable(_ reason: BrowseModel.SelectionBlock) -> String {
         switch reason {
-        case .video: videoLabel
-        case .notAPhoto: otherLabel
+        case .video: videosNotYet
+        case .notAPhoto: "This kind of file can't be imported."
         case .imported: "Already imported."
         case .noCaptureDate: "No capture date, so it can't be imported yet."
         case .cardNotRead: "Wait until the card has been read."
         }
     }
+
+    /// What VoiceOver hears for a video, in place of the on-screen "Video: from 1.1" (Shamil, 9 Nov).
+    public static let videosNotYet = "Videos can't be imported yet."
 
     // Filters.
     public static let filters = "Filters"
@@ -290,8 +315,13 @@ extension BrowseWording {
     public static let from = "From"
     public static let to = "To"
     public static let clearFilters = "Clear Filters"
-    public static let noMatchesTitle = "No matching files"
+    public static let noMatchesTitle = "No Matching Files"
     public static let noMatchesDetail = "No files on the card match these filters."
+    /// The Filters button's VoiceOver value, so hidden files aren't taken for missing ones.
+    public static let filtersOn = "On"
+    public static let filtersOff = "Off"
+
+    public static func filtersValue(isActive: Bool) -> String { isActive ? filtersOn : filtersOff }
 
     public static func typeLabel(_ type: BrowseFileType) -> String {
         switch type {
@@ -303,35 +333,46 @@ extension BrowseWording {
         }
     }
 
-    /// While ImageCaptureCore reads the card, the catalogue's last listing shows at once (decision 7). The screen
-    /// adds the date it was listed (`BrowseModel.lastKnownListedAt`), formatted for the locale.
-    public static let lastKnownTitle = "Last-known card"
+    /// While ImageCaptureCore reads the card, the catalogue's last listing shows at once (decision 7), with one
+    /// line above the grid: "Showing the card as it was on 8 Nov 2026 at 14:05." `date` is when it was listed
+    /// (`BrowseModel.lastKnownListedAt`), formatted by the screen for the locale.
+    public static func lastKnownLine(_ date: String) -> String { "Showing the card as it was on \(date)." }
 
-    /// "Listed 8 Nov 2026 at 14:05." under the last-known title; `date` is formatted by the screen for the locale.
-    public static func lastKnownListed(_ date: String) -> String { "Listed \(date)." }
+    /// The bar's subtitle while the last-known card is shown and the live one is read.
+    public static let readingSubtitle = "Reading the card…"
+
+    /// The button by the last-known line that shows the measured reading times (backlog section 6).
+    public static let readingTimesButton = "Reading Times"
 
     /// The date filter's switch, and what it says when no file on the card has a capture date.
     public static let limitDates = "Only These Dates"
     public static let noDatedFiles = "No file on the card has a capture date."
-    /// The strip at the top of Browse while a job exists; tapping it opens the Import screen.
-    public static let showImport = "Show Import"
-    public static let lastKnownDetail = "These are the files the card held last time. They're replaced when the "
-        + "camera has read the card."
+    /// The import status strip's VoiceOver hint (on Cameras and Browse); tapping it opens the Import screen. A hint
+    /// describes the result (HIG Accessibility).
+    public static let importStripHint = "Opens the import."
 
-    /// The grid cell's VoiceOver label: name, date, type, imported and selected states. `date` is formatted by the
-    /// screen for the locale; nil for a file without one.
-    public static func cellAccessibility(name: String, date: String?, kind: CardCellKind, isImported: Bool,
-                                         isSelected: Bool, selectable: Bool) -> String {
+    /// The grid cell's VoiceOver label: name, date, type and, for a still, Imported or New. Selection is the
+    /// `.isSelected` trait, not words, so it isn't said twice. `date` is formatted by the screen for the locale; nil
+    /// for a file without one.
+    public static func cellAccessibility(name: String, date: String?, kind: CardCellKind, isImported: Bool) -> String {
         var parts = [name]
         parts.append(date ?? undatedHeader)
         switch kind {
         case let .photo(badge): parts.append(badge ?? "JPEG")
-        case .video: parts.append(videoLabel)
+        case .video: parts.append(typeLabel(.video))
         case .other: parts.append(otherLabel)
         }
         if kind.offersJPEGActions { parts.append(isImported ? importedBadge : new) }
-        if selectable || isSelected { parts.append(isSelected ? selected : notSelected) }
         return parts.joined(separator: ", ")
+    }
+
+    /// The grid cell's VoiceOver value: why it can't be selected, unless the label says so already (Imported, Not a
+    /// photo); nil when it can be.
+    public static func cellAccessibilityValue(_ block: BrowseModel.SelectionBlock?) -> String? {
+        switch block {
+        case nil, .imported?, .notAPhoto?: nil
+        case let block?: notSelectable(block)
+        }
     }
 
     /// After Import is tapped in Browse.
@@ -360,12 +401,21 @@ public enum SettingsWording {
         }
     }
 
-    /// Under the control: the forced-Files rule and where files go.
-    public static let destinationFooter = "If Photos access is off, or Photos is restricted on this iPhone, imports "
-        + "go to Files whatever this setting says. In Files they're in On My iPhone › Shutter Bridge, in a folder "
-        + "for each camera. The next import follows this setting; files already imported stay where they are."
+    /// Under the control: where files go in Files, and when a change applies. What Photos access does to the
+    /// setting is said in its own row when it applies (`forcedFiles(_:)`).
+    public static let destinationFooter = "In Files, imports are in On My iPhone › Shutter Bridge, in a folder for "
+        + "each camera. The next import follows this setting."
 
-    public static let done = "Done"
+    /// What the app will do when Photos access overrides the setting (HIG Settings: show what will happen); nil when
+    /// it doesn't. A denial comes with Open Settings; a restriction can't be changed there.
+    public static func forcedFiles(_ reason: FilesReason) -> String? {
+        switch reason {
+        case .chosen: nil
+        case .photosDenied: "Photos access is off, so imports go to Files."
+        case .photosRestricted: "Photos is restricted on this iPhone, so imports go to Files."
+        }
+    }
+
 }
 
 /// The Import screen (backlog section 6, *Import*; decisions 1, 4 and 9).
@@ -374,16 +424,15 @@ public enum ImportWording {
     public static let pause = "Pause"
     public static let resume = "Continue"
     public static let cancel = "Cancel Import"
-    public static let done = "Done"
     public static let openSettings = "Open Settings"
     public static let askingForPhotos = "Waiting for your answer about Photos access…"
     public static let couldNotStart = "The import couldn't start. Check the camera is still connected, then try again."
     public static let couldNotAdd = "These files couldn't be added to the import. Try again."
     public static let filesHeader = "In This Import"
-    public static let noJobTitle = "Nothing to import yet"
+    public static let noJobTitle = "Nothing to Import"
     public static let noJobDetail = "Select photos on a camera's card and tap Import."
     public static let cancelConfirmTitle = "Cancel this import?"
-    public static let cancelConfirmDetail = "Files already imported stay where they went. The rest stay on the card."
+    public static let cancelConfirmDetail = "Files already imported are kept. The rest stay on the card."
     public static let keepImporting = "Keep Importing"
 
     /// The ask to keep the app in front, and why the screen stays on (decision 1: the import asks to stay in front
@@ -428,7 +477,7 @@ public enum ImportWording {
                 ? "Paused: the camera stopped sending. Check the cable and the camera, then tap Continue."
                 : "The camera stopped sending, so the file is being copied again."
         case .byPerson:
-            "Paused. Tap Continue to carry on."
+            "Paused. Tap Continue to resume."
         }
     }
 
@@ -509,11 +558,12 @@ public enum ImportWording {
         case .queued: "Waiting"
         case .downloading: "Copying from the camera"
         case .waitingToRetry: "Trying again"
-        case .committing: kind == .filesFolder ? "Moving to Files" : "Saving to Photos"
+        // One word per idea (HIG Writing): "Saving to", then "Imported to", as the summary says.
+        case .committing: kind == .filesFolder ? "Saving to Files" : "Saving to Photos"
         case let .imported(location):
             switch location {
             case .photosAsset?: "Imported to Photos"
-            case .file?: "Saved to Files"
+            case .file?: "Imported to Files"
             case nil: "Imported"
             }
         case let .skipped(reason): "Skipped: \(skipped(reason, item: item))"
@@ -524,7 +574,8 @@ public enum ImportWording {
 
     static func skipped(_ reason: ImportSkipReason, item: CameraItem) -> String {
         switch reason {
-        case .notAStill: item.format == .video ? "video (from 1.1)" : "not a photo"
+        // The row says it plainly; the thumbnail's "Video: from 1.1" is Shamil's on-screen label (9 Nov).
+        case .notAStill: item.format == .video ? "videos can't be imported yet" : "not a photo"
         case .noCaptureDate: "no capture date"
         case let .link(kind):
             switch kind {

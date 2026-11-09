@@ -12,6 +12,13 @@ struct CamerasEmptyStateTests {
         #expect(copy.modeAdvice.contains("Image Transfer (MTP)"))
         #expect(copy.remoteShootNote.contains("Remote Shoot (PC Remote)"))
         #expect(copy.connect.contains("USB-C"))
+        // The key step is in the empty state itself, not only behind Which USB Mode? (HIG Writing).
+        #expect(copy.connect.contains("choose Image Transfer (MSC)"))
+        #expect(copy.connect.count < 120)
+        #expect(copy.modeHelpButton == "Which USB Mode?")
+        #expect(copy.modeHelpLines == [copy.modeAdvice, copy.remoteShootNote, copy.menuNote])
+        #expect(copy.menuNote.contains("camera's menu"))
+        #expect(copy.lines == [copy.title, copy.connect, copy.modeAdvice, copy.remoteShootNote, copy.menuNote])
     }
 
     @Test func noSonyMarksAndNoUnfinishedLines() {
@@ -81,16 +88,21 @@ struct WordingTests {
 
     @Test func readingTheCardStatesTheMeasuredTimes() {
         let msc = BrowseWording.readingDetail(.usb(.massStorage))
-        #expect(msc.contains("Image Transfer (MSC)") && msc.contains("7–12 seconds") && msc.contains("391–549"))
+        #expect(msc == "In Image Transfer (MSC) this takes about 7–12 seconds.")
         let mtp = BrowseWording.readingDetail(.usb(.mtp))
-        #expect(mtp.contains("Image Transfer (MTP)") && mtp.contains("65–123 seconds") && mtp.contains("391–825"))
+        #expect(mtp.contains("Image Transfer (MTP)") && mtp.contains("65–123 seconds"))
+        // The times stay; the card sizes they were measured on are in the code, not the copy (HIG Writing).
+        #expect(!msc.contains("files") && !mtp.contains("391"))
         #expect(mtp.contains("all appear at the end"))
-        #expect(BrowseWording.noFilesDetail.contains("Remote Shoot (PC Remote)"))
-        #expect(BrowseWording.noFilesDetail.contains("Image Transfer (MSC)"))
+        // Short, as it is also Copy as JPEG's one-line failure; why Remote Shoot (PC Remote) shows nothing is in the
+        // Cameras screen's Which USB Mode? sheet.
+        #expect(BrowseWording.noFilesDetail
+            == "The camera is sharing no files over USB. Reconnect it and choose Image Transfer (MSC) or "
+            + "Image Transfer (MTP).")
         #expect(!BrowseWording.noFilesDetail.contains("empty"))   // an empty MTP card looks the same
-        #expect(BrowseWording.elapsed(seconds: 9) == "9 s so far")
-        #expect(BrowseWording.elapsed(seconds: 125) == "2 min 5 s so far")
-        #expect(BrowseWording.elapsed(seconds: -3) == "0 s so far")
+        #expect(CamerasEmptyState.standard.remoteShootNote.contains("Remote Shoot (PC Remote)"))
+        // The time so far is the system's timer (`Text(timerInterval:)`), followed by these words.
+        #expect(BrowseWording.elapsedSuffix == "so far")
     }
 
     @Test func modeLines() {

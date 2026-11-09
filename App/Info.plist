@@ -28,18 +28,26 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- The launch screen matches the first screen: a navigation bar over the system background (HIG Launching). -->
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UINavigationBar</key>
+		<dict/>
+	</dict>
+	<!-- Portrait and both landscapes (HIG Layout); the strips at the top collapse in compact height. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<!-- Only OS-provided cryptography, so TestFlight skips the export compliance questionnaire. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<!-- ImageCaptureCore on iOS reuses the camera privacy string for external cameras. -->
+	<!-- ImageCaptureCore on iOS reuses the camera privacy string for external cameras. The system's title reads "…Would
+	     Like to Access the Camera", so the string says it isn't the iPhone's own (HIG Privacy). -->
 	<key>NSCameraUsageDescription</key>
-	<string>Reads photos from a camera connected to this iPhone by USB-C.</string>
+	<string>Shutter Bridge reads photos from a camera you connect by USB-C. It doesn't use this iPhone's cameras.</string>
 	<!-- Read/write access, as decision 9 asks: albums need it, and Limit Access with no photos selected is enough. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Saves the photos you import into an album. Limit Access with no photos selected is enough.</string>
