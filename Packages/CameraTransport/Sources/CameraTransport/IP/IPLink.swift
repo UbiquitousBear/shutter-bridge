@@ -44,6 +44,8 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
     /// Transfers cut off by `abortCurrentTransfer()`.
     public var transfersAborted = 0
 
+    /// How many ignored event codes are kept for the log. A choice, `unverified`: no measurement or source gives 64; it
+    /// only bounds the list, and the camera sent two 0xC225 events on a reopen in the whole spike.
     public static let ignoredEventLimit = 64
 
     public init() {}
@@ -135,7 +137,9 @@ public actor IPLink: CameraLink, TransferAborting {
 
     /// The largest data phase kept in memory for each kind of answer, so a broken reply can't fill the phone: DeviceInfo
     /// and ExtDeviceInfo (970 B on the α7C II), ObjectInfo, the handle list (4 B per file), and a thumbnail (the
-    /// spike's 8 MiB limit; the camera's are 160 × 120 JPEGs of about 7 KB).
+    /// spike's 8 MiB limit; the camera's are 160 × 120 JPEGs of about 7 KB). Only `thumbnailLimit` has a source. The 1 MiB
+    /// and 4 MiB limits are choices, `unverified`: roughly a thousand times the 970 B ExtDeviceInfo, and a handle list of
+    /// about a million files at 4 B each (the largest card listed was 741 handles).
     static let datasetLimit = 1 << 20
     static let handlesLimit = 4 << 20
     static let thumbnailLimit = 8 << 20
