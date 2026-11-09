@@ -75,6 +75,8 @@ final class FileEntry {
     /// The most bytes progress has shown for this file, so a restarted download holds its place in the bar until
     /// the new attempt passes it.
     var shownBytes: UInt64 = 0
+    /// Its partial copy, on a link that resumes; nil on one that doesn't (each attempt has a folder of its own).
+    var resumable: ResumableFile?
 
     init(identity: ObjectIdentity, index: Int, item: CameraItem) {
         self.identity = identity
@@ -99,6 +101,32 @@ final class FileEntry {
     }
 }
 
+/// A file's partial copy on a link that resumes (Wi-Fi). Confined to the engine actor.
+final class ResumableFile {
+    /// `staging/Partials/<uuid>/`: every attempt at the file writes here, and the catalogue's `tempURL` points
+    /// here. Outside the job's folder, so it outlives the job (a later job resumes from it through the catalogue).
+    let folder: URL
+    /// The last attempt that wrote into the folder; the next continues from its latest checkpoint once its call
+    /// has ended.
+    var previous: DownloadAttempt?
+    /// A partial file an earlier job left, found through the catalogue, until an attempt in this job takes it.
+    var adopted: PartialSeed?
+    /// The offset last written to the catalogue (0: none).
+    var persistedOffset: UInt64 = 0
+
+    init(folder: URL, adopted: PartialSeed? = nil, persistedOffset: UInt64 = 0) {
+        self.folder = folder
+        self.adopted = adopted
+        self.persistedOffset = persistedOffset
+    }
+
+    /// The newest prefix known to be on disk.
+    var best: PartialSeed? {
+        if let previous { return previous.latestCheckpoint }
+        return adopted
+    }
+}
+
 enum JobPhase: Sendable, Hashable {
     case listing
     case downloading
@@ -114,13 +142,19 @@ final class Job {
     let timeZone: TimeZone
     let selection: ImportSelection
     /// Downloads in flight, from the settings at the start.
-    let limit: Int
+    let settingsLimit: Int
     /// `staging/<id>/`; every attempt gets its own folder inside.
     let jobDirectory: URL
     let signal = WakeSignal()
 
     var link: any CameraLink
     var linkGeneration = 0
+    /// The card as the app has just listed it, handed over by `reconnect(_:to:knownItems:route:)`: the next listing
+    /// uses it instead of asking the link again (W8 reopens with known handles).
+    var pendingListing: [CameraItem]?
+    /// What a `disconnected` failure means for this job: `.cameraUnreachable` once a link has reported a lost
+    /// session (Wi-Fi), `.cameraRemoved` until then (USB never reports one).
+    var cameraLossReason: PauseReason = .cameraRemoved
     var hasListed = false
     var listRetries = 0
     var route: ImportRoute
@@ -148,7 +182,7 @@ final class Job {
         self.camera = camera
         self.timeZone = timeZone
         self.selection = selection
-        self.limit = limit
+        self.settingsLimit = limit
         self.jobDirectory = staging.appendingPathComponent(id.uuidString, isDirectory: true)
         self.link = link
         self.route = route
@@ -156,6 +190,10 @@ final class Job {
     }
 
     var sortedEntries: [FileEntry] { entries.values.sorted { $0.index < $1.index } }
+
+    /// Downloads in flight: the setting, capped by what the current link can carry (wireless plan, decision 5; USB
+    /// 2, Wi-Fi 1). Read again after a reconnect, so a new link brings its own cap.
+    var limit: Int { min(settingsLimit, link.capabilities.maxDownloadsInFlight) }
 
     /// The job's file with the same content as `identity` (whatever its folder or camera key), if any.
     func entry(sameContentAs identity: ObjectIdentity) -> FileEntry? {
@@ -183,13 +221,8 @@ final class Job {
         queue.insert(entry.identity, at: at)
     }
 
-    /// The pause the person has to deal with first.
-    var primaryPause: PauseReason? {
-        for r in [PauseReason.cameraRemoved, .appInBackground, .stalled, .byPerson] where pauses.contains(r) {
-            return r
-        }
-        return nil
-    }
+    /// The pause the person has to deal with first (`PauseReason.precedence`).
+    var primaryPause: PauseReason? { PauseReason.precedence.first { pauses.contains($0) } }
 
     var state: ImportJobState {
         if let finished { return .finished(finished) }
@@ -197,11 +230,15 @@ final class Job {
         return .running
     }
 
-    /// A USB job running, or paused for a removal or a stall it gets over by itself: the app keeps the screen on
-    /// meanwhile (decision 1). Not while the person or the app's leaving paused it, nor once a stall waits for the
-    /// person after the automatic retries.
-    var isUSBImportRunning: Bool {
-        finished == nil && link.descriptor.carrier == .usb && pauses.isSubset(of: [.cameraRemoved, .stalled])
-            && !stallHold
+    /// The job's link's carrier, while the job is running or paused only for what it gets over without the person
+    /// (a removal, a lost card or session, a stall it retries by itself); nil otherwise. Not while the person, the
+    /// app's leaving, an expiry or a needed join paused it, nor once a stall waits for the person.
+    var runningCarrier: CameraCarrier? {
+        guard finished == nil, pauses.isSubset(of: PauseReason.overcomeWithoutThePerson), !stallHold else { return nil }
+        return link.descriptor.carrier
     }
+
+    /// Whether this job is a running import over `carrier` (`runningCarrier`). Over USB the app keeps the screen on
+    /// meanwhile (decision 1).
+    func importRunning(carrier: CameraCarrier) -> Bool { runningCarrier == carrier }
 }

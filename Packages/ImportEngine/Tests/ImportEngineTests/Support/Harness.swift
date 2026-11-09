@@ -23,9 +23,11 @@ final class Harness {
     let photosAccess = FakePhotosAccess()
     let engine: ImportEngine
     private var links: [FakeCameraLink] = []
+    private var resumingLinks: [ResumingLink] = []
 
-    init(catalogue: any CatalogueStore = InMemoryCatalogue(), downloadsInFlight: Int = 1) {
-        root = FileManager.default.temporaryDirectory
+    init(catalogue: any CatalogueStore = InMemoryCatalogue(), downloadsInFlight: Int = 1,
+         policy: ImportPolicy = .standard, root existing: URL? = nil) {
+        root = existing ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("ImportEngineTests-\(UUID().uuidString)", isDirectory: true)
         staging = root.appendingPathComponent("staging", isDirectory: true)
         filesDirectory = root.appendingPathComponent("files", isDirectory: true)
@@ -36,7 +38,7 @@ final class Harness {
         let recorder = trace
         engine = ImportEngine(
             catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),
-            stagingDirectory: staging, clock: clock, timeZone: zone, policy: .standard,
+            stagingDirectory: staging, clock: clock, timeZone: zone, policy: policy,
             trace: { recorder.record($0) }
         )
     }
@@ -82,7 +84,17 @@ final class Harness {
         return l
     }
 
-    func start(_ selection: ImportSelection, from link: FakeCameraLink, to route: ImportRoute? = nil) async throws {
+    /// A link that resumes (`CameraLinkCapabilities.wifi` unless given), shut down by `cleanup()`.
+    func resumingLink(_ card: [CameraItem], chunk: UInt64 = 300,
+                      capabilities: CameraLinkCapabilities = .wifi) -> ResumingLink {
+        let l = ResumingLink(card: card, chunk: chunk, capabilities: capabilities)
+        resumingLinks.append(l)
+        return l
+    }
+
+    @discardableResult
+    func start(_ selection: ImportSelection, from link: any CameraLink,
+               to route: ImportRoute? = nil) async throws -> ImportJobID {
         try await engine.start(selection, from: link, camera: camera, to: route ?? photosRoute)
     }
 
@@ -132,6 +144,7 @@ final class Harness {
     func cleanup() async {
         await engine.cancel()
         for l in links { await l.shutdown() }
+        for l in resumingLinks { await l.shutdown() }
         try? FileManager.default.removeItem(at: root)
     }
 }

@@ -19,6 +19,8 @@ let package = Package(
         .package(path: "../CameraTransport"),
         .package(path: "../Catalogue"),
         .package(path: "../PhotosBridge"),
+        // `PTPPartialRead.crossesCheckpoint`, the 16 MiB checkpoint rule (pure, Linux-safe).
+        .package(path: "../PTPKit"),
     ],
     targets: [
         .target(
@@ -27,6 +29,7 @@ let package = Package(
                 .product(name: "CameraTransport", package: "CameraTransport"),
                 .product(name: "Catalogue", package: "Catalogue"),
                 .product(name: "PhotosBridge", package: "PhotosBridge"),
+                .product(name: "PTPKit", package: "PTPKit"),
             ]
         ),
         .testTarget(name: "ImportEngineTests", dependencies: ["ImportEngine"]),

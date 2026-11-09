@@ -18,8 +18,16 @@ extension ImportEngine {
                 refreshState()
                 return
             case let .failed(failure):
-                try? FileManager.default.removeItem(at: download.attempt.directory)
                 guard await linkFailed(failure, entry: entry, download: download, job: job) else { return }
+            case .identityChanged:
+                // The handle now names another file: the partial can't be continued, and where the job's file is
+                // now (if it is still on the card) is for the listing to say. It is copied from its start.
+                trace(.identityChanged(entry.item.name))
+                discardPartial(of: entry, download: download)
+                job.requeue(entry)
+                relist(job)
+                refreshState()
+                return
             case let .written(url):
                 let expected = entry.item.size
                 let actual = Self.fileSize(at: url)
@@ -27,7 +35,8 @@ extension ImportEngine {
                 // suspiciously fast after a continue (the spike's 35.4 MB in 0.02 s) gets checked.
                 if actual != expected {
                     trace(.sizeMismatch(entry.item.name, expected: expected, actual: actual))
-                    try? FileManager.default.removeItem(at: download.attempt.directory)
+                    // Bytes that came out the wrong size are never continued from: the retry starts at 0.
+                    discardPartial(of: entry, download: download)
                     guard await retry(identity, of: id,
                                       after: .sizeMismatch(expected: expected, actual: actual)) else { return }
                 } else {
@@ -45,19 +54,26 @@ extension ImportEngine {
     }
 
     /// Follows the failure's outcome. Returns true when a new attempt has begun in this lane.
+    ///
+    /// A partial file is deleted, except on a link that resumes while the file is still to be copied (a retry, or
+    /// waiting for the camera or the card), where its latest checkpoint is written to the catalogue instead.
     func linkFailed(_ failure: CameraLinkFailure, entry: FileEntry, download: Download, job: Job) async -> Bool {
         let id = job.id
+        if !download.attempt.keepsFiles { try? FileManager.default.removeItem(at: download.attempt.directory) }
         switch failure.outcome {
         case .retryNow:
             // A call that was in flight across a pause doesn't fail the file (decision 4): no retry is counted.
             if download.pausedDuring {
                 job.requeue(entry)
                 refreshState()
+                await saveLatestCheckpoint(of: entry, in: id)
                 return false
             }
             return await retry(entry.identity, of: id, after: .link(failure.kind))
         case .retryOnReconnect:
-            cameraRemoved(job) // puts this file back in the queue too, with no retry counted
+            // Puts this file back in the queue too, with no retry counted. A lost card is not a lost camera: the
+            // session is up, and nothing may count as failed (the spike's 82-files bug).
+            if failure.kind == .cardUnavailable { cardLost(job) } else { cameraLost(job, job.cameraLossReason) }
             return false
         case .skipFile:
             resolve(entry, .skipped(.link(failure.kind)))
@@ -67,6 +83,62 @@ extension ImportEngine {
             resolve(entry, .failed(.link(failure.kind)))
             end(job, .stopped(failure.kind))
             return false
+        }
+    }
+
+    // MARK: - Partial files on a link that resumes
+
+    /// A download's checkpoint crossed the catalogue interval (16 MiB): written if the attempt is still the file's
+    /// latest in this job.
+    func checkpointCrossed(_ seed: PartialSeed, by attempt: DownloadAttempt, of identity: ObjectIdentity,
+                           in id: UUID) async {
+        guard let entry = current(id)?.entries[identity], entry.resumable?.previous === attempt else { return }
+        await saveCheckpoint(seed, of: identity, in: id)
+    }
+
+    /// The file's latest checkpoint, written to the catalogue if it is newer than the one there.
+    func saveLatestCheckpoint(of entry: FileEntry, in id: UUID) async {
+        guard let seed = entry.resumable?.best else { return }
+        await saveCheckpoint(seed, of: entry.identity, in: id)
+    }
+
+    /// Writes `seed` as the file's `.partial` row (`markPartial`) with its offset and its path relative to the
+    /// staging folder, if it is newer than the last one written and still the file's partial copy. A catalogue
+    /// that refuses it is left as it was: the resume point in memory holds, and the next checkpoint tries again.
+    func saveCheckpoint(_ seed: PartialSeed, of identity: ObjectIdentity, in id: UUID) async {
+        guard let entry = current(id)?.entries[identity], entry.outcome == nil, let resumable = entry.resumable,
+              seed.offset > resumable.persistedOffset, seed.offset <= entry.identity.size,
+              let relative = relativeToStaging(seed.download.file, in: resumable.folder) else { return }
+        resumable.persistedOffset = seed.offset
+        do {
+            try await catalogue.markPartial(identity, format: entry.item.format, tempURL: relative,
+                                            offset: seed.offset)
+            trace(.checkpointSaved(entry.item.name, offset: seed.offset))
+        } catch {
+            // Let the next checkpoint (or flush) try again.
+            if let r = current(id)?.entries[identity]?.resumable, r === resumable, r.persistedOffset == seed.offset {
+                r.persistedOffset = 0
+            }
+        }
+    }
+
+    /// `file` relative to the staging folder (`Partials/<folder>/<name>`), the form the catalogue keeps (the
+    /// container's path changes on an app update); nil for a file outside the file's own folder.
+    func relativeToStaging(_ file: URL, in folder: URL) -> URL? {
+        guard file.deletingLastPathComponent().standardizedFileURL.pathComponents
+            == folder.standardizedFileURL.pathComponents else { return nil }
+        let path = "\(Self.partialsFolderName)/\(folder.lastPathComponent)/\(file.lastPathComponent)"
+        return URL(fileURLWithPath: path, relativeTo: stagingDirectory)
+    }
+
+    /// Drops the file's partial copy: the folder is deleted and the next attempt starts from 0 in a new one. Nothing
+    /// is written to the catalogue: a row left pointing to the deleted file is restarted by whoever reads it (the
+    /// file isn't there), and the new copy's first checkpoint replaces it.
+    func discardPartial(of entry: FileEntry, download: Download) {
+        try? FileManager.default.removeItem(at: download.attempt.directory)
+        if let resumable = entry.resumable {
+            try? FileManager.default.removeItem(at: resumable.folder)
+            entry.resumable = nil
         }
     }
 
@@ -85,6 +157,9 @@ extension ImportEngine {
         entry.phase = .waitingToRetry
         trace(.retrying(entry.item.name, retry: entry.retries, until: until))
         refreshState()
+        // A resumable file's retry continues from its latest checkpoint: written first, so an app iOS ends during
+        // the backoff leaves a row that holds it. (A file whose partial was discarded has none.)
+        await saveLatestCheckpoint(of: entry, in: id)
         let slept: Bool
         do {
             try await clock.sleep(until: until)
@@ -133,6 +208,7 @@ extension ImportEngine {
             // A commit that finishes after its job ended (cancelled, stopped) still resolves its file on the ended
             // job, so the finished Import screen's row and counts show it as imported.
             guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
+            entry.resumable = nil // its folder went with the commit
             resolve(entry, .imported(location), into: kind)
             guard current(id) != nil else {
                 refreshState()
@@ -216,6 +292,8 @@ extension ImportEngine {
     func commitFailed(_ failure: ImportDestinationFailure, identity: ObjectIdentity, of id: UUID,
                       download: Download, name: String) async -> Bool {
         try? FileManager.default.removeItem(at: download.attempt.directory)
+        // The staged file was the whole copy: nothing is left to continue from.
+        (current(id) ?? endedJob(id))?.entries[identity]?.resumable = nil
         if current(id) == nil, let ended = endedJob(id), let entry = ended.entries[identity] {
             // The job ended while this file was being committed: no retry and no stop, but its row says it failed
             // rather than staying at "committing".
@@ -246,6 +324,10 @@ extension ImportEngine {
 
     func resolve(_ entry: FileEntry, _ outcome: FileOutcome, into kind: DestinationKind? = nil) {
         entry.phase = .done(outcome)
+        if let resumable = entry.resumable { // skipped or failed: nothing will continue the partial copy
+            try? FileManager.default.removeItem(at: resumable.folder)
+            entry.resumable = nil
+        }
         switch outcome {
         case .imported: if let kind { trace(.imported(entry.item.name, kind)) }
         case let .skipped(reason): trace(.skipped(entry.item.name, reason))

@@ -11,6 +11,8 @@ actor HoldingDestination: ImportDestination {
     private(set) var commits: [String] = []
     /// For the held commit: whether its task was cancelled when it was released.
     private(set) var cancelledAtCommit: [Bool] = []
+    /// For the held commit: whether the staged file was still there when it was released.
+    private(set) var stagedFileAtCommit: [Bool] = []
     private var holdFirst = true
     private var held: CheckedContinuation<Void, Never>?
     private var arrivedWaiter: CheckedContinuation<Void, Never>?
@@ -27,6 +29,7 @@ actor HoldingDestination: ImportDestination {
                 arrivedWaiter = nil
             }
             cancelledAtCommit.append(Task.isCancelled)
+            stagedFileAtCommit.append(FileManager.default.fileExists(atPath: unit.files[0].url.path))
             if failsIfCancelled && Task.isCancelled { throw .rejected(detail: "cancelled mid-commit") }
         }
         commits.append(name)

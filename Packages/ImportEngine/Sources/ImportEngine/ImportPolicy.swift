@@ -1,3 +1,5 @@
+import Foundation
+
 /// The engine's numbers (backlog section 3, *Decisions taken here*). Internal, so tests can read them; the app has no
 /// reason to change them.
 struct ImportPolicy: Sendable {
@@ -21,6 +23,17 @@ struct ImportPolicy: Sendable {
     var catalogueWriteAttempts = 2
     /// The rate is measured over the last this-many clean files: about 4 RAW+JPEG pairs, or 6 s at 40 MB/s.
     var rateSampleFiles = 8
+    /// On a link that resumes (`CameraLinkCapabilities.resumesPartialFiles`), a download's checkpoint is written to
+    /// the catalogue each time it crosses a multiple of this (`PTPPartialRead.crossesCheckpoint`), as well as when the
+    /// download is interrupted and on `flushCheckpoints()`: the proposal's 16 MiB, one write per 1–2 s at the Wi-Fi
+    /// rates measured (9.1–17.4 MB/s). The resume point in memory is the link's latest checkpoint, whatever this is.
+    var checkpointInterval: UInt64 = 16 * 1024 * 1024
+    /// How long a partial file from an earlier run is kept in the staging folder's `Partials` folder, counted from
+    /// its last write: a catalogue row may point to it (a later job resumes from it), but a file whose row was
+    /// overwritten (the file imported over another link, under another camera key) has nothing to clean it up.
+    /// 7 days is a choice, not a measurement: long enough for "carry on tomorrow", short enough that abandoned
+    /// partials (an ARW is 40–48 MB) don't pile up.
+    var partialRetention: TimeInterval = 7 * 24 * 60 * 60
 
     static let standard = ImportPolicy()
 }

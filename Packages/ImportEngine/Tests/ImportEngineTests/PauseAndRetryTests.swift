@@ -169,19 +169,17 @@ struct PauseTests {
         await h.cleanup()
     }
 
-    /// Wi-Fi's events are delivered and traced but change nothing until the engine has Wi-Fi pause reasons: the job
-    /// keeps running and no file counts as failed.
-    @Test func wifiEventsAreTracedButDoNotYetChangeAJob() async throws {
+    /// Waiting for the Local Network prompt only informs: traced, and the job keeps running (backlog Iteration 3,
+    /// section 1). The other Wi-Fi events pause it (`WiFiPauseTests`).
+    @Test func waitingForLocalNetworkOnlyInforms() async throws {
         let h = Harness()
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.link(card, mode: .wifi(.cameraNetwork))
         await link.script("A.JPG", .hold, .deliver)
         try await h.start(.items(card), from: link)
         let a = await link.nextHeldCall("A.JPG")
-        for event in [CameraLinkEvent.waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost] {
-            link.send(event)
-            await h.trace.next(.linkEvent(event))
-        }
+        link.send(.waitingForLocalNetwork)
+        await h.trace.next(.linkEvent(.waitingForLocalNetwork))
         #expect(await h.engine.state == .running)
         a.release()
         #expect(await h.waitFinished() == .completed)
@@ -437,8 +435,10 @@ struct RetryTests {
             #expect(await h.outcome(of: card[0]) == .failed(.link(kind)))
             #expect(await h.record(for: card[1])?.state == .imported)
         case .retryOnReconnect:
-            await h.trace.next(.paused(.cameraRemoved))
-            #expect(await h.engine.state == .paused(.cameraRemoved))
+            // A lost card pauses for the card (the session is up); anything else for the camera.
+            let reason: PauseReason = kind == .cardUnavailable ? .cardUnavailable : .cameraRemoved
+            await h.trace.next(.paused(reason))
+            #expect(await h.engine.state == .paused(reason))
             #expect(await link.bytesCalls == ["X.JPG"])
             #expect(await h.engine.currentProgress.filesFailed == 0)
         case .skipFile:

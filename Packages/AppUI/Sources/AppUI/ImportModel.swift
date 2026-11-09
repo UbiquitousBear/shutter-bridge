@@ -174,9 +174,14 @@ public final class ImportModel: BrowseImporting {
     public var isWaitingForCamera: Bool { state == .paused(.cameraRemoved) }
 
     public var canPause: Bool { state == .running }
-    /// Paused for something Continue can lift (not a removed camera: that needs the camera back).
+    /// Paused for something Continue can lift (not a removed or unreachable camera, a lost card or a needed join:
+    /// those need the camera back, `ImportEngine.reconnect`).
     public var canResume: Bool {
-        if case let .paused(reason) = state { reason != .cameraRemoved } else { false }
+        guard case let .paused(reason) = state else { return false }
+        switch reason {
+        case .appInBackground, .stalled, .byPerson, .taskExpired: return true
+        case .cameraRemoved, .cameraUnreachable, .cardUnavailable, .needsJoin: return false
+        }
     }
     public var canCancel: Bool { state.isActive }
 

@@ -14,6 +14,18 @@ import PhotosBridge
 /// on *did suspend* and on removal without failing the file in flight (decision 4), continues when the app says so
 /// or the camera is back (decision 7), and retries real errors a limited number of times. Every catalogue write goes
 /// through the `CatalogueStore` actor; nothing here runs on the main actor, and nothing touches UIKit.
+///
+/// **What differs between links comes from their capabilities** (wireless plan, decision 5), never their carrier:
+/// - Downloads in flight are `min(settings.downloadsInFlight, link.capabilities.maxDownloadsInFlight)`.
+/// - On a link that resumes (`resumesPartialFiles`, Wi-Fi), an interrupted file is continued from the link's
+///   latest checkpoint after its name and size are checked against the camera's (`DownloadAttempt`), and its
+///   checkpoint is written to the catalogue (`markPartial`) every 16 MiB, when it is interrupted and on
+///   `flushCheckpoints()`, so a later job continues it too. On one that doesn't (USB) the partial file is deleted
+///   and the file copied again from 0, as before.
+///
+/// **The Wi-Fi link's events pause, never fail** (backlog Iteration 3, section 9): `.storeRemoved` (and a
+/// `cardUnavailable` failure) pauses with `.cardUnavailable` and `.storeAdded` lists the card again;
+/// `.sessionLost` pauses with `.cameraUnreachable` until `reconnect`; `.waitingForLocalNetwork` only informs.
 public actor ImportEngine {
     /// Progress of the current job, at most four updates a second. One consumer, the Import screen's view model;
     /// only the newest value is kept.
@@ -45,8 +57,10 @@ public actor ImportEngine {
     var commitsInFlight: [UUID: (job: UUID, task: Task<CommitResult, Never>)] = [:]
 
     /// - Parameters:
-    ///   - stagingDirectory: Where downloads are written before the destination takes them. Emptied here: anything
-    ///     in it is left over from a crash (resuming from it is Iteration 2's work).
+    ///   - stagingDirectory: Where downloads are written before the destination takes them. Emptied here (anything
+    ///     in it is left over from a crash), except its `Partials` folder, which holds resumable partial files a
+    ///     catalogue row may point to; of those, any not written for `ImportPolicy.partialRetention` (7 days) are
+    ///     deleted.
     ///   - clock: What progress throttling, the rate, stall timing and retry backoff are measured on.
     ///   - timeZone: The zone a link's capture dates are read back to wall-clock time in, for identities; each job
     ///     keeps the zone it started with (an autoupdating zone is fixed at the start, so a change of zone mid-job
@@ -83,7 +97,29 @@ public actor ImportEngine {
         (progress, progressContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
         let fm = FileManager.default
         if let leftovers = try? fm.contentsOfDirectory(at: stagingDirectory, includingPropertiesForKeys: nil) {
-            for url in leftovers { try? fm.removeItem(at: url) }
+            for url in leftovers where url.lastPathComponent != Self.partialsFolderName { try? fm.removeItem(at: url) }
+        }
+        Self.prunePartials(in: stagingDirectory.appendingPathComponent(Self.partialsFolderName, isDirectory: true),
+                           olderThan: Date().addingTimeInterval(-policy.partialRetention))
+    }
+
+    /// The staging folder's subfolder for resumable partial files, one folder per file.
+    static let partialsFolderName = "Partials"
+
+    var partialsDirectory: URL { stagingDirectory.appendingPathComponent(Self.partialsFolderName, isDirectory: true) }
+
+    /// Deletes every partial file's folder whose newest write is before `cutoff`.
+    static func prunePartials(in partials: URL, olderThan cutoff: Date) {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        for folder in (try? fm.contentsOfDirectory(at: partials, includingPropertiesForKeys: keys)) ?? [] {
+            var newest = (try? folder.resourceValues(forKeys: Set(keys)))?.contentModificationDate ?? .distantPast
+            for file in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? [] {
+                if let date = (try? file.resourceValues(forKeys: Set(keys)))?.contentModificationDate, date > newest {
+                    newest = date
+                }
+            }
+            if newest < cutoff { try? fm.removeItem(at: folder) }
         }
     }
 
@@ -101,10 +137,17 @@ public actor ImportEngine {
         return ImportProgress(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0, state: state)
     }
 
-    /// Whether a USB import is running (or paused for removal or a stall, which it gets over by itself), so the app
-    /// keeps the screen on (decision 1). False while the person or the app's leaving paused it, and once a stall
-    /// waits for the person after the automatic retries.
-    public var isUSBImportRunning: Bool { job?.isUSBImportRunning ?? false }
+    /// The current job, for `reconnect(_:to:knownItems:route:)`; nil when there is none.
+    public var currentJobID: ImportJobID? { job.map { ImportJobID($0.id) } }
+
+    /// Whether an import over `carrier` is running, or paused only for what it gets over without the person (a
+    /// removal, a lost card or session, a stall it retries by itself). False while the person, the app's leaving,
+    /// an expiry or a needed join paused it, and once a stall waits for the person after the automatic retries.
+    public func importRunning(carrier: CameraCarrier) -> Bool { job?.importRunning(carrier: carrier) ?? false }
+
+    /// `importRunning(carrier: .usb)`: the app keeps the screen on meanwhile (decision 1). The screen-on rule stays
+    /// USB-only.
+    public var isUSBImportRunning: Bool { importRunning(carrier: .usb) }
 
     /// Changes the settings; a job already running keeps the ones it started with.
     public func updateSettings(_ settings: ImportSettings) { self.settings = settings }
@@ -114,12 +157,14 @@ public actor ImportEngine {
     ///
     /// - Parameter camera: The catalogue's key for the camera, which identities are made with. The link can't give
     ///   it: how to key a camera in MSC is still open (section 2).
+    /// - Returns: The job's ID, which `reconnect(_:to:knownItems:route:)` names.
+    @discardableResult
     public func start(
         _ selection: ImportSelection,
         from link: any CameraLink,
         camera: CameraKey,
         to route: ImportRoute
-    ) throws(ImportEngineError) {
+    ) throws(ImportEngineError) -> ImportJobID {
         guard job == nil else { throw .jobInProgress }
         guard !selection.isEmpty else { throw .emptySelection }
         // A copy of `.autoupdatingCurrent` keeps following the system zone; the job's must not change.
@@ -132,6 +177,7 @@ public actor ImportEngine {
         refreshState()
         let id = job.id
         job.driver = Task { await self.runJob(id) }
+        return ImportJobID(id)
     }
 
     /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job or already imported
@@ -176,32 +222,42 @@ public actor ImportEngine {
 
     /// Pauses the job. Nothing new starts; a download in flight carries on and is committed if it finishes (decision
     /// 4). `.appInBackground` is the fallback for when *did suspend* doesn't reach the engine: the app calls it from
-    /// its scene phase. `.cameraRemoved` acts as a removal.
+    /// its scene phase. `.cameraRemoved` and `.cameraUnreachable` act as the camera going away (`.removed`,
+    /// `.sessionLost`), and `.cardUnavailable` as the card going (`.storeRemoved`).
+    ///
+    /// On the continued task's expiry the app calls `flushCheckpoints()` first, then `pause(.taskExpired)`, then
+    /// stops the link's transfer (W13); `.needsJoin` is the app's, when getting the camera back needs a join it can't
+    /// make from the background (W14).
     public func pause(_ reason: PauseReason = .byPerson) throws(ImportEngineError) {
         guard let job else { throw .noJob }
         switch reason {
-        case .cameraRemoved: cameraRemoved(job)
-        case .appInBackground, .stalled, .byPerson: addPause(reason, to: job)
+        case .cameraRemoved: cameraLost(job, .cameraRemoved)
+        case .cameraUnreachable:
+            job.cameraLossReason = .cameraUnreachable
+            cameraLost(job, .cameraUnreachable)
+        case .cardUnavailable: cardLost(job)
+        case .appInBackground, .stalled, .byPerson, .taskExpired, .needsJoin: addPause(reason, to: job)
         }
     }
 
     /// Continues a paused job in the same session, without reopening it.
     ///
     /// - Parameters:
-    ///   - reason: nil (the Continue button) lifts the person's pause, the app's and a stall; `.appInBackground` (the
-    ///     app coming back) lifts only that, so the app's return never undoes a pause the person made. A removal is
-    ///     lifted only by `reconnect(_:to:)`.
+    ///   - reason: nil (the Continue button) lifts the person's pause, the app's, a stall and an expiry;
+    ///     `.appInBackground` (the app coming back) lifts only that, so the app's return never undoes a pause the
+    ///     person made. A removal, a lost card or session and a needed join are lifted only by `reconnect`.
     ///   - route: A new route for the files not yet committed, after re-reading Photos access (backlog section 5).
     public func resume(_ reason: PauseReason? = nil, to route: ImportRoute? = nil) throws(ImportEngineError) {
         guard let job else { throw .noJob }
         if let route { change(job, to: route) }
         let lifted: Set<PauseReason>
         switch reason {
-        case nil: lifted = [.byPerson, .appInBackground, .stalled]
+        case nil: lifted = [.byPerson, .appInBackground, .stalled, .taskExpired]
         case .appInBackground?: lifted = [.appInBackground]
         case .byPerson?: lifted = [.byPerson]
         case .stalled?: lifted = [.stalled]
-        case .cameraRemoved?: lifted = []
+        case .taskExpired?: lifted = [.taskExpired]
+        case .cameraRemoved?, .cameraUnreachable?, .cardUnavailable?, .needsJoin?: lifted = []
         }
         if lifted.contains(.stalled) {
             job.stallHold = false
@@ -211,23 +267,71 @@ public actor ImportEngine {
         liftPauses(lifted, of: job)
     }
 
-    /// The camera is back after a removal: a new link (or the same one), which the engine opens and lists, then
-    /// finds the files left by identity and copies the interrupted one again from its start (decision 7).
+    /// The camera is back after a removal: `reconnect(_:to:knownItems:route:)` for the current job, listing the
+    /// card through the link.
     public func reconnect(_ link: any CameraLink, to route: ImportRoute? = nil) throws(ImportEngineError) {
         guard let job else { throw .noJob }
-        guard job.phase == .waitingForCamera else { throw .cameraNotRemoved }
-        if let route { change(job, to: route) }
-        job.link = link
-        job.linkGeneration += 1
-        job.listRetries = 0
+        try reconnect(ImportJobID(job.id), to: link, route: route)
+    }
+
+    /// The camera is back, or a new session is up: the job carries on through `link` (a new link, or the same one
+    /// opened again). The engine opens it, lists the card (or takes `knownItems`), finds the files left by content
+    /// (name, capture time, size) and goes on. On a link that resumes, the file that was in flight continues from
+    /// its latest checkpoint once the camera confirms its name and size; on one that doesn't, it is copied again
+    /// from its start (decision 7).
+    ///
+    /// Lifts every pause that waits for the camera or a session (`.cameraRemoved`, `.cameraUnreachable`,
+    /// `.cardUnavailable`, `.needsJoin`) and the continued task's expiry (`.taskExpired`): Continue after an
+    /// expiry is a new continued task, a reopen, then this (W13). A download still in flight on the old session is
+    /// walked away from, its partial file kept where the link resumes.
+    ///
+    /// - Parameters:
+    ///   - job: The job to carry on; a job that has since ended (or another) throws `.noJob`.
+    ///   - knownItems: The card as the app has just listed it (`IPLink.list(reusing:)`, which asks GetObjectInfo
+    ///     only for handles it hasn't seen, W8); empty to have the engine call `list()`. Each file's name and size
+    ///     are still checked against the camera before a partial file is continued.
+    ///   - route: A new route for the files not yet committed, after re-reading Photos access (backlog section 5).
+    /// - Throws: `.cameraNotRemoved` when the job is neither waiting for the camera nor paused for a reason this
+    ///   lifts.
+    public func reconnect(_ job: ImportJobID, to link: any CameraLink, knownItems: [CameraItem] = [],
+                          route: ImportRoute? = nil) throws(ImportEngineError) {
+        guard let current = self.job, current.id == job.rawValue else { throw .noJob }
+        guard current.phase == .waitingForCamera || !current.pauses.isDisjoint(with: PauseReason.liftedByReconnect)
+        else { throw .cameraNotRemoved }
+        if let route { change(current, to: route) }
+        for entry in current.sortedEntries {
+            guard let d = entry.download else { continue }
+            d.attempt.abandon()
+            entry.interrupted = true
+            current.requeue(entry)
+        }
+        current.link = link
+        current.linkGeneration += 1
+        current.listRetries = 0
+        current.pendingListing = knownItems.isEmpty ? nil : knownItems
         ensureConsumer(for: link)
-        job.phase = .listing
-        liftPauses([.cameraRemoved], of: job)
-        job.signal.fire()
+        current.phase = .listing
+        liftPauses(PauseReason.liftedByReconnect, of: current)
+        current.signal.fire()
+        scheduleCheckpointFlush()
+    }
+
+    /// Writes every resumable file's latest checkpoint to the catalogue (`markPartial`) where it is newer than the
+    /// one written, so a job the app loses (iOS ends it after an expiry) leaves rows a later job resumes from. The
+    /// app calls it before `pause(.taskExpired)` (backlog Iteration 3, section 9, *Expiry is normal*). Returns once
+    /// the catalogue has them; a catalogue that refuses one is left as it was (the in-memory resume point holds).
+    public func flushCheckpoints() async {
+        guard let job else { return }
+        let id = job.id
+        for entry in job.sortedEntries {
+            guard let resumable = entry.resumable, let seed = resumable.best else { continue }
+            await saveCheckpoint(seed, of: entry.identity, in: id)
+        }
     }
 
     /// Cancels the job, if there is one. Files already committed stay where they went; downloads in flight are
-    /// abandoned and their temporary files removed at once.
+    /// abandoned and their temporary files removed at once, except a resumable partial file whose checkpoint the
+    /// catalogue has (a later job continues it; `ImportPolicy.partialRetention` cleans up one that never does).
     public func cancel() {
         guard let job else { return }
         end(job, .cancelled)
@@ -284,11 +388,58 @@ public actor ImportEngine {
         refreshState()
     }
 
-    /// The camera went away (the `.removed` event or a `.disconnected` failure, in either order): abandon every
-    /// download, delete its partial file, put it back in the queue in order, and wait for `reconnect`. Files being
-    /// committed carry on. Idempotent.
-    func cameraRemoved(_ job: Job) {
-        guard job.phase != .waitingForCamera else { return }
+    /// The camera went away (`reason` `.cameraRemoved`: the `.removed` event or a `.disconnected` failure, in either
+    /// order; `.cameraUnreachable`: `.sessionLost`): walk away from every download, put it back in the queue in
+    /// order, and wait for `reconnect`. A partial file is deleted, or kept for the resume on a link that resumes.
+    /// Files being committed carry on. Idempotent; a lost session names a removal already recorded more exactly
+    /// (the failure and the event race), never the other way round.
+    func cameraLost(_ job: Job, _ reason: PauseReason) {
+        guard job.phase != .waitingForCamera else {
+            if reason == .cameraUnreachable {
+                job.pauses.remove(.cameraRemoved) // the session was lost: the camera wasn't removed
+            } else if job.pauses.contains(.cameraUnreachable) {
+                return
+            }
+            addPause(reason, to: job)
+            return
+        }
+        stopDownloads(of: job)
+        addPause(reason, to: job)
+        job.signal.fire()
+        finishIfDrained(job.id) // nothing left to copy: the job is complete, camera or not
+    }
+
+    /// The camera dropped its card (`.storeRemoved`, or a `cardUnavailable` failure): like a lost camera, with the
+    /// session still up, so nothing counts as failed (the spike's 82-files bug) and `.storeAdded` lists the card
+    /// again. Idempotent.
+    func cardLost(_ job: Job) {
+        if job.phase != .waitingForCamera { stopDownloads(of: job) }
+        addPause(.cardUnavailable, to: job)
+        job.signal.fire()
+        finishIfDrained(job.id)
+    }
+
+    /// The card is back (`.storeAdded`) and the session never went: list it again on the same link, find the files
+    /// left by content (handles may have changed) and go on.
+    func cardBack(_ job: Job) {
+        guard job.pauses.contains(.cardUnavailable), job.phase == .waitingForCamera,
+              job.pauses.isDisjoint(with: [.cameraRemoved, .cameraUnreachable]) else { return }
+        relist(job)
+        liftPauses([.cardUnavailable], of: job)
+    }
+
+    /// Lists the card again on the job's link, before anything else starts.
+    func relist(_ job: Job) {
+        job.linkGeneration += 1
+        job.listRetries = 0
+        job.pendingListing = nil
+        job.phase = .listing
+        job.signal.fire()
+    }
+
+    /// Walks away from every download (each is put back in the queue in order) and waits for the camera; the
+    /// latest checkpoints of resumable files are written to the catalogue.
+    func stopDownloads(of job: Job) {
         for entry in job.sortedEntries {
             guard let d = entry.download else { continue }
             d.attempt.abandon()
@@ -296,9 +447,13 @@ public actor ImportEngine {
             job.requeue(entry)
         }
         job.phase = .waitingForCamera
-        addPause(.cameraRemoved, to: job)
-        job.signal.fire()
-        finishIfDrained(job.id) // nothing left to copy: the job is complete, camera or not
+        scheduleCheckpointFlush()
+    }
+
+    /// `flushCheckpoints()` in its own task, from a synchronous step.
+    func scheduleCheckpointFlush() {
+        guard job?.entries.values.contains(where: { $0.resumable != nil }) == true else { return }
+        Task { await self.flushCheckpoints() }
     }
 
     /// Ends the job: abandons downloads (a committing file finishes in its own unstructured task, which cancelling the
@@ -306,9 +461,17 @@ public actor ImportEngine {
     func end(_ job: Job, _ outcome: JobOutcome) {
         guard self.job === job else { return }
         for entry in job.entries.values {
-            guard let d = entry.download else { continue }
-            d.attempt.abandon()
-            entry.phase = .queued
+            if let d = entry.download {
+                d.attempt.abandon()
+                entry.phase = .queued
+            }
+            // A resumable partial stays only where the catalogue points to it. A committing file's folder holds
+            // the staged file; `commitAndRecord` removes it once the commit is done.
+            if case .committing = entry.phase { continue }
+            if let r = entry.resumable, entry.outcome == nil, r.persistedOffset == 0 {
+                try? FileManager.default.removeItem(at: r.folder)
+                entry.resumable = nil
+            }
         }
         job.finished = outcome
         job.signal.finish()
@@ -340,13 +503,18 @@ public actor ImportEngine {
         trace(.linkEvent(event))
         switch event {
         case .didSuspend: addPause(.appInBackground, to: job)
-        case .removed: cameraRemoved(job)
+        case .removed: cameraLost(job, .cameraRemoved)
         // No pause was made for these; *resumed operations* also fires with no suspension before it, so the job
         // continues on the app's return (`resume(.appInBackground)`), not on this.
         case .willSuspend, .cancelledSuspending, .resumedOperations: break
-        // Wi-Fi's events (`IPLink`, Iteration 3). They are traced above and change nothing yet: no job pauses on them
-        // until the engine's Wi-Fi pause reasons exist, and a USB link never sends them.
-        case .waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost: break
+        // Wi-Fi's events (`IPLink`); a USB link never sends them. Waiting for the Local Network prompt only informs
+        // (the link keeps waiting, the app explains the prompt); it is traced above.
+        case .waitingForLocalNetwork: break
+        case .storeRemoved: cardLost(job)
+        case .storeAdded: cardBack(job)
+        case .sessionLost:
+            job.cameraLossReason = .cameraUnreachable
+            cameraLost(job, .cameraUnreachable)
         }
     }
 
@@ -413,6 +581,7 @@ public actor ImportEngine {
         }
         job.stallResumeAt = job.stallHold ? nil : now + policy.stallRetryDelay
         addPause(.stalled, to: job)
+        scheduleCheckpointFlush()
     }
 
     func offer(_ p: ImportProgress) {
@@ -462,7 +631,7 @@ public actor ImportEngine {
             filesDone: filesDone, filesTotal: job.entries.count + job.unkeyed.count, bytesDone: bytesDone,
             bytesTotal: bytesTotal, bytesPerSecond: job.rate.bytesPerSecond, state: job.state,
             destination: job.route.decision, filesSkipped: skipped, filesFailed: failed,
-            isUSBImportRunning: job.isUSBImportRunning,
+            runningCarrier: job.runningCarrier,
             stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled)
         )
     }
