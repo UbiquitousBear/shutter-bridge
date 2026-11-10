@@ -75,11 +75,10 @@ public struct BrowseCatalogue: Sendable {
 /// is lost with the app in front and nothing else holds the link, Browse reopens the same link and lists again, reusing
 /// what it knows (`ReusingListing`). When the link is let go (the app went to the background with Browse open and no
 /// import: the phone leaves the camera's network) or can't be reopened, the card stays on screen with a strip saying so
-/// and Reconnect (`interruption`); coming back to the app reconnects by itself, once per return, through `openLink` (which
-/// prepares again), and the selection and the thumbnails already fetched are kept. A failed open offers Try Again, and on
-/// the way back to the app opens again by itself when discovery says so (`opensAgainOnReturn`: a join that needed the app
-/// in front). Nothing reconnects while the app is in the background. Over USB none of this applies: Browse behaves as it
-/// always has.
+/// and Reconnect (`interruption`); only Reconnect prepares a new link, through `openLink`, and the selection and the
+/// thumbnails already fetched are kept. A failed open (a join that needed the app in front among them) offers Try Again.
+/// Coming back to the app reconnects nothing by itself (Shamil, 10 Nov): the strip or the failed state stays until the
+/// person taps. Over USB none of this applies: Browse behaves as it always has.
 @MainActor
 @Observable
 public final class BrowseModel {
@@ -101,7 +100,7 @@ public final class BrowseModel {
     public enum Interruption: Sendable, Hashable {
         /// Getting the link back: the same link reopened after its session was lost, or a new one prepared.
         case reconnecting
-        /// The link was let go or lost and isn't back: Reconnect, or coming back to the app, prepares a new one.
+        /// The link was let go or lost and isn't back: Reconnect prepares a new one.
         case disconnected
     }
 
@@ -189,7 +188,6 @@ public final class BrowseModel {
     @ObservationIgnored private var zone = TimeZone.current
     @ObservationIgnored private let openFailureText: (@Sendable () async -> String?)?
     @ObservationIgnored private let openWasDeclined: (@Sendable () async -> Bool)?
-    @ObservationIgnored private let opensAgainOnReturn: (@Sendable () async -> Bool)?
     @ObservationIgnored private let onGone: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let onDeclined: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let now: @Sendable () -> Date
@@ -211,20 +209,12 @@ public final class BrowseModel {
     @ObservationIgnored private var badgeReadsApplied = 0
     @ObservationIgnored private let keyTags: CameraKeyTags
     // The link going away (Wi-Fi).
-    /// Whether the app is in front, as `scenePhaseChanged(_:)` last said.
+    /// Whether the app is in front, as `scenePhaseChanged(_:)` last said: a session lost in front reopens the same link,
+    /// one lost away lets it go.
     @ObservationIgnored private var inForeground = true
-    /// How many times the app has gone to the background, and the count when the current hold or open began: a hold that
-    /// ends with the count moved ended with (or after) a trip away, so the next return reconnects by itself.
-    @ObservationIgnored private var leaves = 0
-    @ObservationIgnored private var leavesAtAttempt = 0
-    /// One automatic reconnect is due once the app is in front (once per return).
-    @ObservationIgnored private var reopenDueOnReturn = false
     /// Reconnect or Try Again was tapped while Browse waits to prepare the link again.
     @ObservationIgnored private var reopenTapped = false
     @ObservationIgnored private var reopenWaiter: CheckedContinuation<Void, Never>?
-    /// Browse is waiting for a reason to prepare the link again (`waitToReopen()`), parked or not: a return to the front
-    /// then makes one reconnect due.
-    @ObservationIgnored private var waitingToReopen = false
     /// Why the latest hold of a link ended, for the log.
     @ObservationIgnored private var linkEnd: LinkEnd = .eventsFinished
     /// When the card was last listed on a link, for the log.
@@ -251,15 +241,12 @@ public final class BrowseModel {
     ///     Nil, or a nil answer, shows the kind's own wording.
     ///   - openWasDeclined: Asked when opening the link failed: true when the person chose not to continue (Not Now on the
     ///     Local Network explanation), so `onDeclined` closes the screen with no notice instead of `onGone`'s.
-    ///   - opensAgainOnReturn: Asked, over Wi-Fi, when the app comes back to the front after an open failed: true to open
-    ///     again by itself (`CameraDiscovery.opensAgainOnReturn(for:)`: the join needed the app in front). Nil: never.
     public init(
         camera: CameraDescriptor,
         openLink: @escaping @Sendable () async throws(CameraLinkFailure) -> any CameraLink,
         services: BrowseServices,
         openFailureText: (@Sendable () async -> String?)? = nil,
         openWasDeclined: (@Sendable () async -> Bool)? = nil,
-        opensAgainOnReturn: (@Sendable () async -> Bool)? = nil,
         onGone: @escaping @MainActor (CameraDescriptor.ID) -> Void,
         onDeclined: @escaping @MainActor (CameraDescriptor.ID) -> Void = { _ in },
         catalogue: BrowseCatalogue? = nil,
@@ -275,7 +262,6 @@ public final class BrowseModel {
         self.services = services
         self.openFailureText = openFailureText
         self.openWasDeclined = openWasDeclined
-        self.opensAgainOnReturn = opensAgainOnReturn
         self.onGone = onGone
         self.onDeclined = onDeclined
         self.catalogue = catalogue
@@ -314,8 +300,8 @@ public final class BrowseModel {
     /// Opens the link, shows the last-known card, lists the card, and follows the link's events and the import's
     /// "more files imported" (refreshing the badges on each) until the calling task is cancelled or the link's events
     /// end, then lets go of the link (closing it unless an import holds it). Over Wi-Fi it then waits, with the card
-    /// still shown, for Reconnect, Try Again or the app's return, and holds the next link the same way, until the calling
-    /// task is cancelled. A second call while one runs does nothing.
+    /// still shown, for Reconnect or Try Again (never for the app's return alone), and holds the next link the same way,
+    /// until the calling task is cancelled. A second call while one runs does nothing.
     public func run() async {
         guard !isRunning, phase != .gone else { return }
         isRunning = true
@@ -353,7 +339,6 @@ public final class BrowseModel {
     /// prepared and the card listed again; otherwise the screen connects (Wi-Fi) or reads (USB) from the start.
     private func attempt(reconnecting: Bool) async -> Attempt {
         let started = ContinuousClock.now
-        leavesAtAttempt = leaves
         var shownEarlyFor: CameraKey?
         if reconnecting {
             interruption = .reconnecting
@@ -377,7 +362,6 @@ public final class BrowseModel {
                 services.log.note("browse: reconnecting failed after \(Self.seconds(since: started)) s: \(error)")
                 interruptionDetail = await openFailureText?()
                 interruption = .disconnected
-                noteLeaveDuringAttempt()
                 return .linkEnded
             }
             if shownEarlyFor != nil { clearLastKnown() }
@@ -390,13 +374,10 @@ public final class BrowseModel {
             }
             openFailed = true
             listingFailed(error, text: await openFailureText?())
-            noteLeaveDuringAttempt()
             return phase == .gone ? .stopped : .openFailed
         }
         self.link = link
         leases.acquire(link)
-        // A trip away during the open doesn't count against this link: only one during its hold does.
-        leavesAtAttempt = leaves
         // The card is read from now on: the time so far starts here, not at the join (bench 19.1).
         if case .connecting = phase { phase = .reading(since: now()) }
         await adoptKey(of: link, shownEarlyFor: shownEarlyFor, reconnecting: reconnecting)
@@ -446,7 +427,6 @@ public final class BrowseModel {
         if showsListedCard, interruption != .disconnected {
             interruption = .disconnected
         }
-        noteLeaveDuringAttempt()
         return .linkEnded
     }
 
@@ -470,34 +450,14 @@ public final class BrowseModel {
         }
     }
 
-    /// An attempt that ended with the app having gone to the background since it began: its end came with (or after) a
-    /// trip away, so the next return to the front reconnects by itself.
-    private func noteLeaveDuringAttempt() {
-        if leaves > leavesAtAttempt { reopenDueOnReturn = true }
-    }
-
-    /// Waits, over Wi-Fi, for a reason to prepare the link again: Reconnect or Try Again, or the app in front after a
-    /// return (once per return; after a failed open, only when discovery says so). Nil when the calling task is cancelled.
+    /// Waits, over Wi-Fi, for a reason to prepare the link again: Reconnect or Try Again, and nothing else (a return to the
+    /// front reconnects nothing by itself, Shamil 10 Nov). Nil when the calling task is cancelled.
     private func waitToReopen() async -> String? {
-        waitingToReopen = true
-        defer { waitingToReopen = false }
         while true {
             if Task.isCancelled { return nil }
             if reopenTapped {
                 reopenTapped = false
                 return interruption == .disconnected ? "Reconnect" : "Try Again"
-            }
-            if inForeground, reopenDueOnReturn {
-                reopenDueOnReturn = false
-                if showsListedCard { return "back in front" }
-                if await opensAgainOnReturn?() == true {
-                    if Task.isCancelled { return nil }
-                    // A tap during that suspension is answered by this reopen; don't let it start another later.
-                    reopenTapped = false
-                    return "back in front after a join that needed the app"
-                }
-                // A tap or a scene change during that suspension found no one parked: look again before parking.
-                continue
             }
             await nextReopenWake()
         }
@@ -524,22 +484,14 @@ public final class BrowseModel {
         reopenWaiter = nil
     }
 
-    /// The app's scene changed (`AppModel.scenePhaseChanged(_:)`): on the way back to the front from the background, a
-    /// Wi-Fi Browse whose link was let go or lost reconnects by itself, once per return (and after a failed open, opens
-    /// again when discovery says so). Nothing reconnects in the background.
+    /// The app's scene changed (`AppModel.scenePhaseChanged(_:)`): Browse only notes whether it is in front, so a Wi-Fi
+    /// session lost away lets the link go instead of reopening it. The way back to the front reconnects nothing by itself:
+    /// the disconnected strip's Reconnect, or the failed state's Try Again, does (Shamil, 10 Nov).
     public func scenePhaseChanged(_ scene: AppScenePhase) {
         switch scene {
-        case .background:
-            guard inForeground else { return }
-            inForeground = false
-            leaves += 1
-        case .active:
-            guard !inForeground else { return }
-            inForeground = true
-            if waitingToReopen { reopenDueOnReturn = true }
-            wakeReopen()
-        case .inactive:
-            break
+        case .background: inForeground = false
+        case .active: inForeground = true
+        case .inactive: break
         }
     }
 
@@ -644,7 +596,7 @@ public final class BrowseModel {
             case .sessionLost:
                 services.log.note("browse: link event \(event)")
                 // Over Wi-Fi, with the live card shown and no import holding the link (its recovery has the link then):
-                // in front, the same link reopens and lists again; away, the link is let go, and the return reconnects.
+                // in front, the same link reopens and lists again; away, the link is let go, and Reconnect gets it back.
                 guard reconnects, showsListedCard, leases.holders(of: link) <= 1 else { continue }
                 guard inForeground else {
                     linkEnd = .sessionLost
