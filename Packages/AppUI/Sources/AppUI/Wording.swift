@@ -881,7 +881,7 @@ public enum WiFiWording {
 
     /// A connection that ended because the join needed the app in front (`.paused(.needsJoin)` as an open failure; bench
     /// 19.1: the session holds the join while the app is away, then lets go). Worded for both places it shows: Browse's
-    /// failed state, with Try Again, and the Import screen. To confirm with Shamil.
+    /// failed state, with Try Again, and the Import screen. Wording confirmed by Shamil (10 Nov).
     public static let needsAppToJoin = "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in "
         + "Shutter Bridge until iOS asks to join."
 

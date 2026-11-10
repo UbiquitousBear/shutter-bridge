@@ -4,8 +4,9 @@ import Testing
 @testable import AppUI
 
 // Browse over Wi-Fi when its link goes away under the screen (bench 19.1, 9 Nov): the card stays with a strip, a lost
-// session reopens the same link in front, the return to the app reconnects once, thumbnails are asked again on the new
-// link, wait while the link is reached, and are counted in the bench log without names or handles. Every wait is bounded.
+// session reopens the same link in front, the return to the app reconnects nothing by itself (only Reconnect or Try Again
+// does, Shamil 10 Nov), thumbnails are asked again on the new link, wait while the link is reached, and are counted in
+// the bench log without names or handles. Every wait is bounded.
 
 /// A Wi-Fi link whose opens, listings and thumbnails a test scripts and counts. Its events reach every reader (as
 /// `IPLink`'s do), and closing it finishes them.
@@ -128,45 +129,6 @@ final class LinkQueue: @unchecked Sendable {
     }
 }
 
-final class Flag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Bool
-    private var asked = 0
-    private var gate: AsyncStream<Void>?
-    private var release: AsyncStream<Void>.Continuation?
-    init(_ value: Bool) { self.value = value }
-    func set(_ value: Bool) { lock.withLock { self.value = value } }
-    var asks: Int { lock.withLock { asked } }
-    func ask() -> Bool { lock.withLock { asked += 1; return value } }
-
-    /// The next answer waits until `releaseAnswer()` (or its task's cancellation); it is counted as asked at once.
-    func holdAnswer() {
-        let (stream, sink) = AsyncStream<Void>.makeStream()
-        lock.withLock { gate = stream; release = sink }
-    }
-
-    func releaseAnswer() {
-        let sink = lock.withLock { () -> AsyncStream<Void>.Continuation? in
-            defer { gate = nil; release = nil }
-            return release
-        }
-        sink?.finish()
-    }
-
-    /// `ask()`, after `holdAnswer()`'s gate when one is set.
-    func answer() async -> Bool {
-        let (held, value) = lock.withLock { () -> (AsyncStream<Void>?, Bool) in
-            asked += 1
-            return (gate, self.value)
-        }
-        if let held {
-            var iterator = held.makeAsyncIterator()
-            _ = await iterator.next()
-        }
-        return value
-    }
-}
-
 /// A clock for `now` the test moves by hand.
 final class HandClock: @unchecked Sendable {
     private let lock = NSLock()
@@ -196,13 +158,11 @@ struct BrowseReconnectTests {
     }
 
     func start(_ links: [(any CameraLink)?], camera: CameraDescriptor? = nil, openFailureText: String? = nil,
-               opensAgain: Flag? = nil, clock: HandClock? = nil, holdFirstOpen: Bool = false) -> Harness {
+               clock: HandClock? = nil, holdFirstOpen: Bool = false) -> Harness {
         let queue = LinkQueue(links)
         if holdFirstOpen { queue.holdOpen() }
         let log = RecordingLog()
         let leases = LinkLeases()
-        var again: (@Sendable () async -> Bool)?
-        if let opensAgain { again = { await opensAgain.answer() } }
         var now: @Sendable () -> Date = { Date() }
         if let clock { now = { clock.now } }
         let model = BrowseModel(
@@ -210,7 +170,6 @@ struct BrowseReconnectTests {
             openLink: { () async throws(CameraLinkFailure) -> any CameraLink in try await queue.next() },
             services: services(log: log),
             openFailureText: { openFailureText },
-            opensAgainOnReturn: again,
             onGone: { _ in },
             leases: leases,
             now: now)
@@ -220,9 +179,17 @@ struct BrowseReconnectTests {
 
     var ids: [CameraItem.ID] { card.newestFirst().map(\.id) }
 
+    /// The app goes to the background and comes back; then a moment passes, in which nothing may be opened by itself.
+    func awayAndBack(_ model: BrowseModel) async {
+        model.scenePhaseChanged(.background)
+        model.scenePhaseChanged(.inactive)
+        model.scenePhaseChanged(.active)
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+
     // MARK: The link closed by a leave
 
-    @Test func aLinkClosedUnderTheCardShowsTheStripAndTheReturnReconnectsKeepingSelectionAndThumbnails() async {
+    @Test func aLinkClosedUnderTheCardShowsTheStripAndOnlyReconnectGetsItBackKeepingSelectionAndThumbnails() async {
         let first = ScriptedWiFiLink(items: card)
         let second = ScriptedWiFiLink(items: card)
         let h = start([first, second])
@@ -242,8 +209,14 @@ struct BrowseReconnectTests {
         try? await Task.sleep(for: .milliseconds(50))
         #expect(h.links.opens == 1)
         #expect(await h.model.thumbnail(for: ids[1]) == nil)
-        // Back in front: one reconnect, the card listed again from what is known, the selection and thumbnails kept.
+        // Back in front: nothing reconnects by itself; the strip, the card and the selection stay.
         h.model.scenePhaseChanged(.active)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.links.opens == 1)
+        #expect(h.model.interruption == .disconnected && h.model.linkGeneration == 1)
+        #expect(h.model.phase == .listed && h.model.selection == [card[0].id])
+        // Reconnect: one new link, the card listed again from what is known, the selection and thumbnails kept.
+        h.model.reconnect()
         #expect(await eventuallyLong { h.model.interruption == nil && h.model.linkGeneration == 2 })
         #expect(h.links.opens == 2)
         #expect(await second.reusingLists == [ids])
@@ -253,13 +226,14 @@ struct BrowseReconnectTests {
         #expect(await second.thumbnailsAsked == [ids[1]])
         let lines = h.log.lines
         #expect(lines.contains { $0.hasPrefix("browse: the link ended under the screen (events finished) ") })
-        #expect(lines.contains("browse: reconnecting (back in front)"))
+        #expect(lines.contains("browse: reconnecting (Reconnect)"))
+        #expect(!lines.contains { $0.contains("back in front") })
         #expect(lines.contains { $0.hasPrefix("browse: reconnected: a link in ") })
         await h.stop()
         #expect(await second.closed)
     }
 
-    @Test func aReconnectThatFailsWaitsForReconnectAndIsTriedOncePerReturn() async {
+    @Test func aReconnectThatFailsKeepsTheStripAndOnlyAnotherReconnectTriesAgain() async {
         let first = ScriptedWiFiLink(items: card)
         let third = ScriptedWiFiLink(items: card)
         let h = start([first, nil, third], openFailureText: "Open the camera again.")
@@ -267,14 +241,15 @@ struct BrowseReconnectTests {
         h.model.scenePhaseChanged(.background)
         await first.close()
         #expect(await eventuallyLong { h.model.interruption == .disconnected })
-        h.model.scenePhaseChanged(.active)
+        await awayAndBack(h.model)
+        #expect(h.links.opens == 1)
+        h.model.reconnect()
         #expect(await eventuallyLong { h.links.opens == 2 && h.model.interruption == .disconnected })
         #expect(h.model.interruptionDetail == "Open the camera again.")
-        // Once per return: an inactive and active again (no trip to the background) doesn't try again.
-        h.model.scenePhaseChanged(.inactive)
-        h.model.scenePhaseChanged(.active)
-        try? await Task.sleep(for: .milliseconds(50))
+        // Another trip away and back doesn't try again.
+        await awayAndBack(h.model)
         #expect(h.links.opens == 2)
+        #expect(h.model.interruption == .disconnected && h.model.interruptionDetail == "Open the camera again.")
         // Reconnect does.
         h.model.reconnect()
         #expect(await eventuallyLong { h.model.interruption == nil && h.model.linkGeneration == 2 })
@@ -330,7 +305,21 @@ struct BrowseReconnectTests {
         await h.leases.release(link)
     }
 
-    @Test func aLostSessionWithTheAppAwayLetsTheLinkGoAndTheReturnReconnects() async {
+    @Test func aLostSessionInFrontAfterATripAwayStillReopensTheSameLink() async {
+        let link = ScriptedWiFiLink(items: card)
+        let h = start([link])
+        #expect(await eventuallyLong { h.model.phase == .listed })
+        // A trip away that let nothing go (an import held the link, say): back in front, a lost session is recovered.
+        await awayAndBack(h.model)
+        #expect(h.links.opens == 1 && h.model.interruption == nil)
+        await link.send(.sessionLost)
+        #expect(await eventuallyLong { h.model.linkGeneration == 2 && h.model.interruption == nil })
+        #expect(await link.opens == 2)
+        #expect(h.links.opens == 1)   // the same link: nothing prepared again
+        await h.stop()
+    }
+
+    @Test func aLostSessionWithTheAppAwayLetsTheLinkGoAndOnlyReconnectGetsItBack() async {
         let first = ScriptedWiFiLink(items: card)
         let second = ScriptedWiFiLink(items: card)
         let h = start([first, second])
@@ -340,6 +329,10 @@ struct BrowseReconnectTests {
         #expect(await eventuallyLong { h.model.interruption == .disconnected })
         #expect(await first.opens == 1)   // not reopened from the background
         h.model.scenePhaseChanged(.active)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await first.opens == 1)   // nor on the return
+        #expect(h.links.opens == 1 && h.model.interruption == .disconnected)
+        h.model.reconnect()
         #expect(await eventuallyLong { h.model.interruption == nil && h.model.linkGeneration == 2 })
         #expect(h.links.opens == 2)
         await h.stop()
@@ -391,23 +384,37 @@ struct BrowseReconnectTests {
         await h.stop()
     }
 
-    @Test func aFailedOpenOpensAgainOnTheReturnOnlyWhenDiscoverySaysSoAndOncePerReturn() async {
+    @Test func aJoinThatNeededTheAppInFrontIsNotOpenedAgainOnTheReturnOnlyByTryAgain() async {
         let link = ScriptedWiFiLink(items: card)
-        let opensAgain = Flag(false)
-        let h = start([nil, link], openFailureText: WiFiWording.needsAppToJoin, opensAgain: opensAgain)
+        let h = start([nil, link], openFailureText: WiFiWording.needsAppToJoin)
         #expect(await eventuallyLong { h.model.phase == .failed(WiFiWording.needsAppToJoin) })
-        // Discovery says no: nothing.
-        h.model.scenePhaseChanged(.background)
-        h.model.scenePhaseChanged(.active)
-        #expect(await waitUntil { opensAgain.asks == 1 })
-        try? await Task.sleep(for: .milliseconds(50))
+        // Back in front, twice: the failed state stays with Try Again, and nothing is prepared.
+        await awayAndBack(h.model)
+        await awayAndBack(h.model)
         #expect(h.links.opens == 1)
-        // The next return, discovery says yes (the join needed the app in front): one open.
-        opensAgain.set(true)
-        h.model.scenePhaseChanged(.background)
-        h.model.scenePhaseChanged(.active)
+        #expect(h.model.phase == .failed(WiFiWording.needsAppToJoin) && h.model.canRetry)
+        // Try Again: one open.
+        h.model.retry()
         #expect(await eventuallyLong { h.model.phase == .listed })
-        #expect(h.links.opens == 2 && opensAgain.asks == 2)
+        #expect(h.links.opens == 2)
+        #expect(h.log.lines.contains("browse: opening again (Try Again)"))
+        await h.stop()
+    }
+
+    @Test func aJoinThatNeededTheAppAndWasLeftDuringTheOpenIsNotOpenedAgainOnTheReturn() async {
+        let link = ScriptedWiFiLink(items: card)
+        let h = start([nil, link], openFailureText: WiFiWording.needsAppToJoin, holdFirstOpen: true)
+        #expect(await waitUntil { h.links.opens == 1 })
+        // The person leaves while the open is under way; it fails while they are away.
+        h.model.scenePhaseChanged(.background)
+        h.links.releaseOpen()
+        #expect(await eventuallyLong { h.model.phase == .failed(WiFiWording.needsAppToJoin) })
+        h.model.scenePhaseChanged(.active)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.links.opens == 1 && h.model.canRetry)
+        h.model.retry()
+        #expect(await eventuallyLong { h.model.phase == .listed })
+        #expect(h.links.opens == 2)
         await h.stop()
     }
 
@@ -439,25 +446,6 @@ struct BrowseReconnectTests {
         await h.stop()
     }
 
-    @Test func aTryAgainTappedWhileDiscoveryIsAskedIsNotLost() async {
-        let link = ScriptedWiFiLink(items: card)
-        let opensAgain = Flag(false)
-        let h = start([nil, link], openFailureText: WiFiWording.needsAppToJoin, opensAgain: opensAgain)
-        #expect(await eventuallyLong { h.model.phase == .failed(WiFiWording.needsAppToJoin) })
-        // Back in front: discovery is asked, and Try Again is tapped before it answers.
-        opensAgain.holdAnswer()
-        h.model.scenePhaseChanged(.background)
-        h.model.scenePhaseChanged(.active)
-        #expect(await waitUntil { opensAgain.asks == 1 })
-        h.model.retry()
-        opensAgain.releaseAnswer()
-        // The one tap opens again.
-        #expect(await eventuallyLong { h.model.phase == .listed })
-        #expect(h.links.opens == 2)
-        #expect(h.log.lines.contains("browse: opening again (Try Again)"))
-        await h.stop()
-    }
-
     @Test func aThumbnailRefusedOnOneLinkIsAskedOnceMoreOnTheNext() async {
         let first = ScriptedWiFiLink(items: card)
         let second = ScriptedWiFiLink(items: card)
@@ -472,6 +460,7 @@ struct BrowseReconnectTests {
         await first.close()
         #expect(await eventuallyLong { h.model.interruption == .disconnected })
         h.model.scenePhaseChanged(.active)
+        h.model.reconnect()
         #expect(await eventuallyLong { h.model.interruption == nil && h.model.linkGeneration == 2 })
         #expect(await h.model.thumbnail(for: ids[0]) != nil)
         #expect(await second.thumbnailsAsked == [ids[0]])

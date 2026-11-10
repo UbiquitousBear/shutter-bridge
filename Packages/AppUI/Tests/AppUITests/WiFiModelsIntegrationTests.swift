@@ -349,7 +349,7 @@ struct WiFiAppModelTests {
         #expect(session.calls == ["prepare", "background", "importFinished", "active"])
     }
 
-    @Test func goingToTheBackgroundWithBrowseOpenAndNoImportLeavesTheCameraNetworkAndTheReturnReconnects() async throws {
+    @Test func goingToTheBackgroundWithBrowseOpenAndNoImportLeavesTheCameraNetworkAndOnlyReconnectGetsItBack() async throws {
         let log = RecordingLog()
         let b = bench(log: log)
         let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)
@@ -382,8 +382,14 @@ struct WiFiAppModelTests {
         try? await Task.sleep(for: .milliseconds(50))
         #expect(session.count("prepare") == 1)
         #expect(await browse.thumbnail(for: ids[1]) == nil)
-        // Back in front, the same Browse prepares again (no closed link handed out), lists and loads thumbnails.
+        // Back in front: nothing is prepared by itself (Shamil, 10 Nov); the strip, the card and the selection stay.
         await b.app.scenePhaseChanged(.active)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(session.count("prepare") == 1)
+        #expect(browse.interruption == .disconnected && browse.linkGeneration == 1)
+        #expect(browse.phase == .listed && browse.selection == [files[0].id])
+        // Reconnect: the same Browse prepares again (no closed link handed out), lists and loads thumbnails.
+        browse.reconnect()
         #expect(await eventuallyLong { browse.interruption == nil && browse.linkGeneration == 2 })
         #expect(session.count("prepare") == 2)
         #expect(browse.phase == .listed && browse.selection == [files[0].id])
@@ -396,7 +402,39 @@ struct WiFiAppModelTests {
         // The new link's last holder letting go is the end of its import; the closed one's ended at the leave.
         #expect(await waitUntil { session.count("importFinished") == 2 })
         #expect(log.lines.contains { $0.hasPrefix("browse: the link ended under the screen (events finished)") })
-        #expect(log.lines.contains("browse: reconnecting (back in front)"))
+        #expect(log.lines.contains("browse: reconnecting (Reconnect)"))
+    }
+
+    @Test func anOpenThatNeededTheAppInFrontIsNotPreparedAgainOnTheReturnOnlyByTryAgain() async throws {
+        let log = RecordingLog()
+        let b = bench(log: log)
+        let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)
+        let session = b.connecting.session(for: WiFiCameraEntry(
+            descriptor: descriptor, key: nil, peripheral: peripheral, guid: UUID())) as! FakeSession
+        let files = [item("DSC00001.ARW", at: 10, size: 1_000)]
+        session.script(.failure(.paused(.needsJoin)), .success(FakeWiFiLink(items: files)))
+        await b.app.scenePhaseChanged(.active)
+        #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
+        let browse = b.app.browseModel(for: descriptor)
+        let run = Task { await browse.run() }
+        #expect(await eventuallyLong { browse.phase == .failed(WiFiWording.needsAppToJoin) })
+        #expect(session.count("prepare") == 1)
+        // Away and back, twice: nothing is prepared by itself (Shamil, 10 Nov); the failure and Try Again stay.
+        for _ in 0..<2 {
+            await b.app.scenePhaseChanged(.background)
+            await b.app.scenePhaseChanged(.inactive)
+            await b.app.scenePhaseChanged(.active)
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(session.count("prepare") == 1)
+        #expect(browse.phase == .failed(WiFiWording.needsAppToJoin) && browse.canRetry)
+        // Try Again prepares once more, and the card lists.
+        browse.retry()
+        #expect(await eventuallyLong { browse.phase == .listed })
+        #expect(session.count("prepare") == 2)
+        #expect(log.lines.contains("browse: opening again (Try Again)"))
+        run.cancel()
+        #expect(await bounded(run) != nil)
     }
 
     @Test func anImportsLeaseGoingInTheBackgroundWhileBrowseHoldsTheLinkLeavesTheCameraNetwork() async throws {

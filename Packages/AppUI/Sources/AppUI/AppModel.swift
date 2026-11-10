@@ -247,7 +247,8 @@ public final class AppModel {
         }
         switch phase {
         case .active:
-            // After the sessions have heard the return: a Wi-Fi Browse whose link was let go reconnects (once per return).
+            // After the sessions have heard the return: Browse notes it is in front again (it reconnects nothing by itself;
+            // a link let go waits for Reconnect, Shamil 10 Nov).
             cameras.browseScenePhaseChanged(.active)
             // After the import's rule and the sessions, so a paused USB import carries on as soon as it did before (W16).
             await wireless?.becameActive()

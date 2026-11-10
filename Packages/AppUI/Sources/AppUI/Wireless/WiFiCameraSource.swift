@@ -49,8 +49,8 @@ public protocol PairedCameraRegistering: Sendable {
 /// reported (`WiFiConnectionEvent.failed`); the open itself fails with the nearest `CameraLinkFailure` kind. A person who
 /// declines the explanation gets `disconnected` with no text and `openWasDeclined(for:)` true, so the caller closes
 /// the screen that asked without saying the camera went away. A connection that failed because the join needed the app in
-/// front (`.paused(.needsJoin)`, bench 19.1) is opened again by Browse when the app comes back: `opensAgainOnReturn(for:)`
-/// says yes once per return.
+/// front (`.paused(.needsJoin)`, bench 19.1) is not opened again by itself when the app comes back: the person taps Try
+/// Again (Shamil, 10 Nov).
 public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiConnectionSource {
     public nonisolated let discoveries: AsyncStream<CameraDiscoveryEvent>
     public nonisolated let connectionEvents: AsyncStream<WiFiConnectionEvent>
@@ -80,9 +80,6 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     private var inFlight: [CameraDescriptor.ID: Task<Result<any CameraLink, CameraLinkFailure>, Never>] = [:]
     private var failures: [CameraDescriptor.ID: WirelessFailure] = [:]
     private var declined: Set<CameraDescriptor.ID> = []
-    /// Cameras whose last connection needed the app in front, flagged on the way back to the front and taken by the
-    /// first `opensAgainOnReturn(for:)` (once per return).
-    private var opensAgain: Set<CameraDescriptor.ID> = []
     private var inBackground = false
     /// How many callers waited for a connection another caller had begun (for tests).
     private(set) var joinedConnections = 0
@@ -146,7 +143,6 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         defer { inFlight[id] = nil }
         failures[id] = nil
         declined.remove(id)
-        opensAgain.remove(id)
         if let gate = beforeFirstConnection, await gate() == false {
             log.note("wifi: the connection wasn't started")
             declined.insert(id)
@@ -193,12 +189,6 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// closes without a notice (they chose not to continue; the camera didn't go away).
     public func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool {
         declined.contains(id)
-    }
-
-    /// True once per return to the front when the camera's last connection failed because the join needed the app in front
-    /// (`.paused(.needsJoin)`), so Browse, still showing that failure, prepares it once more by itself.
-    public func opensAgainOnReturn(for id: CameraDescriptor.ID) async -> Bool {
-        opensAgain.remove(id) != nil
     }
 
     // MARK: - Setting cameras up
@@ -288,14 +278,11 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         switch phase {
         case .background:
             inBackground = true
-            opensAgain = []
             for session in sessions.values { await session.appMovedToBackground() }
             for id in Array(handedOut.keys) where !isImporting(id, activeImport) {
                 if let link = await finish(id) { letGo.append(link) }
             }
         case .active:
-            // A return from the background (not the end of an inactive spell) flags the joins that needed the app.
-            if inBackground { opensAgain = Set(failures.filter { $0.value == .paused(.needsJoin) }.keys) }
             inBackground = false
             for session in sessions.values { await session.appBecameActive() }
         case .inactive:
