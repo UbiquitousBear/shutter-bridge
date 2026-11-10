@@ -15,6 +15,25 @@ final class Journal: Sendable {
     var all: [String] { entries.withLock { $0 } }
 }
 
+/// Something done part-way through a fake call (the person switching to another app, say), awaited inside the call, so the
+/// session has been told before the call returns and the virtual clock can't move past it.
+struct Midway: Sendable {
+    /// When, from the start of the call; within the call's delay.
+    var after: Duration
+    var action: @Sendable () async -> Void
+}
+
+/// Sleeps `delay` on the clock, running `midway` at its moment on the way.
+private func sleep(_ delay: Duration, midway: Midway?, on clock: VirtualClock) async throws {
+    var left = delay
+    if let midway {
+        if midway.after > .zero { try await clock.sleep(for: midway.after) }
+        await midway.action()
+        left = max(.zero, delay - midway.after)
+    }
+    if left > .zero { try await clock.sleep(for: left) }
+}
+
 /// iOS's `apply` and `removeConfiguration`, scripted per call.
 final class FakeJoiner: HotspotJoining {
     struct Step: Sendable {
@@ -23,6 +42,8 @@ final class FakeJoiner: HotspotJoining {
         var failure: JoinFailure?
         /// Runs when the call starts (to drop the Bluetooth link meanwhile, say).
         var onCall: (@Sendable () -> Void)?
+        /// Runs part-way through the call (the person leaving while iOS's prompt is up).
+        var during: Midway?
     }
 
     private struct State {
@@ -55,9 +76,7 @@ final class FakeJoiner: HotspotJoining {
             return s.steps.isEmpty ? Step() : s.steps.removeFirst()
         }
         step.onCall?()
-        if step.delay > .zero {
-            do { try await clock.sleep(for: step.delay) } catch { throw .cancelled }
-        }
+        do { try await sleep(step.delay, midway: step.during, on: clock) } catch { throw .cancelled }
         if let failure = step.failure { throw failure }
     }
 
@@ -158,6 +177,8 @@ final class FakeHandoff: WiFiHandingOff {
         /// How long before the call returns status 2 was first seen (the camera's 50 s run from then).
         var statusTwoAgo: Duration = .zero
         var failure: HandoffFailure?
+        /// Runs part-way through the call (the person leaving during the hand-off).
+        var during: Midway?
     }
 
     struct Call: Equatable {
@@ -205,9 +226,7 @@ final class FakeHandoff: WiFiHandingOff {
             s.calls.append(Call(kind: kind, at: at, peripheral: link.peripheral))
             return s.steps.isEmpty ? Step() : s.steps.removeFirst()
         }
-        if step.delay > .zero {
-            do { try await clock.sleep(for: step.delay) } catch { throw .cancelled }
-        }
+        do { try await sleep(step.delay, midway: step.during, on: clock) } catch { throw .cancelled }
         if let failure = step.failure { throw failure }
         let credentials = try! SonyWiFiCredentials(ssid: Cam.ssid, passphrase: Cam.passphrase)
         return HandoffResult(
@@ -448,6 +467,28 @@ final class Rig: Sendable {
             },
             clock: clock, handoff: handoff, trace: trace)
         phases = PhaseLog(session.phases)
+    }
+
+    /// The person switching to another app `after` into a fake call: the scene goes to the background and the session is
+    /// told, as the app's scene phase does.
+    func away(after: Duration) -> Midway {
+        let foreground = foreground
+        let session = session
+        return Midway(after: after) {
+            foreground.set(false)
+            await session.appMovedToBackground()
+        }
+    }
+
+    /// The person coming back to the app at `offset`: registered on the clock at once, so the driver can't move past it,
+    /// and told to the session from a task started then (the session's reaction is what the driver waits for).
+    func comeBack(at offset: Duration) {
+        let foreground = foreground
+        let session = session
+        clock.schedule(at: offset) {
+            foreground.set(true)
+            Task { await session.appBecameActive() }
+        }
     }
 
     /// A second camera link, as the connector would give after a reconnect.

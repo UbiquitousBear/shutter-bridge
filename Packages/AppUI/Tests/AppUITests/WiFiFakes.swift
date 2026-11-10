@@ -117,6 +117,10 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     private var peripheralValue: PeripheralID?
     private var phaseValue: WirelessPhase = .ready
     private var gate: AsyncStream<Void>?
+    /// `importFinished` closes the link `prepareImport` last handed out, as the real session does (it leaves, or stays
+    /// and then leaves, either way closing the link it holds).
+    private var closesLinkWhenFinished = false
+    private var lastLink: (any CameraLink)?
     let phases: AsyncStream<WirelessPhase>
     private let phaseSink: AsyncStream<WirelessPhase>.Continuation
 
@@ -134,6 +138,7 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     func set(peripheral: PeripheralID?) { lock.withLock { peripheralValue = peripheral } }
     /// Where the session says it is (`.ready` unless a test says otherwise).
     func set(phase: WirelessPhase) { lock.withLock { phaseValue = phase } }
+    func set(closesLinkWhenFinished: Bool) { lock.withLock { self.closesLinkWhenFinished = closesLinkWhenFinished } }
     /// Makes `prepareImport` wait until `releasePrepare()` (or its task's cancellation), so a test can hold a connection
     /// in flight. Bounded: the wait ends when the task is cancelled.
     func holdPrepare() {
@@ -159,10 +164,18 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
             return results.count > 1 ? results.removeFirst() : results.first
         }
         guard let next else { throw .cancelled }
-        return try next.get()
+        let link = try next.get()
+        lock.withLock { lastLink = link }
+        return link
     }
 
-    func importFinished() async { lock.withLock { recorded.append("importFinished") } }
+    func importFinished() async {
+        let closing: (any CameraLink)? = lock.withLock {
+            recorded.append("importFinished")
+            return closesLinkWhenFinished ? lastLink : nil
+        }
+        await closing?.close()
+    }
     func appMovedToBackground() async { lock.withLock { recorded.append("background") } }
     func appBecameActive() async { lock.withLock { recorded.append("active") } }
     func leave() async { lock.withLock { recorded.append("leave") } }

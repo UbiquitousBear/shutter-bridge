@@ -46,6 +46,8 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
     /// GetDevicePropValue commands sent over the link's life. Expected 0: the whole-card session never answers one, and
     /// decision 6 sends only what DeviceInfo lists (wireless plan section 4, check 9).
     public var devicePropValueReads = 0
+    /// GetThumb over the link's life (bench 19.1: thumbnails that never loaded, with nothing logged).
+    public var thumbnails = IPThumbnailDiagnostics()
 
     /// How many ignored event codes are kept for the log. A choice, `unverified`: no measurement or source gives 64; it
     /// only bounds the list, and the camera sent two 0xC225 events on a reopen in the whole spike.
@@ -57,6 +59,38 @@ public struct IPLinkDiagnostics: Sendable, Equatable {
         ignoredEvents.append(code)
         if ignoredEvents.count > Self.ignoredEventLimit { ignoredEvents.removeFirst() }
     }
+}
+
+/// What `IPLink.thumbnail(of:)` met over the link's life, as counts, PTP response codes and times only: no handle, file
+/// name or size of a particular file. GetThumb on the 1.0 route (PC Remote Function off) is `unverified`: the spike only
+/// measured it with PC Remote on.
+public struct IPThumbnailDiagnostics: Sendable, Equatable {
+    /// GetThumb commands sent. A thumbnail cancelled while it waited for its turn, or still waiting when the session
+    /// ended, sent nothing: it is counted in `notSent` only.
+    public var asked = 0
+    /// GetThumb answered OK with a complete, non-empty data phase.
+    public var answered = 0
+    /// GetThumb answered with a response code other than OK, counted by code.
+    public var failuresByCode: [PTPResponseCode: Int] = [:]
+    /// GetThumb that got no answer within the reply limit (the connection is then lost).
+    public var timeouts = 0
+    /// GetThumb that failed another way: the connection failed (not a timeout), the data phase was short or empty, or it
+    /// was larger than the link keeps.
+    public var otherFailures = 0
+    /// Thumbnails asked for while the latest DeviceInfo didn't list GetThumb (0x100A), so nothing was sent.
+    public var notListed = 0
+    /// Thumbnails that never reached the wire: cancelled while they waited for their turn (a cell scrolled away), or
+    /// still waiting when the session ended. Neither `asked` nor a failure.
+    public var notSent = 0
+    /// The data of every answered GetThumb, in bytes.
+    public var bytesTotal: UInt64 = 0
+    /// From the session opening to the first answered GetThumb over the link's life; nil until one is answered.
+    public var firstAfterOpen: Duration?
+
+    public init() {}
+
+    /// The failures counted by code, in total.
+    public var refused: Int { failuresByCode.values.reduce(0, +) }
 }
 
 /// The `CameraLink` over Wi-Fi: Sony's whole-card contents-transfer session over PTP/IP (backlog Iteration 3, sections
@@ -176,6 +210,8 @@ public actor IPLink: CameraLink, TransferAborting {
     private var folders: [PTPObjectHandle: IPListing.Folder] = [:]
     private var objects: [PTPObjectHandle: KnownObject] = [:]
     private var recorded = IPLinkDiagnostics()
+    /// When the current session finished opening, for `IPThumbnailDiagnostics.firstAfterOpen`.
+    private var sessionOpenedAt: ClockMark?
     private var retiredKeepAlives = (answered: 0, failed: 0)
     /// GetDevicePropValue commands sent by sessions already dropped.
     private var retiredDevicePropValueReads = 0
@@ -312,6 +348,7 @@ public actor IPLink: CameraLink, TransferAborting {
             sessionReady = true
             hadSession = true
             recorded.sessionsOpened += 1
+            sessionOpenedAt = ClockMark.now(on: clock)
             // What an earlier session listed is a hint in this one: a download reads the ObjectInfo again first.
             for handle in objects.keys { objects[handle]?.confirmed = false }
             await session.startKeepAlive()
@@ -673,18 +710,50 @@ public actor IPLink: CameraLink, TransferAborting {
         return true
     }
 
+    /// GetThumb for one file. Every outcome is counted in `diagnostics.thumbnails` (bench 19.1).
     public func thumbnail(of item: CameraItem.ID) async throws(CameraLinkFailure) -> Data {
         let session = try readySession(.thumbnail)
-        try requireListed(.getThumb, during: .thumbnail)
-        let handle = try Self.handle(of: item, during: .thumbnail)
-        let answer = try await transact(.thumbnail, on: session, limit: Self.thumbnailLimit) {
-            PTPCommand.getThumb(handle, tx: $0)
+        do throws(CameraLinkFailure) {
+            try requireListed(.getThumb, during: .thumbnail)
+        } catch {
+            recorded.thumbnails.notListed += 1
+            throw error
         }
-        guard answer.reply.code == .ok else { throw await failure(answer.reply.code, during: .thumbnail, on: session) }
-        if answer.overflowed { throw CameraLinkFailure(.unreadableItem, detail: "thumbnail: larger than 8 MiB") }
+        let handle = try Self.handle(of: item, during: .thumbnail)
+        // Set when the command is built, which `IPSession` does only once the turn has come and just before sending it:
+        // a call cancelled in the queue, or still queued when the session ends, sent nothing and is counted apart.
+        let sent = IPSentFlag()
+        let answer: (reply: PTPIPConnection.Reply, data: Data, overflowed: Bool)
+        do throws(PTPIPConnectionFailure) {
+            answer = try await rawTransact(on: session, limit: Self.thumbnailLimit) {
+                sent.mark()
+                return PTPCommand.getThumb(handle, tx: $0)
+            }
+        } catch {
+            if !sent.isSet {
+                recorded.thumbnails.notSent += 1
+            } else {
+                recorded.thumbnails.asked += 1
+                if case .timedOut = error { recorded.thumbnails.timeouts += 1 } else { recorded.thumbnails.otherFailures += 1 }
+            }
+            throw IPFailureMapping.failure(error, during: .thumbnail)
+        }
+        recorded.thumbnails.asked += 1
+        guard answer.reply.code == .ok else {
+            recorded.thumbnails.failuresByCode[answer.reply.code, default: 0] += 1
+            throw await failure(answer.reply.code, during: .thumbnail, on: session)
+        }
+        if answer.overflowed {
+            recorded.thumbnails.otherFailures += 1
+            throw CameraLinkFailure(.unreadableItem, detail: "thumbnail: larger than 8 MiB")
+        }
         guard answer.reply.dataIsComplete, !answer.data.isEmpty else {
+            recorded.thumbnails.otherFailures += 1
             throw CameraLinkFailure(.noAnswer, detail: "thumbnail: short data phase")
         }
+        recorded.thumbnails.answered += 1
+        recorded.thumbnails.bytesTotal += UInt64(answer.data.count)
+        if recorded.thumbnails.firstAfterOpen == nil { recorded.thumbnails.firstAfterOpen = sessionOpenedAt?.elapsed }
         return answer.data
     }
 
@@ -1003,7 +1072,7 @@ public actor IPLink: CameraLink, TransferAborting {
         guard sessionReady, self.session === session, !closed else { return }
         recorded.sessionsLost += 1
         recorded.lastLoss = reason
-        trace(.linkLost(failure))
+        trace(.linkLost(failure, thumbnails: recorded.thumbnails))
         fanOut.send(.sessionLost)
         await discard(session)
     }
@@ -1037,15 +1106,22 @@ public actor IPLink: CameraLink, TransferAborting {
                           within hold: IPSession.Hold? = nil, timeout: Duration? = nil,
                           limit: Int, _ command: @escaping @Sendable (UInt32) -> PTPContainer)
         async throws(CameraLinkFailure) -> (reply: PTPIPConnection.Reply, data: Data, overflowed: Bool) {
-        let collector = IPDataCollector(limit: limit)
         do throws(PTPIPConnectionFailure) {
-            let reply = try await session.perform(within: hold, timeout: timeout, sink: { collector.append($0) }) {
-                counter in command(counter.take())
-            }
-            return (reply, collector.data, collector.overflowed)
+            return try await rawTransact(on: session, within: hold, timeout: timeout, limit: limit, command)
         } catch {
             throw IPFailureMapping.failure(error, during: operation)
         }
+    }
+
+    /// `transact`, with the connection's own failure.
+    private func rawTransact(on session: IPSession, within hold: IPSession.Hold? = nil, timeout: Duration? = nil,
+                             limit: Int, _ command: @escaping @Sendable (UInt32) -> PTPContainer)
+        async throws(PTPIPConnectionFailure) -> (reply: PTPIPConnection.Reply, data: Data, overflowed: Bool) {
+        let collector = IPDataCollector(limit: limit)
+        let reply = try await session.perform(within: hold, timeout: timeout, sink: { collector.append($0) }) {
+            counter in command(counter.take())
+        }
+        return (reply, collector.data, collector.overflowed)
     }
 
     /// GetObjectInfo for one handle: the dataset, or nil when the camera says the handle is gone and the card is
@@ -1100,6 +1176,18 @@ public actor IPLink: CameraLink, TransferAborting {
         let ns = error as NSError
         return CameraLinkFailure(.unreadableItem, detail: "download: couldn't write the file (\(ns.domain) \(ns.code))")
     }
+}
+
+/// Whether a transaction's command was built, for `IPLink.thumbnail(of:)`'s counts. `IPSession` builds it only once the
+/// turn has come and the call wasn't cancelled, then hands it to the connection, so a set flag means "handed to the
+/// connection": in the rare case that the connection ends between the two, a thumbnail counts as asked and failed
+/// although no bytes went out.
+final class IPSentFlag: Sendable {
+    private let state = Mutex(false)
+
+    func mark() { state.withLock { $0 = true } }
+
+    var isSet: Bool { state.withLock { $0 } }
 }
 
 /// Collects a small data phase, up to a limit; beyond it the bytes are dropped and `overflowed` is set (the sink never

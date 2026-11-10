@@ -42,10 +42,12 @@ struct TransportTraceWordingTests {
                                       windowLeft: .seconds(50)))
             == "wifi join: rewrite hand-off done in 1.0 s (connect included): no CC08 write, the camera's Wi-Fi was already on; "
             + "at most 50.0 s left of the camera's 50 s")
-        #expect(line(.joinApplied(attempt: 1, after: .milliseconds(55_200), failure: nil))
-            == "wifi join: join 1 returned after 55.2 s (iOS's prompt included)")
-        #expect(line(.joinApplied(attempt: 2, after: .milliseconds(400), failure: .userDenied))
-            == "wifi join: join 2 failed after 0.4 s: declined")
+        #expect(line(.joinApplied(attempt: 1, after: .milliseconds(55_200), failure: nil, inFront: true))
+            == "wifi join: join 1 returned after 55.2 s with the app in front (iOS's prompt included)")
+        #expect(line(.joinApplied(attempt: 2, after: .milliseconds(400), failure: .userDenied, inFront: true))
+            == "wifi join: join 2 failed after 0.4 s with the app in front: declined")
+        #expect(line(.joinApplied(attempt: 1, after: .seconds(60), failure: nil, inFront: false))
+            == "wifi join: join 1 returned after 60.0 s with the app away (iOS's prompt included)")
         #expect(line(.gateway(found: true, after: .milliseconds(1_250)))
             == "wifi join: the camera's gateway 192.168.122.1 appeared 1.3 s after the join")
         #expect(line(.gateway(found: false, after: .seconds(20)))
@@ -70,6 +72,10 @@ struct TransportTraceWordingTests {
             total: .milliseconds(18_440), handingOff: .milliseconds(7_200), joining: .milliseconds(6_100),
             openingSession: .milliseconds(5_140))))
             == "wifi join: ready after 18.4 s (hand-off 7.2 s, join 6.1 s, session 5.1 s)")
+        #expect(line(.preparationEnded(succeeded: true, times: WirelessStepTimes(
+            total: .seconds(60), handingOff: .seconds(7), joining: .seconds(6), openingSession: .seconds(5),
+            held: .seconds(42))))
+            == "wifi join: ready after 60.0 s (hand-off 7.0 s, join 6.0 s, session 5.0 s, held while away 42.0 s)")
     }
 
     @Test func theHandoffsLines() {
@@ -104,10 +110,25 @@ struct TransportTraceWordingTests {
         #expect(line(.resumeRefused(offset: 16 * 1_048_576))
             == "wifi link: the camera refused the first 0x9211 read at 16.0 MiB (16777216 B); copying the file again from the start")
         #expect(line(.resumeFinished(reads: 9)) == "wifi link: the resumed file finished after 9 0x9211 reads")
-        #expect(line(.linkLost(.linkLost(posix: 53))) == "wifi link: the session was lost: the network went away")
-        #expect(line(.linkLost(.protocolViolation("serial 1234567 at 10.0.0.9")))
-            == "wifi link: the session was lost: the camera's bytes broke PTP/IP")
-        #expect(line(.linkLost(nil)) == "wifi link: the session was lost: the camera answered SessionNotOpen")
+        let none = IPThumbnailDiagnostics()
+        #expect(line(.linkLost(.linkLost(posix: 53), thumbnails: none))
+            == "wifi link: the session was lost: the network went away; GetThumb asked 0")
+        #expect(line(.linkLost(.protocolViolation("serial 1234567 at 10.0.0.9"), thumbnails: none))
+            == "wifi link: the session was lost: the camera's bytes broke PTP/IP; GetThumb asked 0")
+        #expect(line(.linkLost(nil, thumbnails: none))
+            == "wifi link: the session was lost: the camera answered SessionNotOpen; GetThumb asked 0")
+        // A GetThumb never answered: the timeout shows right after the first thumbnails (bench 19.1).
+        var thumbs = IPThumbnailDiagnostics()
+        thumbs.asked = 3
+        thumbs.answered = 1
+        thumbs.bytesTotal = 7_397
+        thumbs.timeouts = 1
+        thumbs.failuresByCode = [.operationNotSupported: 1]
+        thumbs.firstAfterOpen = .milliseconds(420)
+        #expect(line(.linkLost(.timedOut(.transaction), thumbnails: thumbs))
+            == "wifi link: the session was lost: no answer in time; GetThumb asked 3, answered 1 (7397 B), refused 1 "
+            + "(OperationNotSupported 1), timed out 1, other failures 0, not listed 0, not sent 0, the first answered 0.4 s "
+            + "after the open")
         var seen = IPLinkDiagnostics()
         seen.sessionsOpened = 2
         seen.sessionsLost = 1
@@ -116,8 +137,41 @@ struct TransportTraceWordingTests {
         seen.partialReads = 9
         #expect(line(.linkClosed(seen))
             == "wifi link: closed: sessions opened 2, lost 1; keep-alives answered 6, failed 0; GetDevicePropValue sent 0; "
-            + "0x9211 resumes 1, reads 9, refused 0; transfers aborted 0")
+            + "0x9211 resumes 1, reads 9, refused 0; transfers aborted 0; GetThumb asked 0")
+        seen.thumbnails.notListed = 12
+        #expect(line(.linkClosed(seen)).hasSuffix("; GetThumb asked 0, answered 0 (0 B), refused 0, timed out 0, other "
+            + "failures 0, not listed 12, not sent 0"))
+        seen.thumbnails = IPThumbnailDiagnostics()
+        seen.thumbnails.notSent = 5
+        #expect(line(.linkClosed(seen)).hasSuffix("; GetThumb asked 0, answered 0 (0 B), refused 0, timed out 0, other "
+            + "failures 0, not listed 0, not sent 5"))
         #expect(line(.linkClosed(IPLinkDiagnostics())) == "wifi link: closed without opening a session")
+    }
+
+    @Test func theHoldsLines() {
+        #expect(line(.appWentToBackground(during: .handOff))
+            == "wifi join: the app went to the background during the hand-off")
+        #expect(line(.appCameBack(after: .milliseconds(74_200), during: .join))
+            == "wifi join: the app came back after 74.2 s, during the join")
+        #expect(line(.joinHeld(reason: .beforeJoin, limit: .seconds(300)))
+            == "wifi join: join held before the join: the app is away; waiting for it to come back (at most 300.0 s)")
+        #expect(line(.joinHeld(reason: .joinRefused, limit: .seconds(300)))
+            == "wifi join: join held after iOS refused the join with the app away (code 14): the app is away; waiting for "
+            + "it to come back (at most 300.0 s)")
+        #expect(line(.joinHeld(reason: .beforeSwitchOn, limit: .seconds(300))).contains("before switching the camera's Wi-Fi on again"))
+        #expect(line(.joinHeld(reason: .retryHandoff, limit: .seconds(300))).contains("before running the hand-off again"))
+        #expect(line(.joinHoldEnded(after: .seconds(28), windowPassed: false))
+            == "wifi join: the app is back after 28.0 s; the camera's 50 s have not passed; joining now")
+        #expect(line(.joinHoldEnded(after: .seconds(90), windowPassed: true))
+            == "wifi join: the app is back after 90.0 s; the camera's 50 s have passed; joining now")
+        #expect(line(.joinHoldRanOut(after: .seconds(300))) == "wifi join: the hold ran out after 300.0 s; letting go")
+        #expect(line(.handoffRetriedAfterAway(rewrite: true, failure: .timedOut(lastStatus: nil)))
+            == "wifi join: the rewrite hand-off failed with the app away for part of it (timed out waiting for Wi-Fi "
+            + "(last status unknown)); running it once more from the front")
+        #expect(line(.preparationFailed(rewrite: true, appAway: .milliseconds(74_200)))
+            == "wifi join: the preparation failed in a rewrite hand-off; the app was away 74.2 s in all since it began")
+        #expect(line(.preparationFailed(rewrite: false, appAway: .zero))
+            == "wifi join: the preparation failed outside a rewrite hand-off; the app was away 0.0 s in all since it began")
     }
 
     @Test func secondsAndSizesRound() {

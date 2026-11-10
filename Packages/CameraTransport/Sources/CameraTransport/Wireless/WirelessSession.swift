@@ -20,7 +20,9 @@ public struct WirelessCamera: Sendable, Hashable {
 
 /// Why the session is waiting for the person. In each, nothing is held: no Bluetooth link, no network, no session.
 public enum WirelessPause: Sendable, Equatable, Hashable {
-    /// A join is needed and the app isn't in front (a join needs the app in front). Prepare again from the front.
+    /// A join is needed and the app isn't in front (a join needs the app in front), or it stayed away longer than
+    /// `WirelessTiming.joinHoldWhileAway` during a join, or a switch-on after a lapse that came while it was away failed.
+    /// Prepare again from the front.
     case needsJoin
     /// The camera refused because the phone isn't paired with it: the person opens the camera's Pairing screen.
     case notPaired
@@ -40,6 +42,10 @@ public enum WirelessPhase: Sendable, Equatable, Hashable {
     case handingOff
     /// Asking iOS to join and waiting for the camera's gateway.
     case joining
+    /// A join held because the app is away: iOS shows no join prompt to an app in the background, so nothing is applied
+    /// and no rewrite starts until the app is back in front, for at most `WirelessTiming.joinHoldWhileAway`. The Bluetooth
+    /// link is kept. The person's return goes on with the join; after the limit the session pauses with `.needsJoin`.
+    case awaitingFront
     /// On the camera's network, opening the camera's session.
     case openingSession
     /// The session is open; an import is running or about to.
@@ -60,8 +66,12 @@ public enum WirelessFailure: Error, Sendable, Equatable, CustomStringConvertible
     case cameraNotFound
     /// Bluetooth failed for another reason (`serviceMissing` sends the person to the manual route, backlog section 7).
     case bluetooth(GATTFailure)
-    /// The hand-off didn't give the network's details (`HandoffFailure` says why).
+    /// The first hand-off of the join didn't give the network's details (`HandoffFailure` says why).
     case handoff(HandoffFailure)
+    /// The camera's Wi-Fi went off during the join (a slow answer to iOS's prompt) and switching it on again failed
+    /// (`HandoffFailure` says why). Told apart from `handoff`, a first hand-off that failed, so the app can word it apart.
+    /// When the lapse came while the app was away, the session pauses with `.needsJoin` instead.
+    case rewriteFailed(HandoffFailure)
     /// `apply` failed: the details were refused, or every try failed this way.
     case join(JoinFailure)
     /// `apply` returned, but the camera's gateway never appeared, `WirelessTiming.joinAttempts` times.
@@ -79,6 +89,7 @@ public enum WirelessFailure: Error, Sendable, Equatable, CustomStringConvertible
         case .cameraNotFound: "camera not found over Bluetooth"
         case .bluetooth(let failure): "Bluetooth: \(failure)"
         case .handoff(let failure): "hand-off: \(failure)"
+        case .rewriteFailed(let failure): "rewrite hand-off: \(failure)"
         case .join(let failure): "join: \(failure)"
         case .noGateway: "joined, but the camera's gateway never appeared"
         case .cameraWiFiLapsed: "the camera's Wi-Fi kept going off during the join"
@@ -106,8 +117,20 @@ extension WiFiHandoff: WiFiHandingOff {}
 /// off, so switch it on again (`rewriteIfLapsed`, or a new connection and `run` when the link dropped) and apply again;
 /// otherwise apply again as it is (the 12:34 case), `WirelessTiming.joinAttempts` in all. When `apply` returns after the
 /// camera's 50 s, the camera is looked at first, without waiting for the gateway. Then try to open the session for up to
-/// `WirelessTiming.portWait`. A declined prompt pauses with `.joinDeclined`; `applicationIsNotInForeground` pauses with
-/// `.needsJoin`.
+/// `WirelessTiming.portWait`. A declined prompt pauses with `.joinDeclined`.
+///
+/// **The app away during a join** (bench 19.1, 9 Nov): the foreground is read before every `apply`, and before every rewrite
+/// or new hand-off inside the join. With the app away, nothing is applied or written: the join is held
+/// (`.awaitingFront`), keeping the Bluetooth link, until `appBecameActive()`, for at most `WirelessTiming.joinHoldWhileAway`;
+/// then it lets go of everything and pauses with `.needsJoin`. On the return, when the camera's 50 s have run out, CC09 is
+/// read and, with the Wi-Fi off, it is switched on again with a fresh `run` (not counted against
+/// `WirelessTiming.rewritesPerJoin`) before the join. `applicationIsNotInForeground` from `apply` holds the same way, and is
+/// not a failed try; when it comes while the scene already reads active, `apply` is tried once more after
+/// `WirelessTiming.applyAgainInFrontAfter`, then the session pauses. A hand-off that failed on a time limit while the app was
+/// away for part of it is run once more from the front, since its limits may have run out during a suspension. A switch-on
+/// after a lapse that came while the app was away pauses with `.needsJoin` when it fails; other rewrite failures are
+/// `.rewriteFailed`. The first hand-off itself is never held: no wait comes before the first CC08 write. An inactive app
+/// (iOS's prompt up, Control Centre) is in front (5 Nov 01:21).
 ///
 /// Why the camera is looked at after `apply` and not during it: iOS's prompt can't be withdrawn, so a lapse seen while it is
 /// up can only be acted on once the person has answered. Reading CC09 then gives the same decision without a second waiting
@@ -190,6 +213,16 @@ public actor WirelessSession {
     private var epoch = 0
     /// The preparation under way's time in each phase, for the trace only; nil when the trace is off or none is running.
     private var timeline: StepTimeline?
+    /// Wakes a join held while the app is away; `appBecameActive()` opens it.
+    private let frontWake = FrontWake()
+    /// Counts the moves to the background the session was told of, so `apply` can tell whether the app left meanwhile.
+    private var backgroundMoves = 0
+    /// The preparation under way: since when the app has been away (nil while it is in front), and how long it was away
+    /// before that, in all.
+    private var preparationAwaySince: Duration?
+    private var preparationAway: Duration = .zero
+    /// The preparation's last failed hand-off switched the camera's Wi-Fi on again after a lapse (for the trace).
+    private var failedInRewrite = false
 
     /// - Parameters:
     ///   - camera: the camera's Bluetooth identity from the catalogue.
@@ -297,21 +330,33 @@ public actor WirelessSession {
     /// The app has gone to the background. During the stay: leave at once, in the short background time iOS gives an app
     /// that has just left (the caller holds it open until this returns; decided 8 Nov, removing the configuration from the
     /// background is to be tested in Iteration 3, week 1). During a join it does nothing: a join with the app away 8.9 s
-    /// still worked (5 Nov 01:21), and iOS's prompt only makes the app inactive, which isn't the background. During an import it does nothing: the continued task
-    /// carries it.
+    /// still worked (5 Nov 01:21), and iOS's prompt only makes the app inactive, which isn't the background; the join reads
+    /// the foreground itself before each `apply` or rewrite, and holds while the app is away. During an import it does
+    /// nothing: the continued task carries it.
     public func appMovedToBackground() async {
         inBackground = true
         sceneChanges += 1
+        backgroundMoves += 1
+        if operation != nil, preparationAwaySince == nil {
+            preparationAwaySince = clock.now()
+            trace(.appWentToBackground(during: currentStep))
+        }
         if network != nil { awaySince = clock.now() }
         if case .staying = phase { await leave() }
     }
 
     /// The app is in front again. Leave if the stay ran out while it was away. When the phone is no longer on the camera's
     /// network and the app was away longer than the camera's 50 s, the camera's Wi-Fi is off, so the next preparation goes
-    /// to Bluetooth at once (B:191).
+    /// to Bluetooth at once (B:191). A join held while the app was away goes on.
     public func appBecameActive() async {
         inBackground = false
         sceneChanges += 1
+        if operation != nil, let since = preparationAwaySince {
+            preparationAwaySince = nil
+            preparationAway += clock.now() - since
+            trace(.appCameBack(after: clock.now() - since, during: currentStep))
+        }
+        frontWake.open()
         let away = awaySince
         awaySince = nil
         if case .staying = phase, let stayEnd, clock.now() >= stayEnd {
@@ -345,6 +390,9 @@ public actor WirelessSession {
 
     private func runPreparation() async -> Result<any CameraLink, WirelessFailure> {
         defer { operation = nil }
+        preparationAwaySince = inBackground ? clock.now() : nil
+        preparationAway = .zero
+        failedInRewrite = false
         if trace.isOn {
             timeline = StepTimeline(start: clock.now(), phase: phase)
             trace(.preparationStarted(joined: network != nil, bluetoothFirst: network != nil && bluetoothFirst))
@@ -354,6 +402,10 @@ public actor WirelessSession {
             endTimeline(succeeded: true)
             return .success(opened)
         } catch {
+            if trace.isOn {
+                let away = preparationAway + (preparationAwaySince.map { clock.now() - $0 } ?? .zero)
+                trace(.preparationFailed(rewrite: failedInRewrite, appAway: away))
+            }
             endTimeline(succeeded: false)
             return .failure(error)
         }
@@ -438,33 +490,82 @@ public actor WirelessSession {
             await current.disconnect()
             held.gatt = nil
         }
-        var (handed, switchedOn) = try await handOff(&held, rewriting: false)
+        // Never held before the first CC08 write (decided 9 Nov): the person is most likely still there.
+        var (handed, switchedOn) = try await switchOn(&held, .first)
         // The camera's 50 s run from status 2, not from the write (B:180).
         var windowEnd = clock.now() + handed.windowRemaining
-        set(.joining)
 
         var failedTries = 0
         var rewrites = 0
+        /// Switch-ons after a lapse that followed time away (`WirelessTiming.switchOnsAfterAway`).
+        var switchOnsAfterAway = 0
         var applies = 0
         var lastFailure: JoinFailure?
+        /// iOS refused `apply` as not in front while the scene read active: once more after a second, then pause.
+        var refusedInFront = false
+        /// Why the next hold at the top of the loop would hold.
+        var holdReason = WirelessHoldReason.beforeJoin
         joining: while true {
             try checkCancelled()
+            // Never `apply` from the background: iOS shows no prompt there (bench 19.1). Hold until the app is back.
+            let reason = holdReason
+            holdReason = .beforeJoin
+            let heldFor = try await holdWhileAway(reason, windowEnd: windowEnd)
+            if heldFor != nil, clock.now() >= windowEnd {
+                // The camera's 50 s ran out while the app was away: look, and switch its Wi-Fi on again if it went off.
+                // Not the person's slowness at the prompt, so not counted against `rewritesPerJoin`.
+                if case .off(let linkDown) = await cameraWiFi(held.gatt, windowEnd: windowEnd) {
+                    try checkCancelled()
+                    guard switchOnsAfterAway < WirelessTiming.switchOnsAfterAway else { throw .paused(.needsJoin) }
+                    switchOnsAfterAway += 1
+                    let again = try await switchOnAgain(&held, linkDown: linkDown,
+                                                        .rewrite(sameLink: false, lapsedWhileAway: true))
+                    handed = again.result
+                    switchedOn = switchedOn || again.switchedOn
+                    windowEnd = clock.now() + handed.windowRemaining
+                    failedTries = 0
+                    lastFailure = nil
+                    // The person may have left again during the switch-on: back to the hold, which reads the foreground
+                    // before `apply`. It can't spin: another switch-on needs another hold that ends past the new window.
+                    continue joining
+                }
+            }
+            try checkCancelled()
+            // A hold that ended inside the window has already moved to `.joining`.
+            if heldFor == nil || phase != .joining { set(.joining) }
             held.ssid = handed.credentials.ssid // set first: whatever `apply` did, a leave removes it
             var applied = false
             applies += 1
             let applyStart = clock.now()
+            let movesBefore = backgroundMoves
+            var refusal: JoinFailure?
             do throws(JoinFailure) {
                 try await joiner.apply(handed.credentials)
                 applied = true
-                trace(.joinApplied(attempt: applies, after: clock.now() - applyStart, failure: nil))
             } catch {
-                trace(.joinApplied(attempt: applies, after: clock.now() - applyStart, failure: error))
-                switch error {
+                refusal = error
+            }
+            let appliedInFront = backgroundMoves == movesBefore && !inBackground
+            trace(.joinApplied(attempt: applies, after: clock.now() - applyStart, failure: refusal, inFront: appliedInFront))
+            if let refusal {
+                switch refusal {
                 case .userDenied: throw .paused(.joinDeclined)
-                case .notInForeground: throw .paused(.needsJoin)
-                case .invalidCredentials: throw .join(error)
+                case .notInForeground:
+                    // Not a failed try: hold until the app is back (at the top of the loop), then apply again.
+                    if await isInForeground() {
+                        // The scene already reads active (an inactive to active race): once more, then pause.
+                        guard !refusedInFront else { throw .paused(.needsJoin) }
+                        refusedInFront = true
+                        do { try await clock.sleep(until: clock.now() + WirelessTiming.applyAgainInFrontAfter) } catch {
+                            throw .cancelled
+                        }
+                    } else {
+                        holdReason = .joinRefused
+                    }
+                    continue joining
+                case .invalidCredentials: throw .join(refusal)
                 case .cancelled: throw .cancelled
-                case .pending, .systemConfiguration, .other: lastFailure = error
+                case .pending, .systemConfiguration, .other: lastFailure = refusal
                 }
             }
             try checkCancelled()
@@ -487,22 +588,33 @@ public actor WirelessSession {
 
             switch camera {
             case .off(let linkDown):
-                rewrites += 1
-                guard rewrites <= WirelessTiming.rewritesPerJoin else { throw .cameraWiFiLapsed }
-                trace(.rewriteStarted(number: rewrites, limit: WirelessTiming.rewritesPerJoin))
-                set(.handingOff)
-                if linkDown, let current = held.gatt {
-                    await current.disconnect()
-                    held.gatt = nil
+                // Only a lapse that came with the app in front throughout counts against `rewritesPerJoin`, as on the
+                // return from a hold at the top of the loop: one that followed time away (the app left while iOS's prompt
+                // was up, or leaves now) is not the person's slowness at the prompt. Each such switch-on still needs the
+                // person to come back, within the hold's limit.
+                let counted = appliedInFront
+                if counted {
+                    guard rewrites < WirelessTiming.rewritesPerJoin else { throw .cameraWiFiLapsed }
                 }
-                let rewritten = try await handOff(&held, rewriting: true)
+                // No rewrite while the app is away either: hold first. After time away, a fresh `run` (it resubscribes).
+                let wasAway = try await holdWhileAway(.beforeSwitchOn, windowEnd: windowEnd) != nil
+                try checkCancelled()
+                if counted, !wasAway {
+                    rewrites += 1
+                    trace(.rewriteStarted(number: rewrites, limit: WirelessTiming.rewritesPerJoin))
+                } else {
+                    guard switchOnsAfterAway < WirelessTiming.switchOnsAfterAway else { throw .paused(.needsJoin) }
+                    switchOnsAfterAway += 1
+                }
+                // `appliedInFront` false: the app went away while iOS's prompt was up, and the camera's 50 s ran out.
+                let rewritten = try await switchOnAgain(&held, linkDown: linkDown,
+                                                        .rewrite(sameLink: !wasAway, lapsedWhileAway: !appliedInFront))
                 handed = rewritten.result
                 switchedOn = switchedOn || rewritten.switchedOn
                 windowEnd = clock.now() + handed.windowRemaining
                 // A new hand-off: its own `WirelessTiming.joinAttempts`.
                 failedTries = 0
                 lastFailure = nil
-                set(.joining)
             case .on, nil:
                 failedTries += 1
                 guard failedTries < WirelessTiming.joinAttempts else {
@@ -526,6 +638,131 @@ public actor WirelessSession {
         }
     }
 
+    /// Holds the join while the app is away: returns nil at once when it is in front, else waits in `.awaitingFront`,
+    /// keeping everything held, until `appBecameActive()` with the app still in front once woken, and returns how long it
+    /// waited. A return followed at once by another leave holds on, for the rest of the limit. Throws
+    /// `.paused(.needsJoin)` when `WirelessTiming.joinHoldWhileAway` passes first (the caller lets go of everything),
+    /// `.cancelled` on `leave()`. `windowEnd`, when given, is the end of the camera's 50 s.
+    ///
+    /// On the return it moves out of `.awaitingFront` at once, so the person isn't asked to come back while they are back:
+    /// to `.joining` when a join follows inside the camera's 50 s, else to `.handingOff` (CC09 is read, and the camera's
+    /// Wi-Fi may be switched on again).
+    private func holdWhileAway(
+        _ reason: WirelessHoldReason, windowEnd: Duration?
+    ) async throws(WirelessFailure) -> Duration? {
+        // Taken before the read, so a return during the read or before the wait below is not missed.
+        var token = frontWake.token
+        guard !(await isInForeground()) else { return nil }
+        try checkCancelled()
+        set(.awaitingFront)
+        let started = clock.now()
+        let limit = WirelessTiming.joinHoldWhileAway
+        trace(.joinHeld(reason: reason, limit: limit))
+        while true {
+            switch await frontWake.wait(after: token, until: started + limit, on: clock) {
+            case .woken:
+                try checkCancelled()
+                // Read again: the app may have left again since it came back. Taken first, as above.
+                token = frontWake.token
+                guard await isInForeground() else { continue }
+                try checkCancelled()
+                let after = clock.now() - started
+                let windowPassed = windowEnd.map { clock.now() >= $0 } ?? false
+                trace(.joinHoldEnded(after: after, windowPassed: windowPassed))
+                switch reason {
+                case .beforeJoin, .joinRefused: set(windowPassed ? .handingOff : .joining)
+                case .beforeSwitchOn, .retryHandoff: set(.handingOff)
+                }
+                return after
+            case .timedOut:
+                trace(.joinHoldRanOut(after: clock.now() - started))
+                throw .paused(.needsJoin)
+            case .cancelled:
+                throw .cancelled
+            }
+        }
+    }
+
+    /// Which switch-on a hand-off is, for its failure.
+    private enum SwitchOn {
+        /// The join's first hand-off: a failure is `.handoff`.
+        case first
+        /// Switching the camera's Wi-Fi on again after a lapse: `rewriteIfLapsed` on the same link when `sameLink`, else a
+        /// fresh `run`. A failure is `.rewriteFailed`, or `.paused(.needsJoin)` when the lapse came while the app was away.
+        case rewrite(sameLink: Bool, lapsedWhileAway: Bool)
+    }
+
+    /// Switches the camera's Wi-Fi on again after a lapse, from `.handingOff` back to `.joining`. A link that is down is
+    /// let go first, so a new connection runs the hand-off.
+    private func switchOnAgain(
+        _ held: inout Held, linkDown: Bool, _ kind: SwitchOn
+    ) async throws(WirelessFailure) -> (result: HandoffResult, switchedOn: Bool) {
+        // A hold just before may have moved here already.
+        if phase != .handingOff { set(.handingOff) }
+        if linkDown, let current = held.gatt {
+            await current.disconnect()
+            held.gatt = nil
+        }
+        let result = try await switchOn(&held, kind)
+        set(.joining)
+        return result
+    }
+
+    /// `handOff`, run once more from the front when it failed on a time limit while the app was away for part of it (its
+    /// limits may have come due during a suspension, without the camera having had its time), and with its failure named
+    /// by `kind`.
+    private func switchOn(
+        _ held: inout Held, _ kind: SwitchOn
+    ) async throws(WirelessFailure) -> (result: HandoffResult, switchedOn: Bool) {
+        let isRewrite: Bool
+        let sameLink: Bool
+        let lapsedWhileAway: Bool
+        switch kind {
+        case .first: (isRewrite, sameLink, lapsedWhileAway) = (false, false, false)
+        case let .rewrite(same, away): (isRewrite, sameLink, lapsedWhileAway) = (true, same, away)
+        }
+        // Moves to the background only: an inactive spell in front (Control Centre, a banner) is not time away.
+        let movesBefore = backgroundMoves
+        // Until it succeeds, a failure of the preparation is this hand-off's.
+        failedInRewrite = isRewrite
+        var failure: HandoffFailure
+        do throws(WirelessFailure) {
+            let result = try await handOff(&held, rewriting: sameLink, rewrite: isRewrite)
+            failedInRewrite = false
+            return result
+        } catch {
+            guard case .handoff(let handoffFailure) = error else { throw error }
+            failure = handoffFailure
+        }
+        if Self.mayHaveLapsedInSuspension(failure), backgroundMoves != movesBefore {
+            trace(.handoffRetriedAfterAway(rewrite: isRewrite, failure: failure))
+            // A hold that waited has already moved to `.handingOff`.
+            let waited = try await holdWhileAway(.retryHandoff, windowEnd: nil)
+            try checkCancelled()
+            if waited == nil { set(.handingOff) }
+            do throws(WirelessFailure) {
+                // A fresh `run`: it reads CC09 and writes only at 0, and resubscribes.
+                let result = try await handOff(&held, rewriting: false, rewrite: isRewrite)
+                failedInRewrite = false
+                return result
+            } catch {
+                guard case .handoff(let again) = error else { throw error }
+                failure = again
+            }
+        }
+        if lapsedWhileAway { throw .paused(.needsJoin) }
+        throw isRewrite ? .rewriteFailed(failure) : .handoff(failure)
+    }
+
+    /// A failure a suspension of the app can cause by itself: a time limit that came due late (ContinuousClock keeps
+    /// counting while the app is suspended).
+    private static func mayHaveLapsedInSuspension(_ failure: HandoffFailure) -> Bool {
+        switch failure {
+        case .timedOut, .wifiDidNotStart, .wifiLapsed, .gatt(.timedOut, _): true
+        default: false
+        }
+    }
+
     /// With the app away (W14, B:211): switch the camera's Wi-Fi on over Bluetooth, wait for iOS to rejoin by itself, and
     /// open the session; `.needsJoin` when iOS doesn't rejoin in time. A Bluetooth failure is thrown as it is: the person has
     /// to come back for any of them.
@@ -536,7 +773,7 @@ public actor WirelessSession {
             await current.disconnect()
             held.gatt = nil
         }
-        let (handed, switchedOn) = try await handOff(&held, rewriting: false)
+        let (handed, switchedOn) = try await handOff(&held, rewriting: false, rewrite: false)
         try checkCancelled()
         set(.joining)
         // Nobody joined yet, so the camera's Wi-Fi goes off 50 s after status 2: no point waiting past that.
@@ -561,9 +798,10 @@ public actor WirelessSession {
     /// Connects when there is no link, and runs the hand-off: `run` on a new link (it has no subscriptions), else
     /// `rewriteIfLapsed` when `rewriting`. A dropped link is connected again and the hand-off run again,
     /// `WirelessTiming.handoffReconnects` times: after a drop following the write, `run` reads CC09 and writes only at 0.
-    /// `switchedOn`: some run in it wrote CC08, including one whose link dropped after the write.
+    /// `switchedOn`: some run in it wrote CC08, including one whose link dropped after the write. `rewrite`: it switches
+    /// the camera's Wi-Fi on again after a lapse (for the trace).
     private func handOff(
-        _ held: inout Held, rewriting: Bool
+        _ held: inout Held, rewriting: Bool, rewrite: Bool
     ) async throws(WirelessFailure) -> (result: HandoffResult, switchedOn: Bool) {
         var reconnects = 0
         var wrote = false
@@ -585,7 +823,7 @@ public actor WirelessSession {
                 let result = rewriting && !fresh
                     ? try await handoff.rewriteIfLapsed(on: current) : try await handoff.run(on: current)
                 if trace.isOn {
-                    trace(.handoffFinished(after: clock.now() - started, rewrite: rewriting,
+                    trace(.handoffFinished(after: clock.now() - started, rewrite: rewrite,
                                            wroteWiFiOn: wrote || result.wroteWiFiOn,
                                            statusTwoAlready: result.launchedBeforeLooking,
                                            windowLeft: result.windowRemaining))
@@ -881,6 +1119,15 @@ public actor WirelessSession {
 
     // MARK: - Helpers
 
+    /// The step of the preparation under way, for the scene changes the trace records.
+    private var currentStep: WirelessStep {
+        switch phase {
+        case .joining, .awaitingFront: .join
+        case .openingSession, .ready: .session
+        default: .handOff
+        }
+    }
+
     private func set(_ next: WirelessPhase) {
         timeline?.move(to: next, at: clock.now())
         phase = next
@@ -931,6 +1178,7 @@ struct StepTimeline: Sendable {
 
     var times: WirelessStepTimes {
         WirelessStepTimes(total: (end ?? start) - start, handingOff: spent[.handingOff] ?? .zero,
-                          joining: spent[.joining] ?? .zero, openingSession: spent[.openingSession] ?? .zero)
+                          joining: spent[.joining] ?? .zero, openingSession: spent[.openingSession] ?? .zero,
+                          held: spent[.awaitingFront] ?? .zero)
     }
 }

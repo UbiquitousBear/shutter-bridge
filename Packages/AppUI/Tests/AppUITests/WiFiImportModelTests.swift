@@ -308,6 +308,73 @@ struct WiFiImportModelTests {
         #expect(await waitUntilOnMain { h.model.phase == .ready })
     }
 
+    // MARK: A join held with the app away (bench 19.1)
+
+    @Test func aHeldJoinAsksThePersonToComeBackWithoutASpinner() {
+        let h = Harness(explained: true)
+        h.send(.connecting(cam))
+        h.phase(.handingOff)
+        h.phase(.awaitingFront)
+        let line = "Come back to Shutter Bridge to finish joining the camera's Wi-Fi."
+        #expect(h.model.statusLine == line)
+        #expect(h.model.activityLine == line)
+        #expect(h.model.isConnecting && !h.model.isJoined)
+        #expect(!h.model.showsActivity)
+        #expect(h.model.hasStatus(for: cam))
+        // Back in front, the join's own line.
+        h.phase(.joining)
+        #expect(h.model.activityLine == WiFiWording.step(.joining))
+        #expect(h.model.showsActivity)
+    }
+
+    @Test func aHeldJoinPostsOneNotificationWhenAllowedAndWithdrawsItOnReturn() async {
+        let h = Harness(explained: true)
+        let notifier = FakeNotifier(.authorised)
+        h.model.notifier = notifier
+        h.send(.connecting(cam))
+        h.phase(.handingOff)
+        h.phase(.awaitingFront)
+        h.phase(.awaitingFront)   // still held: no second notification
+        await h.model.joinNotificationSettled()
+        #expect(notifier.posts == [.joinWaiting])
+        #expect(AppNotification.joinWaiting.body == "Open Shutter Bridge to join the camera's Wi-Fi.")
+        h.phase(.joining)
+        await h.model.joinNotificationSettled()
+        #expect(notifier.withdrawals == [.joinWaiting])
+        #expect(notifier.requests == 0)   // never asks for permission
+    }
+
+    @Test func aHeldJoinNeverAsksForNotificationsAndPostsNothingWhenNotAllowed() async {
+        let h = Harness(explained: true)
+        let notifier = FakeNotifier(.notDetermined)
+        h.model.notifier = notifier
+        h.send(.connecting(cam))
+        h.phase(.awaitingFront)
+        h.send(.failed(cam, .paused(.needsJoin)))
+        await h.model.joinNotificationSettled()
+        #expect(notifier.posts.isEmpty && notifier.withdrawals.isEmpty && notifier.requests == 0)
+    }
+
+    @Test func theJoinsFailuresSayWhatReallyHappened() {
+        // A pause for a join, as an open failure: the app had to be open.
+        let needsApp = "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in Shutter Bridge "
+            + "until iOS asks to join."
+        #expect(WiFiWording.failure(.paused(.needsJoin)) == needsApp)
+        #expect(WiFiWording.failure(.join(.notInForeground)) == needsApp)
+        // The strip's step for the same pause is unchanged.
+        #expect(WiFiWording.step(.paused(.needsJoin)) == "Open Shutter Bridge to join the camera's Wi-Fi.")
+        // A rewrite that failed: the camera's Wi-Fi lapsed before iOS joined.
+        let rewrite = "The camera's Wi-Fi switched itself off before iOS joined it. Try again, and tap Join as soon as "
+            + "iOS asks."
+        for failure in [HandoffFailure.timedOut(lastStatus: nil), .wifiDidNotStart(lastStatus: nil), .linkDropped(afterWrite: true)] {
+            #expect(WiFiWording.failure(.rewriteFailed(failure)) == rewrite)
+        }
+        #expect(WiFiWording.failure(.rewriteFailed(.cancelled)) == nil)
+        // A first hand-off that really failed in front keeps its sentence.
+        #expect(WiFiWording.failure(.handoff(.timedOut(lastStatus: nil)))
+            == "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then try again.")
+    }
+
     // MARK: Wording
 
     @Test func theCopyIsBritishWithANextStepInEveryFailure() {
@@ -317,6 +384,7 @@ struct WiFiImportModelTests {
             .bluetooth(.bluetoothOff), .bluetooth(.unauthorised), .bluetooth(.notPaired), .handoff(.notPaired),
             .handoff(.timedOut(lastStatus: nil)), .handoff(.wifiLapsed(lastStatus: nil)), .join(.userDenied),
             .join(.invalidCredentials), .join(.other(1)), .join(.notInForeground), .noGateway, .cameraWiFiLapsed,
+            .rewriteFailed(.timedOut(lastStatus: nil)), .rewriteFailed(.notPaired),
             .link(CameraLinkFailure(.refused)), .link(CameraLinkFailure(.noAnswer)),
             .link(CameraLinkFailure(.identityChanged)), .link(CameraLinkFailure(.cardUnavailable)),
         ]

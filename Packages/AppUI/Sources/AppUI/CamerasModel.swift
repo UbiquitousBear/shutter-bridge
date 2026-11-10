@@ -26,6 +26,10 @@ public protocol CameraDiscovery: Actor {
     /// Whether the last `cameraLink(for:)` of this camera didn't start because the person chose not to continue (Not Now
     /// on the Local Network explanation). The screen that asked closes with no notice: the camera didn't go away.
     func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool
+    /// Whether Browse, showing a failed open of this camera, should open it again by itself now that the app is back in
+    /// front: true at most once per return, for a failure that needed the app in front (a Wi-Fi join, bench 19.1). False
+    /// for USB.
+    func opensAgainOnReturn(for id: CameraDescriptor.ID) async -> Bool
 }
 
 extension CameraDiscovery {
@@ -33,6 +37,7 @@ extension CameraDiscovery {
     public func knownKey(for id: CameraDescriptor.ID) async -> CameraKey? { nil }
     public func openFailureText(for id: CameraDescriptor.ID) async -> String? { nil }
     public func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool { false }
+    public func opensAgainOnReturn(for id: CameraDescriptor.ID) async -> Bool { false }
 }
 
 /// What Browse uses besides the link: the JPEG maker, the clipboard, the temporary folders and the bench log.
@@ -95,6 +100,8 @@ public final class CamerasModel: CameraFinding {
     @ObservationIgnored private let cameraKey: CameraKeying
     @ObservationIgnored private let leases: LinkLeases
     @ObservationIgnored private var watchTask: Task<Void, Never>?
+    /// The Browse models made, held weakly, so the scene reaches the one on screen (`browseScenePhaseChanged(_:)`).
+    @ObservationIgnored private var browsing: [WeakBrowse] = []
     @ObservationIgnored private var starting = false
     @ObservationIgnored private var launched = false
     /// The camera `notice` is about, if it is about one.
@@ -148,7 +155,7 @@ public final class CamerasModel: CameraFinding {
     public func browseModel(for camera: CameraDescriptor) -> BrowseModel {
         let discovery = self.discovery
         let id = camera.id
-        return BrowseModel(
+        let model = BrowseModel(
             camera: camera,
             openLink: { () async throws(CameraLinkFailure) -> any CameraLink in
                 try await discovery.cameraLink(for: id)
@@ -156,6 +163,7 @@ public final class CamerasModel: CameraFinding {
             services: services,
             openFailureText: { await discovery.openFailureText(for: id) },
             openWasDeclined: { await discovery.openWasDeclined(for: id) },
+            opensAgainOnReturn: { await discovery.opensAgainOnReturn(for: id) },
             onGone: { [weak self] id in self?.cameraWentAway(id) },
             onDeclined: { [weak self] id in self?.openWasDeclined(id) },
             catalogue: catalogue.map {
@@ -164,6 +172,16 @@ public final class CamerasModel: CameraFinding {
             importer: importModel,
             leases: leases
         )
+        browsing.removeAll { $0.model == nil }
+        browsing.append(WeakBrowse(model: model))
+        return model
+    }
+
+    /// The scene changed: every Browse model still alive is told (a Wi-Fi Browse reconnects on the way back to the front,
+    /// `BrowseModel.scenePhaseChanged(_:)`).
+    public func browseScenePhaseChanged(_ scene: AppScenePhase) {
+        browsing.removeAll { $0.model == nil }
+        for entry in browsing { entry.model?.scenePhaseChanged(scene) }
     }
 
     /// A link to the connected camera whose catalogue key is `key`, for the import to carry on through after a
@@ -270,4 +288,10 @@ public final class CamerasModel: CameraFinding {
             }
         }
     }
+}
+
+/// A Browse model held weakly: the screen owns it.
+@MainActor
+private struct WeakBrowse {
+    weak var model: BrowseModel?
 }

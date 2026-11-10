@@ -98,6 +98,31 @@ public enum BrowseWording {
     // Writing).
     public static let readingTitle = "Reading the Card"
 
+    /// While a Wi-Fi camera is reached (Bluetooth, the join, the session) and no last-known card is shown: the card
+    /// isn't being read yet, so the screen doesn't say it is (bench 19.1). The detail is always `connectingDetail`: the
+    /// connection's step is in the status strip above (`WiFiImportModel.activityLine`).
+    public static let connectingTitle = "Connecting to the Camera"
+    public static let connectingDetail = "Shutter Bridge is reaching the camera over Bluetooth and its Wi-Fi."
+    /// The bar's subtitle while a Wi-Fi camera is reached under its last-known card.
+    public static let connectingSubtitle = "Connecting to the camera…"
+
+    // The link going away under a shown card (Wi-Fi; bench 19.1).
+
+    /// The strip over the card while the link is let go or lost.
+    public static let disconnectedLine = "Disconnected from the camera's Wi-Fi."
+    /// The strip while it comes back.
+    public static let reconnectingLine = "Reconnecting to the camera…"
+    public static let reconnect = "Reconnect"
+    public static let reconnectHint = "Joins the camera's Wi-Fi again and reads its card."
+
+    /// The strip's line for an interruption.
+    public static func interruptionLine(_ interruption: BrowseModel.Interruption) -> String {
+        switch interruption {
+        case .reconnecting: reconnectingLine
+        case .disconnected: disconnectedLine
+        }
+    }
+
     /// What to expect while ImageCaptureCore reads the card, from the bench's measurements (decision 7). The times
     /// were measured on cards of 391–549 (MSC) and 391–825 (MTP) files; the copy keeps the times only (HIG Writing).
     public static func readingDetail(_ mode: CameraMode) -> String {
@@ -813,6 +838,7 @@ public enum WiFiWording {
         case .idle, .ready: nil
         case .handingOff: "Switching on the camera's Wi-Fi…"
         case .joining: "Joining the camera's Wi-Fi. Tap Join if iOS asks."
+        case .awaitingFront: "Come back to Shutter Bridge to finish joining the camera's Wi-Fi."
         case .openingSession: "Opening the camera…"
         case .staying: stay
         case .leaving: "Leaving the camera's Wi-Fi…"
@@ -853,9 +879,17 @@ public enum WiFiWording {
 
     public static let failedTitle = "Couldn't Connect to the Camera"
 
+    /// A connection that ended because the join needed the app in front (`.paused(.needsJoin)` as an open failure; bench
+    /// 19.1: the session holds the join while the app is away, then lets go). Worded for both places it shows: Browse's
+    /// failed state, with Try Again, and the Import screen. To confirm with Shamil.
+    public static let needsAppToJoin = "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in "
+        + "Shutter Bridge until iOS asks to join."
+
     /// Why the connection failed, with a next step in every line; nil for a cancel the person asked for.
     public static func failure(_ failure: WirelessFailure) -> String? {
         switch failure {
+        case .paused(.needsJoin):
+            return needsAppToJoin
         case let .paused(pause):
             return paused(pause)
         case .cameraNotFound:
@@ -874,6 +908,8 @@ public enum WiFiWording {
                 return "The Bluetooth connection to the camera failed. Move closer to the camera, then try again."
             }
         case let .handoff(handoff):
+            // The join's first hand-off, which failed with the app in front (one that overlapped time away is run again
+            // from the front by the session, and a lapse while away pauses with `.needsJoin`).
             switch handoff {
             case .notPaired: return paused(.notPaired)
             case .cancelled: return nil
@@ -882,10 +918,20 @@ public enum WiFiWording {
                 return "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then "
                     + "try again."
             }
+        case let .rewriteFailed(handoff):
+            // Switching the camera's Wi-Fi on again after it lapsed before iOS joined it.
+            switch handoff {
+            case .notPaired: return paused(.notPaired)
+            case .cancelled: return nil
+            case .gatt, .linkDropped, .statusUnreadable, .unexpectedStatus, .wifiDidNotStart, .timedOut, .wifiLapsed,
+                 .credentialsInvalid:
+                return "The camera's Wi-Fi switched itself off before iOS joined it. Try again, and tap Join as soon "
+                    + "as iOS asks."
+            }
         case let .join(join):
             switch join {
             case .userDenied: return paused(.joinDeclined)
-            case .notInForeground: return paused(.needsJoin)
+            case .notInForeground: return needsAppToJoin
             case .cancelled: return nil
             case .invalidCredentials:
                 return "iOS couldn't use the camera's network details. Try again; if it keeps happening, switch the "

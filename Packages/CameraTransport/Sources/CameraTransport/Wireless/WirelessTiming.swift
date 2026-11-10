@@ -35,6 +35,12 @@ public enum WirelessTiming {
     /// `unverified`: no run lapsed during a join; two allows a person slow at iOS's prompt twice.
     public static let rewritesPerJoin = 2
 
+    /// How many times, in one preparation, the camera's Wi-Fi is switched on again after a lapse that followed time away
+    /// (not counted against `rewritesPerJoin`, as it isn't the person's slowness at the prompt). Each needs the person to
+    /// come back within the hold's limit; this bounds a join the person keeps leaving during iOS's prompt, which then
+    /// pauses with `.needsJoin`. `unverified`: twice `rewritesPerJoin`, chosen, not measured.
+    public static let switchOnsAfterAway = 4
+
     /// How many times a hand-off whose Bluetooth link dropped is started again from a new connection, in one join. Once,
     /// as the pairing check does: the link dropped by itself 11.2 s after a join on 5 Nov (CBInternalErrorDomain 13).
     public static let handoffReconnects = 1
@@ -57,6 +63,16 @@ public enum WirelessTiming {
     /// only to 63 to 64 s (3 Nov 14:56 and 15:21, 4 Nov 13:06), so the stay ends here (backlog section 8). A reconnect in
     /// progress at the limit is not cut off: it finishes within the connector's own limits first.
     public static let linkDownStayLimit: Duration = .seconds(60)
+
+    /// How long a join is held while the app is away (`WirelessPhase.awaitingFront`), with the Bluetooth link kept, before
+    /// the session lets go of everything and pauses with `.needsJoin`. A join is never applied from the background (bench
+    /// 19.1, 9 Nov: `apply` made while away showed no prompt, and the camera's 50 s ran out). Decided by Shamil on 9 Nov as
+    /// a starting value: `unverified`, nobody measured how long the camera keeps its Bluetooth link with the app away.
+    public static let joinHoldWhileAway: Duration = .seconds(300)
+
+    /// After iOS refused `apply` because the app wasn't in front while the scene already read active (an inactive to active
+    /// race), the gap before the one more try. `unverified`: the race was never seen; a second refusal pauses.
+    public static let applyAgainInFrontAfter: Duration = .seconds(1)
 
     /// The gap between tries to reconnect the Bluetooth link during the stay. `unverified`: the spike never reconnected
     /// during a stay; each try already spends the connector's own limits (W10: 8 s, or 20 s, then a 10 s scan).

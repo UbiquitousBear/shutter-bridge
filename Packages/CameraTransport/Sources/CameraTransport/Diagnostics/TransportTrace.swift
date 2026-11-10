@@ -50,13 +50,16 @@ public struct WirelessStepTimes: Sendable, Equatable {
     /// From the gateway (or, inside the stay, the start) to the camera's session open: the port, PTP/IP and the card's
     /// listing poll.
     public var openingSession: Duration
+    /// Held while the app was away (`WirelessPhase.awaitingFront`), so the four add up to about `total`.
+    public var held: Duration
 
     public init(total: Duration = .zero, handingOff: Duration = .zero, joining: Duration = .zero,
-                openingSession: Duration = .zero) {
+                openingSession: Duration = .zero, held: Duration = .zero) {
         self.total = total
         self.handingOff = handingOff
         self.joining = joining
         self.openingSession = openingSession
+        self.held = held
     }
 }
 
@@ -70,6 +73,28 @@ public enum CameraWiFiCheck: Sendable, Equatable {
     case readFailed
     /// No Bluetooth link is held; the camera's 50 s from status 2 decide.
     case noLink
+}
+
+/// The step of a preparation the session was at, for the scene changes the trace records.
+public enum WirelessStep: Sendable, Equatable {
+    /// Bluetooth: the connect, the hand-off or a rewrite.
+    case handOff
+    /// The join: `apply`, the gateway, or a join held while the app is away.
+    case join
+    /// Opening the camera's session.
+    case session
+}
+
+/// Why a join was held while the app was away (`WirelessPhase.awaitingFront`).
+public enum WirelessHoldReason: Sendable, Equatable {
+    /// `apply` was due.
+    case beforeJoin
+    /// The camera's Wi-Fi had to be switched on again over Bluetooth (a rewrite after a lapse).
+    case beforeSwitchOn
+    /// iOS refused `apply` because the app wasn't in front (`applicationIsNotInForeground`, code 14).
+    case joinRefused
+    /// A hand-off that failed with the app away for part of it is run once more from the front.
+    case retryHandoff
 }
 
 /// One thing the Wi-Fi route did. Times are `Duration`s since the start of the step named in each case's notes.
@@ -95,7 +120,9 @@ public enum TransportTraceEvent: Sendable, Equatable {
     /// bound when `statusTwoAlready`: the status read 2 before the hand-off looked).
     case handoffFinished(after: Duration, rewrite: Bool, wroteWiFiOn: Bool, statusTwoAlready: Bool, windowLeft: Duration)
     /// The join's `apply` number `attempt` returned `after` since it was called (iOS's prompt included), or threw `failure`.
-    case joinApplied(attempt: Int, after: Duration, failure: JoinFailure?)
+    /// `inFront`: the app stayed in front (active or inactive) from the call to its return; false when it went to the
+    /// background meanwhile, or was there when `apply` returned.
+    case joinApplied(attempt: Int, after: Duration, failure: JoinFailure?, inFront: Bool)
     /// The camera's gateway appeared (or not) `after` since the wait for it began.
     case gateway(found: Bool, after: Duration)
     /// After a join that didn't reach the gateway (or one that returned after the camera's 50 s), the session looked at the
@@ -111,6 +138,26 @@ public enum TransportTraceEvent: Sendable, Equatable {
     case sessionOpened(after: Duration, tries: Int, reopening: Bool)
     /// The camera's session didn't open: `refused` (a failure trying again won't fix) or every try failed in the time given.
     case sessionNotOpened(after: Duration, tries: Int, refused: Bool)
+    /// The app went to the background while a preparation was at `during`.
+    case appWentToBackground(during: WirelessStep)
+    /// The app came back to the front `after` it went away, while a preparation was at `during`.
+    case appCameBack(after: Duration, during: WirelessStep)
+    /// The app is away, so the join is held, with the Bluetooth link kept, for at most `limit`
+    /// (`WirelessTiming.joinHoldWhileAway`) until it comes back.
+    case joinHeld(reason: WirelessHoldReason, limit: Duration)
+    /// The app came back `after` the hold began; `windowPassed`: the camera's 50 s from status 2 had run out by then, so the
+    /// session looks at CC09 before it joins.
+    case joinHoldEnded(after: Duration, windowPassed: Bool)
+    /// The app didn't come back within the hold's limit (`after` since it began): the session lets go of everything and
+    /// pauses with `.needsJoin`.
+    case joinHoldRanOut(after: Duration)
+    /// A hand-off (`rewrite`: a switch-on after a lapse) failed with `failure` while the app was away for part of it, so
+    /// its time limits may have run out during a suspension: it is run once more, from the front.
+    case handoffRetriedAfterAway(rewrite: Bool, failure: HandoffFailure)
+    /// The preparation failed. `rewrite`: in a hand-off that switched the camera's Wi-Fi on again after a lapse (a rewrite,
+    /// or the switch-on after the app came back); `appAway`: how long the app had been away during the preparation, in all.
+    /// Recorded just before `preparationEnded`; the failure itself is the app's own line.
+    case preparationFailed(rewrite: Bool, appAway: Duration)
     /// The preparation ended, ready (`succeeded`) or not, with the time in each step.
     case preparationEnded(succeeded: Bool, times: WirelessStepTimes)
 
@@ -142,8 +189,9 @@ public enum TransportTraceEvent: Sendable, Equatable {
     case resumeRefused(offset: UInt64)
     /// A continuation with 0x9211 finished the file, with `reads` 0x9211 reads.
     case resumeFinished(reads: Int)
-    /// The open session ended under the link: the connection's failure, or nil when the camera answered SessionNotOpen.
-    case linkLost(PTPIPConnectionFailure?)
+    /// The open session ended under the link: the connection's failure, or nil when the camera answered SessionNotOpen;
+    /// with the link's thumbnail counts so far (a timeout right after the first GetThumb shows here).
+    case linkLost(PTPIPConnectionFailure?, thumbnails: IPThumbnailDiagnostics)
     /// The link was closed; what it saw over its life.
     case linkClosed(IPLinkDiagnostics)
 }

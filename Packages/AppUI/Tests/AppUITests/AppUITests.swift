@@ -46,7 +46,8 @@ struct WordingTests {
             BrowseWording.readingDetail(.usb(.massStorage)), BrowseWording.readingDetail(.usb(.mtp)),
             BrowseWording.noFilesDetail, BrowseWording.emptyCardDetail, BrowseWording.goneDetail,
             JPEGWording.copied(pressedName: "DSC00001.ARW", embeddedPreview: false), JPEGWording.copiedPreview,
-            JPEGWording.sharingPreview,
+            JPEGWording.sharingPreview, BrowseWording.connectingDetail, BrowseWording.disconnectedLine,
+            BrowseWording.reconnectHint, WiFiWording.needsAppToJoin, NotificationWording.joinWaiting,
         ]
         lines += CameraLinkFailure.Kind.allCases.map(BrowseWording.listingFailed)
         lines += CameraLinkFailure.Kind.allCases.compactMap { JPEGWording.failed(.link(CameraLinkFailure($0))) }

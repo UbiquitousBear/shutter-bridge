@@ -48,6 +48,9 @@ struct BrowseScreen: View {
                     if let wifiStatus, wifiStatus.hasStatus(for: model.camera.id) {
                         JoinStatusView(status: wifiStatus)
                     }
+                    if let interruption = model.interruption {
+                        InterruptionStrip(model: model, interruption: interruption)
+                    }
                     ActionStrip(model: model)
                     if let notice = model.importStatus {
                         NoticeStrip(notice: notice) {
@@ -60,6 +63,7 @@ struct BrowseScreen: View {
                 }
             }
             .animation(.default, value: model.action)
+            .animation(.default, value: model.interruption)
             .animation(.default, value: model.importStatus)
             .animation(.default, value: model.isSelecting)
             .animation(.default, value: importer?.hasJob)
@@ -155,6 +159,13 @@ struct BrowseScreen: View {
 
     @ViewBuilder private var content: some View {
         switch model.phase {
+        case let .connecting(since):
+            // Over Wi-Fi the card isn't read until the link is in hand: the join isn't counted as reading (bench 19.1).
+            if model.lastKnownListedAt != nil {
+                card(readingSince: since)
+            } else {
+                ConnectingView()
+            }
         case let .reading(since):
             if model.lastKnownListedAt != nil {
                 card(readingSince: since)
@@ -174,7 +185,7 @@ struct BrowseScreen: View {
                                    description: Text(BrowseWording.noFilesDetail))
         case let .failed(message):
             ContentUnavailableView {
-                Label(BrowseWording.listingFailedTitle, systemImage: "exclamationmark.triangle")
+                Label(model.failedTitle, systemImage: "exclamationmark.triangle")
             } description: {
                 Text(message)
             } actions: {
@@ -350,6 +361,67 @@ struct BrowseFilterSheet: View {
     }
 }
 
+/// While a Wi-Fi camera is reached and no last-known card is shown: a spinner and a fixed line, with no timer, since the
+/// card isn't being read yet. The connection's step is the status strip's above, so it isn't repeated here.
+struct ConnectingView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label {
+                Text(BrowseWording.connectingTitle)
+            } icon: {
+                ProgressView()
+                    .controlSize(.large)
+            }
+        } description: {
+            Text(BrowseWording.connectingDetail)
+        }
+    }
+}
+
+/// The link went away under the card (Wi-Fi): one strip above it saying so, with Reconnect, or a spinner while it comes
+/// back. The card, the selection and the thumbnails already fetched stay.
+struct InterruptionStrip: View {
+    let model: BrowseModel
+    let interruption: BrowseModel.Interruption
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Group {
+                if interruption == .reconnecting {
+                    ProgressView()
+                } else {
+                    Image(systemName: "wifi.slash")
+                }
+            }
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(BrowseWording.interruptionLine(interruption))
+                    .font(.subheadline)
+                    .stripLineLimit()
+                if interruption == .disconnected, let detail = model.interruptionDetail {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .stripLineLimit()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            if interruption == .disconnected {
+                // A large bordered button is at least 44 pt tall (HIG Buttons).
+                Button(BrowseWording.reconnect) { model.reconnect() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .accessibilityHint(BrowseWording.reconnectHint)
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .glassEffect(.regular, in: stripShape)
+    }
+}
+
 /// While ImageCaptureCore reads the card: what to expect, from the bench's measurements, and the time so far.
 struct ReadingCardView: View {
     let mode: CameraMode
@@ -445,7 +517,8 @@ struct DayHeader: View {
     }
 }
 
-/// One file: the camera's thumbnail (fetched when the cell appears, given up when it scrolls away), its badges (RAW,
+/// One file: the camera's thumbnail (fetched when the cell appears and again on a new link while it has none, given up
+/// when it scrolls away), its badges (RAW,
 /// HEIF, Imported), and, while selecting, its selection mark. It is a button, so a tap shows it was pressed: while
 /// selecting it selects the file, otherwise it starts selecting with this file (`BrowseModel.tap(_:)`, until the
 /// loupe exists); VoiceOver's default action does the same. A still of the live card offers the press-and-hold menu.
@@ -487,9 +560,13 @@ struct CardCell: View {
             picture
         }
         .buttonStyle(.plain)
-        .task(id: item.id) {
+        // Keyed by the link generation too, so a cell still without a picture asks again when a new link has listed the
+        // card (bench 19.1).
+        .task(id: ThumbnailTaskID(item: item.id, generation: model.linkGeneration)) {
             guard image == nil, let data = await model.thumbnail(for: item.id) else { return }
-            image = UIImage(data: data)
+            let decoded = UIImage(data: data)
+            model.thumbnailShown(data, decoded: decoded != nil, for: item.id)
+            image = decoded
         }
         .accessibilityLabel(model.accessibilityLabel(
             for: item, date: item.captureDate?.formatted(date: .abbreviated, time: .shortened)))

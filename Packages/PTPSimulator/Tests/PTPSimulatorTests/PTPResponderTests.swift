@@ -175,6 +175,17 @@ struct PTPResponderTests {
         #expect(r.respond(to: PTPCommand.getObject(h, tx: 3)).code == .ok)
     }
 
+    @Test func silencedCommandsGetNoResponse() throws {
+        var r = try responder()
+        let h = r.card.handles[0]
+        r.silence(forNext: .getThumb)
+        let silent = r.respond(to: PTPCommand.getThumb(h, tx: 1))
+        #expect(silent.isSilent && silent.data == nil)
+        let answered = r.respond(to: PTPCommand.getThumb(h, tx: 2))
+        #expect(!answered.isSilent && answered.code == .ok)
+        #expect(Array(r.commandsAnswered.suffix(2)) == [.getThumb, .getThumb])
+    }
+
     @Test func shootingSendsObjectAdded() throws {
         var usb = try responder()
         let events = usb.shoot([.rawPlusJPEG])

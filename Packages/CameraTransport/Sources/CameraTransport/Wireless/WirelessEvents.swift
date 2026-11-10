@@ -216,3 +216,103 @@ final class PhaseBroadcast: Sendable {
         }
     }
 }
+
+/// Wakes a join held while the app is away (`WirelessSession`'s hold): `appBecameActive()` opens it.
+///
+/// Opening counts up, and a wait names the count it saw before it decided to wait, so a return that lands between that
+/// decision and the wait is not missed. A wait ends when the wake opens, when its deadline passes on the session's clock, or
+/// when its task is cancelled (`leave()`), whichever comes first.
+final class FrontWake: Sendable {
+    enum Outcome: Sendable, Equatable {
+        case woken
+        case timedOut
+        case cancelled
+    }
+
+    private enum Slot {
+        case pending
+        case waiting(CheckedContinuation<Bool, Never>)
+        case cancelled
+    }
+
+    private struct State {
+        var opened = 0
+        var nextID = 0
+        var slots: [Int: Slot] = [:]
+    }
+
+    private let state = Mutex(State())
+
+    /// How many times the wake has opened; pass it to `wait`.
+    var token: Int { state.withLock { $0.opened } }
+
+    /// Ends every wait whose token is older.
+    func open() {
+        let waiters = state.withLock { s -> [CheckedContinuation<Bool, Never>] in
+            s.opened += 1
+            var woken: [CheckedContinuation<Bool, Never>] = []
+            for (id, slot) in s.slots {
+                if case .waiting(let continuation) = slot {
+                    woken.append(continuation)
+                    s.slots.removeValue(forKey: id)
+                }
+            }
+            return woken
+        }
+        for waiter in waiters { waiter.resume(returning: true) }
+    }
+
+    /// Waits until the wake opens after `token`, `deadline` passes on `clock`, or the task is cancelled.
+    func wait(after token: Int, until deadline: Duration, on clock: SessionClock) async -> Outcome {
+        await withTaskGroup(of: Outcome.self) { group in
+            group.addTask { await self.wait(after: token) ? .woken : .cancelled }
+            group.addTask {
+                do { try await clock.sleep(until: deadline) } catch { return .cancelled }
+                return .timedOut
+            }
+            let first = await group.next() ?? .cancelled
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// True once the wake has opened after `token`; false when the task was cancelled first.
+    private func wait(after token: Int) async -> Bool {
+        let id = state.withLock { s -> Int in
+            s.nextID += 1
+            s.slots[s.nextID] = .pending
+            return s.nextID
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                let now = state.withLock { s -> Bool? in
+                    if s.opened > token {
+                        s.slots.removeValue(forKey: id)
+                        return true
+                    }
+                    if case .cancelled? = s.slots[id] {
+                        s.slots.removeValue(forKey: id)
+                        return false
+                    }
+                    s.slots[id] = .waiting(continuation)
+                    return nil
+                }
+                if let now { continuation.resume(returning: now) }
+            }
+        } onCancel: {
+            let waiter = state.withLock { s -> CheckedContinuation<Bool, Never>? in
+                switch s.slots[id] {
+                case .waiting(let continuation)?:
+                    s.slots.removeValue(forKey: id)
+                    return continuation
+                case .pending?:
+                    s.slots[id] = .cancelled
+                    return nil
+                case .cancelled?, nil:
+                    return nil
+                }
+            }
+            waiter?.resume(returning: false)
+        }
+    }
+}

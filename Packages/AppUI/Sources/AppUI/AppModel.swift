@@ -97,6 +97,8 @@ public final class AppModel {
         self.importer = importer
         jobShown.importer = importer
         if let wifi {
+            // The Wi-Fi status posts one notification while a join is held with the app away (bench 19.1).
+            wifi.status.notifier = notifier
             let recovery = WiFiRecoveryCoordinator(engine: engine, log: services.log)
             importer.attachWiFiRecovery(recovery)
             wifiRecovery = recovery
@@ -221,6 +223,8 @@ public final class AppModel {
         wireless?.sceneChanged(phase)
         // The reminder's request as it stood when the app left, so one made while this runs (Import Now) isn't dropped.
         let requestOnLeaving = phase == .background ? wireless?.reminders.cameraToOpen : nil
+        // Browse hears the way to the background before its link is let go, so it doesn't take the end for one in front.
+        if phase == .background { cameras.browseScenePhaseChanged(.background) }
         if phase == .active {
             wifi?.status.start()
             await cameras.becameActive()
@@ -236,9 +240,15 @@ public final class AppModel {
         // the stay on the way back (`WirelessSession`). The caller holds the app's background time until this returns.
         // A camera let go is no longer connected for the reminder, though Browse may still hold its closed link (W18).
         let letGo = await wifi?.source.scenePhaseChanged(phase, activeImport: activeImportKey) ?? []
-        for link in letGo { connectionHolds?.closed(link) }
+        for link in letGo {
+            connectionHolds?.closed(link)
+            // Still held means Browse holds it: the phone leaves the camera's network anyway (bench 19.1 log line).
+            if leases.holders(of: link) > 0 { log.note("wifi: let go on the way to the background (Browse open, no import)") }
+        }
         switch phase {
         case .active:
+            // After the sessions have heard the return: a Wi-Fi Browse whose link was let go reconnects (once per return).
+            cameras.browseScenePhaseChanged(.active)
             // After the import's rule and the sessions, so a paused USB import carries on as soon as it did before (W16).
             await wireless?.becameActive()
         case .background:
