@@ -62,6 +62,9 @@ extension ImportEngine {
         let listed: [CameraItem]
         do throws(CameraLinkFailure) {
             try await link.open()
+            // Which session the job now uses, so a late loss of the one it replaced is told apart (I13).
+            let session = await link.sessionGeneration
+            currentListing(id, generation)?.useSession(session)
             if let known { listed = known } else { listed = try await link.list() }
         } catch {
             await listingFailed(error, id: id, generation: generation)
@@ -143,6 +146,8 @@ extension ImportEngine {
         // A job that ended (cancel, stop) may still be committing one of these files: its row has to land first, or
         // the file would be queued, copied and saved again.
         await settleCommits(ofJobsOtherThan: id)
+        // A partial file iOS emptied from Caches, or the prune deleted, sends its row back to offset 0 first (I13).
+        await reconcilePartials()
         guard currentListing(id, generation) != nil else { return }
         let facts: DoneFacts
         do {

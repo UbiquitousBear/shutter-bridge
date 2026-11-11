@@ -43,7 +43,7 @@ public enum EngineTraceWording {
              .sameFileListedTwice, .waitingForPartner, .committedWithoutPartner, .destinationChanged, .routeRefused,
              .linkEvent, .paused, .resumed, .idle, .tick,
              .published, .discardedLateFile, .checkpointSaved, .waitingForCheckpointWrites, .checkpointWritesUnsettled,
-             .identityChanged, .reconnected, .firstByteAfterReconnect:
+             .identityChanged, .reconnected, .firstByteAfterReconnect, .lateSessionLossIgnored, .partialReset:
             return .notice
         }
     }
@@ -112,6 +112,10 @@ public enum EngineTraceWording {
         case let .firstByteAfterReconnect(name, bytes, sinceResumed):
             return "engine: first byte after the reconnect: \(file(name)) at \(bytes) B, "
                 + "\(TransportTraceWording.seconds(sinceResumed)) after the job resumed"
+        case let .lateSessionLossIgnored(generation):
+            return "engine: ignored a late loss of session \(generation), which the reconnect replaced"
+        case let .partialReset(name):
+            return "engine: the partial copy of \(file(name)) is gone; it will be copied from its start"
         }
     }
 

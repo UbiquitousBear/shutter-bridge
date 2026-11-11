@@ -297,7 +297,7 @@ struct WiFiContractTests {
         let listing = Task { try await link.list() }
         await link.waitForListCall(2)
         await link.loseSession()
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
         #expect(await failure(of: listing)?.outcome == .retryOnReconnect)
         #expect(await link.isOpen == false)
         await #expect(throws: CameraLinkFailure.self) { _ = try await link.list() }

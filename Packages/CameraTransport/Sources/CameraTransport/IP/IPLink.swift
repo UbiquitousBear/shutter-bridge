@@ -265,6 +265,10 @@ public actor IPLink: CameraLink, TransferAborting {
 
     public nonisolated var events: AsyncStream<CameraLinkEvent> { fanOut.subscribe() }
 
+    /// The sessions that finished opening (`IPLinkDiagnostics.sessionsOpened`): the open one's generation, which its
+    /// `.sessionLost` carries.
+    public var sessionGeneration: Int { recorded.sessionsOpened }
+
     /// What the link has seen so far.
     public var diagnostics: IPLinkDiagnostics {
         get async {
@@ -1080,7 +1084,7 @@ public actor IPLink: CameraLink, TransferAborting {
         recorded.sessionsLost += 1
         recorded.lastLoss = reason
         trace(.linkLost(failure, thumbnails: recorded.thumbnails))
-        fanOut.send(.sessionLost)
+        fanOut.send(.sessionLost(generation: recorded.sessionsOpened))
         await discard(session)
     }
 

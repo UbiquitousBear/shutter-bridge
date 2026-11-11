@@ -207,7 +207,7 @@ struct LinkFaultHookTests {
         #expect(await link.waitUntilThrottled())
         #expect(progress.last == 5_000)
         await link.powerOff()
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
         #expect(await failureKind(of: download) == .disconnected)
         // What reached the disk is the file's first bytes, and no more than was granted.
         let onDisk = try Data(contentsOf: folder.appendingPathComponent(object.filename))
@@ -229,7 +229,7 @@ struct LinkFaultHookTests {
 
         await link.powerOff()
         #expect(await link.isPoweredOff)
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
         #expect(await failureKind(of: download) == .disconnected)
         #expect(await link.isRemoved == false)                          // a Wi-Fi link can be opened again
 
@@ -281,7 +281,7 @@ struct LinkFaultHookTests {
         #expect(await link.isOpen)
         await link.powerOff()
         await link.powerOff()
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
         await link.send(.resumedOperations)                             // a marker: no second loss came before it
         #expect(await nextEvent(&events) == .resumedOperations)
     }
@@ -306,7 +306,7 @@ struct LinkFaultHookTests {
         #expect(await link.dialled == [.cameraNetwork])
 
         await link.moveCamera(to: elsewhere)
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
         #expect(await link.isOpen == false)
         #expect(await link.cameraLocation == elsewhere)
 
@@ -368,6 +368,7 @@ struct LinkFaultHookTests {
         #expect(await link.lateSessionLosses == 1)
         #expect(await link.isOpen)
         #expect(await link.openCount == 2)
+        #expect(await link.sessionGeneration == 2)
 
         // No `.sessionLost` has gone out: the next event the app sees is the marker.
         await link.send(.resumedOperations)
@@ -377,11 +378,26 @@ struct LinkFaultHookTests {
         _ = try await link.bytes(of: item.id, into: folder)             // the new session carries on
 
         #expect(await link.sendLateSessionLoss())
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))   // stamped with the replaced session
         #expect(await link.lateSessionLosses == 0)
         #expect(await link.isOpen)                                      // it was the old session that was lost
         #expect(try await link.list().count == 5)
         #expect(await link.sendLateSessionLoss() == false)
+    }
+
+    @Test func generationsCountSessionsNotOpens() async throws {
+        let link = try wifiLink()
+        var events = link.events.makeAsyncIterator()
+        #expect(await link.sessionGeneration == 0)
+        try await link.open()
+        try await link.open()                                           // already open: the same session
+        #expect(await link.sessionGeneration == 1)
+        await link.loseSession()
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
+        try await link.open()
+        #expect(await link.sessionGeneration == 2)
+        await link.loseSession()
+        #expect(await nextEvent(&events) == .sessionLost(generation: 2))
     }
 
     @Test func eachReplacedSessionLeavesOneLateLoss() async throws {
@@ -391,11 +407,12 @@ struct LinkFaultHookTests {
         await link.loseSessionAndReopen(announcing: .late)
         await link.loseSessionAndReopen(announcing: .late)
         #expect(await link.lateSessionLosses == 2)
+        #expect(await link.sessionGeneration == 3)
         #expect(await link.sendLateSessionLoss())
         #expect(await link.sendLateSessionLoss())
         #expect(await link.sendLateSessionLoss() == false)
-        #expect(await nextEvent(&events) == .sessionLost)
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
+        #expect(await nextEvent(&events) == .sessionLost(generation: 2))
     }
 
     @Test func aCallFromTheReplacedSessionStillEndsDisconnectedWithALateLoss() async throws {
@@ -418,8 +435,9 @@ struct LinkFaultHookTests {
         var events = link.events.makeAsyncIterator()
         try await link.open()
         await link.loseSessionAndReopen()
-        #expect(await nextEvent(&events) == .sessionLost)
+        #expect(await nextEvent(&events) == .sessionLost(generation: 1))
         #expect(await link.lateSessionLosses == 0)
         #expect(await link.isOpen)
+        #expect(await link.sessionGeneration == 2)
     }
 }

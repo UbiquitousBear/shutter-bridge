@@ -605,7 +605,7 @@ public final class BrowseModel {
                 services.log.note("browse: link event \(event)")
                 cancelForSuspension()
             case .sessionLost:
-                services.log.note("browse: link event \(event)")
+                services.log.note("browse: link event sessionLost") // the line as before generations (I13)
                 // Over Wi-Fi, with the live card shown and no import holding the link (its recovery has the link then):
                 // in front, the same link reopens and lists again; away, the link is let go, and Reconnect gets it back.
                 guard reconnects, showsListedCard, leases.holders(of: link) <= 1 else { continue }

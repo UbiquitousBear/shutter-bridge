@@ -428,7 +428,7 @@ struct PairTests {
         let job = try await h.start(.allNew, from: link, to: h.stageRoute)
         await link.waitUntilHeld(jpeg.name)
         #expect(h.trace.log.contains(.waitingForPartner(raw.name)))
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         #expect(await h.files.attempts == 0)
 

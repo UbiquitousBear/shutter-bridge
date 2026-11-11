@@ -43,6 +43,8 @@ actor ResumingLink: CameraLink {
     private var heldWaiters: [(String, CheckedContinuation<Void, Never>)] = []
 
     private(set) var openCount = 0
+    /// The session's generation (`CameraLink.sessionGeneration`): 0, no generations, unless a test sets one.
+    private(set) var sessionGeneration = 0
     private(set) var listCount = 0
     private(set) var infoCalls: [String] = []
     private(set) var bytesCalls: [String] = []
@@ -71,6 +73,8 @@ actor ResumingLink: CameraLink {
     // MARK: Scripting
 
     func script(_ name: String, _ steps: Step...) { scripts[name, default: []] += steps }
+    /// The session the link has open now, as a reopen gives it a new one.
+    func setSessionGeneration(_ generation: Int) { sessionGeneration = generation }
     func setCard(_ items: [CameraItem]) { card = items }
     func overrideInfo(_ id: CameraItem.ID, with item: CameraItem) { infoOverrides[id] = item }
     func failInfo(_ name: String, _ kinds: CameraLinkFailure.Kind...) { infoFailures[name, default: []] += kinds }

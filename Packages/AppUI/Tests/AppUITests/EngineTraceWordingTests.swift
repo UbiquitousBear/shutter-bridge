@@ -95,7 +95,7 @@ struct EngineTraceWordingTests {
         #expect(line(.paused(.cameraUnreachable)) == "engine: paused (the camera is unreachable)")
         #expect(line(.paused(.needsJoin)) == "engine: paused (the phone needs to join the camera's network)")
         #expect(line(.resumed) == "engine: continued")
-        #expect(line(.linkEvent(.sessionLost)) == "engine: camera link: session lost")
+        #expect(line(.linkEvent(.sessionLost(generation: 2))) == "engine: camera link: session lost")
         #expect(line(.linkEvent(.storeRemoved)) == "engine: camera link: card removed from the session")
         #expect(line(.linkEvent(.removed)) == "engine: camera link: removed")
         // Every pause and every event has words.
@@ -128,6 +128,13 @@ struct EngineTraceWordingTests {
             == "engine: first byte after the reconnect: DSC00001.ARW at 16842752 B, 1.3 s after the job resumed")
     }
 
+    @Test func theLinesForPartialsAndSessionsBetweenLaunches() {
+        #expect(line(.lateSessionLossIgnored(generation: 1))
+            == "engine: ignored a late loss of session 1, which the reconnect replaced")
+        #expect(line(.partialReset("DSC00001.ARW"))
+            == "engine: the partial copy of DSC00001.ARW is gone; it will be copied from its start")
+    }
+
     @Test func eventsThatHaveNoLine() {
         #expect(line(.imported("A.JPG", .photos)) == nil) // the import model's line carries it
         #expect(line(.staged("A.JPG", nil)) == nil)
@@ -153,6 +160,7 @@ struct EngineTraceWordingTests {
             .identityChanged("A.JPG"), .finished(.completed), .finished(.cancelled), .finished(.stopped(.refused)),
             .finished(.catalogueUnavailable), .reconnected(.usb, sinceLost: .zero, filesLeft: 0),
             .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero),
+            .lateSessionLossIgnored(generation: 1), .partialReset("A.JPG"),
         ]
     }
 
@@ -200,7 +208,7 @@ struct EngineTraceWordingTests {
         let name = "DSC\n2026-11-11T10:00:00Z error [browse] serial \(serial)\u{0}\u{7}.ARW"
         // The checkpoint-wait and lone-half lines carry a name too, so they clean it the same way.
         for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name),
-                      .committedWithoutPartner(name)] {
+                      .committedWithoutPartner(name), .partialReset(name)] {
             let waiting = try #require(line(event))
             #expect(!waiting.contains("\n") && !waiting.contains("\u{0}") && !waiting.contains("\u{7}"))
         }

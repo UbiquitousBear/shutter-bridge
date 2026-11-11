@@ -23,14 +23,15 @@ final class Bench {
     let engine: ImportEngine
     let files: StagingFolderDestination
 
-    init(downloadsInFlight: Int = 1) {
+    /// - Parameter trace: Where the engine's decisions go (a test that waits for one).
+    init(downloadsInFlight: Int = 1, trace: EngineTraceSink = .none) {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("IntegrationTests-\(UUID().uuidString)", isDirectory: true)
         staging = root.appendingPathComponent("staging", isDirectory: true)
         documents = root.appendingPathComponent("Documents", isDirectory: true)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         engine = ImportEngine(catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),
-                              stagingDirectory: staging, timeZone: Bench.zone)
+                              stagingDirectory: staging, timeZone: Bench.zone, trace: trace)
         files = StagingFolderDestination(root: documents, place: Bench.place,
                                          cameraName: "ILCE-7CM2", timeZone: Bench.zone)
     }
