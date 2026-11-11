@@ -10,14 +10,16 @@ import SwiftData
 // inferred one. Version 1 (this file) is what every build before Catalogue V2 (17.1 and 18.1) shipped, and is frozen:
 // its models' stored properties must never change, or a store written by those builds stops opening ("Shutter Bridge
 // couldn't start"). Version 2 (`CatalogueSchemaV2.swift`, Iteration 3) adds the Camera row's Bluetooth peripheral
-// identifier through a lightweight stage, and version 3 (`CatalogueSchemaV3.swift`, staging, 11 Nov) the file row's
-// staged copy through another. Iteration 2's cull marks and the like arrive as a further version and stage.
+// identifier through a lightweight stage, version 3 (`CatalogueSchemaV3.swift`, staging, 11 Nov) the file row's
+// staged copy through another, and version 4 (`CatalogueSchemaV4.swift`, Iteration 2) History's job fields, cull marks
+// and the pending-commit marker through a third.
 //
 // Kept CloudKit-compatible for a later opt-in (proposal): no `@Attribute(.unique)` (the store enforces identity, see
 // `SwiftDataCatalogue`), every attribute optional or defaulted, every relationship optional with an inverse.
 //
 // The models are internal: `@Model` classes aren't `Sendable`, and every write goes through `SwiftDataCatalogue`,
-// off the main actor. Callers see `CatalogueRecord` and `CardListing`.
+// off the main actor. Callers see `CatalogueRecord`, `CardListing`, `CameraRecord`, `JobRecord`, `MarkRecord` and
+// `PendingCommit`.
 
 /// Version 1 of the catalogue's schema: `Camera`, `CameraObject` and `ImportJob`.
 public enum CatalogueSchemaV1: VersionedSchema, Sendable {
@@ -35,12 +37,15 @@ public enum CatalogueSchemaV1: VersionedSchema, Sendable {
 /// - V2 → V3 (staging, 11 Nov): lightweight. V3 adds three optional attributes to `CameraObject`
 ///   (`stagedRelativePath`, `stagedRoot`, `stagedAt`), which read nil (not staged) on every migrated row; nothing else
 ///   changes.
+/// - V3 → V4 (Iteration 2): lightweight. V4 adds optional attributes to `ImportJob` (History's fields), which read nil
+///   on every migrated job (an import of every new file, no counts), and two new models, `CullMark` and
+///   `PendingCommitFile`, which start empty; nothing else changes.
 public enum CatalogueMigrationPlan: SchemaMigrationPlan, Sendable {
     public static var schemas: [any VersionedSchema.Type] {
-        [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self]
+        [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self, CatalogueSchemaV4.self]
     }
 
-    public static var stages: [MigrationStage] { [v1ToV2, v2ToV3] }
+    public static var stages: [MigrationStage] { [v1ToV2, v2ToV3, v3ToV4] }
 
     /// V1 → V2: the peripheral identifier, optional, so no row needs a value and no custom stage is needed.
     static var v1ToV2: MigrationStage {
@@ -51,13 +56,22 @@ public enum CatalogueMigrationPlan: SchemaMigrationPlan, Sendable {
     static var v2ToV3: MigrationStage {
         MigrationStage.lightweight(fromVersion: CatalogueSchemaV2.self, toVersion: CatalogueSchemaV3.self)
     }
+
+    /// V3 → V4: History's job attributes, optional, and two new models, so no row needs a value and no custom stage is
+    /// needed.
+    static var v3ToV4: MigrationStage {
+        MigrationStage.lightweight(fromVersion: CatalogueSchemaV3.self, toVersion: CatalogueSchemaV4.self)
+    }
 }
 
-// The current version's models, so the store's code names no version.
-typealias CatalogueCurrentSchema = CatalogueSchemaV3
+// The current version's models, so the store's code names no version. The cull mark's model is `StoredCullMark` here,
+// so the store's code never reads as AppUI's `CullMark`, the cull session's value of the same name.
+typealias CatalogueCurrentSchema = CatalogueSchemaV4
 typealias Camera = CatalogueCurrentSchema.Camera
 typealias CameraObject = CatalogueCurrentSchema.CameraObject
 typealias ImportJob = CatalogueCurrentSchema.ImportJob
+typealias StoredCullMark = CatalogueCurrentSchema.CullMark
+typealias PendingCommitFile = CatalogueCurrentSchema.PendingCommitFile
 
 // Frozen: what every build before Catalogue V2 (17.1 and 18.1) shipped. Change nothing stored here; add a version
 // instead.

@@ -179,7 +179,9 @@ public struct CardListing: Sendable, Hashable, Codable {
 /// (where SwiftData exists). Both pass the same contract tests (`CatalogueContractTests`, `CameraRowContractTests`).
 ///
 /// Besides file rows and listings, a store keeps one `CameraRecord` per camera (the `Camera` row, Iteration 3) and
-/// download checkpoints for resumable Wi-Fi downloads (`markPartial`). It never stores a network password.
+/// download checkpoints for resumable Wi-Fi downloads (`markPartial`). Since Catalogue V4 (Iteration 2) it also keeps
+/// cull marks by content key (`MarkRecord`), one record per job (`JobRecord`) and the pending-commit markers
+/// (`PendingCommit`, backlog section 3.1). It never stores a network password.
 ///
 /// Rows are unique per store by their full identity (camera, folder, name, capture date, size): the store, not the
 /// schema, enforces it (a SwiftData schema with a unique attribute can't sync through CloudKit, which the proposal
@@ -248,8 +250,9 @@ public protocol CatalogueStore: Actor {
 
     // MARK: The Camera row (Iteration 3)
 
-    /// The stored camera with this key, if the catalogue has one. A camera gets a row as soon as it has a file row
-    /// or a listing (with empty names and `lastSeen` from the listing), not only through `upsertCamera(_:)`.
+    /// The stored camera with this key, if the catalogue has one. A camera gets a row as soon as it has a file row,
+    /// a listing (with empty names and `lastSeen` from the listing) or a job record, not only through
+    /// `upsertCamera(_:)`.
     func camera(_ key: CameraKey) throws -> CameraRecord?
 
     /// Every stored camera, the most recently seen first (ties by key), one per key. For the proximity scan's list
@@ -263,6 +266,71 @@ public protocol CatalogueStore: Actor {
     /// with an `await` in between, writes back that read's value of every other field and loses a write made in the
     /// meantime (the Bluetooth link storing the peripheral while the Wi-Fi link stores the GUID).
     func upsertCamera(_ record: CameraRecord) throws
+
+    // MARK: Cull marks (Catalogue V4; D3, D4)
+
+    /// Marks every file of `keys` (one file, or both halves of a RAW+JPEG pair, written together) with `decision` and
+    /// `rating` (0 to 5, 0 being no stars), at `date`, replacing any mark they had: the whole mark, not one field of
+    /// it. Kept by content key (`MarkRecord`), so the mark is the same for the file on the card and in Staging, under
+    /// any camera key or folder. No decision and no stars is the same as `clearMarks(of:)`. Throws
+    /// `CatalogueFailure.ratingOutOfRange` for a rating outside 0...5, and then writes nothing. Never touches a file
+    /// row, the card or a staged file.
+    func setMark(_ decision: MarkRecord.Decision?, rating: Int, for keys: [ObjectIdentity.ContentKey],
+                 at date: Date) throws
+
+    /// The mark of each of `keys` that has one; keys with no mark are left out. An identity's key is its
+    /// `contentKey`, which ignores the camera key and folder.
+    func marks(of keys: [ObjectIdentity.ContentKey]) throws -> [ObjectIdentity.ContentKey: MarkRecord]
+
+    /// Removes the marks of `keys`. Nothing happens for a key with none.
+    func clearMarks(of keys: [ObjectIdentity.ContentKey]) throws
+
+    // MARK: Job records (Catalogue V4; D6)
+
+    /// Inserts the job, or replaces the one with the same `id`: every field is written as given. The job's camera gets
+    /// a row when it has none, as a file row gives it one.
+    func recordJob(_ job: JobRecord) throws
+
+    /// The job with this identifier, if there is one.
+    func job(_ id: UUID) throws -> JobRecord?
+
+    /// The jobs of `camera`, or of every camera when it is nil, newest first (ties by identifier): History's list.
+    func jobs(camera: CameraKey?) throws -> [JobRecord]
+
+    // MARK: Staged files and Forget imports (Catalogue V4; D6)
+
+    /// Every row with a staged copy (unknown paths included), of `camera` or of every camera when it is nil, in
+    /// capture order (then by file name, then by camera key): the cull screen's files. `StagedDays.grouped(_:)` groups
+    /// them by capture day. One row per identity.
+    func stagedRecords(camera: CameraKey?) throws -> [CatalogueRecord]
+
+    /// *Forget imports* for one camera key (D6): every `.imported` and `.skipped` row of exactly that key is
+    /// forgotten. A row with no staged copy is deleted; a row with one goes back to `.new`, with no location, and keeps
+    /// its staged copy, so the file stays on the cull screen and can still be removed from Staging. The key's
+    /// pending-commit markers are removed too, so a later pass can't mark the forgotten files imported again. New and
+    /// partial rows, rows of other keys (a file also imported under another key stays imported, by content), marks,
+    /// job records, the listing and the camera row are left alone, as are Photos, Staging and the card. Returns how
+    /// many rows were forgotten.
+    @discardableResult
+    func forgetImports(camera: CameraKey) throws -> Int
+
+    // MARK: Pending commits (Catalogue V4; backlog section 3.1)
+
+    /// Stores the marker, or replaces the commit with the same `id` (the engine's switch from Photos to Staging
+    /// rewrites it). Throws `CatalogueFailure.emptyCommit` for a commit with no files, and then writes nothing.
+    func beginCommit(_ pending: PendingCommit) throws
+
+    /// Writes `writes` (as `upsert` and `markStaged` would, in order) and removes the marker with this `id`, in one
+    /// store save: if anything fails, nothing is written and the marker stays. With no marker of that `id`, the writes
+    /// alone.
+    func finishCommit(_ id: UUID, writing writes: [CommitWrite]) throws
+
+    /// Removes the marker with this `id`; nothing happens when there is none.
+    func abandonCommit(_ id: UUID) throws
+
+    /// Every unresolved commit, oldest first (ties by identifier); a commit's files in `CommitUnit.files`' order. A
+    /// marker a later version wrote with a destination this build doesn't know is left out.
+    func pendingCommits() throws -> [PendingCommit]
 }
 
 extension CatalogueStore {
@@ -281,4 +349,72 @@ extension CatalogueStore {
         try upsertCamera(record)
         return record.written(over: stored)
     }
+
+    /// Marks the files at the current time (`setMark(_:rating:for:at:)`).
+    public func setMark(_ decision: MarkRecord.Decision?, rating: Int = 0, for keys: [ObjectIdentity.ContentKey])
+        throws {
+        try setMark(decision, rating: rating, for: keys, at: Date())
+    }
+
+    /// Changes the stored job in one actor call, as `updateCamera(_:_:)` changes a camera, so the engine's writes at a
+    /// pause and at the end never lose each other: reads the job, applies `change`, and writes the result with
+    /// `recordJob(_:)`, with no suspension in between. `change` can't move the record to another identifier. Returns
+    /// the job as stored, or nil (writing nothing) when there is no job with this identifier.
+    @discardableResult
+    public func updateJob(_ id: UUID, _ change: @Sendable (inout JobRecord) -> Void) throws -> JobRecord? {
+        guard var job = try job(id) else { return nil }
+        change(&job)
+        job.id = id
+        try recordJob(job)
+        return job
+    }
+}
+
+// What a store that keeps no marks, job records or pending-commit markers does: the calls Catalogue V4 added, for test
+// doubles written before it (`InMemoryCatalogue` and `SwiftDataCatalogue` implement every one). Writes to what isn't
+// kept are dropped and reads answer empty; `finishCommit` still writes its rows, through `upsert` and `markStaged` (not
+// in one save); `stagedRecords` and `forgetImports`, which need every row, throw `CatalogueFailure.notSupported`.
+extension CatalogueStore {
+    public func setMark(_ decision: MarkRecord.Decision?, rating: Int, for keys: [ObjectIdentity.ContentKey],
+                        at date: Date) throws {
+        _ = try MarkRule.mark(decision, rating: rating, at: date)
+    }
+
+    public func marks(of keys: [ObjectIdentity.ContentKey]) throws -> [ObjectIdentity.ContentKey: MarkRecord] {
+        [:]
+    }
+
+    public func clearMarks(of keys: [ObjectIdentity.ContentKey]) throws {}
+
+    public func recordJob(_ job: JobRecord) throws {}
+
+    public func job(_ id: UUID) throws -> JobRecord? { nil }
+
+    public func jobs(camera: CameraKey?) throws -> [JobRecord] { [] }
+
+    public func stagedRecords(camera: CameraKey?) throws -> [CatalogueRecord] {
+        throw CatalogueFailure.notSupported
+    }
+
+    @discardableResult
+    public func forgetImports(camera: CameraKey) throws -> Int {
+        throw CatalogueFailure.notSupported
+    }
+
+    public func beginCommit(_ pending: PendingCommit) throws {
+        if pending.files.isEmpty { throw CatalogueFailure.emptyCommit }
+    }
+
+    public func finishCommit(_ id: UUID, writing writes: [CommitWrite]) throws {
+        for write in writes {
+            switch write {
+            case let .imported(record): try upsert(record)
+            case let .staged(identity, format, location): try markStaged(identity, format: format, at: location)
+            }
+        }
+    }
+
+    public func abandonCommit(_ id: UUID) throws {}
+
+    public func pendingCommits() throws -> [PendingCommit] { [] }
 }

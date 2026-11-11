@@ -2,8 +2,9 @@
 import Foundation
 import SwiftData
 
-// Version 3 of the catalogue's schema (staging; Shamil, 11 Nov). The current version: `SwiftDataCatalogue` uses these
-// models through the `Camera`, `CameraObject` and `ImportJob` typealiases in `CatalogueSchema.swift`.
+// Version 3 of the catalogue's schema (staging; Shamil, 11 Nov). Frozen since version 4 (`CatalogueSchemaV4.swift`,
+// Iteration 2) became the current one: what every staging build before Catalogue V4 shipped. Change nothing stored
+// here; add a version instead.
 //
 // What changed from version 2, and nothing else: `CameraObject` gains three optional attributes for the staged copy
 // (`stagedRelativePath`, `stagedRoot` as `StagingRoot`'s raw string, `stagedAt`), so the stage from version 2 is

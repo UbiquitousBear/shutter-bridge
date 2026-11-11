@@ -10,6 +10,12 @@ public actor InMemoryCatalogue: CatalogueStore {
     private var byContent: [ObjectIdentity.ContentKey: Set<ObjectIdentity>] = [:]
     private var listings: [CameraKey: CardListing] = [:]
     private var cameraRows: [CameraKey: CameraRecord] = [:]
+    /// Cull marks by content key: one per key, by the store's rule.
+    private var cullMarks: [ObjectIdentity.ContentKey: MarkRecord] = [:]
+    private var jobRecords: [UUID: JobRecord] = [:]
+    /// Pending-commit markers as `PendingCommitFile` rows, one per file, read back through the same mapping as
+    /// SwiftData's, so both stores answer `pendingCommits()` alike.
+    private var markerRows: [PendingCommitColumns] = []
 
     public init(records: [CatalogueRecord] = [], cameras: [CameraRecord] = []) {
         for c in cameras {
@@ -79,6 +85,103 @@ public actor InMemoryCatalogue: CatalogueStore {
     public func upsertCamera(_ record: CameraRecord) {
         cameraRows[record.key] = record.written(over: cameraRows[record.key])
     }
+
+    // MARK: Cull marks (Catalogue V4)
+
+    public func setMark(_ decision: MarkRecord.Decision?, rating: Int, for keys: [ObjectIdentity.ContentKey],
+                        at date: Date) throws(CatalogueFailure) {
+        guard let mark = try MarkRule.mark(decision, rating: rating, at: date) else {
+            clearMarks(of: keys)
+            return
+        }
+        for key in keys {
+            cullMarks[key] = mark
+        }
+    }
+
+    public func marks(of keys: [ObjectIdentity.ContentKey]) -> [ObjectIdentity.ContentKey: MarkRecord] {
+        var out: [ObjectIdentity.ContentKey: MarkRecord] = [:]
+        for key in keys {
+            if let mark = cullMarks[key] { out[key] = mark }
+        }
+        return out
+    }
+
+    public func clearMarks(of keys: [ObjectIdentity.ContentKey]) {
+        for key in keys {
+            cullMarks[key] = nil
+        }
+    }
+
+    // MARK: Job records (Catalogue V4)
+
+    public func recordJob(_ job: JobRecord) {
+        jobRecords[job.id] = job
+        ensureCamera(job.camera)
+    }
+
+    public func job(_ id: UUID) -> JobRecord? { jobRecords[id] }
+
+    public func jobs(camera: CameraKey?) -> [JobRecord] {
+        JobOrder.sorted(jobRecords.values.filter { camera == nil || $0.camera == camera })
+    }
+
+    // MARK: Staged files and Forget imports (Catalogue V4)
+
+    public func stagedRecords(camera: CameraKey?) -> [CatalogueRecord] {
+        StagedOrder.sorted(records.values.filter {
+            $0.staged != nil && (camera == nil || $0.identity.camera == camera)
+        })
+    }
+
+    @discardableResult
+    public func forgetImports(camera: CameraKey) -> Int {
+        var forgotten = 0
+        for (identity, record) in records where identity.camera == camera {
+            switch ForgetRule.change(for: CatalogueRow(record)) {
+            case .keep:
+                continue
+            case .delete:
+                records[identity] = nil
+                byContent[identity.contentKey]?.remove(identity)
+                if byContent[identity.contentKey]?.isEmpty == true { byContent[identity.contentKey] = nil }
+            case let .rewrite(row):
+                records[identity] = row.record
+            }
+            forgotten += 1
+        }
+        markerRows.removeAll { $0.cameraKey == camera.rawValue }
+        return forgotten
+    }
+
+    // MARK: Pending commits (Catalogue V4)
+
+    public func beginCommit(_ pending: PendingCommit) throws(CatalogueFailure) {
+        guard !pending.files.isEmpty else { throw .emptyCommit }
+        markerRows.removeAll { $0.commitID == pending.id }
+        markerRows += PendingCommitColumns.rows(of: pending)
+    }
+
+    /// All or nothing within one actor call: none of these writes can fail here, and nothing suspends between them.
+    public func finishCommit(_ id: UUID, writing writes: [CommitWrite]) {
+        for write in writes {
+            switch write {
+            case let .imported(record): upsert(record)
+            case let .staged(identity, format, location): markStaged(identity, format: format, at: location)
+            }
+        }
+        abandonCommit(id)
+    }
+
+    public func abandonCommit(_ id: UUID) {
+        markerRows.removeAll { $0.commitID == id }
+    }
+
+    public func pendingCommits() -> [PendingCommit] {
+        PendingCommitColumns.commits(from: markerRows)
+    }
+
+    // MARK: Beyond the protocol
 
     /// Every row, in no particular order.
     public var allRecords: [CatalogueRecord] { Array(records.values) }
