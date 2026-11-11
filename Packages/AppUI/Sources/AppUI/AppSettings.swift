@@ -26,8 +26,9 @@ public final class InMemoryDestinationSettingStore: DestinationSettingStore, @un
 }
 
 /// The choice in `UserDefaults`, as the value's JSON under one key. `DestinationSetting` decodes leniently, so a
-/// value written by a later version reads as Photos rather than failing, and Files, written before 11 Nov, as *Stage*. Foundation only, so it is tested on Linux
-/// against a suite of its own. (`UserDefaults` is thread-safe, hence `@unchecked Sendable`.)
+/// value written by a later version reads as Photos rather than failing, and Files, written before 11 Nov, as
+/// *Stage*. Foundation only, so it is tested on Linux against a suite of its own. (`UserDefaults` is thread-safe,
+/// hence `@unchecked Sendable`.)
 public final class UserDefaultsDestinationSettingStore: DestinationSettingStore, @unchecked Sendable {
     public static let key = "destinationSetting"
     private let defaults: UserDefaults

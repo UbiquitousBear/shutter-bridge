@@ -121,7 +121,6 @@ struct BrowseBarWordingTests {
 
     @Test func theCellValueLeavesOutWhatTheLabelSays() {
         #expect(BrowseWording.cellAccessibilityValue(nil) == nil)
-        #expect(BrowseWording.cellAccessibilityValue(.imported) == nil)
         #expect(BrowseWording.cellAccessibilityValue(.notAPhoto) == nil)
         #expect(BrowseWording.cellAccessibilityValue(.video) == "Videos can't be imported yet.")
         #expect(BrowseWording.cellAccessibilityValue(.noCaptureDate) == "No capture date, so it can't be imported yet.")

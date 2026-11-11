@@ -224,19 +224,66 @@ struct BrowseStagingTests {
         await h.stop()
     }
 
-    @Test func aStagedPhotoCanBePickedToImportButAnImportedOneOnlyToStage() async {
+    @Test func stagedAndImportedPhotosCanBePickedWhateverTheDefault() async {
         let h = await start()
         #expect(await listed(h))
-        // Import to Photos is the default: a staged photo can be picked, an imported one can't.
-        #expect(h.model.selectionBlock(for: named("DSC00002.ARW")) == nil)
-        #expect(h.model.selectionBlock(for: named("DSC00001.ARW")) == .imported)
-        #expect(h.model.selectionBlock(for: named("DSC00003.JPG")) == .imported)
+        // Import to Photos is the default, and every photo can be picked: a staged one to import, an imported one
+        // to stage (Shamil, 11 Nov).
+        #expect(h.model.importButtonTitle == "Import")
+        for name in ["DSC00001.ARW", "DSC00002.ARW", "DSC00003.JPG", "DSC00004.JPG"] {
+            #expect(h.model.selectionBlock(for: named(name)) == nil)
+        }
         h.model.tap(named("DSC00002.ARW"))
         #expect(h.model.selectedItems.map(\.name) == ["DSC00002.ARW"])
         #expect(await h.model.importSelected() == .started(1))
         #expect(h.importer.asked.last?.choice == .photos)
         #expect(h.importer.asked.last?.newOnly == false)
         #expect(h.model.importNotice == "Importing 1 file.")
+        await h.stop()
+    }
+
+    /// The menu's *Stage* stages an imported photo picked while Import to Photos is the default.
+    @Test func anImportedPhotoCanBeStagedWhileImportToPhotosIsTheDefault() async {
+        let h = await start()
+        #expect(await listed(h))
+        h.model.tap(named("DSC00001.ARW"))
+        #expect(await h.model.importSelected(as: .staging) == .started(1))
+        #expect(h.importer.calls.last?.items.map(\.name) == ["DSC00001.ARW"])
+        #expect(h.importer.asked.last?.choice == .staging)
+        #expect(h.importer.asked.last?.newOnly == false)
+        #expect(h.model.importNotice == "Staging 1 file.")
+        // Select All New still skips it.
+        h.model.selectAllNew()
+        #expect(h.model.selectedItems.map(\.name) == ["DSC00004.JPG"])
+        await h.stop()
+    }
+
+    /// What the chosen import would leave out isn't handed over, so the notice counts only what it copies; when
+    /// nothing is left, no job starts and the notice says the files are done.
+    @Test func whatTheChosenImportLeavesOutIsNotHandedOver() async {
+        let h = await start()
+        #expect(await listed(h))
+        // Import to Photos leaves out imported photos.
+        h.model.tap(named("DSC00001.ARW"))
+        h.model.toggleSelection(named("DSC00004.JPG"))
+        #expect(await h.model.importSelected() == .started(1))
+        #expect(h.importer.calls.last?.items.map(\.name) == ["DSC00004.JPG"])
+        #expect(h.model.importNotice == "Importing 1 file.")
+        #expect(h.model.selectedItems.isEmpty)
+        // Only imported ones: nothing to hand over.
+        let calls = h.importer.calls.count
+        h.model.tap(named("DSC00003.JPG"))
+        #expect(await h.model.importSelected(as: .photos) == .nothingNew)
+        #expect(h.importer.calls.count == calls)
+        #expect(h.model.importNotice == "These files are already imported or in the import.")
+        #expect(h.model.selectedItems.isEmpty && !h.model.isSelecting)
+        // Stage leaves out staged photos, imported or not.
+        h.model.tap(named("DSC00002.ARW"))
+        h.model.toggleSelection(named("DSC00003.JPG"))
+        #expect(await h.model.importSelected(as: .staging) == .nothingNew)
+        #expect(h.importer.calls.count == calls)
+        #expect(h.model.importNotice == "These files are already staged or being staged.")
+        #expect(h.importer.importChoice == .photos) // nothing was handed over, so nothing was remembered
         await h.stop()
     }
 
@@ -266,9 +313,10 @@ struct BrowseStagingTests {
         #expect(h.importer.asked.last?.choice == .staging)
         #expect(h.importer.asked.last?.newOnly == true)
         #expect(h.model.importButtonTitle == "Stage")
-        // An explicit pick added to Select All New's picks is no longer "new only".
+        // An explicit pick added to Select All New's picks is no longer "new only": an imported photo picked with
+        // it is staged too.
         h.model.selectAllNew()
-        h.model.tap(named("DSC00002.ARW"))
+        h.model.tap(named("DSC00001.ARW"))
         #expect(await h.model.importSelected() == .started(2))
         #expect(h.importer.asked.last?.newOnly == false)
         await h.stop()

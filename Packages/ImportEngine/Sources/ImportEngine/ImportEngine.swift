@@ -227,6 +227,7 @@ public actor ImportEngine {
                 continue
             }
             let entry = FileEntry(identity: c.identity, index: current.nextIndex, item: c.item)
+            entry.queuedUnderStagingRule = facts.purpose == .staging
             current.nextIndex += 1
             current.add(entry)
             current.queue.append(c.identity)

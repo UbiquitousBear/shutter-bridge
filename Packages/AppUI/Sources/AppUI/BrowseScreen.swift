@@ -539,7 +539,7 @@ struct DayHeader: View {
 /// selecting it selects the file, otherwise it starts selecting with this file (`BrowseModel.tap(_:)`, until the
 /// loupe exists); VoiceOver's default action does the same. A still of the live card offers the press-and-hold menu.
 /// Video and other files are greyed out with no actions, and while selecting so are stills that can't be imported
-/// (already imported, no capture date); VoiceOver's value says why.
+/// (no capture date); VoiceOver's value says why. Imported and staged stills can be picked (Shamil, 11 Nov).
 struct CardCell: View {
     let item: CameraItem
     let model: BrowseModel

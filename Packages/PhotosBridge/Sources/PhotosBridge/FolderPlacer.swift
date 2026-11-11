@@ -154,6 +154,12 @@ struct FolderPlacer: Sendable {
 
     /// `NSUbiquitousFileUnavailableError`: the iCloud container isn't available (signed out, or iCloud Drive off).
     /// The number, rather than `CocoaError.Code.ubiquitousFileUnavailable`, so the mapping is the same everywhere.
+    ///
+    /// Unverified: that a container that goes away mid-job fails `setUbiquitous` or `createDirectory` with this code
+    /// (directly or as the underlying error) is from Apple's documentation, not the device. If it fails with "no such
+    /// file" (4 or 260) instead, the file maps to `.stagedFileMissing` and is downloaded again; with any other code,
+    /// to `.rejected`. Either way the job doesn't switch to this iPhone, though nothing is lost, and the next import
+    /// finds iCloud Drive unavailable (the locator asks again each time). Bench check S11 confirms it.
     static let ubiquitousFileUnavailable = 4353
 
     private static func isExists(_ error: any Error) -> Bool {

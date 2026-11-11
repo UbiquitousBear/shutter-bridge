@@ -333,8 +333,9 @@ extension BrowseWording {
     public static let importToPhotos = "Import to Photos"
     public static let stageInICloudDrive = "Stage in iCloud Drive"
     public static let stageOnIPhone = "Stage on iPhone"
-    /// The Import button's VoiceOver hint: the menu behind a long press.
-    public static let importButtonHint = "Touch and hold for Import to Photos or Stage."
+    /// The Import button's VoiceOver hint: what it does, not the gesture (VoiceOver reaches the menu its own way;
+    /// how it announces a menu with a primary action is to be confirmed on the iPhone).
+    public static let importButtonHint = "Uses the last choice. Import to Photos and Stage are in its menu."
 
     /// The Import button's title: "Import", or "Stage" when the remembered choice is *Stage*.
     public static func importButtonTitle(_ choice: DestinationKind) -> String {
@@ -370,7 +371,6 @@ extension BrowseWording {
         switch reason {
         case .video: videosNotYet
         case .notAPhoto: "This kind of file can't be imported."
-        case .imported: "Already imported."
         case .noCaptureDate: "No capture date, so it can't be imported yet."
         case .cardNotRead: "Wait until the card has been read."
         }
@@ -447,11 +447,11 @@ extension BrowseWording {
         return parts.joined(separator: ", ")
     }
 
-    /// The grid cell's VoiceOver value: why it can't be selected, unless the label says so already (Imported, Not a
-    /// photo); nil when it can be.
+    /// The grid cell's VoiceOver value: why it can't be selected, unless the label says so already (Not a photo); nil
+    /// when it can be.
     public static func cellAccessibilityValue(_ block: BrowseModel.SelectionBlock?) -> String? {
         switch block {
-        case nil, .imported?, .notAPhoto?: nil
+        case nil, .notAPhoto?: nil
         case let block?: notSelectable(block)
         }
     }
@@ -717,6 +717,7 @@ public enum ImportWording {
         // The row says it plainly; the thumbnail's "Video: from 1.1" is Shamil's on-screen label (9 Nov).
         case .notAStill: item.format == .video ? "videos can't be imported yet" : "not a photo"
         case .noCaptureDate: "no capture date"
+        case .alreadyStaged: "already staged"
         case let .link(kind):
             switch kind {
             case .itemNotFound: "no longer on the card"

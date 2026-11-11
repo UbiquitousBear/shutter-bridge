@@ -101,7 +101,7 @@ struct BrowseAndImportAgainstSimulatorTests {
         #expect(bench.importer.importedRevision > 0)
         try await bench.until("the badges after the import") { browse.imported.count == importableStills.count }
         #expect(Set(browse.shown.filter(browse.isImported).map(\.name)) == importableStills)
-        #expect(browse.selectionBlock(for: try #require(browse.shown("DSC00002.ARW"))) == .imported)
+        #expect(browse.selectionBlock(for: try #require(browse.shown("DSC00002.ARW"))) == nil) // to stage it
         for item in browse.shown where importableStills.contains(item.name) {
             #expect(await bench.state(of: item) == .imported, "\(item.name)")
         }

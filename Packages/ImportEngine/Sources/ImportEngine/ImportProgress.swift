@@ -68,10 +68,10 @@ public struct ImportProgress: Sendable, Hashable {
 
     public var bytesRemaining: UInt64 { bytesTotal > bytesDone ? bytesTotal - bytesDone : 0 }
 
-    /// 0 to 1, by bytes; 0 for an empty job.
     /// Files imported (part of `filesDone`): resolved, and neither staged, skipped nor failed.
     public var filesImported: Int { max(0, filesDone - filesSkipped - filesFailed - filesStaged) }
 
+    /// 0 to 1, by bytes; 0 for an empty job.
     public var fractionCompleted: Double {
         guard bytesTotal > 0 else { return 0 }
         return min(1, Double(bytesDone) / Double(bytesTotal))

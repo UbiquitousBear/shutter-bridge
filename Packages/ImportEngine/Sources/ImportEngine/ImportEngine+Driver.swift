@@ -174,6 +174,7 @@ extension ImportEngine {
                 continue
             }
             let entry = FileEntry(identity: p.identity, index: index, item: p.item)
+            entry.queuedUnderStagingRule = facts.purpose == .staging
             job.add(entry)   // replaces a file of the same content appended during the listing
             switch p.plan {
             case .queue:

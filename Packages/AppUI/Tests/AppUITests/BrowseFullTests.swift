@@ -79,7 +79,8 @@ struct BrowseFullTests {
         #expect(await eventually { h.model.phase == .listed && !h.model.imported.isEmpty })
         #expect(h.model.isImported(named("DSC00002.ARW")))
         #expect(!h.model.isImported(named("DSC00001.ARW")))
-        #expect(h.model.selectionBlock(for: named("DSC00002.ARW")) == .imported)
+        // It can still be picked, to stage it (Shamil, 11 Nov).
+        #expect(h.model.selectionBlock(for: named("DSC00002.ARW")) == nil)
         await h.stop()
     }
 
@@ -158,7 +159,7 @@ struct BrowseFullTests {
         #expect(await eventually { await catalogue.failedCalls == 1 })   // the live card's read
         let imported = named("DSC00002.ARW")
         #expect(model.isImported(imported))
-        #expect(model.selectionBlock(for: imported) == .imported)
+        #expect(model.selectionBlock(for: imported) == nil) // can be picked, to stage it
         #expect(!model.sections.flatMap(\.items).contains { $0.id == imported.id })
         model.selectAllNew()
         #expect(!model.isSelected(imported))
@@ -362,6 +363,19 @@ struct BrowseFullTests {
         await h.stop()
     }
 
+    /// An explicit pick stays picked when it is imported meanwhile: it can still be staged (Shamil, 11 Nov).
+    @Test func anExplicitPickImportedMeanwhileStaysSelected() async {
+        let catalogue = InMemoryCatalogue()
+        let h = await start(catalogue: catalogue)
+        #expect(await eventually { h.model.phase == .listed })
+        h.model.tap(named("DSC00003.JPG"))
+        await catalogue.upsert(importedRow("DSC00003.JPG", camera: h.link.descriptor))
+        await h.model.refreshImportedStates()
+        #expect(h.model.isImported(named("DSC00003.JPG")))
+        #expect(h.model.isSelected(named("DSC00003.JPG")))
+        await h.stop()
+    }
+
     /// The 17.1 bench run's MTP failure: Browse refreshes its badges itself when the import says more files were
     /// imported (nothing in SwiftUI has to ask), and stops following the import when it goes.
     @Test func browseRefreshesWhenTheImporterSaysMoreFilesWereImported() async {
@@ -392,7 +406,7 @@ struct BrowseFullTests {
         let h = await start(catalogue: catalogue)
         #expect(await eventually { h.model.phase == .listed && !h.model.imported.isEmpty })
         #expect(h.model.isImported(source))
-        #expect(h.model.selectionBlock(for: source) == .imported)
+        #expect(h.model.selectionBlock(for: source) == nil) // can be picked, to stage it
         await h.stop()
     }
 
@@ -426,7 +440,7 @@ struct BrowseFullTests {
         // The value: the reason, unless the label says it already.
         #expect(h.model.accessibilityValue(for: named("DSC00003.JPG")) == nil)
         #expect(h.model.accessibilityValue(for: named("DSC00001.JPG")) == nil)
-        #expect(h.model.accessibilityValue(for: named("DSC00002.ARW")) == nil)   // the label says Imported
+        #expect(h.model.accessibilityValue(for: named("DSC00002.ARW")) == nil)   // it can be picked, to stage it
         #expect(h.model.accessibilityValue(for: named("C0001.MP4")) == "Videos can't be imported yet.")
         #expect(h.model.accessibilityValue(for: named("DSC00005.JPG"))
             == "No capture date, so it can't be imported yet.")

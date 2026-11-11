@@ -33,7 +33,7 @@ struct ImportWordingTests {
         for choice in [DestinationKind.photos, .staging] {
             lines += outcomes.compactMap { BrowseWording.importRequested($0, choice: choice) }
         }
-        lines += [BrowseModel.SelectionBlock.video, .notAPhoto, .imported, .noCaptureDate, .cardNotRead]
+        lines += [BrowseModel.SelectionBlock.video, .notAPhoto, .noCaptureDate, .cardNotRead]
             .map(BrowseWording.notSelectable)
         lines += [ImportWording.destination(.photos, folder: nil, finished: false, imported: 0)!,
                   ImportWording.destination(.stagedHere(.chosen), folder: "Untitled", finished: true, imported: 1)!,

@@ -184,7 +184,8 @@ extension ImportEngine {
     ///
     /// The commit, the row and the cleanup run in an unstructured task, not in this lane, so ending the job (which
     /// cancels the driver and its lanes) never cancels a Photos save or a move into the staging folder half-way: the
-    /// file always gets its row. The retry after a failed commit runs back in the lane, where ending the job cancels its backoff.
+    /// file always gets its row. The retry after a failed commit runs back in the lane, where ending the job cancels
+    /// its backoff.
     func commit(_ url: URL, identity: ObjectIdentity, of id: UUID, download: Download) async -> Bool {
         guard let job = current(id), let entry = job.entries[identity] else { return false }
         entry.phase = .committing
@@ -192,10 +193,11 @@ extension ImportEngine {
         let item = entry.item
         let route = job.route
         let directory = download.attempt.directory
+        let checkStaged = !entry.queuedUnderStagingRule
         let token = UUID()
         let task = Task {
             await self.commitAndRecord(url, item: item, identity: identity, of: id, route: route,
-                                       attemptDirectory: directory)
+                                       attemptDirectory: directory, checkStaged: checkStaged)
         }
         commitsInFlight[token] = (id, task)
         let result = await task.value
@@ -204,6 +206,13 @@ extension ImportEngine {
         switch result {
         case let .failed(failure):
             return await commitFailed(failure, identity: identity, of: id, download: download, name: item.name)
+        case .alreadyStaged:
+            // Staged instead part-way, and staged already: left out, as a stage job's diff would have.
+            guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
+            trace(.alreadyStaged(item.name))
+            resolve(entry, .skipped(.alreadyStaged))
+            refreshState()
+            return false
         case let .committed(outcome, kind, written):
             // A commit that finishes after its job ended (cancelled, stopped) still resolves its file on the ended
             // job, so the finished Import screen's row and counts show it as imported or staged.
@@ -227,18 +236,34 @@ extension ImportEngine {
     }
 
     /// How a commit ended: committed (imported or staged, and where; into which destination; and whether its row was
-    /// written), or failed.
+    /// written), left out because it was to be staged and is staged already, or failed.
     enum CommitResult: Sendable {
         case committed(FileOutcome, DestinationKind, rowWritten: Bool)
+        case alreadyStaged
         case failed(ImportDestinationFailure)
     }
 
     /// The commit itself, its row and the cleanup of the staged file. Runs whether or not the job is still current:
     /// once a destination has the file, its row is written.
+    ///
+    /// - Parameter checkStaged: The file was queued by an import job, whose done rule ignores staging
+    ///   (`FileEntry.queuedUnderStagingRule`). If the job has been staged instead (a refused save, here or by another
+    ///   file; or a continue), a file the catalogue already has a staged copy of is left out (`.alreadyStaged`) rather
+    ///   than staged a second time, which would leave the first copy in the staging folder with no row.
     func commitAndRecord(_ url: URL, item: CameraItem, identity: ObjectIdentity, of id: UUID, route: ImportRoute,
-                         attemptDirectory: URL) async -> CommitResult {
+                         attemptDirectory: URL, checkStaged: Bool) async -> CommitResult {
         let unit = commitUnit(for: StagedFile(url: url, filename: item.name, captureDate: item.captureDate))
+        let fm = FileManager.default
+        /// Drops the downloaded file of one that is left out.
+        func discard() {
+            if fm.fileExists(atPath: url.path(percentEncoded: false)) { try? fm.removeItem(at: url) }
+            try? fm.removeItem(at: attemptDirectory)
+        }
         var used = route.destination
+        if checkStaged, used.kind == .staging, await isStaged(identity) {
+            discard()
+            return .alreadyStaged
+        }
         // Whether `used` is the staging folder in iCloud Drive, which can go away mid-job.
         var usedICloudDrive = route.purpose == .staging && route.stagesInICloudDrive
         var result: ImportResult?
@@ -264,6 +289,10 @@ extension ImportEngine {
             let staging = current(id)?.route ?? route
             used = staging.staging
             usedICloudDrive = staging.stagesInICloudDrive
+            if checkStaged, await isStaged(identity) {
+                discard()
+                return .alreadyStaged
+            }
             failure = nil
             do throws(ImportDestinationFailure) {
                 result = try await used.commit(unit)
@@ -312,10 +341,15 @@ extension ImportEngine {
         case .skipped, .failed:
             written = true // unreachable: a commit's outcome is imported or staged
         }
-        let fm = FileManager.default
-        if fm.fileExists(atPath: url.path(percentEncoded: false)) { try? fm.removeItem(at: url) } // Photos copies
-        try? fm.removeItem(at: attemptDirectory)
+        discard() // Photos copies; the staging folder moves the file, leaving only its folder
         return .committed(outcome, used.kind, rowWritten: written)
+    }
+
+    /// Whether the catalogue has a staged copy of the file (by content). A catalogue that can't answer counts as
+    /// not staged: a second copy is better than a file not staged at all.
+    func isStaged(_ identity: ObjectIdentity) async -> Bool {
+        guard let staged = try? await catalogue.stagedStates(of: [identity]) else { return false }
+        return staged.contains(identity)
     }
 
     /// Writes a committed file's row, trying up to `policy.catalogueWriteAttempts` times; whether it was written.

@@ -258,9 +258,12 @@ Bridge › Staging › camera › capture day) when iCloud Drive is available, a
 Staging otherwise. The code is in (`UbiquityStagingLocator` and `UbiquitousFileMover` in PhotosBridge, wired in
 `LiveRoot`), but the entitlements are not: the App ID doesn't have iCloud yet, and a build that signs with iCloud
 entitlements before the App ID has the capability and the container fails at signing or export (cloud signing at
-export won't add a capability, as for Hotspot Configuration above). Until the follow-up below lands,
-`url(forUbiquityContainerIdentifier:)` answers nil, so every build stages on this iPhone and says so (Settings and the
-Import screen: "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone.").
+export won't add a capability, as for Hotspot Configuration above). Until the follow-up below lands, the Info.plist
+doesn't declare the container (`NSUbiquitousContainers`), so `UbiquityStagingLocator` doesn't ask iCloud at all, and
+every build stages on this iPhone and says so (Settings and the Import screen: "iCloud Drive isn't available to
+Shutter Bridge, so staging is on this iPhone."). It checks the Info.plist rather than asking iCloud because
+`ubiquityIdentityToken` is commonly reported nil for an app without the entitlement, which would read as "iCloud Drive
+is off or you're not signed in" to a person signed in with it on (unverified; bench S1).
 
 **1. Portal (Shamil, before the follow-up PR).** Certificates, IDs & Profiles:
 - Identifiers → the filter's **iCloud Containers** → + → description "Shutter Bridge", identifier
@@ -296,7 +299,8 @@ No `com.apple.developer.icloud-container-environment` (CloudKit only) and no key
 
 `App/Info.plist`: the folder Files shows as iCloud Drive › Shutter Bridge (with the app's icon; no Sony mark). The key
 must equal the container identifier exactly; `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` stay, for
-On My iPhone:
+On My iPhone. This entry is also what turns on `UbiquityStagingLocator`'s lookup, so it lands in the same PR as the
+entitlements, never before them:
 
 ```xml
 	<key>NSUbiquitousContainers</key>

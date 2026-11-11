@@ -11,6 +11,9 @@ public enum ImportSkipReason: Sendable, Hashable {
     case notAStill
     /// The link gave no capture date, so the file has no identity (section 4 decides what to do with these).
     case noCaptureDate
+    /// An import job was staged instead part-way (Photos access was turned off: a refused save, or a continue), and
+    /// the catalogue already has a staged copy of this file (by content), so it isn't staged a second time.
+    case alreadyStaged
 }
 
 /// Why a file failed: real errors only, after the retries (decision 4). Public for the Import screen's rows.
@@ -80,6 +83,10 @@ final class FileEntry {
     var shownBytes: UInt64 = 0
     /// Its partial copy, on a link that resumes; nil on one that doesn't (each attempt has a folder of its own).
     var resumable: ResumableFile?
+    /// Queued under a stage job's done rule, which already left it out if it was staged. False for a file queued by
+    /// an import job, which ignores staging: if that job is staged instead, the file is checked for a staged copy
+    /// before it is committed (`ImportEngine.commitAndRecord`), so it is never staged twice.
+    var queuedUnderStagingRule = false
 
     init(identity: ObjectIdentity, index: Int, item: CameraItem) {
         self.identity = identity

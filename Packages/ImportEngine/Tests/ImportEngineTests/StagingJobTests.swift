@@ -308,6 +308,44 @@ struct StagingJobTests {
         await h.cleanup()
     }
 
+    /// An import job staged instead by a refused save never stages a file a second time: a picked file that is
+    /// staged already (B, by content) is left out, saying so, and its staged copy keeps its one row.
+    @Test func anImportStagedByADenialLeavesOutWhatIsStaged() async throws {
+        let (h, card) = await Self.seeded()
+        let link = h.link(card)
+        await h.photos.deny(from: 1)
+        h.photosAccess.set(.denied)
+        try await h.start(.items([card[1], card[3]]), from: link, to: h.photosRoute)
+        #expect(await h.waitFinished() == .completed)
+        #expect(await h.files.committedNames == ["D.JPG"])
+        #expect(await h.outcome(of: card[1]) == .skipped(.alreadyStaged))
+        #expect(h.trace.log.contains(.alreadyStaged("B.JPG")))
+        #expect(await h.record(for: card[1]) == nil) // no second row with a second staged copy
+        let b = h.identity(of: card[1])
+        #expect(try await h.catalogue.stagedStates(of: [b]) == [b]) // the other row's copy still counts
+        #expect(h.stagedFiles == 0)
+        await h.cleanup()
+    }
+
+    /// An import job staged instead by a continue (Photos access turned off meanwhile) leaves out the files it had
+    /// queued that are staged already, rather than staging them twice.
+    @Test func anImportStagedByAContinueLeavesOutWhatIsStaged() async throws {
+        let (h, card) = await Self.seeded()
+        let link = h.link(card)
+        await link.script("D.JPG", .hold)
+        try await h.start(.items([card[3], card[1]]), from: link, to: h.photosRoute)
+        let held = await link.nextHeldCall("D.JPG")
+        try await h.engine.pause()
+        try await h.engine.resume(to: h.stageRoute(reason: .photosDenied))
+        held.release()
+        #expect(await h.waitFinished() == .completed)
+        #expect(await h.photos.attempts == 0)
+        #expect(await h.files.committedNames == ["D.JPG"])
+        #expect(await h.outcome(of: card[1]) == .skipped(.alreadyStaged))
+        #expect(await h.record(for: card[1]) == nil)
+        await h.cleanup()
+    }
+
     // MARK: - The purpose holds
 
     /// A stage job stays one across a pause and a continue: a Photos route offered with the continue is refused, and
