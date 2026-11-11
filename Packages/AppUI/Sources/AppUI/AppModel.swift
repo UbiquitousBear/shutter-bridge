@@ -3,6 +3,7 @@ import Catalogue
 import Foundation
 import ImportEngine
 import Observation
+import PhotosBridge
 
 /// The composition root's plain half: the app's models, wired to each other. The app (Apple-only) opens the
 /// catalogue, makes the engine, the Photos library and the destinations, and hands them here; everything below is
@@ -41,6 +42,9 @@ public final class AppModel {
     @ObservationIgnored private var reminderActivity: Task<Void, Never>?
     /// When each camera counts as connected for the reminder (W18), when the app has a reminder.
     @ObservationIgnored let connectionHolds: ConnectionHolds?
+    /// For the Staging screen (`stagingModel`): the staged files and their marks, and where staging's iCloud folder is.
+    @ObservationIgnored private let catalogue: any CatalogueStore
+    @ObservationIgnored private let stagingLocator: any StagingLocator
 
     public init(
         discovery: any CameraDiscovery,
@@ -60,6 +64,8 @@ public final class AppModel {
         diagnostics: (any DiagnosticsExporting)? = nil
     ) {
         self.notifier = notifier
+        self.catalogue = catalogue
+        stagingLocator = destinations
         self.wifi = wifi
         self.wireless = wireless
         self.discovery = discovery
@@ -209,6 +215,18 @@ public final class AppModel {
 
     /// The key of the camera whose import is running (or paused, which still holds its link), if one is.
     private var activeImportKey: CameraKey? { importer.isActive ? importer.camera?.key : nil }
+
+    /// A model for the Staging screen (backlog section 7.3; D5), over the app's catalogue and staging locator, made each
+    /// time the screen opens so it reads the staged files as they are then. The app passes its Documents folder (On My
+    /// iPhone's staging root) and the Apple-only parts: the preview loader, iCloud's file availability and the EXIF
+    /// reader.
+    public func stagingModel<Image: Sendable>(documents: URL, loader: any PreviewLoading<Image>,
+                                              files: any StagedFileAvailability = AlwaysLocalFiles(),
+                                              reader: any StagedFileReading = StagedFileReaders.platform,
+                                              exif: (@Sendable (URL) async -> EXIFSummary?)? = nil) -> CullModel<Image> {
+        CullModel(catalogue: catalogue, onThisIPhone: documents, locator: stagingLocator, reader: reader,
+                  loader: loader, files: files, exif: exif, log: log)
+    }
 
     /// The model for browsing `camera`, with the catalogue and the import.
     public func browseModel(for camera: CameraDescriptor) -> BrowseModel {
