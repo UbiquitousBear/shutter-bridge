@@ -5,10 +5,14 @@ import PhotosBridge
 
 extension ImportEngine {
     /// One job from start to finish: list and diff, download, and on a removal wait for the camera, relist and find
-    /// the files left by content (name, capture time, size). Removes the job's staging folder when it ends.
+    /// the files left by content (name, capture time, size). Removes the job's staging folder when it ends, unless a
+    /// commit no lane waits for is still reading from it (`removeFolderIfUnused(of:)`).
     func runJob(_ id: UUID) async {
-        guard let directory = current(id)?.jobDirectory else { return }
-        defer { try? FileManager.default.removeItem(at: directory) }
+        guard let job = current(id) else { return }
+        defer {
+            job.driverReturned = true
+            removeFolderIfUnused(of: job)
+        }
         while let job = current(id) {
             switch job.phase {
             case .listing:

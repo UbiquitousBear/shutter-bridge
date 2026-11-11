@@ -297,7 +297,7 @@ struct PairTests {
 
     /// A job that ends with a half waiting for its partner (stopped by the other file in flight, or cancelled) leaves
     /// none of its downloads on disk once it reports the end: the held half's file goes as an abandoned download's
-    /// does, not later with the job's folder, which the driver removes only once its lanes have returned.
+    /// does, not later with the job's folder, which goes only once the driver's lanes have returned.
     @Test(arguments: [false, true])
     func aJobThatEndsMidPairLeavesNoDownloadBehind(_ cancelled: Bool) async throws {
         let root = FileManager.default.temporaryDirectory
@@ -334,6 +334,47 @@ struct PairTests {
         #expect(h.stagedFiles == 0)
         #expect(await h.photos.attempts == 0)
         #expect(await h.records().isEmpty)
+        await h.cleanup()
+    }
+
+    /// A half committed alone, outside the lanes, while its job is cancelled or stopped (by the next file finding the
+    /// phone full): the commit finishes on the ended job and records its row, as a lane's commit does. The job's
+    /// folder holds the half's file, so it outlives the commit: the driver, which no lane holds up, returns without
+    /// removing it, and the commit removes it once it is done.
+    @Test(arguments: [false, true])
+    func aLoneHalfCommittingWhenTheJobEndsIsImported(_ cancelled: Bool) async throws {
+        let h = Harness()
+        let (raw, jpeg) = Self.frame(h, "DSC00002", at: Harness.t0.addingTimeInterval(2))
+        let victim = h.item("DSC00001.JPG", size: 2100, date: Harness.t0.addingTimeInterval(1))
+        let link = h.link(cancelled ? [raw, jpeg] : [victim, raw, jpeg])
+        await link.script(jpeg.name, .fail(.unreadableItem)) // skipped: the ARW goes alone at once
+        await link.script(victim.name, .fail(.phoneStorageFull))
+        let dest = HoldingDestination(failsIfFileMissing: true)
+        try await h.start(.allNew, from: link, to: h.photosRoute(to: dest))
+        await dest.waitArrived()
+        #expect(h.trace.log.contains(.committedWithoutPartner(raw.name)))
+        if cancelled {
+            await h.engine.cancel()
+            #expect(await h.waitFinished() == .cancelled)
+        } else {
+            #expect(await h.waitFinished() == .stopped(.phoneStorageFull))
+        }
+        await h.engine.lastJobDriver()?.value
+        #expect(h.stagedFiles == 1, "the committing file was deleted under its commit")
+
+        await dest.release()
+        let settled = await h.trace.next { event in
+            switch event {
+            case let .imported(name, _), let .failed(name, _): name == raw.name
+            default: false
+            }
+        }
+        #expect(settled == .imported(raw.name, .photos))
+        #expect(await dest.stagedFileAtCommit == [true])
+        #expect(await h.outcome(of: raw) == .imported(.photosAsset(localIdentifier: "held-1")))
+        #expect(await h.record(for: raw)?.state == .imported)
+        let left = try FileManager.default.contentsOfDirectory(atPath: h.staging.path(percentEncoded: false))
+        #expect(left.filter { $0 != ImportEngine.partialsFolderName } == [], "the job's folder outlived the commit")
         await h.cleanup()
     }
 

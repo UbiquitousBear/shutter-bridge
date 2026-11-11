@@ -231,6 +231,8 @@ final class Job {
     var rate: RateEstimator
     var finished: JobOutcome?
     var driver: Task<Void, Never>?
+    /// The driver has returned, and with it every lane and the commits they wait for; set once the job has ended.
+    var driverReturned = false
 
     init(camera: CameraKey, timeZone: TimeZone, selection: ImportSelection, limit: Int, staging: URL,
          link: any CameraLink, route: ImportRoute, rateSamples: Int) {

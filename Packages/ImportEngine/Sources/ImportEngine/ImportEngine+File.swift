@@ -268,7 +268,8 @@ extension ImportEngine {
     }
 
     /// A commit no download lane waits for (a held half committed alone): its result is settled in its own task,
-    /// which then wakes the driver and finishes the job if nothing is left.
+    /// which then wakes the driver and finishes the job if nothing is left. The driver doesn't wait for it, so a job
+    /// that ends meanwhile leaves its folder, which holds the half's file, for this task to remove once it is done.
     func commitWithoutLane(_ halves: [Half], of job: Job) {
         let id = job.id
         guard let started = startCommit(halves, of: job) else { return }
@@ -278,6 +279,7 @@ extension ImportEngine {
             _ = await self.settle(result, halves, lane: nil, of: id)
             self.current(id)?.signal.fire()
             self.finishIfDrained(id)
+            self.removeFolderIfUnused(of: job)
         }
     }
 

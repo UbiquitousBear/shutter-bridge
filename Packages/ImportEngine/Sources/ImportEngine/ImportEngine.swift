@@ -558,7 +558,8 @@ public actor ImportEngine {
     }
 
     /// Ends the job: abandons downloads (a committing file finishes in its own unstructured task, which cancelling the
-    /// driver doesn't reach, and records its row), wakes the driver so it drains and removes the staging folder.
+    /// driver doesn't reach, and records its row), wakes the driver so it drains and removes the job's folder (or
+    /// leaves it to the last commit still reading from it: `removeFolderIfUnused(of:)`).
     func end(_ job: Job, _ outcome: JobOutcome) {
         guard self.job === job else { return }
         for entry in job.entries.values {
@@ -760,10 +761,25 @@ public actor ImportEngine {
         }
     }
 
+    /// Removes an ended job's staging folder once nothing reads from it any more: its driver has returned (so every
+    /// lane has, with the commits the lanes wait for) and none of its commits is in flight. Called by the driver as
+    /// it returns and by each commit no lane waits for once it is done, so whichever is last removes the folder, and
+    /// nobody waits for anybody: a destination that never answers keeps only that folder, which the next launch
+    /// empties with the rest of the staging folder. Each job has its own folder, so a job started meanwhile keeps
+    /// its own.
+    func removeFolderIfUnused(of job: Job) {
+        guard job.finished != nil, job.driverReturned,
+              !commitsInFlight.values.contains(where: { $0.job == job.id }) else { return }
+        try? FileManager.default.removeItem(at: job.jobDirectory)
+    }
+
     // MARK: - Test support
 
     /// The current job's zone.
     func jobTimeZone() -> TimeZone? { job?.timeZone }
+
+    /// The last finished job's driver, to wait until it has returned.
+    func lastJobDriver() -> Task<Void, Never>? { lastJob?.driver }
 
     /// The latest attempt at a resumable file of the current job: the one whose checkpoint crossings are written.
     func latestAttempt(of identity: ObjectIdentity) -> DownloadAttempt? {
