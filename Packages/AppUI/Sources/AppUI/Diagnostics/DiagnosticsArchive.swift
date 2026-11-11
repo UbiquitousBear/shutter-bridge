@@ -22,7 +22,7 @@ public struct DiagnosticsLogEntry: Sendable, Hashable {
     }
 }
 
-/// Where the current launch's log lines come from: the unified log in the app (`OSLogStoreReader`), a fake in tests.
+/// Where the current launch's log lines come from: the unified log in the app (`LogStoreReader`), a fake in tests.
 public protocol LogEntrySource: Sendable {
     func entries() async throws -> [DiagnosticsLogEntry]
 }

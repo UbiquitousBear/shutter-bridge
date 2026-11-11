@@ -32,6 +32,7 @@ struct DiagnosticsRedactorTests {
             "home address 192.168.1.20 and 10.0.0.9, 172.20.10.3",
             "(203.0.113.77)",
             "v6 2001:db8:85a3:0:0:8a2e:370:7334 and fe80::1c2d:3e4f:5a6b:7c8d and ::1",
+            "mapped ::ffff:198.51.100.7 port and 64:ff9b::203.0.113.9.",
             "camera at \(DiagnosticsRedactor.cameraGateway) is fine, 192.168.122.10 is not",
             "network name inside a word: xx\(network.lowercased())yy and \(password.uppercased())",
         ]
@@ -41,7 +42,7 @@ struct DiagnosticsRedactorTests {
         let out = redactor.redact(stream.joined(separator: "\n"))
         for forbidden in [serial, network, network.lowercased(), password, password.uppercased(), guid, guid.lowercased(),
                           peripheral, peripheral.uppercased(), hardwareID, hardwareID.lowercased(), "a1:b2:c3", "A1-B2-C3",
-                          "192.168.1.20", "10.0.0.9", "172.20.10.3", "203.0.113.77", "192.168.122.10", "2001:db8", "fe80",
+                          "198.51.100", "51.100.7", "203.0.113.9", "113.9", "ffff", "192.168.1.20", "10.0.0.9", "172.20.10.3", "203.0.113.77", "192.168.122.10", "2001:db8", "fe80",
                           "1c2d:3e4f", "DIRECT-", "Qx7k", "8813"] {
             #expect(!out.localizedCaseInsensitiveContains(forbidden), "\"\(forbidden)\" survived in:\n\(out)")
         }

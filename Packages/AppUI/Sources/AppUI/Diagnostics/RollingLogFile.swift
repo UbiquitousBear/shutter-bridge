@@ -8,8 +8,10 @@ import Synchronization
 /// shares an export; nothing here reads it except `DiagnosticsArchive`.
 ///
 /// Writing never throws and never blocks the caller for long: a failed write drops the line. The lines are the app's own
-/// bench lines, which hold names, sizes and times only; the archive redacts them again when it is made, with the values
-/// the app knows are private by then.
+/// bench lines, which hold names, sizes and times only. Each message goes through the redactor's patterns (identifiers,
+/// MAC addresses, hardware IDs, addresses; no private values, which the file doesn't know) before it is written, so one
+/// that slips into a line never reaches disk; the archive redacts everything again when it is made, with the values the
+/// app knows are private by then.
 public final class RollingLogFile: Sendable, BenchLog {
     public static let folderName = "Diagnostics"
     public static let defaultMaxLaunches = 3
@@ -24,6 +26,8 @@ public final class RollingLogFile: Sendable, BenchLog {
     private let directory: URL
     private let maxBytes: Int
     private let now: @Sendable () -> Date
+    /// Patterns only: the private values are known to the archive, not to the file.
+    private let redactor = DiagnosticsRedactor()
     private let state: Mutex<State>
 
     private struct StoredFile {
@@ -75,7 +79,8 @@ public final class RollingLogFile: Sendable, BenchLog {
 
     /// Adds one entry to this launch's file, first making room within the budget.
     public func append(_ entry: DiagnosticsLogEntry) {
-        var message = entry.message
+        // Redacted before it is cut, so the cut can't leave half an identifier behind.
+        var message = redactor.redact(entry.message)
         if message.count > Self.maxMessageCharacters { message = String(message.prefix(Self.maxMessageCharacters)) + "…" }
         let line = Self.encode(DiagnosticsLogEntry(date: entry.date, category: entry.category, level: entry.level,
                                                    message: message))

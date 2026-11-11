@@ -8,7 +8,7 @@ import OSLog
 ///
 /// Entries are read with their composed message; the bench lines are logged public, so they are there in full. Private
 /// interpolations would read `<private>`.
-public struct OSLogStoreReader: LogEntrySource {
+public struct LogStoreReader: LogEntrySource {
     public let subsystem: String
 
     public init(subsystem: String = Bundle.main.bundleIdentifier ?? "net.shamil.shutter-bridge") {

@@ -49,6 +49,20 @@ struct RollingLogFileTests {
         }
     }
 
+    @Test func patternsAreRedactedBeforeALineReachesDisk() throws {
+        try withFolder { folder in
+            let file = RollingLogFile(directory: folder, launchStarted: at(0))
+            let identifier = "5a4b3c2d-1e0f-4a1b-9c8d-7e6f5a4b3c2d"
+            file.note("peer \(identifier) at 10.1.2.3 and ::ffff:198.51.100.7, camera 192.168.122.1, 4.1 s")
+            let text = try String(contentsOf: folder.appendingPathComponent(files(in: folder)[0]), encoding: .utf8)
+            for forbidden in [identifier, "10.1.2.3", "198.51.100", "ffff"] {
+                #expect(!text.contains(forbidden), "\"\(forbidden)\" reached the file:\n\(text)")
+            }
+            #expect(text.contains("camera 192.168.122.1, 4.1 s"))
+            #expect(file.currentLaunch().entries.first?.message.contains(DiagnosticsRedactor.identifierMark) == true)
+        }
+    }
+
     @Test func aLaunchIsMadeByItsFirstLineNotByStartingIt() throws {
         try withFolder { folder in
             let file = RollingLogFile(directory: folder, launchStarted: at(0))

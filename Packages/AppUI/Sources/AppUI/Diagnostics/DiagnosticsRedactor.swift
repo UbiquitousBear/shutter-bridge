@@ -10,7 +10,8 @@ import Foundation
 /// - anything shaped like a UUID (the PTP/IP GUID, a peripheral identifier, a device identifier);
 /// - a MAC address (six pairs of hex digits joined by colons or hyphens), and 12 hex digits in a row (the camera's
 ///   hardware ID, the tail of its SSDP UDN);
-/// - an IPv6 address (eight groups, or any with "::");
+/// - an IPv6 address (eight groups, or any with "::"), including one that ends in a dotted IPv4 address
+///   (`::ffff:192.168.1.20`), which goes whole;
 /// - an IPv4 address other than the camera's fixed gateway, 192.168.122.1, which is the same on every α7C II and which the
 ///   bench lines name on purpose.
 ///
@@ -56,9 +57,11 @@ public struct DiagnosticsRedactor: Sendable {
     private static let uuid = pattern(#"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"#)
     private static let macAddress = pattern(#"(?<![0-9A-Fa-f])[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f])"#)
     private static let twelveHexDigits = pattern(#"(?<![0-9A-Za-z])[0-9A-Fa-f]{12}(?![0-9A-Za-z])"#)
-    // Eight groups, or a shorter run containing "::" (which a time such as 10:20:30 never has).
+    // Eight groups, or a shorter run containing "::" (which a time such as 10:20:30 never has). A run with "::" may end
+    // in a dotted IPv4 address (an IPv4-mapped address, `::ffff:192.168.1.20`): tried before the last hex group, so the
+    // address goes whole and its last three octets are not left behind for the IPv4 pass to miss.
     private static let ipv6 = pattern(
-        #"(?<![0-9A-Fa-f:])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{0,4}::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{0,4})(?![0-9A-Fa-f:])"#)
+        #"(?<![0-9A-Fa-f:])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{0,4}::(?:[0-9A-Fa-f]{1,4}:){0,6}(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3}|[0-9A-Fa-f]{0,4}))(?![0-9A-Fa-f:])"#)
     private static let ipv4 = pattern(#"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9]|\.[0-9])"#)
 
     /// Built once. A pattern that doesn't compile is a bug found by the first test, never by a user's data.
