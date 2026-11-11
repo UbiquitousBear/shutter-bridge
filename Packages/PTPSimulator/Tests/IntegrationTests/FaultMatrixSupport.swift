@@ -151,6 +151,63 @@ actor RecordingDestination: ImportDestination {
     }
 }
 
+// MARK: - The work folder at the end of a job
+
+/// What the engine's trace says of the work folder, for check 4. The sink runs synchronously on the engine's actor,
+/// and `end(_:_:)` traces `finished` before it returns, so the folder is listed at the moment the job reads as
+/// finished, before the driver (a task that needs the actor) can remove the job's folder: a file the engine should
+/// have deleted by then and left for the driver is seen here, not only in a look taken after the driver ran. The sink
+/// only lists the folder and takes a lock of its own: it never waits and never calls the engine.
+final class FinishedJobs: Sendable {
+    private enum Entry: Sendable {
+        /// A job read as finished with these files (not under `Partials`) in the work folder.
+        case finished([URL])
+        /// A file's result was traced (committed, staged, left out or failed).
+        case result(String)
+        /// A job listed the card.
+        case listed
+    }
+
+    private let log = Mutex<[Entry]>([])
+
+    func record(_ event: EngineTrace, work: URL) {
+        switch event {
+        case .finished:
+            let files = MatrixBench.workFiles(in: work).others.map { $0.resolvingSymlinksInPath() }
+            log.withLock { $0.append(.finished(files)) }
+        case let .imported(name, _), let .staged(name, _), let .alreadyStaged(name), let .skipped(name, _),
+             let .failed(name, _):
+            log.withLock { $0.append(.result(name)) }
+        case .listed:
+            log.withLock { $0.append(.listed) }
+        default:
+            break
+        }
+    }
+
+    /// The names of the files in the work folder at the end of any job that were neither written by an abandoned
+    /// call (`late`: resolved paths) nor a file whose result was traced after that job finished, up to the next
+    /// listing or job end: a commit still under way when the job ended holds its staged file until it is done, and
+    /// traces its result when it is.
+    func leaks(excluding late: Set<String>) -> [String] {
+        let entries = log.withLock { $0 }
+        var leaks: [String] = []
+        for (i, entry) in entries.enumerated() {
+            guard case let .finished(files) = entry else { continue }
+            var resolved: Set<String> = []
+            for later in entries[(i + 1)...] {
+                guard case let .result(name) = later else { break }
+                resolved.insert(name)
+            }
+            for file in files where !late.contains(file.path) && !resolved.contains(file.lastPathComponent)
+                && !leaks.contains(file.lastPathComponent) {
+                leaks.append(file.lastPathComponent)
+            }
+        }
+        return leaks
+    }
+}
+
 // MARK: - The bench
 
 struct MatrixTimeout: Error, CustomStringConvertible {
@@ -177,6 +234,8 @@ final class MatrixBench {
     let staging: RecordingDestination
     let inFlight: Int
     private(set) var engine: ImportEngine
+    /// What the engine's trace showed of the work folder when each job ended (`FinishedJobs`).
+    let finished = FinishedJobs()
     /// Every progress reading the waits took, for "progress never went backwards".
     private(set) var samples: [ImportProgress] = []
     /// The folder rows are keyed under when a link can't tell the folder (`IPLink` lists none): "" for the real Wi-Fi
@@ -195,22 +254,23 @@ final class MatrixBench {
                                       place: Self.place)
         staging = RecordingDestination(kind: .staging, folder: root.appendingPathComponent("staging", isDirectory: true),
                                        place: Self.place)
-        engine = Self.makeEngine(catalogue: catalogue, work: work, clock: clock, inFlight: inFlight)
+        engine = Self.makeEngine(catalogue: catalogue, work: work, clock: clock, inFlight: inFlight, finished: finished)
     }
 
     deinit { try? FileManager.default.removeItem(at: root) }
 
-    private static func makeEngine(catalogue: InMemoryCatalogue, work: URL, clock: CameraClock,
-                                   inFlight: Int) -> ImportEngine {
+    private static func makeEngine(catalogue: InMemoryCatalogue, work: URL, clock: CameraClock, inFlight: Int,
+                                   finished: FinishedJobs) -> ImportEngine {
         ImportEngine(catalogue: catalogue, settings: ImportSettings(downloadsInFlight: inFlight),
-                     stagingDirectory: work, clock: clock, timeZone: zone)
+                     stagingDirectory: work, clock: clock, timeZone: zone,
+                     trace: EngineTraceSink { event in finished.record(event, work: work) })
     }
 
     /// The app was killed and started again: a new engine over what the first left on disk and in the catalogue.
     /// The first engine is only parked, never told anything, so nothing it would do is part of the case.
     func relaunch() {
         retired.append(engine)
-        engine = Self.makeEngine(catalogue: catalogue, work: work, clock: clock, inFlight: inFlight)
+        engine = Self.makeEngine(catalogue: catalogue, work: work, clock: clock, inFlight: inFlight, finished: finished)
         samples = []
     }
 
@@ -324,6 +384,25 @@ final class MatrixBench {
         var late: Set<String> = []
         /// Late files the engine had not discarded when the wait ran out.
         var undiscarded: [String] = []
+        /// `callsState().counts` when `late` was read: if it has changed since, a call has reached a link after the
+        /// settle, and the settle is stale.
+        var counts: [Int] = []
+    }
+
+    /// What the links' abandoned calls have done so far: per link, the `bytes` calls writing and the late files
+    /// recorded (links that resume keep their files, so their late files aren't the engine's to discard).
+    func callsState() async -> (counts: [Int], writing: [String], late: [URL]) {
+        var counts: [Int] = []
+        var writing: [String] = []
+        var late: [URL] = []
+        for link in links {
+            let n = await link.downloadsWriting
+            let files = link.capabilities.resumesPartialFiles ? [] : await link.lateFiles
+            counts += [n, files.count]
+            if n > 0 { writing.append("\(n) on \(link.descriptor.mode)") }
+            late += files
+        }
+        return (counts, writing, late)
     }
 
     /// Waits (bounded) for the downloads the engine walked away from to end, and for the engine to discard what they
@@ -333,27 +412,23 @@ final class MatrixBench {
     /// scripted cut, a throughput wait or a suspension writes nothing until the test lets it), and then only until
     /// each file such a late call wrote is gone (on a link whose attempts keep their files the engine keeps it, and
     /// the partials check judges it). It doesn't wait for any other file: one the engine deletes only some time after
-    /// the job ends is a leak, which the work-folder check must still see. Calls still writing when the wait runs out
-    /// are recorded as an issue.
-    func settleAbandonedCalls(sourceLocation: SourceLocation = #_sourceLocation) async -> AbandonedCalls {
-        let deadline = ContinuousClock.now.advanced(by: Self.patience)
-        while true {
-            var writing: [String] = []
-            for link in links {
-                let n = await link.downloadsWriting
-                if n > 0 { writing.append("\(n) on \(link.descriptor.mode)") }
-            }
-            if writing.isEmpty { break }
+    /// the job ends is a leak, which the work-folder check must still see. Calls still writing when the wait ran out
+    /// are recorded as an issue. A call can reach a link after the wait: compare `callsState().counts` with the
+    /// result's `counts` once the work folder has been read, and settle again if they differ.
+    func settleAbandonedCalls(until deadline: ContinuousClock.Instant = ContinuousClock.now.advanced(by: MatrixBench.patience),
+                              sourceLocation: SourceLocation = #_sourceLocation) async -> AbandonedCalls {
+        var state = await callsState()
+        while !state.writing.isEmpty {
             guard ContinuousClock.now < deadline else {
-                Issue.record("downloads still writing after \(Self.patience): \(writing.joined(separator: ", "))",
+                Issue.record("downloads still writing after \(Self.patience): \(state.writing.joined(separator: ", "))",
                              sourceLocation: sourceLocation)
                 break
             }
             try? await Task.sleep(for: .milliseconds(2))
+            state = await callsState()
         }
-        var late: [URL] = []
-        for link in links where !link.capabilities.resumesPartialFiles { late += await link.lateFiles }
-        var found = AbandonedCalls(late: Set(late.map { $0.resolvingSymlinksInPath().path }))
+        let late = state.late
+        var found = AbandonedCalls(late: Set(late.map { $0.resolvingSymlinksInPath().path }), counts: state.counts)
         let fm = FileManager.default
         while true {
             let left = late.filter { fm.fileExists(atPath: $0.path(percentEncoded: false)) }
@@ -449,7 +524,10 @@ final class MatrixBench {
     }
 
     /// The regular files under the work folder: partial files (under `Partials`) and anything else.
-    func workFiles() -> (partials: [URL], others: [URL]) {
+    func workFiles() -> (partials: [URL], others: [URL]) { Self.workFiles(in: work) }
+
+    /// `workFiles()` of any work folder; the trace sink calls it on the engine's actor, so it only lists the folder.
+    static func workFiles(in work: URL) -> (partials: [URL], others: [URL]) {
         var partials: [URL] = []
         var others: [URL] = []
         // Symlinks resolved on both sides: on a Mac the temporary folder is under /var, a link to /private/var, and the
@@ -637,13 +715,31 @@ final class MatrixBench {
             }
         }
 
-        // 4: the work folder: as it is now, but for files of calls the engine walked away from, and again once
-        // those calls have ended and the engine has discarded their files. The first look is taken before any wait,
-        // so a file the engine deletes only some time after the job has ended is still seen.
+        // 4: the work folder: as it was when each job read as finished (listed by the trace sink on the engine's actor,
+        // before the driver can remove the job's folder), as it is now, and again once abandoned calls have ended and
+        // the engine has discarded their files. The look "now" is taken before any wait, so a file the engine deletes
+        // only some time after the job has ended is still seen. Files of calls the engine walked away from are not
+        // judged (they are the late files), and nor is a file whose commit was under way when the job ended (its
+        // result is traced after `finished`).
         let before = workFiles().others
-        let abandoned = await settleAbandonedCalls(sourceLocation: sourceLocation)
-        let (kept, after) = workFiles()
-        var others = before.filter { !abandoned.late.contains($0.resolvingSymlinksInPath().path) }.map(\.lastPathComponent)
+        let deadline = ContinuousClock.now.advanced(by: Self.patience)
+        var abandoned = await settleAbandonedCalls(until: deadline, sourceLocation: sourceLocation)
+        var (kept, after) = workFiles()
+        // A call that reached a link after the settle may have written a late file the settle didn't know of.
+        while await callsState().counts != abandoned.counts {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("abandoned calls were still reaching the links after \(Self.patience)",
+                             sourceLocation: sourceLocation)
+                break
+            }
+            abandoned = await settleAbandonedCalls(until: deadline, sourceLocation: sourceLocation)
+            (kept, after) = workFiles()
+        }
+        var others = finished.leaks(excluding: abandoned.late).map { "\($0) (when a job ended)" }
+        for url in before where !abandoned.late.contains(url.resolvingSymlinksInPath().path)
+            && !others.contains(url.lastPathComponent) {
+            others.append(url.lastPathComponent)
+        }
         for url in after where !others.contains(url.lastPathComponent) { others.append(url.lastPathComponent) }
         let late = abandoned.undiscarded.isEmpty ? "" : " (late, not discarded: \(abandoned.undiscarded))"
         #expect(others.isEmpty, "work folder holds \(others)\(late)", sourceLocation: sourceLocation)

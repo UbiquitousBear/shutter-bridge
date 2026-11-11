@@ -121,7 +121,7 @@ The proposal: "cable pulled at 10 %, 50 %, 99 % of a file; Wi-Fi drop then recon
 1. every selected file is either committed exactly once (one unit in the destination per content key) or reported as skipped or failed with its reason; none is silently missing;
 2. the bytes committed equal the scripted card's bytes for that file;
 3. the catalogue holds one `.imported` row per committed file and none for a file not committed; `.partial` rows exist only for files the case leaves resumable;
-4. the engine's work folder holds nothing but kept partials once the job ends;
+4. the engine's work folder holds nothing but kept partials once the job ends (the harness lists it from the engine's trace sink at the moment each job reads as finished, before the driver can remove the job's folder, as well as after the job and its abandoned calls have ended);
 5. progress never went backwards, and the outcome class (retry now, retry on reconnect, skip this file, stop the job) is the one the error taxonomy gives.
 
 | Case | USB | Wi-Fi | Status | Note |
