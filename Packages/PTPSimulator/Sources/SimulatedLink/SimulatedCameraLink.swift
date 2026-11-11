@@ -27,8 +27,21 @@ import PTPSimulator
 ///   or a held catalogue) end at once with `.noAnswer`, and a download stop at its next chunk, as `IPLink` will.
 /// - **Closing** is final, as `USBLink`'s is: `open()` on a closed link throws `.disconnected`.
 ///
-/// Remote Shoot (PC Remote) lists no files (`.modeListsNoFiles`), as `USBLink` reports it. Drops, a slow link and
-/// duplicate file names are Iteration 2's fault matrix.
+/// **Fault hooks** (Iteration 2's fault matrix, backlog section 3):
+/// - **A slow link:** `limitThroughput(bytesPerTick:every:)` lets a download write only what the budget grants; time
+///   passes only through `advance(by:)`, so a test (or the integration clock) says how many bytes have gone by.
+/// - **A camera that powers off:** `powerOff()` ends the session the way the carrier does (USB: removal; Wi-Fi: the
+///   session lost) and every `open()` fails as `.disconnected` until `powerOn()`, however long that is on the
+///   test's clock. The camera never announces it.
+/// - **A camera at another address:** `moveCamera(to:)` loses the session and answers only at the new location; each
+///   `open()` dials the `locationProvider`'s answer (or the link's fixed location), so a link given a provider
+///   reconnects to the new address and one with a fixed location is refused.
+/// - **A late loss from a replaced session:** `loseSessionAndReopen(announcing: .late)` replaces the session without
+///   telling the app, and `sendLateSessionLoss()` delivers the old session's `.sessionLost` afterwards, while the new
+///   session is up (I13's rule: it must not pause the job).
+///
+/// Remote Shoot (PC Remote) lists no files (`.modeListsNoFiles`), as `USBLink` reports it. Duplicate file names are
+/// the card's business (`ScriptedCard`).
 ///
 /// **Carrier rules follow `capabilities`** (by default the mode's carrier baseline, `CameraLinkCapabilities.usb` or
 /// `.wifi`), so one simulator plays either link as far as the contract goes (not Sony's PTP/IP wire behaviour,
@@ -75,6 +88,15 @@ public actor SimulatedCameraLink: CameraLink {
         }
     }
 
+    /// When the app is told that a session was lost and another opened in its place.
+    public enum LossAnnouncement: Sendable, Hashable {
+        /// `.sessionLost` goes out as the session is replaced.
+        case immediately
+        /// Nothing goes out; `sendLateSessionLoss()` sends the old session's `.sessionLost` later, the way a socket
+        /// that failed during a reconnect reports itself after the new session is already up.
+        case late
+    }
+
     private enum HoldOutcome: Sendable {
         case released, removed, cancelled
     }
@@ -89,6 +111,8 @@ public actor SimulatedCameraLink: CameraLink {
     public nonisolated let honoursCancellation: Bool
     /// The bytes written between progress reports and suspension checks.
     public nonisolated let chunkSize: UInt64
+    /// Where `open()` dials, asked at each open; nil dials `dialLocation`.
+    public nonisolated let locationProvider: (@Sendable () -> PTPIPEndpoint)?
 
     private let fanOut = LiveEvents<CameraLinkEvent>()
 
@@ -113,10 +137,30 @@ public actor SimulatedCameraLink: CameraLink {
     public private(set) var isStoreAvailable = true
     /// Whether `open()` waits for `allowLocalNetwork()`.
     public private(set) var isHeldForLocalNetwork = false
+    /// Whether the camera is off (`powerOff()`); every `open()` fails as `.disconnected` until `powerOn()`.
+    public private(set) var isPoweredOff = false
+    /// Where the camera answers now. Its description withholds an address other than the camera's own, so logging it
+    /// is safe, but nothing here does.
+    public private(set) var cameraLocation: PTPIPEndpoint
+    /// Where the link dialled last, or will dial if it has no provider.
+    public private(set) var dialLocation: PTPIPEndpoint
+    /// Where each `open()` dialled, in order, failed ones included.
+    public private(set) var dialled: [PTPIPEndpoint] = []
+    /// Old sessions' `.sessionLost` events held back by `loseSessionAndReopen(announcing: .late)`.
+    public private(set) var lateSessionLosses = 0
+    /// Downloads waiting for the throughput budget to grow.
+    public var throttledDownloads: Int { throughputWaiters.count }
+    /// The throughput limit, if one is set.
+    public var throughputLimit: (bytesPerTick: UInt64, tick: Duration)? {
+        budget.map { ($0.bytesPerTick, $0.tick) }
+    }
     /// Counts `loseSession()`s: a call that began in an earlier session ends as `disconnected`.
     private var sessionEpoch = 0
     private var bytesInFlight = 0
     private var closed = false
+
+    private var budget: ThroughputBudget?
+    private var throughputWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
 
     private var injected: [Operation: [CameraLinkFailure.Kind]] = [:]
     private var scripts: [String: [BytesStep]] = [:]
@@ -134,6 +178,11 @@ public actor SimulatedCameraLink: CameraLink {
     ///   - name: What the camera calls itself (in MSC the card's volume name, "Untitled", would be truer).
     ///   - descriptorID: The discovery handle; kept across `replugged()`.
     ///   - capabilities: The link's rules; the mode's carrier baseline when nil.
+    ///   - isPoweredOff: The camera starts off (`powerOn()` switches it on).
+    ///   - location: Where the camera answers: the camera's own network address by default.
+    ///   - dialling: Where the link dials when it has no provider; `location` when nil.
+    ///   - locationProvider: Asked at every `open()` where to dial, as the app's locator is: a camera that moved is
+    ///     found there. Without one the link keeps dialling `dialling`.
     public init(
         card: ScriptedCard,
         mode: CameraMode = .usb(.mtp),
@@ -143,9 +192,17 @@ public actor SimulatedCameraLink: CameraLink {
         generation: Int = 1,
         honoursCancellation: Bool = false,
         chunkSize: UInt64 = 256 * 1024,
-        capabilities: CameraLinkCapabilities? = nil
+        capabilities: CameraLinkCapabilities? = nil,
+        isPoweredOff: Bool = false,
+        location: PTPIPEndpoint = .cameraNetwork,
+        dialling: PTPIPEndpoint? = nil,
+        locationProvider: (@Sendable () -> PTPIPEndpoint)? = nil
     ) {
         self.card = card
+        self.isPoweredOff = isPoweredOff
+        cameraLocation = location
+        dialLocation = dialling ?? location
+        self.locationProvider = locationProvider
         descriptor = CameraDescriptor(id: .init(rawValue: descriptorID), name: name, mode: mode)
         self.capabilities = capabilities ?? .defaults(for: mode.carrier)
         self.timeZone = timeZone
@@ -172,6 +229,7 @@ public actor SimulatedCameraLink: CameraLink {
         }
         try await waitWhileSuspended(.open)
         try requireNotClosed(.open)
+        try reachCamera()
         try takeInjected(.open)
         openCount += 1
         isOpen = true
@@ -355,12 +413,99 @@ public actor SimulatedCameraLink: CameraLink {
     }
 
     /// `loseSession()` and the link opening again in one step, so a test can have the new session in place before a
-    /// call from the old one wakes. Calls that began before it still end as `.disconnected`.
-    public func loseSessionAndReopen() {
+    /// call from the old one wakes. Calls that began before it still end as `.disconnected`. With `.late` the old
+    /// session's `.sessionLost` is not sent now: `sendLateSessionLoss()` sends it, with the new session up.
+    public func loseSessionAndReopen(announcing announcement: LossAnnouncement = .immediately) {
         guard isUsable else { return }
-        loseSession()
+        switch announcement {
+        case .immediately:
+            loseSession()
+        case .late:
+            sessionEpoch += 1
+            isOpen = false
+            lateSessionLosses += 1
+            wakeEveryone(with: .removed)
+        }
         openCount += 1
         isOpen = true
+    }
+
+    /// Sends the `.sessionLost` of a session `loseSessionAndReopen(announcing: .late)` replaced, one per call, in the
+    /// order they were replaced. The link's state doesn't change: the session now open is not the one that was lost.
+    /// The event carries no generation yet, so the engine can't tell this loss from a real loss of the new session: when
+    /// I13 adds one to `CameraLinkEvent.sessionLost`, this hook must stamp the replaced session's generation.
+    /// Returns whether one was waiting.
+    @discardableResult
+    public func sendLateSessionLoss() -> Bool {
+        guard lateSessionLosses > 0 else { return false }
+        lateSessionLosses -= 1
+        fanOut.send(.sessionLost)
+        return true
+    }
+
+    /// The camera runs out of battery, or is switched off, and doesn't come back until `powerOn()`. Over USB the cable
+    /// is still in, but the camera leaves the bus: this is `remove()`, and the way back is `powerOn()` and
+    /// `replugged()`. Over Wi-Fi the session is lost with no event from the camera (`.sessionLost` is the phone seeing
+    /// its sockets die) and every `open()` fails as `.disconnected` (nothing answers) until `powerOn()`, however long
+    /// that is on the test's clock.
+    public func powerOff() {
+        guard !isPoweredOff else { return }
+        isPoweredOff = true
+        switch descriptor.mode.carrier {
+        case .usb: remove()
+        case .wifi: if isOpen { loseSession() }
+        }
+    }
+
+    /// The camera is on again. A removed USB link stays removed (`replugged()` makes the new one); a Wi-Fi link opens.
+    public func powerOn() { isPoweredOff = false }
+
+    /// The camera restarts its responder somewhere else (another port, or another address on its network): an open
+    /// session is lost, and from now the camera answers only at `location`. A dial anywhere else is refused if the
+    /// host is the same (nothing listens on that port) and unanswered, `.disconnected`, if it isn't. The link finds
+    /// the camera again only if its `locationProvider` says where it went.
+    public func moveCamera(to location: PTPIPEndpoint) {
+        cameraLocation = location
+        if isOpen { loseSession() }
+    }
+
+    /// From now downloads write `bytesPerTick` bytes per `tick` of simulated time (`advance(by:)`), sharing the budget
+    /// when two run at once; progress is reported after each piece, however small. Replaces any earlier limit, with
+    /// nothing banked.
+    ///
+    /// `bytesPerTick` must be at least 1 and `tick` positive (a precondition: 0 is not "stalled" and not "unlimited").
+    public func limitThroughput(bytesPerTick: UInt64, every tick: Duration = .seconds(1)) {
+        precondition(bytesPerTick > 0 && tick > .zero,
+                     "a limit grants at least one byte per positive tick; removeThroughputLimit() is the way to lift it")
+        budget = ThroughputBudget(bytesPerTick: bytesPerTick, every: tick)
+        wakeAll(.throughput)
+    }
+
+    /// Back to the chunk size alone; waiting downloads go on.
+    public func removeThroughputLimit() {
+        budget = nil
+        wakeAll(.throughput)
+    }
+
+    /// Lets `elapsed` simulated time go by for the throughput limit (nothing happens without one). Move it with the
+    /// engine's manual clock, as `PTPIPResponderCore.advance(by:)` is moved.
+    public func advance(by elapsed: Duration) {
+        guard budget != nil else { return }
+        budget?.advance(by: elapsed)
+        if (budget?.available ?? 0) > 0 { wakeAll(.throughput) }
+    }
+
+    /// Returns true once a download is waiting for the throughput budget to grow, polling for at most `timeout` of
+    /// real time (10 s by default) and returning false if none parks by then (or the task is cancelled), so a
+    /// download that never parks fails a test instead of hanging it: a wait on a continuation can't be ended by a
+    /// suite's time limit.
+    public func waitUntilThrottled(timeout: Duration = .seconds(10)) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while throughputWaiters.isEmpty {
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return true
     }
 
     /// Sends any event as it is, without changing the link's state.
@@ -379,11 +524,14 @@ public actor SimulatedCameraLink: CameraLink {
 
     /// The camera plugged in again (or, over Wi-Fi, the link made again): a new, unopened link over the card as it is
     /// now, with the same name, mode, capabilities and descriptor and the next generation of item IDs (which differ
-    /// from the old ones only if the capabilities say IDs don't last). Failures and scripts don't carry over.
+    /// from the old ones only if the capabilities say IDs don't last). The camera's power and location carry over, and
+    /// the link's way of finding it. Failures, scripts and the throughput limit don't.
     public func replugged() -> SimulatedCameraLink {
         SimulatedCameraLink(card: card, mode: descriptor.mode, name: descriptor.name,
                             descriptorID: descriptor.id.rawValue, timeZone: timeZone, generation: generation + 1,
-                            honoursCancellation: honoursCancellation, chunkSize: chunkSize, capabilities: capabilities)
+                            honoursCancellation: honoursCancellation, chunkSize: chunkSize, capabilities: capabilities,
+                            isPoweredOff: isPoweredOff, location: cameraLocation, dialling: dialLocation,
+                            locationProvider: locationProvider)
     }
 
     /// The next `times` calls of `operation` throw `kind` (after waiting out a suspension, before doing anything).
@@ -452,6 +600,36 @@ public actor SimulatedCameraLink: CameraLink {
         }
     }
 
+    /// The camera has to be on and answering where the link dials.
+    private func reachCamera() throws(CameraLinkFailure) {
+        let target = locationProvider?() ?? dialLocation
+        dialLocation = target
+        dialled.append(target)
+        if isPoweredOff { throw CameraLinkFailure(.disconnected, detail: "open: nothing answers") }
+        guard target == cameraLocation else {
+            if target.host == cameraLocation.host {
+                throw CameraLinkFailure(.refused, detail: "open: nothing listens on that port")
+            }
+            throw CameraLinkFailure(.disconnected, detail: "open: nothing answers at that address")
+        }
+    }
+
+    /// Waits until the budget grants bytes and returns how many (at most `wanted`); the checks a wait for a chunk makes
+    /// are made again after each wake. With the limit removed meanwhile it grants all of `wanted`.
+    private func takeThroughput(upTo wanted: UInt64, _ session: Session) async throws(CameraLinkFailure) -> UInt64 {
+        while true {
+            guard var current = budget else { return wanted }
+            let granted = current.take(upTo: wanted)
+            budget = current
+            if granted > 0 { return granted }
+            await park(.throughput)
+            try throwIfCancelled(.bytes)
+            try await waitWhileSuspended(.bytes)
+            try requireSession(session.epoch, .bytes)
+            try requireStore(.bytes)
+        }
+    }
+
     private func requireStore(_ operation: Operation) throws(CameraLinkFailure) {
         if !isStoreAvailable {
             throw CameraLinkFailure(.cardUnavailable, detail: "\(operation.rawValue): the card is not offered")
@@ -477,7 +655,7 @@ public actor SimulatedCameraLink: CameraLink {
         }
     }
 
-    private enum WaitList { case suspension, catalogue, localNetwork }
+    private enum WaitList { case suspension, catalogue, localNetwork, throughput }
 
     /// Waits until the list is woken (`wakeAll`), or, when cancellation is honoured, until the task is cancelled.
     /// Callers re-check their condition afterwards, and `throwIfCancelled`.
@@ -491,6 +669,7 @@ public actor SimulatedCameraLink: CameraLink {
                 case .suspension: suspensionWaiters[token] = continuation
                 case .catalogue: catalogueWaiters[token] = continuation
                 case .localNetwork: localNetworkWaiters[token] = continuation
+                case .throughput: throughputWaiters[token] = continuation
                 }
                 if honours && Task.isCancelled { wake(list, token) }
             }
@@ -504,6 +683,7 @@ public actor SimulatedCameraLink: CameraLink {
         case .suspension: suspensionWaiters.removeValue(forKey: token)?.resume()
         case .catalogue: catalogueWaiters.removeValue(forKey: token)?.resume()
         case .localNetwork: localNetworkWaiters.removeValue(forKey: token)?.resume()
+        case .throughput: throughputWaiters.removeValue(forKey: token)?.resume()
         }
     }
 
@@ -512,6 +692,7 @@ public actor SimulatedCameraLink: CameraLink {
         case .suspension: suspensionWaiters.keys.sorted()
         case .catalogue: catalogueWaiters.keys.sorted()
         case .localNetwork: localNetworkWaiters.keys.sorted()
+        case .throughput: throughputWaiters.keys.sorted()
         }
         for token in tokens { wake(list, token) }
     }
@@ -574,7 +755,8 @@ public actor SimulatedCameraLink: CameraLink {
         defer { try? handle.close() }
         var offset = start
         while offset < end {
-            let n = min(chunkSize, end - offset)
+            var n = min(chunkSize, end - offset)
+            if budget != nil { n = try await takeThroughput(upTo: n, session) }
             try append(ScriptedCard.content(of: object.handle, in: offset ..< offset + n), to: handle)
             offset += n
             progress(offset)
@@ -651,5 +833,6 @@ public actor SimulatedCameraLink: CameraLink {
         wakeAll(.catalogue)
         wakeAll(.suspension)
         wakeAll(.localNetwork)
+        wakeAll(.throughput)
     }
 }

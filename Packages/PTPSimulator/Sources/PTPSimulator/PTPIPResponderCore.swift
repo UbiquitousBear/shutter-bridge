@@ -146,6 +146,15 @@ public struct PTPIPResponderCore: Sendable {
         return actions
     }
 
+    /// Payload of a data phase is going out: the session is not idle (the idle drop counts from the last command or
+    /// the last payload sent, whichever is later). The sender calls it for each Data packet it puts on the wire, so a
+    /// throttled transfer that keeps making progress is not cut off by the 30 s drop; one that makes none for
+    /// `idleDropAfter` of simulated time still is. An `advance(by:)` longer than the limit drops the session whatever
+    /// was sent since the last one.
+    public mutating func noteTransferActivity() {
+        responder.noteTransferActivity()
+    }
+
     /// Lets the caller script the responder (`inject(_:forNext:times:)`).
     public mutating func withResponder<T>(_ body: (inout PTPResponder) -> T) -> T { body(&responder) }
 
@@ -298,16 +307,30 @@ public struct DataPhasePackets: Sequence, IteratorProtocol, Sendable {
         self.packetSize = Swift.max(1, packetSize)
     }
 
+    /// The payload bytes the next packet can carry at most: 0 for Start_Data and for an End_Data with nothing left
+    /// to send, otherwise up to `packetSize`. A throttled sender takes this many bytes from its budget first.
+    public var nextPayloadSize: Int {
+        guard started, !ended else { return 0 }
+        return Int(Swift.min(phase.length - offset, UInt64(packetSize)))
+    }
+
     public mutating func next() -> Data? {
+        next(payloadLimit: packetSize)
+    }
+
+    /// The next packet with at most `payloadLimit` payload bytes (at least 1; `packetSize` still caps it), so a
+    /// throttled sender can send what its budget allows. Start_Data carries no payload and ignores the limit.
+    public mutating func next(payloadLimit: Int) -> Data? {
         if ended { return nil }
         if !started {
             started = true
             return PTPIP.startData(transactionID: transactionID, totalLength: phase.length).encode()
         }
+        let size = Swift.min(packetSize, Swift.max(1, payloadLimit))
         let left = phase.length - offset
-        if left > UInt64(packetSize) {
-            let bytes = phase.read(from: offset, count: packetSize)
-            offset += UInt64(packetSize)
+        if left > UInt64(size) {
+            let bytes = phase.read(from: offset, count: size)
+            offset += UInt64(size)
             return PTPIP.data(transactionID: transactionID, bytes: bytes).encode()
         }
         ended = true

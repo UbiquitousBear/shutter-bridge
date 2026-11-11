@@ -12,6 +12,12 @@ import Synchronization
 /// One actor owns the core. Each connection has one receive outstanding at a time, re-armed only after its bytes are
 /// handled, so packets are handled in order; a data phase is sent a packet at a time, each awaited, so a 40 MB object
 /// never sits in memory.
+///
+/// **Fault hooks** (backlog Iteration 2, section 3; compiled and run only by CI's Xcode 27 job, the logic they use
+/// is tested on Linux): `limitThroughput(bytesPerTick:every:)` sends a data phase only as fast as a budget that grows
+/// with `advance(by:)`, and `restartAtAnotherPort()` stops the listener and starts it again on a different port, as
+/// the camera's responder coming back somewhere else. The address can't change on loopback; the in-memory camera
+/// (`InMemoryPTPIPCamera.restart(at:)`) plays a new host.
 public actor PTPIPSimulatorServer {
     public enum Failure: Error, Sendable, Hashable {
         /// The listener couldn't be made or failed before it was ready.
@@ -28,6 +34,10 @@ public actor PTPIPSimulatorServer {
     private var nextID = 1
     /// The port the listener is on, once `start()` has returned.
     public private(set) var port: UInt16?
+    /// The throughput limit's budget, if one is set.
+    private var budget: ThroughputBudget?
+    /// Data phases waiting for the budget to grow (or for a connection to end).
+    private var budgetWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// - Parameter packetSize: The payload of each Data packet in a data phase (the camera's size isn't recorded).
     public init(core: PTPIPResponderCore, packetSize: Int = 1 << 20) {
@@ -119,7 +129,38 @@ public actor PTPIPSimulatorServer {
         _ = core.dropAll()
         for connection in connections.values { connection.cancel() }
         connections = [:]
+        resumeBudgetWaiters()
         await ended?.value
+    }
+
+    /// Stops the listener and starts it again on a port other than the one it had, and returns the new port: the
+    /// camera's responder restarting somewhere else. Every connection ends, as `stop()` ends them; the old port refuses
+    /// from then on. The system picks the port, so it retries (at most 8 times) until it differs.
+    public func restartAtAnotherPort() async throws(Failure) -> UInt16 {
+        let old = port
+        for _ in 0 ..< 8 {
+            await stop()
+            let new = try await start()
+            if new != old { return new }
+        }
+        throw .listenerFailed("the system gave the same port again")
+    }
+
+    /// From now a data phase goes out `bytesPerTick` payload bytes per `tick` of simulated time, waiting for
+    /// `advance(by:)` when the budget is spent. Replaces any earlier limit, with nothing banked.
+    ///
+    /// `bytesPerTick` must be at least 1 and `tick` positive (a precondition: 0 is not "stalled" and not "unlimited").
+    public func limitThroughput(bytesPerTick: UInt64, every tick: Duration = .seconds(1)) {
+        precondition(bytesPerTick > 0 && tick > .zero,
+                     "a limit grants at least one byte per positive tick; removeThroughputLimit() is the way to lift it")
+        budget = ThroughputBudget(bytesPerTick: bytesPerTick, every: tick)
+        resumeBudgetWaiters()
+    }
+
+    /// Back to full speed; a data phase waiting for budget goes on.
+    public func removeThroughputLimit() {
+        budget = nil
+        resumeBudgetWaiters()
     }
 
     /// Shoots `frames` onto the card and sends ObjectAdded on the event channel (`PTPResponder.ObjectAddedStyle`).
@@ -141,6 +182,8 @@ public actor PTPIPSimulatorServer {
     /// keeps no clock of its own, so a test says exactly how much time has passed. Code compiled only by CI's
     /// Xcode 27 job; the logic it calls is tested on Linux.
     public func advance(by elapsed: Duration) async {
+        budget?.advance(by: elapsed)
+        resumeBudgetWaiters()
         await perform(core.advance(by: elapsed))
     }
 
@@ -209,6 +252,7 @@ public actor PTPIPSimulatorServer {
     private func ended(_ id: Int) async {
         guard let connection = connections.removeValue(forKey: id) else { return }
         connection.cancel()
+        resumeBudgetWaiters()
         await perform(core.disconnected(id))
     }
 
@@ -218,14 +262,40 @@ public actor PTPIPSimulatorServer {
             case let .send(packet, to: id):
                 await send(packet.encode(), on: id)
             case let .sendData(transactionID, phase, to: id):
-                for packet in DataPhasePackets(transactionID: transactionID, phase: phase, packetSize: packetSize) {
-                    guard connections[id] != nil else { break }
+                var packets = DataPhasePackets(transactionID: transactionID, phase: phase, packetSize: packetSize)
+                while connections[id] != nil {
+                    var granted = packetSize
+                    let wanted = packets.nextPayloadSize
+                    if wanted > 0, var current = budget {
+                        granted = Int(current.take(upTo: UInt64(wanted)))
+                        budget = current
+                        if granted == 0 {
+                            await waitForBudget()
+                            continue
+                        }
+                    }
+                    guard let packet = packets.next(payloadLimit: granted) else { break }
+                    core.noteTransferActivity()
                     await send(packet, on: id)
                 }
             case let .close(id):
                 if let connection = connections.removeValue(forKey: id) { connection.cancel() }
+                resumeBudgetWaiters()
             }
         }
+    }
+
+    private func waitForBudget() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            budgetWaiters.append(continuation)
+        }
+    }
+
+    /// Wakes every data phase waiting for budget; each looks again, and waits again if there is still none.
+    private func resumeBudgetWaiters() {
+        let waiters = budgetWaiters
+        budgetWaiters = []
+        for waiter in waiters { waiter.resume() }
     }
 
     private func send(_ data: Data, on id: Int) async {
