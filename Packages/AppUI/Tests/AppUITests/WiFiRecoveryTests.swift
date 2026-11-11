@@ -269,7 +269,8 @@ struct WiFiRecoveryTests {
     private static let allNames = ["DSC00001.ARW", "DSC00002.JPG", "DSC00003.ARW"]
 
     private func bench(bluetoothSwitchOnWhenAway: Bool = true,
-                       recoveriesPerImport: Int = WiFiRecoveryTiming.recoveriesPerImport) async -> Bench {
+                       recoveriesPerImport: Int = WiFiRecoveryTiming.recoveriesPerImport,
+                       log: any BenchLog = SilentBenchLog()) async -> Bench {
         let clock = RecoveryTestClock()
         let tickClock = RecoveryTestClock()
         let link = SimulatedCameraLink(card: Self.card, mode: .wifi(.cameraNetwork), honoursCancellation: true,
@@ -291,7 +292,8 @@ struct WiFiRecoveryTests {
             recoveriesPerImport: recoveriesPerImport,
             listing: { (link: any CameraLink, known: [CameraItem]) async throws(CameraLinkFailure) -> [CameraItem] in
                 try await listings.list(link, known: known)
-            })
+            },
+            log: log)
         let session = FakeRecoverySession(clock: clock)
         coordinator.session = session
         model.attachWiFiRecovery(coordinator)
@@ -559,6 +561,22 @@ struct WiFiRecoveryTests {
         b.coordinator.tryAgain()
         #expect(await b.sessionCalls(3))
         #expect(await b.finished())
+    }
+
+    /// Giving up is a real failure (I8): its line goes out at error level, says how long the recovery had run, and holds no
+    /// address or name; the lines before it are notices.
+    @Test func givingUpIsAnErrorLine() async throws {
+        let log = LeveledLog()
+        let b = await bench(log: log)
+        await b.session.script([.failure(.cameraNotFound), .link(b.link)])
+        try await startAndLoseTheSession(b)
+        #expect(await b.phase(.gaveUp))
+        let errors = log.entries.filter { $0.level == .error }
+        #expect(errors.count == 1)
+        let line = try #require(errors.first?.line)
+        #expect(line.hasPrefix("wifi recovery: gave up after "))
+        #expect(line.hasSuffix(" s; waiting for the person"))
+        #expect(log.entries.filter { $0.level == .notice }.allSatisfy { $0.line.hasPrefix("wifi recovery:") })
     }
 
     @Test func aFailedReopenInFrontGivesUpUntilThePersonTriesAgain() async throws {

@@ -16,8 +16,9 @@ public struct SystemJPEGClipboard: JPEGClipboard {
 }
 
 /// The bench lines in the unified log, so Shamil can read them in Console or from a sysdiagnose: subsystem the app's
-/// bundle identifier, category "browse". Logged at the default (notice) level, which is kept on disk, and public:
-/// the lines hold file names, sizes and times only, never file contents or a camera's identifiers.
+/// bundle identifier, category "browse". Logged at the default (notice) level, which is kept on disk, or at the error
+/// level for a real failure (`BenchLogLevel`), and public: the lines hold file names, sizes and times only, never file
+/// contents or a camera's identifiers.
 public struct OSLogBenchLog: BenchLog {
     public static let category = "browse"
     private let logger: Logger
@@ -27,15 +28,22 @@ public struct OSLogBenchLog: BenchLog {
     }
 
     public func note(_ line: String) {
-        logger.notice("\(line, privacy: .public)")
+        note(line, level: .notice)
+    }
+
+    public func note(_ line: String, level: BenchLogLevel) {
+        switch level {
+        case .notice: logger.notice("\(line, privacy: .public)")
+        case .error: logger.error("\(line, privacy: .public)")
+        }
     }
 }
 
 extension BrowseServices {
-    /// What the app uses: Core Image and ImageIO, the general pasteboard, the caches folder and OSLog.
-    public static func system() -> BrowseServices {
-        BrowseServices(maker: CoreImageJPEGMaker(), clipboard: SystemJPEGClipboard(), scratch: .inCaches(),
-                       log: OSLogBenchLog())
+    /// What the app uses: Core Image and ImageIO, the general pasteboard, the caches folder and `log` (OSLog by default;
+    /// the app passes OSLog and the rolling file together).
+    public static func system(log: any BenchLog = OSLogBenchLog()) -> BrowseServices {
+        BrowseServices(maker: CoreImageJPEGMaker(), clipboard: SystemJPEGClipboard(), scratch: .inCaches(), log: log)
     }
 }
 #endif

@@ -451,7 +451,8 @@ public final class ImportModel: BrowseImporting {
             try await engine.start(newOnly ? .newItems(toDo) : .items(toDo), from: link, camera: camera.key,
                                    to: route)
         } catch {
-            log.note("import: didn't start: \(error)")
+            // An empty selection is the person's "nothing new", not a failure; any other refusal is one, so an error.
+            log.note("import: didn't start: \(error)", level: error == .emptySelection ? .notice : .error)
             self.camera = nil
             stagingFolderName = nil
             if error == .emptySelection {

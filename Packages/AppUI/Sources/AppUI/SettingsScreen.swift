@@ -12,6 +12,11 @@ import UIKit
 /// a sheet from the Cameras screen's toolbar; nothing here needs saving, so the sheet closes with the system close
 /// button, not Done (HIG Sheets).
 ///
+/// When the app has a diagnostics exporter (I8), a row *Export Diagnostics…* makes the plain-text file of the app's own log and
+/// opens the share sheet (`SharePresenter`) on it; the footer says what is in the file and that nothing is sent anywhere until
+/// the person shares it. The model removes the file's folder once the sheet closes, and when Settings closes (`LiveApp`'s
+/// sheet).
+///
 /// When the app has the proximity reminder (W18, placed by W16), a Reminders row pushes `ReminderSettingsView` inside this
 /// sheet's navigation stack and says whether the reminder is on; the `ReminderModel` comes from the environment.
 struct SettingsScreen: View {
@@ -48,6 +53,28 @@ struct SettingsScreen: View {
                 } footer: {
                     Text(SettingsWording.stagingFooter)
                 }
+                if model.offersDiagnosticsExport {
+                    Section {
+                        Button {
+                            Task { await model.exportDiagnostics() }
+                        } label: {
+                            HStack {
+                                Text(DiagnosticsWording.rowTitle)
+                                Spacer()
+                                if model.exportState == .preparing { ProgressView() }
+                            }
+                        }
+                        .disabled(model.isExporting)
+                        .accessibilityValue(model.exportState == .preparing ? DiagnosticsWording.preparing : "")
+                        .accessibilityHint(DiagnosticsWording.accessibilityHint)
+                        if case let .failed(text) = model.exportState {
+                            Label(text, systemImage: "exclamationmark.triangle")
+                                .font(.subheadline)
+                        }
+                    } footer: {
+                        Text(DiagnosticsWording.footer)
+                    }
+                }
                 if let reminders {
                     Section {
                         NavigationLink {
@@ -69,6 +96,15 @@ struct SettingsScreen: View {
             }
         }
         .task { await model.refresh() }
+        // The file is ready: the share sheet, from UIKit's top-most controller, over this sheet. Its close, shared or not,
+        // removes the file's folder.
+        .onChange(of: model.exportState) { _, state in
+            guard case let .ready(export) = state else { return }
+            let model = self.model
+            SharePresenter.present(fileAt: export.fileURL,
+                                   onFinish: { model.exportFinished() },
+                                   onFailure: { model.exportCouldNotBePresented() })
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await model.refresh() }

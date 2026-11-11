@@ -219,6 +219,7 @@ extension ImportEngine {
         job.phase = .downloading
         job.hasListed = true
         trace(.listed(onCard: listed.count, queued: queued.count))
+        noteReconnected(job)
         refreshState()
     }
 
@@ -264,6 +265,7 @@ extension ImportEngine {
         job.phase = .downloading
         trace(.listed(onCard: listed.count, queued: job.queue.count))
         commitLoneHalves(of: job) // a half kept for a file that is no longer on the card goes alone
+        noteReconnected(job)
         refreshState()
     }
 

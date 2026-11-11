@@ -2,7 +2,7 @@
 
 Bench run for the 15 Jan 2027 build · Shamil · Spec: [iteration-2-backlog.md](iteration-2-backlog.md) (work item I5), with the open checks it carries from [iteration-1-backlog.md](iteration-1-backlog.md) (section 3) · Findings it builds on: [spike-findings.md](spike-findings.md) · The wireless checks stay on [iteration-3-4-bench.md](iteration-3-4-bench.md)
 
-Results checklist, filled on the bench iPhone with the α7C II. Every value comes from the camera, the phone or the log; nothing is filled in ahead of the measurement. A row stays empty until it has been run, and a failed check is recorded as *Fail* with what was seen, never left out. A check that can't be told either way is *Inconclusive*, with why. The app writes coarse lines to the unified log (read them in Console: subsystem `net.shamil.shutter-bridge`; categories `browse`, `wifi` and, from I8, the engine's own); see *What the log holds* below for the line each record comes from. The **Record** column names what to copy, from the screen, a stopwatch, Xcode's memory gauge or Console. Never record a Wi-Fi name or password, the camera's serial or hardware ID, a device or peripheral identifier, an iCloud account name or a home address here (the app's log already leaves them out).
+Results checklist, filled on the bench iPhone with the α7C II. Every value comes from the camera, the phone or the log; nothing is filled in ahead of the measurement. A row stays empty until it has been run, and a failed check is recorded as *Fail* with what was seen, never left out. A check that can't be told either way is *Inconclusive*, with why. The app writes coarse lines to the unified log (read them in Console: subsystem `net.shamil.shutter-bridge`; category `browse`, whose lines start `engine:`, `import:`, `wifi join:`, `wifi link:` and so on); see *What the log holds* below for the line each record comes from. The **Record** column names what to copy, from the screen, a stopwatch, Xcode's memory gauge or Console. Never record a Wi-Fi name or password, the camera's serial or hardware ID, a device or peripheral identifier, an iCloud account name or a home address here (the app's log already leaves them out).
 
 How the sheet is used: the checks marked *Needs build* wait for the work item named in the **Needs** column; run the rest on any current build. Several checks are decided by Shamil's open decisions (D1 to D14 in the backlog); each says which answer it is written to and what a different answer changes. The sheet is run in full on the 15 Jan build (D12's recommendation), with the same checks repeated on the camera's current firmware.
 
@@ -37,20 +37,32 @@ Existing lines come from `OSLogBenchLog` (category `browse` for the import and B
 | `wifi link: the session was lost: …`, `wifi link: closed: … GetDevicePropValue sent 0; …` | A Wi-Fi drop and its cleanup (checks 6, 7). |
 | `wifi join: ready after … s (hand-off … s, join … s, session … s)` | The step times of a Wi-Fi reconnect (check 7). |
 
-**Not written yet (work item I8; until it lands, record by stopwatch and screen and mark the line column *no line yet*).** The wording below is the intent; I8's final wording replaces it, and this sheet is updated to match when it merges. `…` is a number.
+**Built by I8** (category `browse`, like the rest; every line starts `engine:` or, for the recovery, `wifi recovery:`). Times are seconds to a tenth, sizes in bytes. A file name is the camera's, nothing else of the camera is named. `…` is a number.
+
+| Line | What it records | Checks |
+| --- | --- | --- |
+| `engine: job resumed after a reconnect (usb \| wifi), … s after the camera went away, … files left` | The replug-to-resume time D1's wording needs: from the first loss of the camera, its session or its card, to the card being listed again and the queue released. | 5, 6, 7 |
+| `engine: first byte after the reconnect: <file> at … B, … s after the job resumed` | The first progress report of any download after that: the file's size at the report (USB: the first read from 0; Wi-Fi: the checkpoint plus the first read). The time is the report's. The line is written at the next engine tick (at most 0.25 s later), or when the file's download ends if that comes first, so a small file that starts and finishes between two ticks still names itself. | 5, 6, 7 |
+| `engine: checkpoint <file> at … B` | The offsets partials are saved at (a 16 MiB crossing, a flush and a retry are not told apart). | 6, 7 |
+| `engine: <file> is waiting for a checkpoint write before its row`, `engine: <file>'s row was written without the checkpoint write it waited for` | A finished file's catalogue row waiting for a checkpoint write that was still in flight, and that wait running out (both notice: the row is written either way). | 6, 7 |
+| `engine: committed <file> without the other half of its pair` | One half of a RAW+JPEG pair committed as a lone file, because its partner was skipped or failed after its retries; the partner's own line says which (notice). A pair committed together has no line of its own. | 3, 13 |
+| `engine: skipped <file>: <reason>`, `engine: left out a second copy of <file> listed in another folder` | Why a file didn't come in (notice). | 3, 5 to 8 |
+| `engine: failed <file>: <reason>` | A file that failed after its retries, or a destination error (**error level**): the line the definition of done counts. No attempt count is written; the `engine: <file> failed, trying again (retry …)` lines before it (notice) give the retries. | 3, 5 to 8 |
+| `engine: job stopped: <reason>`, `engine: catalogue unavailable: the job stopped` | A job the engine stopped, the phone's storage full for one (**error level**). | 3, 8 |
+| `launch: the catalogue didn't open: <error type>`, `import: didn't start: <reason>` | The catalogue failing to open at launch, and the engine refusing to start a job for any reason but an empty selection (**error level**; an empty selection is a notice). | 3, 8 |
+| `wifi recovery: gave up after … s; waiting for the person` | The Wi-Fi recovery giving up (**error level**); the other `wifi recovery:` lines are notices. | 3, 8 |
+| `engine: paused (<reason>)` and `engine: continued` | Pauses and continues (notice). | 5 to 8 |
+| `engine: stall … on <file>, retrying` | A stall that is retried (notice); the pause that follows is `engine: paused (a download stalled)`. | 5, 6 |
+| `engine: camera link: <event>` | The camera's events: removed, session lost, card removed from the session, card added back, suspended (notice). | 5 to 8 |
+| `engine: listed … on the card, … to copy`, `engine: job finished: completed \| cancelled` | The listing and the end of a job (notice). | 3 |
+| Level of each line: failures at *error*, everything else at *notice* | So the error count in check 3 can be nonzero. Filter Console on *Errors*; the export shows each line's level. | 3 |
+| Settings › *Export Diagnostics…*: a plain-text file with a header and the app's log entries | Built by I8 (the row compiles only in CI's Xcode job): the unified log for this launch, the app's rolling file for the last two earlier ones. | 3, 17 |
+
+**Not written yet (until each lands, record by stopwatch and screen and mark the line column *no line yet*).** The wording is the intent; the work item's final wording replaces it, and this sheet is updated to match when it merges.
 
 | Line (intended) | What it records | Checks |
 | --- | --- | --- |
-| `engine: job resumed after a reconnect (usb \| wifi), … s after the camera went away, … files left` | The replug-to-resume time D1's wording needs: the camera listed again to the job carrying on. | 5, 6, 7 |
-| `engine: first byte after the reconnect: <file> at … B, … s after the job resumed` | The first byte of the file after a resume (USB: from 0, Wi-Fi: from the checkpoint). | 5, 6, 7 |
-| `engine: checkpoint <file> at … B (16 MiB crossing \| flush)` | The offsets partials are saved at. | 6, 7 |
-| `engine: skipped <file>: <reason>` and `engine: failed <file>: <reason> after … attempts` (error level) | Why a file didn't come in; a failure is the line the definition of done counts. | 3, 5 to 8 |
-| `engine: paused (<reason>)` and `engine: continued` | Pauses and continues, at notice level. | 5 to 8 |
-| `engine: stall of … s on <file>, retrying` | A stall that recovered (notice level). | 5, 6 |
-| `engine: recovery gave up after … s` and `engine: catalogue unavailable: …` (error level) | Real failures. | 3, 8 |
 | `engine: partial <file> was missing at launch; reset to 0` (I13) | A purged partial after a relaunch. | 8 |
-| Level of each line: failures at *error*, everything else at *notice* | So the error count in check 3 can be nonzero. Filter Console on *Errors*. | 3 |
-| Settings › *Export Diagnostics…*: a plain-text file with a header and the app's log entries | Checks 3 and 17. | 3, 17 |
 | `history: job recorded <outcome>: <n> imported, <n> skipped, <n> failed, … MB, … s` (I9) | The History record, to compare with the screen. | 14 |
 | `cull: preview ready for <file> in … s (<local \| downloaded>), source <jpg \| embedded \| raw-render>` (I3 and I11) | The loupe's time from swipe to a sharp preview. | 11 |
 | `intent: <name> started \| finished: <result wording>` (I16) | Each intent's run and what it said. | 16 |

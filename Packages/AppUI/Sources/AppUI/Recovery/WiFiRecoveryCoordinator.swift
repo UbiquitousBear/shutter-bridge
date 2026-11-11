@@ -95,6 +95,8 @@ public final class WiFiRecoveryCoordinator {
     private let log: any BenchLog
     /// The job the recovery under way is for.
     private var job: ImportJobID?
+    /// When the recovery under way began, for the line it writes when it gives up.
+    private var recoveryBegan: ContinuousClock.Instant?
     /// The wait for StoreAdded, cancelled when it is no longer needed. The other steps are never cancelled: a reopen
     /// that ends after a reset still has its session finished (`reopenEnded`), and a late result is set aside by `token`.
     private var cardWait: Task<Void, Never>?
@@ -204,6 +206,8 @@ public final class WiFiRecoveryCoordinator {
     private func feed(_ input: RecoveryInput, link: (any CameraLink)? = nil) {
         guard let host else { return }
         let foreground = !host.isAppAway
+        // For the line when it gives up: from the first input of a recovery, or the person's return after one that waited.
+        if plan.phase == .idle || input == .personReturned { recoveryBegan = ContinuousClock.now }
         let step = plan.next(after: input, foreground: foreground, bluetoothAllowed: bluetoothSwitchOnWhenAway)
         if step != .noChange { log.note("wifi recovery: \(input) → \(step)") }
         // A pause for a join after a reopen began when that reopen did; any other began now.
@@ -219,7 +223,9 @@ public final class WiFiRecoveryCoordinator {
             _ = begin()
         case .giveUp:
             _ = begin()
-            log.note("wifi recovery: gave up; waiting for the person")
+            // A real failure, so an error: the definition of done counts error-level lines.
+            let after = recoveryBegan.map { " after \(TransportTraceWording.seconds(ContinuousClock.now - $0))" } ?? ""
+            log.note("wifi recovery: gave up\(after); waiting for the person", level: .error)
         case .waitForCard:
             let mine = begin()
             let sleep = self.sleep
@@ -411,6 +417,7 @@ public final class WiFiRecoveryCoordinator {
         ticker = nil
         job = nil
         reopenBeganAway = false
+        recoveryBegan = nil
         plan.reset()
     }
 }

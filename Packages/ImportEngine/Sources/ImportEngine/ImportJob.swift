@@ -212,6 +212,11 @@ final class Job {
     var cameraLossReason: PauseReason = .cameraRemoved
     var hasListed = false
     var listRetries = 0
+    /// When the camera (or its card) was lost, until the card is listed again: for `EngineTrace.reconnected`.
+    var lostAt: Duration?
+    /// When the job carried on after a loss, until the first progress report after it: for
+    /// `EngineTrace.firstByteAfterReconnect`.
+    var resumedAt: Duration?
     var route: ImportRoute
     var phase: JobPhase = .listing
     var pauses: Set<PauseReason> = []

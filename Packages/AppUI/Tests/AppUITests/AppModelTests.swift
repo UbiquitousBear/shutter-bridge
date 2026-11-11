@@ -68,6 +68,19 @@ struct AppModelTests {
         await rerun.value
     }
 
+    @Test func aCatalogueThatWontOpenIsOneErrorLineWithoutTheErrorText() async {
+        struct NoStore: Error, CustomStringConvertible { var description: String { "serial 7654321 at 192.168.1.20" } }
+        let log = LeveledLog()
+        let discovery = FakeDiscovery(link: FakeLink(items: []))
+        let launcher = AppLauncher(
+            openCatalogue: { throw NoStore() },
+            build: { store in self.appModel(discovery: discovery, catalogue: store) },
+            log: log
+        )
+        await launcher.launch()
+        #expect(log.entries == [.init(line: "launch: the catalogue didn't open: NoStore", level: .error)])
+    }
+
     @Test func launchOpensTheCatalogueOrSaysWhyNot() async {
         struct NoStore: Error {}
         final class Attempts: @unchecked Sendable {

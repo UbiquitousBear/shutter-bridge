@@ -23,7 +23,7 @@ extension AppLauncher {
         AppLauncher(
             openCatalogue: { try await SwiftDataCatalogue.open(storeURL: SwiftDataCatalogue.defaultStoreURL) },
             build: { catalogue in AppModel.live(catalogue: catalogue, wireless: wireless) },
-            log: OSLogBenchLog()
+            log: AppLogging.shared.log
         )
     }
 }
@@ -55,7 +55,10 @@ extension AppModel {
     ///   `UserDefaults`; the recovery (W14) and the reminder's holds (W18) follow each job (`AppModel`).
     static func live(catalogue: any CatalogueStore, wireless: WirelessRuntime) -> AppModel {
         let library = SystemPhotoLibrary()
-        let engine = ImportEngine(catalogue: catalogue)
+        let logging = AppLogging.shared
+        // The engine's own decisions (skips, failures, checkpoints, retries, reconnects, pauses) reach the log, one line each
+        // (I8, `EngineTraceWording`); a real failure goes out at error level.
+        let engine = ImportEngine(catalogue: catalogue, trace: .bench(logging.log))
         let destinations = StandardImportDestinations(
             library: library,
             albumStore: UserDefaultsAlbumIdentifierStore(),
@@ -66,7 +69,10 @@ extension AppModel {
             stagingLocator: UbiquityStagingLocator(),
             iCloudDriveMover: UbiquitousFileMover()
         )
-        let wifiLog = OSLogBenchLog()
+        let wifiLog = logging.log
+        // The firmware the camera reports is also kept for the diagnostics export's header.
+        let benchTrace = TransportTrace.bench(wifiLog)
+        let firmware = logging.firmware
         let connections = WirelessConnections(
             connector: wireless.bluetooth,
             joiner: NEHotspotJoiner(),
@@ -75,7 +81,10 @@ extension AppModel {
             channels: NWByteChannelFactory(interface: .wifi),
             // The bench lines for the wireless checks (W20): step times, CC09 and CC08, the RSSI, the poll, keep-alives,
             // GetDevicePropValue, 0x9211 resumes. Times, counts and statuses only.
-            trace: .bench(wifiLog)
+            trace: TransportTrace { event in
+                benchTrace.record(event)
+                if case let .deviceInfoRead(version) = event { firmware.note(TransportTraceWording.firmwareWord(version)) }
+            }
         )
         let wifi = WiFiSupport.make(
             catalogue: catalogue,
@@ -86,7 +95,7 @@ extension AppModel {
         )
         return AppModel(
             discovery: CompositeDiscovery(sources: [USBCameraBrowser(), wifi.source]),
-            services: .system(),
+            services: .system(log: wifiLog),
             catalogue: catalogue,
             engine: engine,
             settingsStore: UserDefaultsDestinationSettingStore(),
@@ -100,8 +109,37 @@ extension AppModel {
             notificationAsks: UserDefaultsNotificationAskRecord(),
             background: ContinuedImportRunner(),
             wifi: wifi,
-            wireless: wireless
+            wireless: wireless,
+            diagnostics: logging.exporter(catalogue: catalogue)
         )
+    }
+}
+
+/// The app's logging, made once: the unified log (`OSLogBenchLog`) and the rolling file of the last few launches
+/// (`RollingLogFile`, decision D8) as one `BenchLog`, so every line goes to both, at the level it came with. The Settings
+/// export reads the file for earlier launches and the unified log for this one (`DiagnosticsExporter`).
+final class AppLogging: Sendable {
+    static let shared = AppLogging()
+
+    let rolling: RollingLogFile
+    let log: any BenchLog
+    /// The firmware version last read from a camera this launch, for the export's header.
+    let firmware = CameraFirmwareNotes()
+
+    private init() {
+        let rolling = RollingLogFile.inCaches()
+        self.rolling = rolling
+        log = TeeBenchLog([OSLogBenchLog(), rolling])
+    }
+
+    /// The export, over `catalogue` for the cameras' models and the values to redact. Exports a crash left behind are removed
+    /// first (the file is in Caches, and `discard` removes it as soon as the share sheet closes).
+    func exporter(catalogue: any CatalogueStore) -> DiagnosticsExporter {
+        let exporter = DiagnosticsExporter(scratch: DiagnosticsExporter.scratchInCaches(), info: .current(),
+                                           catalogue: catalogue, firmware: firmware, current: LogStoreReader(),
+                                           rollingFile: rolling)
+        exporter.removeLeftovers()
+        return exporter
     }
 }
 
@@ -218,7 +256,8 @@ struct LiveApp: View {
                                  isImportShown: showsImport, showImport: { showsImport = true })
                 }
         }
-        .sheet(isPresented: $showsSettings) {
+        // However Settings closes, a diagnostics file that is ready (or being made) is removed.
+        .sheet(isPresented: $showsSettings, onDismiss: { model.settings.settingsClosed() }) {
             SettingsScreen(model: model.settings)
         }
         // The close button and swiping down do the same (HIG Sheets): a finished job is cleared once it has been
@@ -327,7 +366,7 @@ public enum LiveLaunch {
     /// The wireless parts, made on first use (before launch finishes, from `beforeLaunchFinishes()`).
     @MainActor static var wireless: WirelessRuntime {
         if let runtime { return runtime }
-        let log = OSLogBenchLog()
+        let log = AppLogging.shared.log
         let store = UserDefaultsKeyValueStore()
         // Before the first unlock after a restart the setting reads as off; Bluetooth's permission can still be read.
         let remindersOn = ReminderSettingsStore(store: store).load().enabled
