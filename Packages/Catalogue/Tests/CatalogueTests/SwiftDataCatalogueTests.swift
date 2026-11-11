@@ -6,9 +6,11 @@ import Testing
 @testable import Catalogue
 
 /// What only the SwiftData store has: the schema opening, a store on disk reopening, a version-1 store (as every
-/// build before Catalogue V2, 17.1 and 18.1, wrote it) and a version-2 store (every build from then until staging)
-/// migrating to the current version, and duplicates written by someone else being healed. Runs where SwiftData exists
-/// (a Mac, CI's iOS Simulator run), not on Linux.
+/// build before Catalogue V2, 17.1 and 18.1, wrote it), a version-2 store (every build from then until staging) and a
+/// version-3 store (the staging builds) migrating to the current version, and duplicates written by someone else being
+/// healed. Runs where SwiftData exists (a Mac, CI's iOS Simulator run), not on Linux. Every migration test reopens its
+/// store through `makeContainer`, so as the current version: a version-1, version-2 or version-3 store is opened as
+/// version 4, through every stage after its own.
 @Suite("SwiftData catalogue")
 struct SwiftDataCatalogueTests {
     typealias C = CatalogueContractTests
@@ -17,17 +19,19 @@ struct SwiftDataCatalogueTests {
         #expect(CatalogueSchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
         #expect(CatalogueSchemaV2.versionIdentifier == Schema.Version(2, 0, 0))
         #expect(CatalogueSchemaV3.versionIdentifier == Schema.Version(3, 0, 0))
+        #expect(CatalogueSchemaV4.versionIdentifier == Schema.Version(4, 0, 0))
         #expect(CatalogueSchemaV1.models.count == 3)
         #expect(CatalogueSchemaV2.models.count == 3)
         #expect(CatalogueSchemaV3.models.count == 3)
-        #expect(CatalogueMigrationPlan.schemas.count == 3)
-        #expect(CatalogueMigrationPlan.stages.count == 2)
+        #expect(CatalogueSchemaV4.models.count == 5)
+        #expect(CatalogueMigrationPlan.schemas.count == 4)
+        #expect(CatalogueMigrationPlan.stages.count == 3)
         // The store opens the current version.
-        #expect(ObjectIdentifier(CatalogueCurrentSchema.self) == ObjectIdentifier(CatalogueSchemaV3.self))
+        #expect(ObjectIdentifier(CatalogueCurrentSchema.self) == ObjectIdentifier(CatalogueSchemaV4.self))
         // CloudKit-compatible: nothing is unique, neither an attribute nor a `#Unique` constraint on the model (the
         // store enforces identity), and every relationship is optional. Every version.
-        for version in [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self]
-            as [any VersionedSchema.Type] {
+        for version in [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self,
+                        CatalogueSchemaV4.self] as [any VersionedSchema.Type] {
             let schema = Schema(versionedSchema: version)
             for entity in schema.entities {
                 #expect(entity.uniquenessConstraints.isEmpty, "\(entity.name)")
@@ -107,6 +111,67 @@ struct SwiftDataCatalogueTests {
         }
     }
 
+    /// Version 4 (Iteration 2) is version 3 plus optional attributes on `ImportJob` and two new models with no
+    /// relationship, which is what makes the stage lightweight. Pins version 4's names.
+    @Test func versionFourAddsOnlyOptionalJobFieldsAndTwoModels() throws {
+        let v3 = Schema(versionedSchema: CatalogueSchemaV3.self)
+        let v4 = Schema(versionedSchema: CatalogueSchemaV4.self)
+        func names(_ schema: Schema) -> [String: Set<String>] {
+            Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, Set($0.attributes.map(\.name))) })
+        }
+        func relationships(_ schema: Schema) -> [String: Set<String>] {
+            Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, Set($0.relationships.map(\.name))) })
+        }
+        let addedToJob: Set<String> = ["cameraKey", "purpose", "destination", "carrier", "albumIdentifier",
+                                       "rangeStart", "rangeEnd", "pickedKeys", "failedKeys", "filesTotal",
+                                       "filesImported", "filesStaged", "filesSkipped", "filesFailed"]
+        let cullMark: Set<String> = ["contentKey", "filename", "captureDate", "size", "mark", "rating", "markedAt"]
+        let pendingCommitFile: Set<String> = ["commitID", "jobID", "writtenAt", "destination", "stagingRoot",
+                                              "stagingFolder", "cameraKey", "identityKey", "folder", "filename",
+                                              "captureDate", "size", "format", "role", "assetDate"]
+        var expected = names(v3)
+        expected["ImportJob", default: []].formUnion(addedToJob)
+        expected["CullMark"] = cullMark
+        expected["PendingCommitFile"] = pendingCommitFile
+        #expect(names(v4) == expected)
+        var expectedRelationships = relationships(v3)
+        expectedRelationships["CullMark"] = []
+        expectedRelationships["PendingCommitFile"] = []
+        #expect(relationships(v4) == expectedRelationships)
+        // Every attribute added to an existing model is optional, so rows migrated from version 3 need no value.
+        let job = try #require(v4.entities.first { $0.name == "ImportJob" })
+        for name in addedToJob {
+            let attribute = try #require(job.attributes.first { $0.name == name })
+            #expect(attribute.isOptional, "\(name)")
+        }
+        // Version 4's names, pinned.
+        #expect(Set(v4.entities.map { Set($0.attributes.map(\.name)) }) == [
+            // Camera
+            ["serial", "model", "friendlyName", "lastSeen", "preferredCarrier", "autoImport", "wifiSSID", "lastIP",
+             "ptpipGUID", "bluetoothPeripheralID", "lastListedAt", "lastListing"],
+            // CameraObject
+            ["cameraKey", "identityKey", "folder", "filename", "captureDate", "size", "format", "state",
+             "resumeOffset", "tempURL", "assetLocalID", "fileRelativePath", "pairStem",
+             "stagedRelativePath", "stagedRoot", "stagedAt"],
+            // ImportJob
+            ["jobID", "startedAt", "finishedAt", "selection", "bytesTotal", "bytesDone", "outcome",
+             "cameraKey", "purpose", "destination", "carrier", "albumIdentifier", "rangeStart", "rangeEnd",
+             "pickedKeys", "failedKeys", "filesTotal", "filesImported", "filesStaged", "filesSkipped", "filesFailed"],
+            // CullMark
+            ["contentKey", "filename", "captureDate", "size", "mark", "rating", "markedAt"],
+            // PendingCommitFile
+            ["commitID", "jobID", "writtenAt", "destination", "stagingRoot", "stagingFolder", "cameraKey",
+             "identityKey", "folder", "filename", "captureDate", "size", "format", "role", "assetDate"],
+        ])
+        #expect(Set(v4.entities.map { $0.name })
+            == ["Camera", "CameraObject", "ImportJob", "CullMark", "PendingCommitFile"])
+        for entity in v4.entities {
+            for attribute in entity.attributes {
+                #expect(!attribute.name.lowercased().contains("pass"), "\(entity.name).\(attribute.name)")
+            }
+        }
+    }
+
     /// The schema every build before Catalogue V2 (17.1 and 18.1) shipped, which every later build has to open as it
     /// is: changing a version-1 model without a new version and a stage would leave the store unopenable ("Shutter
     /// Bridge couldn't start"). Shamil's rule of 8 Nov needed no change (it reads the name, date and size columns every
@@ -118,7 +183,7 @@ struct SwiftDataCatalogueTests {
         // Version 1 stays first in the plan, so a store it wrote migrates rather than failing to open.
         #expect(CatalogueMigrationPlan.schemas.map { ObjectIdentifier($0) }
             == [ObjectIdentifier(CatalogueSchemaV1.self), ObjectIdentifier(CatalogueSchemaV2.self),
-                ObjectIdentifier(CatalogueSchemaV3.self)])
+                ObjectIdentifier(CatalogueSchemaV3.self), ObjectIdentifier(CatalogueSchemaV4.self)])
         let schema = Schema(versionedSchema: CatalogueSchemaV1.self)
         let attributes = Set(schema.entities.map { Set($0.attributes.map(\.name)) })
         #expect(attributes == [
@@ -221,6 +286,7 @@ struct SwiftDataCatalogueTests {
         let lastSeen = Date(timeIntervalSinceReferenceDate: 815_000_200.5)
         let guid = CameraFixtures.guid
         let partialFile = CameraFixtures.partialFile("DSC04513")
+        var v1JobID = UUID()
         do {
             let container = try Self.makeVersion1Container(storeURL: url)
             let context = ModelContext(container)
@@ -243,6 +309,10 @@ struct SwiftDataCatalogueTests {
                 object.camera = camera
             }
             let job = CatalogueSchemaV1.ImportJob(startedAt: Date(timeIntervalSinceReferenceDate: 815_000_000))
+            job.selection = "all-new"
+            job.bytesTotal = 90_000_000
+            job.bytesDone = 40_000_000
+            v1JobID = job.jobID
             context.insert(job)
             job.camera = camera
             try context.save()
@@ -270,6 +340,12 @@ struct SwiftDataCatalogueTests {
             #expect(cameras.first?.objects?.count == 4)
             #expect(cameras.first?.jobs?.count == 1)
             #expect(cameras.first?.bluetoothPeripheralID == nil)
+            // The job, as version 4 reads a job no version-4 column was written for.
+            let migratedJob = JobRecord(id: v1JobID, camera: key,
+                                        startedAt: Date(timeIntervalSinceReferenceDate: 815_000_000),
+                                        bytesTotal: 90_000_000, bytesDone: 40_000_000)
+            #expect(try await store.jobs(camera: key) == [migratedJob])
+            #expect(try await store.job(v1JobID) == migratedJob)
 
             // Version 2's writes.
             var paired = carried
@@ -411,6 +487,230 @@ struct SwiftDataCatalogueTests {
         try await store.markStaged(identity, format: .raw,
                                    at: StagedLocation(root: .iCloudDrive, relativePath: "Staging/a/b/c.ARW"))
         #expect(try await store.stagedStates(of: [identity]) == [identity])
+    }
+
+    // MARK: - Version 3 → version 4 (Iteration 2)
+
+    /// The plan every staging build before Catalogue V4 shipped with: versions 1 to 3.
+    enum Version3Plan: SchemaMigrationPlan, Sendable {
+        static var schemas: [any VersionedSchema.Type] {
+            [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self]
+        }
+        static var stages: [MigrationStage] {
+            [MigrationStage.lightweight(fromVersion: CatalogueSchemaV1.self, toVersion: CatalogueSchemaV2.self),
+             MigrationStage.lightweight(fromVersion: CatalogueSchemaV2.self, toVersion: CatalogueSchemaV3.self)]
+        }
+    }
+
+    /// A container on disk as every staging build before Catalogue V4 made one: version 3's schema and plan, CloudKit
+    /// off.
+    static func makeVersion3Container(storeURL: URL) throws -> ModelContainer {
+        try FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let schema = Schema(versionedSchema: CatalogueSchemaV3.self)
+        let configuration = ModelConfiguration(schema: schema, url: storeURL,
+                                               cloudKitDatabase: ModelConfiguration.CloudKitDatabase.none)
+        return try ModelContainer(for: schema, migrationPlan: Version3Plan.self, configurations: configuration)
+    }
+
+    /// A version-3 store holding real data (a camera with its peripheral, imported, staged, partial and Files rows, a
+    /// listing, a job) opens as version 4 with every value carried, the job read with no version-4 fields, no marks
+    /// and no pending commits, and takes version 4's writes, which survive a reopen.
+    @Test func aVersion3StoreWithRealDataOpensAsVersion4WithEverythingCarried() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "catalogue-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "Catalogue.store", directoryHint: .notDirectory)
+        let key = C.camera
+        let staged = StagedLocation(root: .iCloudDrive, relativePath: "Staging/ILCE-7CM2/2026-11-08/DSC04512.ARW",
+                                    stagedAt: Date(timeIntervalSinceReferenceDate: 815_000_300.75))
+        let importedAndStaged = CatalogueRecord(identity: C.id("DSC04512.ARW", "20261108T101530", 40_329_216),
+                                                format: .raw, state: .imported,
+                                                location: .photosAsset(localIdentifier: "E/L0/001"), staged: staged)
+        let stagedOnly = CatalogueRecord(identity: C.id("DSC04516.ARW", "20261108T101605", 40_000_000),
+                                         format: .raw, state: .new,
+                                         staged: StagedLocation(root: .onThisIPhone,
+                                                                relativePath: "Staging/ILCE-7CM2/2026-11-08/D.ARW"))
+        let partialFile = CameraFixtures.partialFile("DSC04513")
+        let partial = CatalogueRecord(identity: C.id("DSC04513.ARW", "20261108T101602", 41_000_000),
+                                      format: .raw, state: .partial, resumeOffset: 16_777_216, tempURL: partialFile)
+        let toFiles = CatalogueRecord(identity: C.id("DSC04515.HIF", "20261108T101604", 9_000_000, folder: ""),
+                                      format: .heif, state: .imported,
+                                      location: .file(relativePath: "ILCE-7CM2/DSC04515.HIF"))
+        let camera = CameraRecord(key: key, model: "ILCE-7CM2", friendlyName: "Shamil's camera",
+                                  lastSeen: Date(timeIntervalSinceReferenceDate: 815_000_200.5),
+                                  preferredCarrier: .wifi, autoImport: false, wifiSSID: CameraFixtures.ssid,
+                                  lastIP: CameraFixtures.ip, ptpipGUID: CameraFixtures.guid,
+                                  bluetoothPeripheralID: CameraFixtures.peripheral)
+        let listing = CardListing(camera: key, listedAt: Date(timeIntervalSinceReferenceDate: 815_000_100.25),
+                                  entries: [.init(identity: importedAndStaged.identity, format: .raw)])
+        let jobStart = Date(timeIntervalSinceReferenceDate: 815_000_000)
+        let jobEnd = Date(timeIntervalSinceReferenceDate: 815_000_050)
+        var v3JobID = UUID()
+        do {
+            let container = try Self.makeVersion3Container(storeURL: url)
+            let context = ModelContext(container)
+            let row = CatalogueSchemaV3.Camera(serial: key.rawValue)
+            context.insert(row)
+            row.apply(CameraColumns(camera))
+            row.lastListedAt = listing.listedAt
+            row.lastListing = try StoredListing.encode(listing)
+            for record in [importedAndStaged, stagedOnly, partial, toFiles] {
+                let object = CatalogueSchemaV3.CameraObject(row: CatalogueRow(record))
+                context.insert(object)
+                object.camera = row
+            }
+            let job = CatalogueSchemaV3.ImportJob(startedAt: jobStart)
+            job.finishedAt = jobEnd
+            job.selection = "range"
+            job.bytesTotal = 100
+            job.bytesDone = 100
+            job.outcome = "completed"
+            v3JobID = job.jobID
+            context.insert(job)
+            job.camera = row
+            try context.save()
+        }
+
+        let migratedJob = JobRecord(id: v3JobID, camera: key, startedAt: jobStart, finishedAt: jobEnd,
+                                    outcome: .completed, bytesTotal: 100, bytesDone: 100)
+        let newJob = V4Fixtures.fullJob
+        do {
+            let store = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+            #expect(Set(try await store.allRecords()) == [importedAndStaged, stagedOnly, partial, toFiles])
+            #expect(try await store.stagedStates(of: [importedAndStaged.identity, stagedOnly.identity,
+                                                      partial.identity])
+                == [importedAndStaged.identity, stagedOnly.identity])
+            #expect(try await store.stagedRecords(camera: key) == [importedAndStaged, stagedOnly])
+            #expect(try await store.camera(key) == camera)
+            #expect(try await store.lastListing(for: key) == listing)
+            // A range with no stored bounds (version 1's columns only) reads as every new file.
+            #expect(try await store.jobs(camera: key) == [migratedJob])
+            #expect(try await store.marks(of: [importedAndStaged.identity.contentKey]).isEmpty)
+            #expect(try await store.pendingCommits().isEmpty)
+            let context = ModelContext(store.modelContainer)
+            let cameras = try context.fetch(FetchDescriptor<Camera>())
+            #expect(cameras.count == 1)
+            #expect(cameras.first?.objects?.count == 4)
+            #expect(cameras.first?.jobs?.count == 1)
+
+            // Version 4's writes.
+            try await store.setMark(.reject, rating: 1, for: [stagedOnly.identity.contentKey], at: V4Fixtures.t0)
+            try await store.recordJob(newJob)
+            try await store.updateJob(v3JobID) { $0.purpose = .stage }
+            try await store.beginCommit(V4Fixtures.pairCommit)
+        }
+
+        let reopened = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+        var restaged = migratedJob
+        restaged.purpose = .stage
+        #expect(try await reopened.jobs(camera: key) == [newJob, restaged])
+        #expect(try await reopened.marks(of: [stagedOnly.identity.contentKey])
+            == [stagedOnly.identity.contentKey: MarkRecord(decision: .reject, rating: 1, markedAt: V4Fixtures.t0)])
+        #expect(try await reopened.pendingCommits() == [V4Fixtures.pairCommit])
+        #expect(try await reopened.record(for: importedAndStaged.identity) == importedAndStaged)
+        let context = ModelContext(reopened.modelContainer)
+        #expect(try context.fetch(FetchDescriptor<Camera>()).first?.jobs?.count == 2)
+    }
+
+    /// A version-3 store with no rows at all opens too.
+    @Test func anEmptyVersion3StoreOpensAsVersion4() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "catalogue-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "Catalogue.store", directoryHint: .notDirectory)
+        do {
+            let container = try Self.makeVersion3Container(storeURL: url)
+            try ModelContext(container).save()
+        }
+        let store = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+        #expect(try await store.allRecords().isEmpty)
+        #expect(try await store.jobs(camera: nil).isEmpty)
+        try await store.recordJob(V4Fixtures.fullJob)
+        #expect(try await store.jobs(camera: nil) == [V4Fixtures.fullJob])
+    }
+
+    // MARK: - Version 4's rows
+
+    /// `finishCommit` is one save: when it fails, nothing is written and the marker stays (section 3.1).
+    @Test func aFinishCommitWhoseSaveFailsLeavesTheMarkerAndNoRow() async throws {
+        let store = try await SwiftDataCatalogue.open(storeURL: nil)
+        try await store.beginCommit(V4Fixtures.pairCommit)
+        await store.failNextSave(with: WriteFailed())
+        let row = CatalogueRecord(identity: V4Fixtures.raw, format: .raw, state: .imported,
+                                  location: .photosAsset(localIdentifier: "P/L0/001"))
+        await #expect(throws: WriteFailed.self) {
+            try await store.finishCommit(V4Fixtures.commit1,
+                                         writing: [.imported(row), .staged(V4Fixtures.jpeg, format: .jpeg,
+                                                                           at: V4Fixtures.staged)])
+        }
+        #expect(try await store.allRecords().isEmpty)
+        #expect(try await store.pendingCommits() == [V4Fixtures.pairCommit])
+        // The next try lands.
+        try await store.finishCommit(V4Fixtures.commit1, writing: [.imported(row)])
+        #expect(try await store.allRecords() == [row])
+        #expect(try await store.pendingCommits().isEmpty)
+    }
+
+    /// Two mark rows for one content key, as a later sync could leave them: the latest answers, and the next mark
+    /// leaves one row.
+    @Test func duplicateMarksAreReadAsTheLatestAndHealedOnWrite() async throws {
+        let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
+        let key = V4Fixtures.raw.contentKey
+        let early = MarkRecord(decision: .keep, rating: 5, markedAt: V4Fixtures.t0)
+        let late = MarkRecord(decision: .reject, rating: 0, markedAt: V4Fixtures.t1)
+        let context = ModelContext(container)
+        context.insert(StoredCullMark(columns: CullMarkColumns(late, for: key)))
+        context.insert(StoredCullMark(columns: CullMarkColumns(early, for: key)))
+        try context.save()
+
+        let store = SwiftDataCatalogue(modelContainer: container)
+        #expect(try await store.marks(of: [key]) == [key: late])
+        try await store.setMark(.keep, rating: 2, for: [key], at: V4Fixtures.t2)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<StoredCullMark>())
+        #expect(rows.count == 1)
+        #expect(rows.first?.mark == "keep")
+        #expect(rows.first?.rating == 2)
+        #expect(rows.first?.contentKey == key.storageKey)
+        #expect(rows.first?.filename == "DSC00001.ARW")
+    }
+
+    /// Two job rows for one identifier: one is listed, and the next record leaves one row linked to its camera.
+    @Test func duplicateJobsAreListedOnceAndHealedOnWrite() async throws {
+        let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
+        let context = ModelContext(container)
+        for _ in 0 ..< 2 {
+            let row = ImportJob(startedAt: V4Fixtures.t0)
+            row.apply(JobColumns(V4Fixtures.fullJob))
+            context.insert(row)
+        }
+        try context.save()
+
+        let store = SwiftDataCatalogue(modelContainer: container)
+        #expect(try await store.jobs(camera: nil) == [V4Fixtures.fullJob])
+        try await store.updateJob(V4Fixtures.jobA) { $0.filesFailed = 3 }
+        let rows = try ModelContext(container).fetch(FetchDescriptor<ImportJob>())
+        #expect(rows.count == 1)
+        #expect(rows.first?.filesFailed == 3)
+        #expect(rows.first?.camera?.serial == C.camera.rawValue)
+    }
+
+    /// The marker's columns as SwiftData stores them: one row per file, under the commit's identifier.
+    @Test func aPendingCommitIsOneRowPerFile() async throws {
+        let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
+        let store = SwiftDataCatalogue(modelContainer: container)
+        var commit = V4Fixtures.pairCommit
+        commit.destination = .staging(root: .onThisIPhone, folder: "Staging/ILCE-7CM2/2026-11-01")
+        try await store.beginCommit(commit)
+        let rows = try ModelContext(container).fetch(FetchDescriptor<PendingCommitFile>())
+        #expect(rows.count == 2)
+        #expect(rows.allSatisfy {
+            $0.commitID == V4Fixtures.commit1 && $0.destination == "staging" && $0.stagingRoot == "onThisIPhone"
+                && $0.stagingFolder == "Staging/ILCE-7CM2/2026-11-01" && $0.cameraKey == C.camera.rawValue
+        })
+        #expect(Set(rows.map(\.role)) == ["raw", "processed"])
+        try await store.abandonCommit(V4Fixtures.commit1)
+        #expect(try ModelContext(container).fetch(FetchDescriptor<PendingCommitFile>()).isEmpty)
     }
 
     /// The staged copy's columns as SwiftData stores them, and a root this build doesn't know read as not staged.

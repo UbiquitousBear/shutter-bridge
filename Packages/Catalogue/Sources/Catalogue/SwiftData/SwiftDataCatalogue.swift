@@ -29,6 +29,11 @@ import SwiftData
 /// **Staging** (Shamil, 11 Nov; schema version 3): `markStaged` and `clearStaged` write the file row's staged copy,
 /// which `upsert` and `markPartial` keep, and `stagedStates(of:)` matches it by content as `states(of:)` does.
 ///
+/// **Culling, History and pending commits** (Iteration 2; schema version 4): cull marks in `CullMark` rows, one per
+/// content key by this actor's rule, as file rows are one per identity; job records in the `ImportJob` rows version 1
+/// already had, one per job identifier by the same rule; pending-commit markers in `PendingCommitFile` rows, one per
+/// file, grouped by commit, and cleared by `finishCommit` in the same save as the rows it writes.
+///
 /// Each write is saved before the call returns. If any step of a write throws (a fetch, the save), every change it
 /// made is rolled back and the error thrown, so a failed write leaves nothing pending for later reads or writes.
 ///
@@ -198,6 +203,213 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         }
     }
 
+    // MARK: Cull marks (Catalogue V4)
+
+    /// One row per content key: the key's rows are updated (the others deleted), or one is inserted.
+    public func setMark(_ decision: MarkRecord.Decision?, rating: Int, for keys: [ObjectIdentity.ContentKey],
+                        at date: Date) throws {
+        guard let mark = try MarkRule.mark(decision, rating: rating, at: date) else {
+            try clearMarks(of: keys)
+            return
+        }
+        let unique = Array(Set(keys))
+        try write { context in
+            let existing = try markRows(for: unique)
+            for key in unique {
+                let columns = CullMarkColumns(mark, for: key)
+                let rows = existing[key.storageKey] ?? []
+                if let kept = rows.first {
+                    kept.apply(columns)
+                    for other in rows.dropFirst() {
+                        context.delete(other)
+                    }
+                } else {
+                    context.insert(StoredCullMark(columns: columns))
+                }
+            }
+        }
+    }
+
+    /// Should a content key have several rows (a later sync), the latest mark answers (`MarkRule.preferred`).
+    public func marks(of keys: [ObjectIdentity.ContentKey]) throws -> [ObjectIdentity.ContentKey: MarkRecord] {
+        guard !keys.isEmpty else { return [:] }
+        var known: [String: MarkRecord] = [:]
+        for (storageKey, rows) in try markRows(for: Array(Set(keys))) {
+            for row in rows {
+                let mark = row.columns.markRecord
+                if let kept = known[storageKey], !MarkRule.preferred(mark, over: kept) { continue }
+                known[storageKey] = mark
+            }
+        }
+        var out: [ObjectIdentity.ContentKey: MarkRecord] = [:]
+        for key in keys {
+            if let mark = known[key.storageKey] { out[key] = mark }
+        }
+        return out
+    }
+
+    public func clearMarks(of keys: [ObjectIdentity.ContentKey]) throws {
+        let rows = try markRows(for: Array(Set(keys))).values.flatMap { $0 }
+        guard !rows.isEmpty else { return }
+        try write { context in
+            for row in rows {
+                context.delete(row)
+            }
+        }
+    }
+
+    // MARK: Job records (Catalogue V4)
+
+    /// One row per job identifier: the job's rows are updated (the others deleted), or one is inserted, and linked to
+    /// its camera's row (made if missing).
+    public func recordJob(_ job: JobRecord) throws {
+        try write { context in
+            let rows = try jobRows(id: job.id)
+            let row: ImportJob
+            if let kept = rows.first {
+                row = kept
+                for other in rows.dropFirst() {
+                    context.delete(other)
+                }
+            } else {
+                row = ImportJob(startedAt: job.startedAt)
+                context.insert(row)
+            }
+            row.apply(JobColumns(job))
+            if row.camera?.serial != job.camera.rawValue {
+                row.camera = try cameraRow(serial: job.camera.rawValue, creating: true)
+            }
+        }
+    }
+
+    public func job(_ id: UUID) throws -> JobRecord? {
+        try jobRows(id: id).first.map { jobRecord($0) }
+    }
+
+    /// Every job row is read (one per job, a short table) and filtered by camera here, so a row written before
+    /// version 4, whose camera is only its relationship, is listed under its camera too.
+    public func jobs(camera: CameraKey?) throws -> [JobRecord] {
+        var seen: Set<UUID> = []
+        var out: [JobRecord] = []
+        for row in try modelContext.fetch(FetchDescriptor<ImportJob>()) {
+            let job = jobRecord(row)
+            guard camera == nil || job.camera == camera, seen.insert(job.id).inserted else { continue }
+            out.append(job)
+        }
+        return JobOrder.sorted(out)
+    }
+
+    // MARK: Staged files and Forget imports (Catalogue V4)
+
+    public func stagedRecords(camera: CameraKey?) throws -> [CatalogueRecord] {
+        let objects: [CameraObject]
+        if let camera {
+            let key = camera.rawValue
+            let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
+                object.cameraKey == key && object.stagedRelativePath != nil
+            })
+            objects = try modelContext.fetch(descriptor)
+        } else {
+            let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
+                object.stagedRelativePath != nil
+            })
+            objects = try modelContext.fetch(descriptor)
+        }
+        var byIdentity: [String: [CameraObject]] = [:]
+        for object in objects {
+            byIdentity[object.identityKey, default: []].append(object)
+        }
+        var out: [CatalogueRecord] = []
+        for rows in byIdentity.values {
+            if let record = furthestAlong(rows)?.row.record, record.staged != nil { out.append(record) }
+        }
+        return StagedOrder.sorted(out)
+    }
+
+    /// One write: the key's rows changed by `ForgetRule`, and its pending-commit markers deleted, in one save.
+    @discardableResult
+    public func forgetImports(camera: CameraKey) throws -> Int {
+        let key = camera.rawValue
+        var forgotten = 0
+        try write { context in
+            let ofCamera = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
+                object.cameraKey == key
+            })
+            let objects = try modelContext.fetch(ofCamera)
+            for object in objects {
+                switch ForgetRule.change(for: object.row) {
+                case .keep:
+                    continue
+                case .delete:
+                    context.delete(object)
+                case let .rewrite(row):
+                    object.apply(row)
+                }
+                forgotten += 1
+            }
+            let markers = FetchDescriptor<PendingCommitFile>(predicate: #Predicate<PendingCommitFile> { marker in
+                marker.cameraKey == key
+            })
+            for marker in try modelContext.fetch(markers) {
+                context.delete(marker)
+            }
+        }
+        return forgotten
+    }
+
+    // MARK: Pending commits (Catalogue V4)
+
+    /// The commit's rows replaced in one save.
+    public func beginCommit(_ pending: PendingCommit) throws {
+        guard !pending.files.isEmpty else { throw CatalogueFailure.emptyCommit }
+        try write { context in
+            for row in try markerRows(commitID: pending.id) {
+                context.delete(row)
+            }
+            for columns in PendingCommitColumns.rows(of: pending) {
+                context.insert(PendingCommitFile(columns: columns))
+            }
+        }
+    }
+
+    /// The writes, by the rules `upsert` and `markStaged` follow (duplicates healed alike), and the marker's rows
+    /// deleted, then one save; rolled back as a whole if any step or the save fails (`write(_:)`).
+    public func finishCommit(_ id: UUID, writing writes: [CommitWrite]) throws {
+        try write { context in
+            for change in writes {
+                switch change {
+                case let .imported(record):
+                    let existing = try objects(withKey: record.identity.storageKey)
+                    let kept = StagedMark.upserting(record, over: stored(existing))
+                    try upsertObject(CatalogueRow(kept), existing: existing, in: context)
+                case let .staged(identity, format, location):
+                    let existing = try objects(withKey: identity.storageKey)
+                    let record = StagedMark.record(for: identity, format: format, at: location,
+                                                   existing: furthestAlong(existing)?.row.record)
+                    try upsertObject(CatalogueRow(record), existing: existing, in: context)
+                }
+            }
+            for row in try markerRows(commitID: id) {
+                context.delete(row)
+            }
+        }
+    }
+
+    public func abandonCommit(_ id: UUID) throws {
+        let rows = try markerRows(commitID: id)
+        guard !rows.isEmpty else { return }
+        try write { context in
+            for row in rows {
+                context.delete(row)
+            }
+        }
+    }
+
+    public func pendingCommits() throws -> [PendingCommit] {
+        let rows = try modelContext.fetch(FetchDescriptor<PendingCommitFile>())
+        return PendingCommitColumns.commits(from: rows.map(\.columns))
+    }
+
     // MARK: Beyond the protocol
 
     /// Every row, in no particular order (duplicates, if a store ever holds any, included).
@@ -214,12 +426,24 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
     func write(_ body: (ModelContext) throws -> Void) throws {
         do {
             try body(modelContext)
+            if let failure = nextSaveFailure {
+                nextSaveFailure = nil
+                throw failure
+            }
             try modelContext.save()
         } catch {
             modelContext.rollback()
             throw error
         }
     }
+
+    /// Tests only: the next write throws `error` where it would save, after making its changes, as a failing save
+    /// would (`finishCommit`'s all-or-nothing is tested through it).
+    func failNextSave(with error: any Error) {
+        nextSaveFailure = error
+    }
+
+    private var nextSaveFailure: (any Error)?
 
     /// Whether the actor's work runs on the main thread (tests only: the store must never).
     func isOnMainThread() -> Bool {
@@ -265,6 +489,47 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
             }
         }
         return candidates
+    }
+
+    /// The `CullMark` rows of `keys`, by storage key, fetched a chunk of keys at a time.
+    private func markRows(for keys: [ObjectIdentity.ContentKey]) throws -> [String: [StoredCullMark]] {
+        let storageKeys = keys.map(\.storageKey).sorted()
+        var rows: [String: [StoredCullMark]] = [:]
+        var start = storageKeys.startIndex
+        while start < storageKeys.endIndex {
+            let end = min(start + Self.sizesPerFetch, storageKeys.endIndex)
+            let chunk = Array(storageKeys[start ..< end])
+            start = end
+            let descriptor = FetchDescriptor<StoredCullMark>(predicate: #Predicate<StoredCullMark> { mark in
+                chunk.contains(mark.contentKey)
+            })
+            for row in try modelContext.fetch(descriptor) {
+                rows[row.contentKey, default: []].append(row)
+            }
+        }
+        return rows
+    }
+
+    /// Every `ImportJob` row with this identifier: one, by the store's rule.
+    private func jobRows(id: UUID) throws -> [ImportJob] {
+        let descriptor = FetchDescriptor<ImportJob>(predicate: #Predicate<ImportJob> { job in
+            job.jobID == id
+        })
+        return try modelContext.fetch(descriptor)
+    }
+
+    /// The job a row holds; a row written before version 4 has no key column and takes its camera relationship's.
+    private func jobRecord(_ row: ImportJob) -> JobRecord {
+        row.columns.record(cameraKey: row.camera?.serial ?? "")
+    }
+
+    /// Every marker row of one commit.
+    private func markerRows(commitID: UUID) throws -> [PendingCommitFile] {
+        let wanted: UUID? = commitID
+        let descriptor = FetchDescriptor<PendingCommitFile>(predicate: #Predicate<PendingCommitFile> { row in
+            row.commitID == wanted
+        })
+        return try modelContext.fetch(descriptor)
     }
 
     private func objects(withKey key: String) throws -> [CameraObject] {

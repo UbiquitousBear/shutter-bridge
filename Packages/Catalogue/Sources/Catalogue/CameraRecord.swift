@@ -98,6 +98,12 @@ public enum CatalogueFailure: Error, Sendable, Hashable {
     /// `markPartial` was given an absolute URL for the partial file. It must be relative to the engine's staging
     /// folder (`CatalogueRecord.tempURL`), because the app's container moves when the app is updated.
     case partialFileNotRelative
+    /// `setMark` was given a rating outside 0...5 (`MarkRecord.ratings`).
+    case ratingOutOfRange(Int)
+    /// `beginCommit` was given a commit with no files.
+    case emptyCommit
+    /// The store doesn't keep what the call needs (a test double written before Catalogue V4).
+    case notSupported
 }
 
 /// The partial-file rule, for both stores (plan W4; the engine writes a checkpoint every 16 MiB in W7).

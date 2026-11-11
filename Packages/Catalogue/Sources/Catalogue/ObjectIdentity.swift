@@ -69,7 +69,7 @@ extension ObjectIdentity {
     ///
     /// The capture time is `CaptureDate`'s wall-clock time, already to the second. **Unverified:** that MSC and MTP
     /// report the same second and size for one file (the next bench run compares them in the listing's log line).
-    public struct ContentKey: Sendable, Hashable, CustomStringConvertible {
+    public struct ContentKey: Sendable, Hashable, Codable, CustomStringConvertible {
         /// The name with ASCII letters upper-cased.
         public let filename: String
         public let captureDate: CaptureDate
@@ -82,6 +82,23 @@ extension ObjectIdentity {
         }
 
         public var description: String { "\(filename) \(captureDate) \(size)B" }
+
+        private enum CodingKeys: String, CodingKey { case filename, captureDate, size }
+
+        // Decoded through `init`, so a stored name is folded whatever case it was written in.
+        public init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(filename: try c.decode(String.self, forKey: .filename),
+                      captureDate: try c.decode(CaptureDate.self, forKey: .captureDate),
+                      size: try c.decode(UInt64.self, forKey: .size))
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(filename, forKey: .filename)
+            try c.encode(captureDate, forKey: .captureDate)
+            try c.encode(size, forKey: .size)
+        }
 
         /// `a`–`z` as `A`–`Z`; every other byte, non-ASCII ones included, unchanged.
         static func foldingASCIICase(_ name: String) -> String {
