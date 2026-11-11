@@ -210,6 +210,12 @@ final class Job {
     /// What a `disconnected` failure means for this job: `.cameraUnreachable` once a link has reported a lost
     /// session (Wi-Fi), `.cameraRemoved` until then (USB never reports one).
     var cameraLossReason: PauseReason = .cameraRemoved
+    /// The generation of the link's session the job is using (`CameraLink.sessionGeneration`, read after each
+    /// `open()`); 0 until read, and for a link without generations.
+    var sessionInUse = 0
+    /// Sessions of this link up to this generation were replaced by a `reconnect`: a `.sessionLost` stamped with one of
+    /// them is late, and ignored (backlog section 2, I13).
+    var replacedSessions = 0
     var hasListed = false
     var listRetries = 0
     /// When the camera (or its card) was lost, until the card is listed again: for `EngineTrace.reconnected`.
@@ -263,6 +269,33 @@ final class Job {
     /// Downloads in flight: the setting, capped by what the current link can carry (wireless plan, decision 5; USB
     /// 2, Wi-Fi 1). Read again after a reconnect, so a new link brings its own cap.
     var limit: Int { min(settingsLimit, link.capabilities.maxDownloadsInFlight) }
+
+    /// The job carries on through `link` (`reconnect`): the session it was using counts as replaced, so a late
+    /// `.sessionLost` of it, or of an older one, is ignored. A new link has generations of its own.
+    func replaceSession(with link: any CameraLink) {
+        if ObjectIdentifier(link) == ObjectIdentifier(self.link) {
+            replacedSessions = max(replacedSessions, sessionInUse)
+        } else {
+            replacedSessions = 0
+        }
+        sessionInUse = 0
+        self.link = link
+    }
+
+    /// The link's session after an `open()` (`CameraLink.sessionGeneration`). A reconnect that found the old session
+    /// still open (nothing was lost: an expiry, a card that came back) didn't replace it, so its losses count again.
+    /// Until this is read, a real loss of a session the reconnect took over is ignored; its calls still fail as
+    /// `disconnected`, which pauses the job as well.
+    func useSession(_ generation: Int) {
+        sessionInUse = generation
+        if generation > 0 { replacedSessions = min(replacedSessions, generation - 1) }
+    }
+
+    /// Whether a `.sessionLost` stamped with `generation` ends a session the job no longer uses: one a reconnect
+    /// replaced, or one older than the session read after the latest `open()`. Never an unstamped loss (0).
+    func isReplaced(session generation: Int) -> Bool {
+        generation > 0 && (generation <= replacedSessions || generation < sessionInUse)
+    }
 
     /// The job's file with the same content as `identity` (whatever its folder or camera key), if any.
     func entry(sameContentAs identity: ObjectIdentity) -> FileEntry? {

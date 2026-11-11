@@ -124,6 +124,10 @@ public actor SimulatedCameraLink: CameraLink {
     public private(set) var isCatalogueHeld = false
     /// Opens that succeeded.
     public private(set) var openCount = 0
+    /// The open session's generation, or the last one's (`CameraLink.sessionGeneration`): 1 for the first session, one
+    /// more for each `open()` of a closed session and each `loseSessionAndReopen(announcing:)`. Each `.sessionLost`
+    /// carries the generation of the session it ends.
+    public private(set) var sessionGeneration = 0
     /// Every `list()` call that got past a suspension, failed ones included.
     public private(set) var listCount = 0
     /// The file name of every `bytes` call that found its file, in order.
@@ -147,7 +151,9 @@ public actor SimulatedCameraLink: CameraLink {
     /// Where each `open()` dialled, in order, failed ones included.
     public private(set) var dialled: [PTPIPEndpoint] = []
     /// Old sessions' `.sessionLost` events held back by `loseSessionAndReopen(announcing: .late)`.
-    public private(set) var lateSessionLosses = 0
+    public var lateSessionLosses: Int { lateLossGenerations.count }
+    /// The generations of the sessions those losses end, oldest first.
+    private var lateLossGenerations: [Int] = []
     /// Downloads waiting for the throughput budget to grow.
     public var throttledDownloads: Int { throughputWaiters.count }
     /// `bytes` calls running now that are not parked (held by `.holdAfter`, or mid-file waiting for the throughput
@@ -242,6 +248,7 @@ public actor SimulatedCameraLink: CameraLink {
         try requireNotClosed(.open)
         try reachCamera()
         try takeInjected(.open)
+        if !isOpen { sessionGeneration += 1 }
         openCount += 1
         isOpen = true
     }
@@ -422,7 +429,7 @@ public actor SimulatedCameraLink: CameraLink {
         guard isUsable else { return }
         sessionEpoch += 1
         isOpen = false
-        fanOut.send(.sessionLost)
+        fanOut.send(.sessionLost(generation: sessionGeneration))
         wakeEveryone(with: .removed)
     }
 
@@ -437,23 +444,22 @@ public actor SimulatedCameraLink: CameraLink {
         case .late:
             sessionEpoch += 1
             isOpen = false
-            lateSessionLosses += 1
+            lateLossGenerations.append(sessionGeneration)
             wakeEveryone(with: .removed)
         }
+        sessionGeneration += 1
         openCount += 1
         isOpen = true
     }
 
     /// Sends the `.sessionLost` of a session `loseSessionAndReopen(announcing: .late)` replaced, one per call, in the
     /// order they were replaced. The link's state doesn't change: the session now open is not the one that was lost.
-    /// The event carries no generation yet, so the engine can't tell this loss from a real loss of the new session: when
-    /// I13 adds one to `CameraLinkEvent.sessionLost`, this hook must stamp the replaced session's generation.
-    /// Returns whether one was waiting.
+    /// The event carries the replaced session's generation, older than `sessionGeneration`, which is how a reader tells
+    /// it from a loss of the session now open (the engine ignores it, I13). Returns whether one was waiting.
     @discardableResult
     public func sendLateSessionLoss() -> Bool {
-        guard lateSessionLosses > 0 else { return false }
-        lateSessionLosses -= 1
-        fanOut.send(.sessionLost)
+        guard !lateLossGenerations.isEmpty else { return false }
+        fanOut.send(.sessionLost(generation: lateLossGenerations.removeFirst()))
         return true
     }
 

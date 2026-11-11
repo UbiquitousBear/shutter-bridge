@@ -454,7 +454,7 @@ struct StagingJobTests {
         await link.waitUntilHeld("B.JPG")
         await h.engine.flushCheckpoints()
         try await h.engine.pause(.taskExpired)
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         try await h.engine.reconnect(job, to: link, keepingExpiry: true)
         #expect(await h.engine.currentPurpose == .staging)

@@ -121,7 +121,7 @@ struct IPLinkOverNetworkTests {
 
         // The camera going out of range: both TCP connections close under the link.
         await bench.server.dropConnections()
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         #expect(!(await bench.link.isOpen))
         let failure = await #expect(throws: CameraLinkFailure.self) { try await bench.link.list() }
         #expect(failure?.kind == .disconnected)

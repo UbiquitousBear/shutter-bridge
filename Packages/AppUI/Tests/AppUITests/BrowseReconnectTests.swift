@@ -265,7 +265,7 @@ struct BrowseReconnectTests {
         let h = start([link])
         #expect(await eventuallyLong { h.model.phase == .listed })
         #expect(await h.model.thumbnail(for: ids[0]) != nil)
-        await link.send(.sessionLost)
+        await link.send(.sessionLost(generation: 1))
         #expect(await eventuallyLong { h.model.linkGeneration == 2 && h.model.interruption == nil })
         #expect(await link.opens == 2)
         #expect(await link.reusingLists == [ids])
@@ -281,7 +281,7 @@ struct BrowseReconnectTests {
         await first.set(reopenFailure: CameraLinkFailure(.disconnected, detail: "open: PTP/IP linkLost"))
         let h = start([first, second])
         #expect(await eventuallyLong { h.model.phase == .listed })
-        await first.send(.sessionLost)
+        await first.send(.sessionLost(generation: 1))
         #expect(await eventuallyLong { h.model.interruption == .disconnected && h.model.canRetry == false })
         #expect(await first.closed)   // let go: Browse was its only holder
         #expect(h.log.lines.contains { $0.hasPrefix("browse: the link ended under the screen (sessionLost)") })
@@ -296,7 +296,7 @@ struct BrowseReconnectTests {
         let h = start([link])
         #expect(await eventuallyLong { h.model.phase == .listed })
         h.leases.acquire(link)   // the import
-        await link.send(.sessionLost)
+        await link.send(.sessionLost(generation: 1))
         #expect(await eventuallyLong { h.log.lines.contains("browse: link event sessionLost") })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await link.opens == 1)
@@ -312,7 +312,7 @@ struct BrowseReconnectTests {
         // A trip away that let nothing go (an import held the link, say): back in front, a lost session is recovered.
         await awayAndBack(h.model)
         #expect(h.links.opens == 1 && h.model.interruption == nil)
-        await link.send(.sessionLost)
+        await link.send(.sessionLost(generation: 1))
         #expect(await eventuallyLong { h.model.linkGeneration == 2 && h.model.interruption == nil })
         #expect(await link.opens == 2)
         #expect(h.links.opens == 1)   // the same link: nothing prepared again
@@ -325,7 +325,7 @@ struct BrowseReconnectTests {
         let h = start([first, second])
         #expect(await eventuallyLong { h.model.phase == .listed })
         h.model.scenePhaseChanged(.background)
-        await first.send(.sessionLost)
+        await first.send(.sessionLost(generation: 1))
         #expect(await eventuallyLong { h.model.interruption == .disconnected })
         #expect(await first.opens == 1)   // not reopened from the background
         h.model.scenePhaseChanged(.active)

@@ -231,6 +231,11 @@ public protocol CatalogueStore: Actor {
     /// kept.
     func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws
 
+    /// Every `.partial` row with a temporary file, one per identity (the row `record(for:)` reads), in no set order:
+    /// what the engine's launch pass checks against the partial files on disk (`ImportEngine.reconcilePartials()`,
+    /// backlog section 2). A row sent back to offset 0 with no file (`resetPartial(_:ifTempURL:offset:)`) isn't one.
+    func partialRecords() throws -> [CatalogueRecord]
+
     // MARK: Staging (Shamil, 11 Nov)
 
     /// Records that the file was staged, at `location`: the row for exactly this identity gets `staged` = `location`
@@ -350,6 +355,22 @@ extension CatalogueStore {
         return record.written(over: stored)
     }
 
+    /// Sends the row for exactly this identity back to offset 0 with no temporary file, keeping it `.partial` (its
+    /// location and staged copy too), while it is `.partial` with `tempURL` as its file at `offset`, the row the
+    /// caller read: the file is gone, so the next job copies the file from its start. Read and written in one actor
+    /// call, so a checkpoint written since the caller read the row (another file, or another offset in the same one)
+    /// is never undone, and a row that has since been imported, staged or restarted is left alone. `markPartial` can't
+    /// say "no file". `tempURL` is compared by its relative path, in either form `markPartial` takes. Returns whether
+    /// the row was reset.
+    @discardableResult
+    public func resetPartial(_ identity: ObjectIdentity, ifTempURL tempURL: URL, offset: UInt64) throws -> Bool {
+        guard let reset = PartialMark.reset(try record(for: identity), ifTempURL: tempURL, offset: offset) else {
+            return false
+        }
+        try upsert(reset)
+        return true
+    }
+
     /// Marks the files at the current time (`setMark(_:rating:for:at:)`).
     public func setMark(_ decision: MarkRecord.Decision?, rating: Int = 0, for keys: [ObjectIdentity.ContentKey])
         throws {
@@ -373,7 +394,8 @@ extension CatalogueStore {
 // What a store that keeps no marks, job records or pending-commit markers does: the calls Catalogue V4 added, for test
 // doubles written before it (`InMemoryCatalogue` and `SwiftDataCatalogue` implement every one). Writes to what isn't
 // kept are dropped and reads answer empty; `finishCommit` still writes its rows, through `upsert` and `markStaged` (not
-// in one save); `stagedRecords` and `forgetImports`, which need every row, throw `CatalogueFailure.notSupported`.
+// in one save); `stagedRecords`, `partialRecords` and `forgetImports`, which need every row, throw
+// `CatalogueFailure.notSupported`.
 // These are for test doubles only. A store that ships, including a wrapper that forwards to another store, implements
 // every call here: with these defaults it would compile and quietly drop the pending-commit marker (section 3.1's
 // duplicate protection), History's job records and the cull marks.
@@ -396,6 +418,10 @@ extension CatalogueStore {
     public func jobs(camera: CameraKey?) throws -> [JobRecord] { [] }
 
     public func stagedRecords(camera: CameraKey?) throws -> [CatalogueRecord] {
+        throw CatalogueFailure.notSupported
+    }
+
+    public func partialRecords() throws -> [CatalogueRecord] {
         throw CatalogueFailure.notSupported
     }
 

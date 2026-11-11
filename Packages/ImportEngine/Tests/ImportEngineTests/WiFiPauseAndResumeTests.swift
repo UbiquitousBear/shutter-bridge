@@ -52,7 +52,7 @@ struct WiFiPauseAndResumeTests {
         let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
 
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         #expect(await h.engine.state == .paused(.cameraUnreachable))
         #expect(await h.engine.currentProgress.filesFailed == 0)
@@ -118,7 +118,7 @@ struct WiFiPauseAndResumeTests {
         try await h.engine.pause(.taskExpired)
         #expect(await h.engine.state == .paused(.taskExpired))
         #expect(await !h.engine.importRunning(carrier: .wifi))
-        link.send(.sessionLost) // the app stops the link's transfer after the pause (W13)
+        link.send(.sessionLost(generation: 0)) // the app stops the link's transfer after the pause (W13)
         await h.trace.next(.paused(.cameraUnreachable))
         #expect(await h.engine.state == .paused(.taskExpired)) // open the app first
         try await h.engine.resume(.appInBackground)
@@ -142,7 +142,7 @@ struct WiFiPauseAndResumeTests {
         await link.script("A.JPG", .holdAfter(1500))
         let job = try await h.start(.items([a]), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
 
         // Under the old handle, a different A.JPG; the job's file is now under s2-A.JPG.
@@ -222,7 +222,7 @@ struct WiFiPauseAndResumeTests {
         await link.waitUntilHeld("A.JPG")
         link.send(.storeRemoved)
         await h.trace.next(.paused(.cardUnavailable))
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         #expect(await h.engine.state == .paused(.cameraUnreachable))
         link.send(.storeAdded)
@@ -263,7 +263,7 @@ struct WiFiPauseAndResumeTests {
         await link.script("A.JPG", .failAfter(600, .disconnected))
         let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await h.trace.next(.paused(.cameraRemoved))
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         #expect(await h.engine.state == .paused(.cameraUnreachable))
         try await h.engine.reconnect(job, to: link)
@@ -417,7 +417,7 @@ struct WiFiPauseAndResumeTests {
         await #expect(throws: ImportEngineError.noJob) { try await h.engine.reconnect(otherJob, to: link) }
         await other.cleanup()
 
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         try await h.engine.reconnect(job, to: link, knownItems: card)
         #expect(await h.waitFinished() == .completed)
@@ -492,7 +492,7 @@ struct WiFiPauseAndResumeTests {
         #expect(await !h.engine.importRunning(carrier: .usb))
         #expect(await !h.engine.isUSBImportRunning) // the screen-on rule stays USB-only
         #expect(await h.engine.currentProgress.runningCarrier == .wifi)
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         #expect(await h.engine.importRunning(carrier: .wifi))
         try await h.engine.pause()

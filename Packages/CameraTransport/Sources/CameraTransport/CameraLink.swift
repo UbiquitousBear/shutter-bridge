@@ -27,6 +27,12 @@ public protocol CameraLink: Actor {
     /// that can't be used again (`USBLink`). `EventFanOut` gives a link these semantics.
     nonisolated var events: AsyncStream<CameraLinkEvent> { get }
 
+    /// Which session is open, or was open last: 1 for the link's first session, one more for each session it opens
+    /// after one was lost. `.sessionLost` carries the lost session's (`CameraLinkEvent.sessionLost(generation:)`), so a
+    /// reader that read this after `open()` can tell a late loss of an older session from a loss of this one. 0 for a
+    /// link that never loses a session without being removed (USB, the staging folder): the default.
+    var sessionGeneration: Int { get async }
+
     /// Opens the session. Over USB in MTP no PTP command is sent until ImageCaptureCore's catalogue has finished,
     /// and in MSC none at all (backlog section 2, *Open*). Opening an open link does nothing.
     func open() async throws(CameraLinkFailure)
@@ -77,6 +83,9 @@ public protocol CameraLink: Actor {
 }
 
 extension CameraLink {
+    /// No session generations: a link whose sessions end only with `.removed` never sends `.sessionLost`.
+    public var sessionGeneration: Int { 0 }
+
     /// A fresh copy: `bytes(of:into:resuming:checkpoint:progress:)` with nothing to resume and no checkpoints kept.
     public func bytes(
         of item: CameraItem.ID,

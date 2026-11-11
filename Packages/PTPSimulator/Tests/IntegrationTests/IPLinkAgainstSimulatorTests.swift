@@ -295,7 +295,7 @@ struct IPLinkAgainstSimulatorTests {
         await link.close()
         var forwarded: [CameraLinkEvent] = []
         for await event in events { forwarded.append(event) }
-        #expect(!forwarded.contains(.sessionLost))
+        #expect(!forwarded.contains { $0.isSessionLost })
     }
 
     @Test func aListingDuringADownloadHoldsTheTurnFromStartToEnd() async throws {
@@ -334,7 +334,7 @@ struct IPLinkAgainstSimulatorTests {
         bench.camera.withResponder { $0.inject(.sessionNotOpen, forNext: .getObjectInfo) }
         let failure = await #expect(throws: CameraLinkFailure.self) { try await bench.link.info(of: item.id) }
         #expect(failure?.kind == .disconnected)
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         #expect(!(await bench.link.isOpen))
         try await bench.open()
         #expect(try await bench.link.list().count == bench.camera.card.objects.count)
@@ -422,7 +422,7 @@ struct IPLinkAgainstSimulatorTests {
         var events = bench.link.events.makeAsyncIterator()
         try await bench.open()
         bench.clock.advance(by: .seconds(30))
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         #expect(!(await bench.link.isOpen))
         let failure = await #expect(throws: CameraLinkFailure.self) { try await bench.link.list() }
         #expect(failure?.kind == .disconnected)

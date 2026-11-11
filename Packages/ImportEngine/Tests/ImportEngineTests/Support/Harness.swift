@@ -31,14 +31,16 @@ final class Harness {
     private var links: [FakeCameraLink] = []
     private var resumingLinks: [ResumingLink] = []
 
-    /// - Parameter onTrace: Also given every trace event, on the engine's actor as the event happens (to look at
-    ///   the disk at that very step).
+    /// - Parameters:
+    ///   - workFolder: The engine's work folder, relative to `root` (the app's is `Library/Caches/Imports`).
+    ///   - onTrace: Also given every trace event, on the engine's actor as the event happens (to look at the disk at
+    ///     that very step).
     init(catalogue: any CatalogueStore = InMemoryCatalogue(), downloadsInFlight: Int = 1,
-         policy: ImportPolicy = .standard, root existing: URL? = nil,
+         policy: ImportPolicy = .standard, root existing: URL? = nil, workFolder: String = "staging",
          onTrace: (@Sendable (EngineTrace) -> Void)? = nil) {
         root = existing ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("ImportEngineTests-\(UUID().uuidString)", isDirectory: true)
-        staging = root.appendingPathComponent("staging", isDirectory: true)
+        staging = root.appendingPathComponent(workFolder, isDirectory: true)
         filesDirectory = root.appendingPathComponent("files", isDirectory: true)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         self.catalogue = catalogue
@@ -143,7 +145,8 @@ final class Harness {
     /// The outcome of the first job to finish at or after trace index `mark`.
     func waitFinished(after mark: Int = 0) async -> JobOutcome {
         let event = await trace.wait(from: mark) { if case .finished = $0 { true } else { false } }
-        guard case let .finished(outcome) = event else { fatalError("unreachable") }
+        // Anything else is a cancelled wait, already recorded as an issue.
+        guard case let .finished(outcome) = event else { return .catalogueUnavailable }
         return outcome
     }
 
