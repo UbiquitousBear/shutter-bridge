@@ -154,9 +154,10 @@ public actor SimulatedCameraLink: CameraLink {
     /// budget or out a suspension, which only the test ends), so their files may still grow, including any the caller
     /// has walked away from: a link that ignores cancellation (USB) goes on writing such a file until the call returns.
     public var downloadsWriting: Int { bytesInFlight - held.count - throughputWaiters.count - suspendedMidFile }
-    /// Where each `bytes` call whose task was cancelled by the time it returned or threw was writing, in order: calls
-    /// the caller walked away from. A link that ignores cancellation (USB) writes such a file to its end, and what
-    /// becomes of it is the caller's business (the engine deletes it, unless its attempts keep their files).
+    /// The file each `bytes` call whose task was cancelled by the time it returned or threw was to write, in order:
+    /// calls the caller walked away from. One that threw first (a scripted failure) may have written nothing. A link
+    /// that ignores cancellation (USB) writes such a file to its end, and what becomes of it is the caller's business
+    /// (the engine deletes it, unless its attempts keep their files).
     public private(set) var lateFiles: [URL] = []
     /// The throughput limit, if one is set.
     public var throughputLimit: (bytesPerTick: UInt64, tick: Duration)? {
