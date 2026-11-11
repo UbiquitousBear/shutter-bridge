@@ -2,6 +2,7 @@ import CameraTransport
 import Catalogue
 import Foundation
 import Observation
+import PhotosBridge
 
 /// One *Copy as JPEG* or *Share as JPEG…* in progress.
 public struct JPEGWork: Sendable, Hashable {
@@ -63,9 +64,10 @@ public struct BrowseCatalogue: Sendable {
 
 /// The Browse screen's model (backlog section 6): opens the link, shows the last-known card from the catalogue at
 /// once (marked as last-known) while the card is read with the measured expectations, replaces it with the live
-/// listing and saves that, shows the card newest first by day with the already-imported badge, filters it (new only,
-/// type, date range), selects (one by one, or *Select all new*) with the sticky bar's count and size, hands the
-/// selection to the import, fetches thumbnails through the link, and runs *Copy as JPEG* and *Share as JPEG…*.
+/// listing and saves that, shows the card newest first by day with the Imported and Staged badges, filters it (new
+/// only, type, date range), selects (one by one, or *Select all new*) with the sticky bar's count and size, hands the
+/// selection to the import as *Import to Photos* or *Stage* (the Import button's menu; Shamil, 11 Nov), fetches
+/// thumbnails through the link, and runs *Copy as JPEG* and *Share as JPEG…*.
 ///
 /// The screen's `.task` calls `run()`, which holds the link (`LinkLeases`) until the task is cancelled (the screen
 /// went away) and then lets go of it; the link closes unless an import still uses it.
@@ -108,6 +110,7 @@ public final class BrowseModel {
     public enum SelectionBlock: Sendable, Hashable {
         case video
         case notAPhoto
+        /// Already imported, while the Import button imports to Photos (Shamil, 11 Nov: it can be picked to stage).
         case imported
         /// No capture date, so no identity: the engine can't import it yet (backlog section 3).
         case noCaptureDate
@@ -141,8 +144,16 @@ public final class BrowseModel {
     /// the engine skips them. Read after each listing, on the last-known card, and each time the import imports more
     /// files while Browse is shown (`BrowseImporting.importedUpdates()`).
     public private(set) var imported: Set<CameraItem.ID> = []
+    /// The files the catalogue has a staged copy of (Shamil, 11 Nov), for the Staged badge: matched by content, as
+    /// `imported` is, and read with it.
+    public private(set) var staged: Set<CameraItem.ID> = []
     /// The picked files, which the sticky bar counts and Import hands over.
-    public private(set) var selection: Set<CameraItem.ID> = []
+    public private(set) var selection: Set<CameraItem.ID> = [] {
+        didSet { if !allNewPicks.isSubset(of: selection) { allNewPicks.formIntersection(selection) } }
+    }
+    /// Of `selection`, the files *Select All New* picked: when every selected file is one of them, the import is
+    /// told only new files were asked for, so a stage job also leaves out files imported meanwhile.
+    @ObservationIgnored private var allNewPicks: Set<CameraItem.ID> = []
     /// The selecting mode of the grid: taps select instead of opening anything. Leaving it clears the selection, so
     /// the screen hides Back while selecting (a stray tap would throw a hand-built selection away).
     public var isSelecting = false {
@@ -312,6 +323,8 @@ public final class BrowseModel {
             logThumbnails(Task.isCancelled ? "the screen went" : "Browse stopped")
         }
         zone = TimeZone(identifier: TimeZone.current.identifier) ?? TimeZone.current
+        // Where staging goes, for the Import menu's wording; not waited for (finding the iCloud folder can take a moment).
+        Task { [weak self] in await self?.refreshStagingPlace() }
         var reconnecting = false
         while !Task.isCancelled, phase != .gone {
             switch await attempt(reconnecting: reconnecting) {
@@ -972,6 +985,12 @@ public final class BrowseModel {
 
     public func isImported(_ item: CameraItem) -> Bool { imported.contains(item.id) }
 
+    /// Whether the catalogue has a staged copy of `item`. The cell shows Staged only when it isn't imported.
+    public func isStaged(_ item: CameraItem) -> Bool { staged.contains(item.id) }
+
+    /// Imported or staged: what *Select All New* skips and New Only hides (Shamil, 11 Nov).
+    private func isDone(_ id: CameraItem.ID) -> Bool { imported.contains(id) || staged.contains(id) }
+
     /// Why the badges are read, for the bench log.
     enum BadgeRead: Sendable, Hashable, CustomStringConvertible {
         case listing
@@ -989,9 +1008,10 @@ public final class BrowseModel {
         }
     }
 
-    /// Reads the catalogue's states for the card shown: the badge, and selected files that are now imported drop out
-    /// of the selection. Browse calls it itself after each listing, on the last-known card and each time the import
-    /// imports more files; callers may also ask.
+    /// Reads the catalogue's states for the card shown: the Imported and Staged badges, and selected files that can no
+    /// longer be selected (imported, while the Import button imports to Photos) drop out of the selection. Browse calls
+    /// it itself after each listing, on the last-known card and each time the import imports or stages more files;
+    /// callers may also ask.
     public func refreshImportedStates() async {
         await refreshImportedStates(.asked)
     }
@@ -1012,11 +1032,19 @@ public final class BrowseModel {
         badgeReadsStarted += 1
         let mine = badgeReadsStarted
         let states: [ObjectIdentity: ObjectState]
+        let stagedIdentities: Set<ObjectIdentity>?
         do {
             states = try await catalogue.store.states(of: Array(byIdentity.keys))
         } catch {
             services.log.note("browse: badges not refreshed: catalogue error (\(type(of: error)))")
             return
+        }
+        do {
+            stagedIdentities = try await catalogue.store.stagedStates(of: Array(byIdentity.keys))
+        } catch {
+            // The Imported badges still follow; the Staged ones stay as they were.
+            services.log.note("browse: staged badges not refreshed: catalogue error (\(type(of: error)))")
+            stagedIdentities = nil
         }
         // The card may have been replaced while the catalogue answered.
         guard shown == items else {
@@ -1029,10 +1057,14 @@ public final class BrowseModel {
         var now: Set<CameraItem.ID> = []
         for (identity, id) in byIdentity where states[identity] == .imported { now.insert(id) }
         if now != imported { imported = now }
-        if !selection.isDisjoint(with: now) { selection.subtract(now) }
+        if let stagedIdentities {
+            let nowStaged = Set(byIdentity.compactMap { identity, id in stagedIdentities.contains(identity) ? id : nil })
+            if nowStaged != staged { staged = nowStaged }
+        }
+        dropUnselectable()
         if filter.newOnly { rebuildSections() }
         services.log.note("browse: badges refreshed \(why): \(shown.count) shown, \(byIdentity.count) dated, "
-            + "\(now.count) imported, key \(keyTags.tag(for: key))")
+            + "\(now.count) imported, \(staged.count) staged, key \(keyTags.tag(for: key))")
     }
 
     /// The bench log's line for a listing: how long it took, the key by its tag, how many files came without a folder
@@ -1093,37 +1125,50 @@ public final class BrowseModel {
     /// stay marked (the last-known card and the live listing have different item IDs, and MTP may list a file in
     /// another folder), until `refreshImportedStates()` answers from the catalogue.
     private func show(_ newItems: [CameraItem], carryingImported: Bool = false) {
-        let carried = carryingImported ? importedIdentities() : []
+        let carried = carryingImported ? contentKeys(of: imported) : []
+        let carriedStaged = carryingImported ? contentKeys(of: staged) : []
         items = newItems
         if hasFiles == newItems.isEmpty { hasFiles = !newItems.isEmpty }
         itemsByID = Dictionary(newItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let ids = Set(itemsByID.keys)
         if !selection.isSubset(of: ids) { selection.formIntersection(ids) }
-        if let key = cameraKey, !carried.isEmpty {
-            let zone = self.zone
-            let now = Set(newItems.filter { item in
-                item.identity(camera: key, timeZone: zone).map { carried.contains($0.contentKey) } ?? false
-            }.map(\.id))
+        if !carried.isEmpty {
+            let now = matching(carried, in: newItems)
             if now != imported { imported = now }
-            if !selection.isDisjoint(with: now) { selection.subtract(now) }
         } else if !imported.isSubset(of: ids) {
             imported.formIntersection(ids)
         }
+        if !carriedStaged.isEmpty {
+            let now = matching(carriedStaged, in: newItems)
+            if now != staged { staged = now }
+        } else if !staged.isSubset(of: ids) {
+            staged.formIntersection(ids)
+        }
+        dropUnselectable()
         rebuildSections()
     }
 
-    /// The content keys of the files shown as imported.
-    private func importedIdentities() -> Set<ObjectIdentity.ContentKey> {
-        guard let key = cameraKey, !imported.isEmpty else { return [] }
+    /// The content keys of the files shown in `ids`.
+    private func contentKeys(of ids: Set<CameraItem.ID>) -> Set<ObjectIdentity.ContentKey> {
+        guard let key = cameraKey, !ids.isEmpty else { return [] }
         let zone = self.zone
-        return Set(items.filter { imported.contains($0.id) }.compactMap {
+        return Set(items.filter { ids.contains($0.id) }.compactMap {
             $0.identity(camera: key, timeZone: zone)?.contentKey
         })
     }
 
+    /// The files of `newItems` whose content is one of `keys`.
+    private func matching(_ keys: Set<ObjectIdentity.ContentKey>, in newItems: [CameraItem]) -> Set<CameraItem.ID> {
+        guard let key = cameraKey else { return [] }
+        let zone = self.zone
+        return Set(newItems.filter { item in
+            item.identity(camera: key, timeZone: zone).map { keys.contains($0.contentKey) } ?? false
+        }.map(\.id))
+    }
+
     private func rebuildSections() {
         let filter = self.filter
-        let shown = filter.isActive ? items.filter { filter.admits($0, isImported: imported.contains($0.id)) } : items
+        let shown = filter.isActive ? items.filter { filter.admits($0, isDone: isDone($0.id)) } : items
         sections = CardLayout.sections(shown, calendar: calendar)
     }
 
@@ -1145,6 +1190,10 @@ public final class BrowseModel {
     // MARK: - Selection
 
     /// Why `item` can't be selected; nil when it can.
+    ///
+    /// A staged file can always be picked, so it can be imported to Photos (Shamil, 11 Nov). An imported one can't
+    /// while the Import button imports to Photos (the import would leave it out), and can while it stages, so an
+    /// explicit pick of an imported file may still be staged.
     public func selectionBlock(for item: CameraItem) -> SelectionBlock? {
         switch CardLayout.kind(of: item) {
         case .video: return .video
@@ -1152,9 +1201,19 @@ public final class BrowseModel {
         case .photo: break
         }
         guard phase == .listed, lastKnownListedAt == nil else { return .cardNotRead }
-        if imported.contains(item.id) { return .imported }
+        if imported.contains(item.id), importChoice == .photos { return .imported }
         if item.captureDate == nil { return .noCaptureDate }
         return nil
+    }
+
+    /// What the Import button does by default: the import's remembered choice (Photos when there is no import).
+    public var importChoice: DestinationKind { importer?.importChoice ?? .photos }
+
+    /// Takes the files that can no longer be selected out of the selection: imported ones, while the Import button
+    /// imports to Photos.
+    private func dropUnselectable() {
+        guard importChoice == .photos, !selection.isDisjoint(with: imported) else { return }
+        selection.subtract(imported)
     }
 
     public func canSelect(_ item: CameraItem) -> Bool { selectionBlock(for: item) == nil }
@@ -1174,15 +1233,16 @@ public final class BrowseModel {
         }
     }
 
-    /// Selects every file the filters show that can be imported: stills not yet imported and with a capture date,
-    /// so video, other files, imported and undated files are skipped (backlog section 6). Enters the selecting mode.
+    /// Selects every file the filters show that is new: stills neither imported nor staged and with a capture date,
+    /// so video, other files, imported, staged and undated files are skipped (backlog section 6; Shamil, 11 Nov).
+    /// Enters the selecting mode.
     public func selectAllNew() {
         var picked = selection
-        for section in sections {
-            for item in section.items where canSelect(item) { picked.insert(item.id) }
-        }
+        let new = selectableShown
+        picked.formUnion(new)
         isSelecting = true
         selection = picked
+        allNewPicks.formUnion(new)
     }
 
     public func clearSelection() { selection = [] }
@@ -1200,12 +1260,13 @@ public final class BrowseModel {
         }
     }
 
-    /// The files the filters show that could be selected now.
+    /// The files the filters show that *Select All New* picks: those that could be selected now and are neither
+    /// imported nor staged.
     private var selectableShown: [CameraItem.ID] {
-        sections.flatMap { section in section.items.filter { canSelect($0) }.map(\.id) }
+        sections.flatMap { section in section.items.filter { canSelect($0) && !isDone($0.id) }.map(\.id) }
     }
 
-    /// True when every file the filters show that could be selected is selected (and there is one): the leading
+    /// True when every new file the filters show that could be selected is selected (and there is one): the leading
     /// button then reads *Deselect All*, as Select All does in Photos and Files.
     public var allNewSelected: Bool {
         let shown = selectableShown
@@ -1263,26 +1324,42 @@ public final class BrowseModel {
     }
 
     /// Hands the selection to the import: a new job, or the end of the running one. The selection clears once the
-    /// files are in the job; Photos access may be asked for first (the first Import). Returns what came of it (the
-    /// screen opens the Import screen when a job started), or nil when there was nothing to hand over.
+    /// files are in the job; Photos access may be asked for first (the first *Import to Photos*). Returns what came of
+    /// it (the screen opens the Import screen when a job started), or nil when there was nothing to hand over.
+    ///
+    /// - Parameter choice: *Import to Photos* or *Stage*, from the Import button's menu; nil, the button itself, is
+    ///   the remembered choice (`importChoice`). The import remembers what was used.
     @discardableResult
-    public func importSelected() async -> ImportRequestOutcome? {
+    public func importSelected(as choice: DestinationKind? = nil) async -> ImportRequestOutcome? {
         guard canImport, let importer, let link, let key = cameraKey else { return nil }
+        let choice = choice ?? importer.importChoice
         let picked = selectedItems
+        let newOnly = selection.isSubset(of: allNewPicks)
         isStartingImport = true
         defer { isStartingImport = false }
-        let outcome = await importer.importItems(picked, from: ImportCamera(descriptor: camera, key: key), link: link)
+        let outcome = await importer.importItems(picked, from: ImportCamera(descriptor: camera, key: key), link: link,
+                                                 as: choice, newOnly: newOnly)
         switch outcome {
         case .started, .appended, .nothingNew:
             selection.subtract(picked.map(\.id))
+            dropUnselectable()
             if selection.isEmpty { isSelecting = false }
-        case .busyWithAnotherCamera, .stillStarting, .failed:
+        case .busyWithAnotherCamera, .busyWithAnotherMode, .stillStarting, .failed:
             break
         }
         importNoticeCount += 1
-        importStatus = StatusNotice.importRequest(outcome, id: importNoticeCount)
+        importStatus = StatusNotice.importRequest(outcome, id: importNoticeCount, choice: choice)
         return outcome
     }
+
+    /// The Import button's title: "Import", or "Stage" when the remembered choice is *Stage*.
+    public var importButtonTitle: String { BrowseWording.importButtonTitle(importChoice) }
+
+    /// Reads where staging goes again, for the menu's *Stage* item.
+    public func refreshStagingPlace() async { await importer?.refreshStagingPlace() }
+
+    /// The menu's *Stage* item: "Stage in iCloud Drive", or "Stage on iPhone" when iCloud Drive isn't available.
+    public var stageMenuTitle: String { BrowseWording.stageMenuTitle(importer?.stagingPlace) }
 
     public func dismissImportNotice() { importStatus = nil }
 
@@ -1290,7 +1367,7 @@ public final class BrowseModel {
     /// `.isSelected` trait.
     public func accessibilityLabel(for item: CameraItem, date: String?) -> String {
         BrowseWording.cellAccessibility(name: item.name, date: date, kind: CardLayout.kind(of: item),
-                                        isImported: isImported(item))
+                                        isImported: isImported(item), isStaged: isStaged(item))
     }
 
     /// The grid cell's VoiceOver value: why it can't be selected, when the label doesn't already say so.

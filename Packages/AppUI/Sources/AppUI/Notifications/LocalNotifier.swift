@@ -26,6 +26,9 @@ public enum AppNotification: Sendable, Hashable {
     /// An import paused while the app was away: iOS ended its continued task (Wi-Fi), the app left the foreground
     /// (USB; Shamil, 9 Nov), or getting the camera back needs a join (W14). One at a time: a newer one replaces it.
     case importPaused
+    /// The same for a *Stage* job (Shamil, 11 Nov): "Staging paused." It shares the pause notification's identifier,
+    /// so either replaces the other.
+    case stagingPaused
     /// A known camera was noticed nearby (Iteration 4, section 12; W18). `notImported` is the last known count of photos
     /// not yet imported, from the card as last listed (a wake can't read the card), or nil when there is none.
     case cameraNearby(CameraKey, notImported: Int?)
@@ -37,7 +40,7 @@ public enum AppNotification: Sendable, Hashable {
     /// for the reminder (one at a time, whichever camera).
     public var identifier: String {
         switch self {
-        case .importPaused: "net.shamil.shutter-bridge.import-paused"
+        case .importPaused, .stagingPaused: "net.shamil.shutter-bridge.import-paused"
         case .cameraNearby: "net.shamil.shutter-bridge.camera-nearby"
         case .joinWaiting: "net.shamil.shutter-bridge.join-waiting"
         }
@@ -47,7 +50,7 @@ public enum AppNotification: Sendable, Hashable {
     public var category: AppNotificationCategory {
         switch self {
         // No buttons: a tap opens the app, as the pause notification's does.
-        case .importPaused, .joinWaiting: .importPaused
+        case .importPaused, .stagingPaused, .joinWaiting: .importPaused
         case .cameraNearby: .cameraNearby
         }
     }
@@ -55,7 +58,7 @@ public enum AppNotification: Sendable, Hashable {
     /// The title; empty for none (iOS shows the app's name).
     public var title: String {
         switch self {
-        case .importPaused, .joinWaiting: ""
+        case .importPaused, .stagingPaused, .joinWaiting: ""
         case .cameraNearby: NotificationWording.cameraNearbyTitle
         }
     }
@@ -64,6 +67,7 @@ public enum AppNotification: Sendable, Hashable {
     public var body: String {
         switch self {
         case .importPaused: NotificationWording.importPaused
+        case .stagingPaused: NotificationWording.stagingPaused
         case .joinWaiting: NotificationWording.joinWaiting
         case let .cameraNearby(_, notImported): NotificationWording.cameraNearbyBody(notImported: notImported)
         }
@@ -74,7 +78,7 @@ public enum AppNotification: Sendable, Hashable {
     /// for a notification that names no camera.
     public var userInfo: [String: String] {
         switch self {
-        case .importPaused, .joinWaiting: [:]
+        case .importPaused, .stagingPaused, .joinWaiting: [:]
         case let .cameraNearby(camera, _): [Self.cameraUserInfoKey: camera.rawValue]
         }
     }
@@ -167,6 +171,8 @@ public struct SilentNotifier: LocalNotifier {
 public enum NotificationWording {
     /// The pause notification (backlog Iteration 3, section 9, *Expiry is normal*; section 13, *did suspend*).
     public static let importPaused = "Import paused. Open Shutter Bridge to continue."
+    /// The pause notification for a *Stage* job (Shamil, 11 Nov).
+    public static let stagingPaused = "Staging paused. Open Shutter Bridge to continue."
     /// While a Wi-Fi join waits for the app to come back (bench 19.1).
     public static let joinWaiting = "Open Shutter Bridge to join the camera's Wi-Fi."
     /// Shown at the first Import on either link, alongside iOS's prompt: iOS's notification prompt carries no reason

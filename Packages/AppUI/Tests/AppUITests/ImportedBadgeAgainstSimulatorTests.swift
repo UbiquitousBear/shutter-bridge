@@ -181,7 +181,7 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
             "import: imported DSC00005.HIF 20261102T100010 12000 B folder \"\" key \(tag) → Photos"))
         #expect(lines.contains("import: job ended completed: 5 imported, key \(tag)"))
         #expect(lines.contains { $0.hasPrefix("browse: badges refreshed after import (rev ")
-            && $0.hasSuffix("): 7 shown, 6 dated, 5 imported, key \(tag)") })
+            && $0.hasSuffix("): 7 shown, 6 dated, 5 imported, 0 staged, key \(tag)") })
         // No key, no hash of one, no material.
         let hash = String(bench.key.rawValue.drop { $0 != ":" }.dropFirst())
         for line in lines {

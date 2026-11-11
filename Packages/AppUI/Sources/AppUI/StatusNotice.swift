@@ -1,5 +1,6 @@
 import Foundation
 import ImportEngine
+import PhotosBridge
 
 // How the app's status messages are shown and spoken (HIG Accessibility > VoiceOver: tell people about changes in
 // status; HIG Feedback: feedback reaches everyone; HIG Accessibility: give people enough time to read). The rules are
@@ -73,13 +74,17 @@ public struct StatusNotice: Sendable, Hashable {
 
     /// After Import is tapped in Browse: a job started, files were added or there was nothing new (confirmations,
     /// which go by themselves), or a refusal or the engine's failure (kept until closed).
-    public static func importRequest(_ outcome: ImportRequestOutcome, id: Int = 0) -> StatusNotice {
-        let text = BrowseWording.importRequested(outcome) ?? ""
+    ///
+    /// - Parameter choice: What was asked for, *Import to Photos* or *Stage*, so the text says which.
+    public static func importRequest(_ outcome: ImportRequestOutcome, id: Int = 0,
+                                     choice: DestinationKind = .photos) -> StatusNotice {
+        let text = BrowseWording.importRequested(outcome, choice: choice) ?? ""
         switch outcome {
         case .started, .appended, .nothingNew:
-            return StatusNotice(id: id, text: text, tone: .info, systemImage: "square.and.arrow.down",
+            return StatusNotice(id: id, text: text, tone: .info,
+                                systemImage: choice == .staging ? "tray.and.arrow.down" : "square.and.arrow.down",
                                 dismissesItself: true)
-        case .busyWithAnotherCamera, .stillStarting, .failed:
+        case .busyWithAnotherCamera, .busyWithAnotherMode, .stillStarting, .failed:
             return StatusNotice(id: id, text: text, tone: .problem, systemImage: "exclamationmark.triangle",
                                 dismissesItself: false)
         }

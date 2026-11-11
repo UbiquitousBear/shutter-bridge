@@ -376,7 +376,7 @@ struct BrowseFullTests {
         #expect(await eventually { h.model.isImported(named("DSC00003.JPG")) })
         #expect(!h.model.isSelected(named("DSC00003.JPG")))
         #expect(h.log.lines.contains { $0.hasPrefix("browse: badges refreshed after import (rev 1): 7 shown, 6 dated, "
-            + "1 imported, key k") })
+            + "1 imported, 0 staged, key k") })
         await h.stop()
         #expect(await eventually { h.importer.updateReaders == 0 })
     }

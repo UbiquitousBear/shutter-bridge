@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 
 /// The Import screen (backlog section 6, *Import*; decisions 1, 4 and 9): the job's state in the person's words, the
-/// overall bytes, rate and time left, where the files go (named from the first file) and, when Files is forced, why,
+/// overall bytes, rate and time left, where the files go (named from the first file) and, when they are staged, why,
 /// with a button to the app's page in Settings when Photos access is off; then a row per file with its state and
 /// progress. Pause or Continue (one button) and Cancel as the job allows, in the system bottom toolbar. Shown as a
 /// sheet over the whole app, so it stays up when Browse closes because the cable was pulled; the job carries on when
@@ -106,7 +106,7 @@ struct ImportScreen: View {
                     }
                 }
             }
-            if model.destinationLine != nil || model.filesReasonLine != nil {
+            if model.destinationLine != nil || model.stagingReasonLine != nil {
                 Section {
                     destination
                 }
@@ -128,9 +128,9 @@ struct ImportScreen: View {
 
     @ViewBuilder private var destination: some View {
         if let line = model.destinationLine {
-            Label(line, systemImage: model.progress.destination?.kind == .staging ? "folder" : "photo.on.rectangle")
+            Label(line, systemImage: model.progress.destination?.kind == .staging ? "tray.full" : "photo.on.rectangle")
         }
-        if let reason = model.filesReasonLine {
+        if let reason = model.stagingReasonLine {
             Text(reason)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

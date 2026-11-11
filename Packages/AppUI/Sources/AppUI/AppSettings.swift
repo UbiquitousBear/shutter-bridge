@@ -1,11 +1,13 @@
 import Foundation
 import PhotosBridge
 
-/// Where the app keeps the destination setting (decision 9, Shamil, 8 Nov: Photos or Files, app-wide, default Photos).
+/// Where the app keeps the Import button's remembered choice (Shamil, 11 Nov: *Import to Photos* or *Stage*, the last
+/// one used, app-wide, default Photos). It is the value the destination setting of 8 Nov (Photos or Files, chosen in
+/// Settings) was stored as, under the same key, so what an earlier build stored still reads: Files reads as *Stage*.
 /// PhotosBridge defines the value and the rule; persisting it is the app layer's. A protocol so the models are tested
 /// on Linux with an in-memory store.
 public protocol DestinationSettingStore: Sendable {
-    /// The stored setting, or the default (Photos) when nothing, or something unreadable, is stored.
+    /// The stored choice, or the default (Photos) when nothing, or something unreadable, is stored.
     func load() -> DestinationSetting
     func save(_ setting: DestinationSetting)
 }
@@ -23,8 +25,8 @@ public final class InMemoryDestinationSettingStore: DestinationSettingStore, @un
     public func save(_ setting: DestinationSetting) { lock.withLock { self.setting = setting } }
 }
 
-/// The setting in `UserDefaults`, as the value's JSON under one key. `DestinationSetting` decodes leniently, so a
-/// value written by a later version reads as Photos rather than failing. Foundation only, so it is tested on Linux
+/// The choice in `UserDefaults`, as the value's JSON under one key. `DestinationSetting` decodes leniently, so a
+/// value written by a later version reads as Photos rather than failing, and Files, written before 11 Nov, as *Stage*. Foundation only, so it is tested on Linux
 /// against a suite of its own. (`UserDefaults` is thread-safe, hence `@unchecked Sendable`.)
 public final class UserDefaultsDestinationSettingStore: DestinationSettingStore, @unchecked Sendable {
     public static let key = "destinationSetting"

@@ -23,7 +23,7 @@ public enum BrowseFileType: String, Sendable, Hashable, CaseIterable {
 
 /// What Browse shows of the card. Pure, so the rules are tested on Linux.
 public struct BrowseFilter: Sendable, Hashable {
-    /// Hide files the catalogue has as imported.
+    /// Hide files the catalogue has as imported or staged (Shamil, 11 Nov: New Only hides what *Select All New* skips).
     public var newOnly: Bool
     /// The types shown; every type by default.
     public var types: Set<BrowseFileType>
@@ -43,8 +43,9 @@ public struct BrowseFilter: Sendable, Hashable {
     /// Whether anything is filtered out.
     public var isActive: Bool { self != .none }
 
-    public func admits(_ item: CameraItem, isImported: Bool) -> Bool {
-        if newOnly && isImported { return false }
+    /// - Parameter isDone: The catalogue has the file as imported or staged.
+    public func admits(_ item: CameraItem, isDone: Bool) -> Bool {
+        if newOnly && isDone { return false }
         if !types.contains(BrowseFileType.of(item)) { return false }
         if let dateRange {
             guard let date = item.captureDate, dateRange.contains(date) else { return false }

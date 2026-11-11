@@ -69,12 +69,16 @@ final class SimulatorDestinations: ImportDestinationMaking, @unchecked Sendable 
 
     init(documents: URL) { self.documents = documents }
 
-    func destinations(for camera: ImportCamera, startedAt: Date) -> ImportDestinations {
-        let staging = StagingFolderDestination(root: documents, place: ImportDestinations.interimStagingPlace,
+    /// iCloud Drive isn't reachable in a package test: staging is on this iPhone, as on every build until the App ID
+    /// has iCloud.
+    func locate() async -> StagingAvailability { .unavailable(.containerUnavailable) }
+
+    func destinations(for camera: ImportCamera, startedAt: Date,
+                      staging availability: StagingAvailability) -> ImportDestinations {
+        let staging = StagingFolderDestination(root: documents, place: availability.place,
                                                cameraName: camera.name, timeZone: .current)
-        return ImportDestinations(photos: photos, filesFolder: staging,
-                                  filesFolderName: StagingFolderDestination.folderName + " › "
-                                      + staging.cameraFolderName)
+        return ImportDestinations(photos: photos, staging: staging, stagingOnThisIPhone: staging,
+                                  stagingPlace: availability.place, stagingFolderName: staging.cameraFolderName)
     }
 }
 

@@ -3,17 +3,19 @@ import PhotosBridge
 import SwiftUI
 import UIKit
 
-/// The Settings screen (backlog section 6, *Settings, destination*; decision 9, 8 Nov): where imports go, Photos or
-/// Files, app-wide, default Photos, saved as soon as it changes. When Photos access is off or restricted, a row under
-/// the choice says the next import goes to Files whatever the setting (HIG Settings: show what the app will actually
-/// do), with Open Settings after a denial (HIG Privacy); the access is read when the screen appears and when the app
-/// comes back to the foreground. The footer says where files go in Files. Shown as a sheet from the Cameras screen's
-/// toolbar; the choice is saved at once, so the sheet closes with the system close button, not Done (HIG Sheets).
+/// The Settings screen (backlog section 6; Shamil, 11 Nov). There is no destination choice: the Import button offers
+/// *Import to Photos* and *Stage* at each import. The Staging section says where staging goes (iCloud Drive › Shutter
+/// Bridge › Staging, or On My iPhone › Shutter Bridge › Staging) and, when it is on this iPhone, why, with no Settings
+/// button (the app's page in Settings has no iCloud switch). When Photos access is off or restricted, a row says
+/// *Import to Photos* stages instead (HIG Settings: show what the app will actually do), with Open Settings after a
+/// denial (HIG Privacy). Both are read when the screen appears and when the app comes back to the foreground. Shown as
+/// a sheet from the Cameras screen's toolbar; nothing here needs saving, so the sheet closes with the system close
+/// button, not Done (HIG Sheets).
 ///
 /// When the app has the proximity reminder (W18, placed by W16), a Reminders row pushes `ReminderSettingsView` inside this
 /// sheet's navigation stack and says whether the reminder is on; the `ReminderModel` comes from the environment.
 struct SettingsScreen: View {
-    @Bindable var model: SettingsModel
+    let model: SettingsModel
     @Environment(ReminderModel.self) private var reminders: ReminderModel?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -23,15 +25,16 @@ struct SettingsScreen: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker(SettingsWording.destinationHeader, selection: $model.destination) {
-                        ForEach(SettingsModel.choices, id: \.self) { kind in
-                            Label(SettingsModel.label(for: kind), systemImage: Self.symbol(for: kind))
-                                .tag(kind)
-                        }
+                    if let place = model.stagingPlace, let location = model.stagingLocation {
+                        Label(location, systemImage: place == .iCloudDrive ? "icloud" : "iphone")
+                            .accessibilityLabel(SettingsWording.stagingLocationAccessibility(place))
                     }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    if let line = model.forcedFilesLine {
+                    if let line = model.stagingFallbackLine {
+                        Text(line)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let line = model.forcedStagingLine {
                         Label(line, systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
                         if model.offersPhotosSettingsLink {
@@ -41,9 +44,9 @@ struct SettingsScreen: View {
                         }
                     }
                 } header: {
-                    Text(SettingsWording.destinationHeader)
+                    Text(SettingsWording.stagingHeader)
                 } footer: {
-                    Text(SettingsWording.destinationFooter)
+                    Text(SettingsWording.stagingFooter)
                 }
                 if let reminders {
                     Section {
@@ -65,17 +68,10 @@ struct SettingsScreen: View {
                 }
             }
         }
-        .task { await model.refreshPhotosAccess() }
+        .task { await model.refresh() }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await model.refreshPhotosAccess() }
-        }
-    }
-
-    private static func symbol(for kind: DestinationKind) -> String {
-        switch kind {
-        case .photos: "photo.on.rectangle"
-        case .staging: "folder"
+            Task { await model.refresh() }
         }
     }
 }

@@ -44,7 +44,7 @@ struct CameraDisplayNameTests {
         #expect(!CamerasWording.disconnected(camera("Untitled", .usb(.massStorage))).contains("Untitled"))
     }
 
-    @Test func newAlbumsAndFoldersAreNamedWithIt() throws {
+    @Test func newAlbumsAndFoldersAreNamedWithIt() async throws {
         let msc = ImportCamera(descriptor: camera("Untitled", .usb(.massStorage)), key: CameraKey(rawValue: "k1"))
         let mtp = ImportCamera(descriptor: camera("ILCE-7CM2", .usb(.mtp)), key: CameraKey(rawValue: "k2"))
         #expect(msc.name == "Camera")
@@ -52,10 +52,13 @@ struct CameraDisplayNameTests {
 
         let made = StandardImportDestinations(library: UnusedPhotoLibrary(), albumStore: InMemoryAlbumIdentifierStore(),
                                               options: PhotosImportOptions(albums: .both),
-                                              documentsDirectory: URL(fileURLWithPath: "/nonexistent/Documents"))
+                                              documentsDirectory: URL(fileURLWithPath: "/nonexistent/Documents"),
+                                              stagingLocator: FakeStagingLocator(.unavailable(.iCloudDriveOff)),
+                                              iCloudDriveMover: PlainFileMover())
         let start = Date(timeIntervalSince1970: 1_762_700_000)
-        let inMSC = made.destinations(for: msc, startedAt: start)
-        #expect(inMSC.filesFolderName == "Staging › Camera")
+        let inMSC = made.destinations(for: msc, startedAt: start, staging: await made.locate())
+        #expect(inMSC.stagingFolderName == "Camera")
+        #expect(inMSC.stagingPlace == .onThisIPhone(.iCloudDriveOff))
         let photos = try #require(inMSC.photos as? PhotosLibraryDestination)
         let albums = photos.albumPlan.albums
         // The per-camera album is still found by the camera's key; only a new album's title changes.
@@ -64,8 +67,8 @@ struct CameraDisplayNameTests {
         #expect(albums.last?.title.hasPrefix("Camera, ") == true)
         #expect(albums.allSatisfy { !$0.title.contains("Untitled") })
 
-        let inMTP = made.destinations(for: mtp, startedAt: start)
-        #expect(inMTP.filesFolderName == "Staging › ILCE-7CM2")
+        let inMTP = made.destinations(for: mtp, startedAt: start, staging: await made.locate())
+        #expect(inMTP.stagingFolderName == "ILCE-7CM2")
         let mtpPhotos = try #require(inMTP.photos as? PhotosLibraryDestination)
         #expect(mtpPhotos.albumPlan.albums.first?.title == "ILCE-7CM2")
     }

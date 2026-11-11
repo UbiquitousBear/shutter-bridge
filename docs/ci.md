@@ -70,7 +70,9 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
   `app.yml` fails a PR whose app target lacks the setting in either configuration or whose file holds anything but
   that one key (its unsigned builds can't see entitlements), and `testflight.yml` fails a production archive that
   isn't signed with it, before anything is uploaded. Multicast Networking stays out until Apple grants it and it is
-  ticked on the App ID; adding it means ticking it first, then adding the key and updating `app.yml`'s list.
+  ticked on the App ID; adding it means ticking it first, then adding the key and updating `app.yml`'s list. iCloud
+  (staging in iCloud Drive, Shamil, 11 Nov) stays out too until the App ID has it: the change is prepared under *To do
+  once the App ID has iCloud* below, not applied.
 - **Local Network:** `NSLocalNetworkUsageDescription` in `App/Info.plist`, asked at the first connection to the
   camera over Wi-Fi. No `NSBonjourServices` (the camera advertises no `_ptp._tcp`) and no ATS exception (the SSDP
   description fetch stays off).
@@ -248,6 +250,110 @@ browser:
    `CFBundleDisplayName`, which stays "Shutter Bridge". The bundle ID can't change after the first upload.
 3. **Internal testers.** The app → TestFlight → Internal Testing → + a group (e.g. "Bench"), add yourself, and turn
    on automatic distribution.
+
+### To do once the App ID has iCloud (staging in iCloud Drive; prepared 11 Nov, not applied)
+
+*Stage* (Shamil, 11 Nov) copies the camera's originals into the app's iCloud Drive folder (iCloud Drive › Shutter
+Bridge › Staging › camera › capture day) when iCloud Drive is available, and into On My iPhone › Shutter Bridge ›
+Staging otherwise. The code is in (`UbiquityStagingLocator` and `UbiquitousFileMover` in PhotosBridge, wired in
+`LiveRoot`), but the entitlements are not: the App ID doesn't have iCloud yet, and a build that signs with iCloud
+entitlements before the App ID has the capability and the container fails at signing or export (cloud signing at
+export won't add a capability, as for Hotspot Configuration above). Until the follow-up below lands,
+`url(forUbiquityContainerIdentifier:)` answers nil, so every build stages on this iPhone and says so (Settings and the
+Import screen: "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone.").
+
+**1. Portal (Shamil, before the follow-up PR).** Certificates, IDs & Profiles:
+- Identifiers → the filter's **iCloud Containers** → + → description "Shutter Bridge", identifier
+  **`iCloud.net.shamil.shutter-bridge`** (it can't be renamed or deleted afterwards).
+- Identifiers → App IDs → `net.shamil.shutter-bridge` → Capabilities → tick **iCloud**, choose iCloud Documents (no
+  CloudKit support is needed), **Configure** → tick `iCloud.net.shamil.shutter-bridge` → Save. The portal's labels have
+  moved over the years (unverified against today's portal); on the Mac, Signing & Capabilities → + iCloud → iCloud
+  Documents → the container does the same with automatic signing. Check the App ID in the portal afterwards either way.
+- The App ID's existing profiles become invalid; the next export makes new ones with the API key, as now.
+
+**2. The follow-up PR (exact changes; say in the PR that only CI compiled and signed it).**
+
+`App/ShutterBridge.entitlements`: the three keys, beside Hotspot Configuration, and the header comment says iCloud
+must be on the App ID with the container assigned:
+
+```xml
+	<!-- The app's iCloud Drive folder for staging (iCloud Documents, no CloudKit; Shamil, 11 Nov). -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.net.shamil.shutter-bridge</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudDocuments</string>
+	</array>
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.net.shamil.shutter-bridge</string>
+	</array>
+```
+
+No `com.apple.developer.icloud-container-environment` (CloudKit only) and no key-value store.
+
+`App/Info.plist`: the folder Files shows as iCloud Drive › Shutter Bridge (with the app's icon; no Sony mark). The key
+must equal the container identifier exactly; `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` stay, for
+On My iPhone:
+
+```xml
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.net.shamil.shutter-bridge</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Shutter Bridge</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
+```
+
+`.github/workflows/app.yml`, the step *Entitlements are wired into the app target*: the expected dictionary becomes
+the four keys, and a check that the Info.plist names the same container:
+
+```python
+          container = "iCloud.net.shamil.shutter-bridge"
+          expected = {
+              "com.apple.developer.networking.HotspotConfiguration": True,
+              "com.apple.developer.icloud-container-identifiers": [container],
+              "com.apple.developer.icloud-services": ["CloudDocuments"],
+              "com.apple.developer.ubiquity-container-identifiers": [container],
+          }
+          # ... the existing comparison with App/ShutterBridge.entitlements, then:
+          with open("App/Info.plist", "rb") as f:
+              info = plistlib.load(f)
+          entry = info.get("NSUbiquitousContainers", {}).get(container)
+          if entry != {"NSUbiquitousContainerIsDocumentScopePublic": True,
+                       "NSUbiquitousContainerName": "Shutter Bridge",
+                       "NSUbiquitousContainerSupportedFolderLevels": "Any"}:
+              problems.append(f"App/Info.plist: NSUbiquitousContainers[{container}] is {entry!r}")
+```
+
+The step's comment then lists iCloud beside Hotspot Configuration as ticked on the App ID.
+
+`.github/workflows/testflight.yml`, the production branch of step 2, after the Hotspot Configuration check:
+
+```bash
+            for key in com.apple.developer.ubiquity-container-identifiers com.apple.developer.icloud-services \
+                       iCloud.net.shamil.shutter-bridge CloudDocuments; do
+              grep -q "$key" <<<"$entitlements" \
+                || problems+=("it is signed without $key (check iCloud on the App ID and App/ShutterBridge.entitlements)")
+            done
+            [ -n "$(plist NSUbiquitousContainers:iCloud.net.shamil.shutter-bridge:NSUbiquitousContainerName)" ] \
+              || problems+=("Info.plist has no NSUbiquitousContainers entry for iCloud.net.shamil.shutter-bridge")
+```
+
+`App/ShutterBridge/PrivacyInfo.xcprivacy`: no new data type (the files go to the person's own iCloud Drive through
+Apple's service; nothing is collected by the developer). Its comment can say so.
+
+**3. After the first TestFlight build with it.** The bench checks in [iteration-3-4-bench.md](iteration-3-4-bench.md),
+*Staging checks*, part B: the Shutter Bridge folder in iCloud Drive (it may need a build number bump, a reinstall, or a
+first file in Documents before Files shows it), staging there, and the fallback when signed out or switched off.
 
 ### Running it
 

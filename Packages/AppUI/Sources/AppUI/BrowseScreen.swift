@@ -1,10 +1,11 @@
 #if canImport(SwiftUI) && canImport(UIKit) && canImport(ImageCaptureCore) && os(iOS)
 import CameraTransport
+import PhotosBridge
 import SwiftUI
 import UIKit
 
 /// The Browse screen (backlog section 6): the card newest first by day, with the last-known card from the catalogue
-/// shown at once while the camera reads the live one; RAW, HEIF and *already imported* badges; filters (new only,
+/// shown at once while the camera reads the live one; RAW, HEIF, *Imported* and *Staged* badges; filters (new only,
 /// type, date); selection as in Photos (the title reports it, *Select All New* turns into *Deselect All*, Back is
 /// hidden), with the count, size and Import in the system bottom toolbar; and press and hold a photo for *Copy as
 /// JPEG* and *Share as JPEG…*. The link is held while the screen is up and let go when it goes (it closes unless an
@@ -130,29 +131,44 @@ struct BrowseScreen: View {
             }
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
-                Button {
-                    importTapped()
+                // The choice is made at each import (Shamil, 11 Nov): a tap does the remembered choice, and the menu
+                // (a long press) offers both.
+                Menu {
+                    Button {
+                        importTapped(as: .photos)
+                    } label: {
+                        Label(BrowseWording.importToPhotos, systemImage: "photo.on.rectangle")
+                    }
+                    Button {
+                        importTapped(as: .staging)
+                    } label: {
+                        Label(model.stageMenuTitle, systemImage: "tray.and.arrow.down")
+                    }
                 } label: {
                     if model.isStartingImport {
                         // Keeps the button's name for VoiceOver while Photos may be asking.
                         ProgressView()
-                            .accessibilityLabel(BrowseWording.importAction)
+                            .accessibilityLabel(model.importButtonTitle)
                     } else {
-                        Text(BrowseWording.importAction)
+                        Text(model.importButtonTitle)
                     }
+                } primaryAction: {
+                    importTapped(as: nil)
                 }
                 .buttonStyle(.glassProminent)
+                .accessibilityHint(BrowseWording.importButtonHint)
                 .disabled(!model.canImport)
             }
         }
     }
 
-    /// Import in the bottom bar: hands the selection over, and opens the Import screen when a job started.
-    private func importTapped() {
+    /// Import in the bottom bar: hands the selection over as `choice` (nil: the remembered one), and opens the Import
+    /// screen when a job started.
+    private func importTapped(as choice: DestinationKind?) {
         let model = self.model
         let showImport = self.showImport
         Task {
-            let outcome = await model.importSelected()
+            let outcome = await model.importSelected(as: choice)
             if case .started? = outcome { showImport() }
         }
     }
@@ -536,12 +552,13 @@ struct CardCell: View {
         let selected = model.isSelected(item)
         let block = model.selectionBlock(for: item)
         let imported = model.isImported(item)
+        let staged = model.isStaged(item)
         // Only the picture is dimmed: the labels that explain a greyed-out cell stay readable (HIG Colour and
         // contrast).
         let picture = thumbnail
             .opacity(opacity(selecting: selecting, selectable: block == nil))
             .overlay(alignment: .topTrailing) { badge }
-            .overlay(alignment: .bottomLeading) { label(imported: imported) }
+            .overlay(alignment: .bottomLeading) { label(imported: imported, staged: staged) }
             .overlay(alignment: .bottomTrailing) {
                 if selecting, block == nil || selected {
                     SelectionMark(selected: selected)
@@ -629,7 +646,8 @@ struct CardCell: View {
         }
     }
 
-    @ViewBuilder private func label(imported: Bool) -> some View {
+    /// Imported takes precedence over Staged (Shamil, 11 Nov); VoiceOver's label says both.
+    @ViewBuilder private func label(imported: Bool, staged: Bool) -> some View {
         switch kind {
         case .video:
             CellLabel(text: BrowseWording.videoLabel)
@@ -638,6 +656,8 @@ struct CardCell: View {
         case .photo:
             if imported {
                 CellLabel(text: BrowseWording.importedBadge, systemImage: "checkmark.circle.fill")
+            } else if staged {
+                CellLabel(text: BrowseWording.stagedBadge, systemImage: "tray.full")
             }
         }
     }

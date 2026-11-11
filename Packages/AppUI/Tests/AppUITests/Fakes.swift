@@ -222,15 +222,34 @@ func eventually(_ condition: @MainActor () async -> Bool) async -> Bool {
 final class FakeImporter: BrowseImporting {
     var outcome: ImportRequestOutcome = .started(0)
     private(set) var calls: [(items: [CameraItem], camera: ImportCamera)] = []
+    /// The choice and whether only new files were asked for, for each call.
+    private(set) var asked: [(choice: DestinationKind, newOnly: Bool)] = []
+    var importChoice: DestinationKind = .photos
+    /// Whether a request the importer takes makes its choice the remembered one, as `ImportModel` does.
+    var remembersChoice = true
+    var stagingPlace: StagingPlace?
+    /// What `refreshStagingPlace()` reads.
+    var locatedPlace: StagingPlace = .onThisIPhone(.containerUnavailable)
+    private(set) var stagingReads = 0
 
     private let updates = LatestValueFanOut<Int>()
     private var revision = 0
 
-    func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink) async
-        -> ImportRequestOutcome {
+    func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink,
+                     as choice: DestinationKind, newOnly: Bool) async -> ImportRequestOutcome {
         calls.append((items, camera))
+        asked.append((choice, newOnly))
+        switch outcome {
+        case .started, .appended, .nothingNew: if remembersChoice { importChoice = choice }
+        default: break
+        }
         if case .started = outcome { return .started(items.count) }
         return outcome
+    }
+
+    func refreshStagingPlace() async {
+        stagingReads += 1
+        stagingPlace = locatedPlace
     }
 
     func importedUpdates() -> AsyncStream<Int> { updates.subscribe() }
@@ -284,51 +303,73 @@ final class FakePhotosAccess: PhotosAuthorising, @unchecked Sendable {
     }
 }
 
-/// A destination that records the files it was given, by name; Photos can be made to refuse saves (3311).
+/// A destination that records the files it was given, by name; Photos can be made to refuse saves (3311), and
+/// staging in iCloud Drive to find it gone.
 actor RecordingDestination: ImportDestination {
     nonisolated let kind: DestinationKind
+    nonisolated let place: StagingPlace
     private(set) var names: [String] = []
     private var denies = false
+    private var unavailable = false
 
-    init(kind: DestinationKind) { self.kind = kind }
+    init(kind: DestinationKind, place: StagingPlace = testStagingPlace) {
+        self.kind = kind
+        self.place = place
+    }
 
     func setDenies(_ on: Bool) { denies = on }
+    /// Staging here fails as iCloud Drive having gone (`ImportDestinationFailure.stagingUnavailable`).
+    func setUnavailable(_ on: Bool) { unavailable = on }
 
     func commit(_ unit: CommitUnit) throws(ImportDestinationFailure) -> ImportResult {
         if denies { throw .photosAccessDenied }
+        if unavailable { throw .stagingUnavailable }
         let files = unit.files
         names += files.map(\.filename)
         for file in files { try? FileManager.default.removeItem(at: file.url) }
         switch kind {
         case .photos: return .photosAsset(localIdentifier: "asset-\(names.count)")
         case .staging:
-            return .staged(place: ImportDestinations.interimStagingPlace,
-                           files.map { FileLocation(relativePath: "Untitled/\($0.filename)") })
+            return .staged(place: place, files.map { FileLocation(relativePath: "Staging/Untitled/\($0.filename)") })
         }
     }
 }
 
+/// Where the fakes stage unless a test says otherwise: on this iPhone, because iCloud Drive isn't available to the
+/// app (as on every build until the App ID has iCloud).
+let testStagingPlace = StagingPlace.onThisIPhone(.containerUnavailable)
+
 extension DestinationDecision {
-    /// Staged on this iPhone for `reason`: what the app decides until it reads where staging goes
-    /// (`ImportDestinations.interimStagingPlace`). Was `.files(reason)` before staging replaced the Files folder.
+    /// Staged on this iPhone for `reason`, as the fakes stage by default (`testStagingPlace`).
     static func stagedHere(_ reason: StagingReason) -> DestinationDecision {
-        .staging(reason, ImportDestinations.interimStagingPlace)
+        .staging(reason, testStagingPlace)
     }
 }
 
-/// One Photos and one Files destination for every job, so a test can look at what each got.
+/// One Photos destination and two staging folders (on this iPhone, `files`, and in iCloud Drive, `iCloud`) for every
+/// job, so a test can look at what each got; where staging goes is `locator`'s answer, on this iPhone by default.
 final class FakeDestinations: ImportDestinationMaking, @unchecked Sendable {
     let photos = RecordingDestination(kind: .photos)
     let files = RecordingDestination(kind: .staging)
+    let iCloud = RecordingDestination(kind: .staging, place: .iCloudDrive)
+    let locator: FakeStagingLocator
     private let lock = NSLock()
     private var made: [ImportCamera] = []
 
+    init(staging: StagingAvailability = .unavailable(.containerUnavailable)) {
+        locator = FakeStagingLocator(staging)
+    }
+
     var cameras: [ImportCamera] { lock.withLock { made } }
 
-    func destinations(for camera: ImportCamera, startedAt: Date) -> ImportDestinations {
+    func locate() async -> StagingAvailability { await locator.locate() }
+
+    func destinations(for camera: ImportCamera, startedAt: Date,
+                      staging availability: StagingAvailability) -> ImportDestinations {
         lock.withLock { made.append(camera) }
-        return ImportDestinations(photos: photos, filesFolder: files,
-                                  filesFolderName: FilesFolderNaming.folderName(forCamera: camera.name))
+        return ImportDestinations(photos: photos, staging: availability.iCloudDocuments == nil ? files : iCloud,
+                                  stagingOnThisIPhone: files, stagingPlace: availability.place,
+                                  stagingFolderName: FilesFolderNaming.folderName(forCamera: camera.name))
     }
 }
 

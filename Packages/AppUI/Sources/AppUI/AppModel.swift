@@ -108,7 +108,7 @@ public final class AppModel {
             wifiRecovery = nil
             wirelessSetup = nil
         }
-        settings = SettingsModel(store: settingsStore, photos: photos)
+        settings = SettingsModel(photos: photos, staging: destinations)
         cameras.importModel = importer
         importer.cameraFinder = cameras
         // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).
@@ -228,7 +228,7 @@ public final class AppModel {
         if phase == .active {
             wifi?.status.start()
             await cameras.becameActive()
-            await settings.refreshPhotosAccess()
+            await settings.refresh()
             await importer.notificationPermission.refresh()
             if !registeredCategories {
                 registeredCategories = true

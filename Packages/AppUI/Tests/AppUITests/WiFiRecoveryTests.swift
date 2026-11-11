@@ -402,7 +402,7 @@ struct WiFiRecoveryTests {
         await b.link.loseSession()
 
         #expect(await b.state(.paused(.needsJoin)))
-        #expect(await eventually { b.notifier.posts == [.importPaused] })
+        #expect(await eventually { b.notifier.posts == [.stagingPaused] })
         #expect(b.coordinator.plan.phase == .pausedForJoin)
         #expect(await b.session.calls == [true])
         // Nothing more happens while the app is away.
@@ -418,8 +418,8 @@ struct WiFiRecoveryTests {
         #expect(await b.link.resumes == [.init(filename: Self.victim, offset: Self.cut)])
         #expect(await b.importedNames == Self.allNames)
         // "Import paused" no longer holds once the job goes again.
-        #expect(b.notifier.withdrawals.contains(.importPaused))
-        #expect(b.notifier.posts == [.importPaused])
+        #expect(b.notifier.withdrawals.contains(.stagingPaused))
+        #expect(b.notifier.posts == [.stagingPaused])
     }
 
     @Test func awayNoNotificationWhenThePersonHadPaused() async throws {
@@ -447,7 +447,7 @@ struct WiFiRecoveryTests {
         await b.link.loseSession()
         #expect(await b.state(.paused(.needsJoin)))
         #expect(await b.phase(.pausedForJoin))
-        #expect(await eventually { b.notifier.posts == [.importPaused] })
+        #expect(await eventually { b.notifier.posts == [.stagingPaused] })
         #expect(await b.session.calls.isEmpty)
 
         await b.model.scenePhaseChanged(.active)
