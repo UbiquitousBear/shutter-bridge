@@ -237,7 +237,8 @@ final class Job {
     /// Each file's identity by its content key (name, capture time, size: Shamil's rule of 8 Nov), so a file a later
     /// listing or a pick reports in another folder is found as the one already in the job.
     private var byContent: [ObjectIdentity.ContentKey: ObjectIdentity] = [:]
-    /// Picked files without an identity (no capture date), skipped and counted.
+    /// Files without an identity (no capture date), skipped and counted (D10): picked ones, and the stills a
+    /// whole-card listing or *Select All New* left out.
     var unkeyed: [CameraItem] = []
     /// Pending files, kept sorted by `FileEntry.index`.
     var queue: [ObjectIdentity] = []
@@ -262,6 +263,17 @@ final class Job {
         self.route = route
         self.startPurpose = route.purpose
         self.rate = RateEstimator(capacity: rateSamples)
+    }
+
+    /// Counts a file without a capture date as left out (D10), once: listed or handed over again, it is the file
+    /// already counted, matched by folder, name and size since it has no capture time to match on. Returns whether
+    /// it was new to the job.
+    @discardableResult
+    func leaveOut(undated item: CameraItem) -> Bool {
+        guard !unkeyed.contains(where: { $0.folder == item.folder && $0.name == item.name && $0.size == item.size })
+        else { return false }
+        unkeyed.append(item)
+        return true
     }
 
     var sortedEntries: [FileEntry] { entries.values.sorted { $0.index < $1.index } }

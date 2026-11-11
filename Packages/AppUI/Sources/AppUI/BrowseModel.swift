@@ -1082,7 +1082,8 @@ public final class BrowseModel {
         let keyText = cameraKey.map { ", key \(keyTags.tag(for: $0))" } ?? ""
         let unfiled = listed.filter(\.folder.isEmpty).count
         let newest = listed.filter { $0.captureDate != nil }.newestFirst().prefix(3).map { item in
-            let date = item.captureDate.flatMap { CaptureDate($0, in: zone) }?.rawValue ?? "undated"
+            let date = item.captureDate.flatMap { CaptureDate($0, in: item.captureTimeZone ?? zone) }?.rawValue
+                ?? "undated"
             return "\(item.name) \(date) \(item.size) B"
         }
         return "browse: listed \(listed.count) files in \(seconds) s\(keyText), \(unfiled) with no folder "
@@ -1120,7 +1121,8 @@ public final class BrowseModel {
             let identity = entry.identity
             return CameraItem(id: .init(rawValue: "last-known:\(identity.folder)/\(identity.filename)"),
                               folder: identity.folder, name: identity.filename, size: identity.size,
-                              captureDate: identity.captureDate.date(in: zone), format: entry.format)
+                              captureDate: identity.captureDate.date(in: zone), format: entry.format,
+                              captureTimeZone: zone)
         }
         lastKnownListedAt = listing.listedAt
         show(known)
@@ -1274,6 +1276,11 @@ public final class BrowseModel {
         sections.flatMap { section in section.items.filter { canSelect($0) && !isDone($0.id) }.map(\.id) }
     }
 
+    /// The stills the filters show that can't be selected only for want of a capture date (D10).
+    private var undatedStillsShown: [CameraItem] {
+        sections.flatMap { section in section.items.filter { selectionBlock(for: $0) == .noCaptureDate } }
+    }
+
     /// True when every new file the filters show that could be selected is selected (and there is one): the leading
     /// button then reads *Deselect All*, as Select All does in Photos and Files.
     public var allNewSelected: Bool {
@@ -1351,11 +1358,14 @@ public final class BrowseModel {
         let selected = selectedItems
         let newOnly = selection.isSubset(of: allNewPicks)
         let picked = selected.filter { !isDone($0.id, for: choice, newOnly: newOnly) }
+        // *Select All New* hands over the stills shown without a capture date as well, never selected, for the job to
+        // leave out and the Import screen to count (D10); they start nothing on their own.
+        let undated = newOnly && !picked.isEmpty ? undatedStillsShown : []
         isStartingImport = true
         defer { isStartingImport = false }
         let outcome: ImportRequestOutcome = picked.isEmpty ? .nothingNew(staging: choice == .staging)
-            : await importer.importItems(picked, from: ImportCamera(descriptor: camera, key: key), link: link,
-                                         as: choice, newOnly: newOnly)
+            : await importer.importItems(picked + undated, from: ImportCamera(descriptor: camera, key: key),
+                                         link: link, as: choice, newOnly: newOnly)
         switch outcome {
         case .started, .appended, .nothingNew:
             selection.subtract(selected.map(\.id))

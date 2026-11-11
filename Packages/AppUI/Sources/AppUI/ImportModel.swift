@@ -311,6 +311,12 @@ public final class ImportModel: BrowseImporting {
         return ImportWording.counts(progress)
     }
 
+    /// How many files were left out for having no capture date, and why (D10); nil when none was.
+    public var undatedLine: String? {
+        guard camera != nil else { return nil }
+        return ImportWording.undatedLeftOut(progress.filesUndated)
+    }
+
     public var destinationLine: String? {
         guard camera != nil else { return nil }
         return ImportWording.destination(progress.destination, folder: stagingFolderName, finished: isFinished,
@@ -428,7 +434,10 @@ public final class ImportModel: BrowseImporting {
         let selection: ImportSelection = newOnly ? .newItems(items) : .items(items)
         let stages = route.purpose == .staging
         let toDo = (try? await engine.picksToDo(selection, camera: camera.key, for: route)) ?? items
-        guard !toDo.isEmpty else {
+        // Files without a capture date come with *Select All New* only for the job to leave out and count (D10): on
+        // their own they start no job, and they aren't counted as started.
+        let toCopy = toDo.filter { $0.identity(camera: camera.key, timeZone: .current) != nil }.count
+        guard toCopy > 0 else {
             // No job starts, so the one shown before (if any) stays shown.
             log.note("import: nothing new to \(decision)")
             self.camera = shown.camera
@@ -464,7 +473,7 @@ public final class ImportModel: BrowseImporting {
         rememberChoice(choice)
         await hold(link)
         announceStart(camera)
-        log.note("import: started \(toDo.count) of \(items.count) file(s) to \(decision)")
+        log.note("import: started \(toCopy) of \(items.count) file(s) to \(decision)")
         // The run starts from the person's tap (iOS's rule), without holding the import up.
         background.begin(progress, staging: isStageJob)
         await refresh()
@@ -479,7 +488,7 @@ public final class ImportModel: BrowseImporting {
             starting = false
             await refresh()
         }
-        return .started(toDo.count)
+        return .started(toCopy)
     }
 
     /// Browse's Import button's primary action: the remembered choice, for an explicit pick.

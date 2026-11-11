@@ -182,6 +182,12 @@ struct ImportSummary: View {
             if let counts = model.countsLine {
                 Text(counts)
             }
+            if let leftOut = model.undatedLine {
+                Text(leftOut)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if model.keepsScreenOn {
                 Text(ImportWording.screenOnNote)
                     .font(.footnote)

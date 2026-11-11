@@ -92,8 +92,13 @@ struct BrowseAndImportAgainstSimulatorTests {
         #expect(bench.importer.hasJob)
         #expect(bench.importer.camera?.key == bench.key)
         try await bench.untilImport(.finished(.completed))
-        #expect(bench.importer.countsLine == "5 files imported.")
-        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Imported to Photos" })
+        // The undated RAW Select All New couldn't pick is left out, and the Import screen says so (D10).
+        #expect(bench.importer.countsLine == "5 files imported, 1 skipped.")
+        #expect(bench.importer.undatedLine == ImportWording.undatedLeftOut(1))
+        #expect(bench.importer.rows.filter { $0.name != "DSC00004.ARW" }.allSatisfy {
+            $0.stateText == "Imported to Photos"
+        })
+        #expect(bench.importer.rows.first { $0.name == "DSC00004.ARW" }?.stateText == "Skipped: no capture date")
         await bench.expectInPhotos(importableStills)
         #expect(await bench.link.bytesCalls.sorted() == importableStills.sorted())   // each file fetched once
 
@@ -263,7 +268,7 @@ struct SceneAndCableAgainstSimulatorTests {
         let again = await bench.replug()
         await bench.discovery.send(.appeared(bench.camera))
         try await bench.untilImport(.finished(.completed))
-        #expect(bench.importer.countsLine == "5 files staged.")
+        #expect(bench.importer.countsLine == "5 files staged, 1 skipped.")   // the undated RAW (D10)
         await bench.expectInFiles(importableStills)   // no second copy of anything ("DSC00005 (1).HIF" and so on)
         let refetched = await again.bytesCalls
         #expect(refetched.first == "DSC00002.ARW")   // the interrupted file again, from its start

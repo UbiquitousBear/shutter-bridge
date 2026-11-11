@@ -115,7 +115,12 @@ extension ImportEngine {
             if case let .dateRange(r) = job.selection { range = r }
             var listedContent = Set<ObjectIdentity.ContentKey>()
             for item in listed.newestFirst() where item.format.isStill {
-                guard let identity = item.identity(camera: camera, timeZone: zone) else { continue }
+                guard let identity = item.identity(camera: camera, timeZone: zone) else {
+                    // No capture date, so no identity: left out and counted, for the Import screen to say how many
+                    // (D10). A date range can't hold a file with no date, so it leaves such files out unsaid.
+                    if range == nil { unkeyed.append(item) }
+                    continue
+                }
                 if let range, let date = item.captureDate, !range.contains(date) { continue }
                 // One file listed in two folders is one file.
                 guard listedContent.insert(identity.contentKey).inserted else {
@@ -216,8 +221,7 @@ extension ImportEngine {
         for (a, b) in pairs {
             if let first = created[a], let second = created[b] { job.pair(first, second) }
         }
-        for item in unkeyed {
-            job.unkeyed.append(item)
+        for item in unkeyed where job.leaveOut(undated: item) {
             trace(.skipped(item.name, .noCaptureDate))
         }
         job.queue = queued + job.queue

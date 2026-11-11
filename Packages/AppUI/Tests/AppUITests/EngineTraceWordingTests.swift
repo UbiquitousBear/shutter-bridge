@@ -284,7 +284,9 @@ struct EngineTraceWholeImportTests {
 
     @Test func aCleanImportHasNoErrorLine() async throws {
         let log = try await run(destination: RecordingDestination(kind: .staging))
-        #expect(log.lines.first?.hasPrefix("engine: listed ") == true)
+        // The card's undated RAW is left out and said so (D10) as the listing is read; then the listing's line.
+        #expect(log.lines.first == "engine: skipped DSC00004.ARW: no capture date")
+        #expect(log.lines.dropFirst().first?.hasPrefix("engine: listed ") == true)
         #expect(log.lines.contains("engine: job finished: completed"))
         #expect(!log.entries.contains { $0.level == .error })
         expectClean(log)

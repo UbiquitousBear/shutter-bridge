@@ -36,12 +36,15 @@ public struct ImportProgress: Sendable, Hashable {
     /// A file stalled more often than the automatic retries allow, so the stall pause waits for the person's
     /// Continue rather than lifting itself after 5 s (decision 4). False otherwise.
     public var stallWaitsForPerson: Bool
+    /// Files left out because they have no capture date (part of `filesSkipped`): without one a file has no identity,
+    /// so nothing could stop it being imported twice (D10, Shamil, 11 Nov). The Import screen says how many and why.
+    public var filesUndated: Int
 
     public init(
         filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil,
         state: ImportJobState = .idle, destination: DestinationDecision? = nil, filesSkipped: Int = 0,
         filesFailed: Int = 0, filesStaged: Int = 0, runningCarrier: CameraCarrier? = nil,
-        stallWaitsForPerson: Bool = false
+        stallWaitsForPerson: Bool = false, filesUndated: Int = 0
     ) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
@@ -55,6 +58,7 @@ public struct ImportProgress: Sendable, Hashable {
         self.filesStaged = filesStaged
         self.runningCarrier = runningCarrier
         self.stallWaitsForPerson = stallWaitsForPerson
+        self.filesUndated = filesUndated
     }
 
     /// Whether an import over `carrier` is running (`runningCarrier`).

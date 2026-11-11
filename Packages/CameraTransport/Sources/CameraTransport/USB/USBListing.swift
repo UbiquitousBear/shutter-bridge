@@ -12,6 +12,10 @@ struct USBCatalogueEntry: Sendable, Hashable {
     var fileSize: Int64
     /// `ICCameraItem.creationDate`, which matched `GetObjectInfo`'s capture date for an ARW and a JPG in MTP.
     var creationDate: Date?
+    /// The zone ImageCaptureCore made `creationDate` in from the camera's zone-less time: the phone's zone when the
+    /// link read the catalogue (`unverified`: whether ImageCaptureCore remakes its dates after a time-zone change
+    /// within one session is a bench check). Nil when unknown.
+    var creationTimeZone: TimeZone? = nil
 }
 
 /// From ImageCaptureCore's items to `CameraItem`s, newest first (backlog section 2, *List and info*).
@@ -31,7 +35,8 @@ enum USBListing {
     static func item(from entry: USBCatalogueEntry) -> CameraItem? {
         guard let name = entry.name, !name.isEmpty else { return nil }
         return CameraItem(id: entry.id, folder: folderPath(ancestorsNearestFirst: entry.ancestorsNearestFirst),
-                          name: name, size: UInt64(max(0, entry.fileSize)), captureDate: entry.creationDate)
+                          name: name, size: UInt64(max(0, entry.fileSize)), captureDate: entry.creationDate,
+                          captureTimeZone: entry.creationDate == nil ? nil : entry.creationTimeZone)
     }
 
     /// The whole listing, newest first, and each item's rank in it (0 is the newest) for the thumbnail queue.
