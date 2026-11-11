@@ -150,6 +150,9 @@ public actor SimulatedCameraLink: CameraLink {
     public private(set) var lateSessionLosses = 0
     /// Downloads waiting for the throughput budget to grow.
     public var throttledDownloads: Int { throughputWaiters.count }
+    /// `bytes` calls running now and not held by `.holdAfter`, whose files may still grow, including any the caller
+    /// has walked away from: a link that ignores cancellation (USB) goes on writing such a file until the call returns.
+    public var downloadsWriting: Int { bytesInFlight - held.count }
     /// The throughput limit, if one is set.
     public var throughputLimit: (bytesPerTick: UInt64, tick: Duration)? {
         budget.map { ($0.bytesPerTick, $0.tick) }

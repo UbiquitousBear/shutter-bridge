@@ -317,6 +317,21 @@ final class MatrixBench {
         }
     }
 
+    /// Waits (bounded) for the downloads the engine walked away from to end. A USB link ignores cancellation, so a
+    /// call abandoned when a job stops or is cancelled can still be writing its file after the job has ended; the
+    /// engine deletes that file when the call returns (`DownloadAttempt` discards a late file), not before, so the
+    /// work folder is checked once no link has a `bytes` call writing (one held at a scripted cut writes nothing
+    /// until released) and that deletion has run. A file still there when the wait runs out is reported by the check.
+    func settleAbandonedCalls() async {
+        let deadline = ContinuousClock.now.advanced(by: Self.patience)
+        while ContinuousClock.now < deadline {
+            var running = false
+            for link in links where await link.downloadsWriting > 0 { running = true }
+            if !running && workFiles().others.isEmpty { return }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+    }
+
     /// Polls until `check` holds of the files' statuses.
     func waitForFiles(_ what: String, sourceLocation: SourceLocation = #_sourceLocation,
                       _ check: ([ImportFileStatus]) -> Bool) async throws {
@@ -588,7 +603,8 @@ final class MatrixBench {
             }
         }
 
-        // 4: the work folder.
+        // 4: the work folder, once the calls the engine walked away from have ended.
+        await settleAbandonedCalls()
         let (kept, others) = workFiles()
         #expect(others.isEmpty, "work folder holds \(others.map(\.lastPathComponent))", sourceLocation: sourceLocation)
         if knownGaps?.keptPartials == true {
