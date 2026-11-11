@@ -248,6 +248,7 @@ struct ImportRowView: View {
         case .waitingToRetry: "arrow.clockwise"
         case .committing: "square.and.arrow.down"
         case .imported: "checkmark.circle.fill"
+        case .staged: "tray.full.fill"
         case .skipped: "minus.circle"
         case .failed: "exclamationmark.triangle.fill"
         case .notImported: "circle"

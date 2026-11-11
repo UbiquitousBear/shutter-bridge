@@ -4,10 +4,13 @@ import Foundation
 @testable import ImportEngine
 import PhotosBridge
 
-/// One engine on a manual clock, with a trace recorder, a Photos fake and a Files fake, in a temporary folder of its
-/// own. Nothing in it waits on the wall clock: `advance(by:)` moves the clock and waits for the engine's tick.
+/// One engine on a manual clock, with a trace recorder, a Photos fake and two staging fakes (on this iPhone and in
+/// iCloud Drive), in a temporary folder of its own. Nothing in it waits on the wall clock: `advance(by:)` moves the clock and waits for the engine's tick.
 final class Harness {
     static let t0 = Date(timeIntervalSince1970: 1_793_000_000) // 26 Oct 2026, 07:33:20 UTC
+    /// Where the harness's routes stage unless a test says otherwise: this iPhone, as every build stages until the
+    /// App ID has iCloud.
+    static let onThisIPhone = StagingPlace.onThisIPhone(.containerUnavailable)
 
     let root: URL
     let staging: URL
@@ -18,7 +21,10 @@ final class Harness {
     let trace = TraceRecorder()
     let catalogue: any CatalogueStore
     let photos: FakeDestination
+    /// The staging folder on this iPhone.
     let files: FakeDestination
+    /// The staging folder in iCloud Drive.
+    let iCloud: FakeDestination
     /// The Photos access the Photos route reads after a refused save; full access unless a test changes it.
     let photosAccess = FakePhotosAccess()
     let engine: ImportEngine
@@ -35,6 +41,8 @@ final class Harness {
         self.catalogue = catalogue
         photos = FakeDestination(kind: .photos, folder: root.appendingPathComponent("photos", isDirectory: true))
         files = FakeDestination(kind: .staging, folder: filesDirectory)
+        iCloud = FakeDestination(kind: .staging, folder: root.appendingPathComponent("icloud", isDirectory: true),
+                                 place: .iCloudDrive)
         let recorder = trace
         engine = ImportEngine(
             catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),
@@ -45,13 +53,31 @@ final class Harness {
 
     var photosRoute: ImportRoute { photosRoute(to: photos) }
 
-    /// Into `destination` as Photos, with this harness's Files folder and Photos access.
+    /// Into `destination` as Photos, with this harness's staging folder on this iPhone and Photos access.
     func photosRoute(to destination: any ImportDestination) -> ImportRoute {
-        .photos(destination, filesFolder: files, authorisation: photosAccess.read)
+        .photos(destination, staging: files, onThisIPhone: files, stagingPlace: Harness.onThisIPhone,
+                authorisation: photosAccess.read)
     }
-    var filesRoute: ImportRoute { .filesFolder(files, reason: .chosen) }
 
-    func route(_ kind: DestinationKind) -> ImportRoute { kind == .photos ? photosRoute : filesRoute }
+    /// Into Photos, with staging in iCloud Drive (and on this iPhone once iCloud Drive is lost).
+    var photosRouteStagingInICloud: ImportRoute {
+        .photos(photos, staging: iCloud, onThisIPhone: files, stagingPlace: .iCloudDrive,
+                authorisation: photosAccess.read)
+    }
+
+    /// *Stage*, on this iPhone.
+    var stageRoute: ImportRoute { stageRoute(reason: .chosen) }
+
+    func stageRoute(reason: StagingReason) -> ImportRoute {
+        .staging(files, reason: reason, place: Harness.onThisIPhone, onThisIPhone: files)
+    }
+
+    /// *Stage*, in iCloud Drive, with this iPhone for when iCloud Drive is lost.
+    var stageRouteInICloud: ImportRoute {
+        .staging(iCloud, reason: .chosen, place: .iCloudDrive, onThisIPhone: files)
+    }
+
+    func route(_ kind: DestinationKind) -> ImportRoute { kind == .photos ? photosRoute : stageRoute }
 
     /// A file on the card, its handle `"<prefix>-<name>"`.
     func item(_ name: String, size: UInt64, prefix: String = "s1", date: Date? = Harness.t0,

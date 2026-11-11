@@ -302,7 +302,7 @@ actor RecordingDestination: ImportDestination {
         switch kind {
         case .photos: return .photosAsset(localIdentifier: "asset-\(names.count)")
         case .staging:
-            return .staged(place: ImportRoute.defaultStagingPlace,
+            return .staged(place: ImportDestinations.interimStagingPlace,
                            files.map { FileLocation(relativePath: "Untitled/\($0.filename)") })
         }
     }
@@ -310,9 +310,9 @@ actor RecordingDestination: ImportDestination {
 
 extension DestinationDecision {
     /// Staged on this iPhone for `reason`: what the app decides until it reads where staging goes
-    /// (`ImportRoute.defaultStagingPlace`). Was `.files(reason)` before staging replaced the Files folder.
+    /// (`ImportDestinations.interimStagingPlace`). Was `.files(reason)` before staging replaced the Files folder.
     static func stagedHere(_ reason: StagingReason) -> DestinationDecision {
-        .staging(reason, ImportRoute.defaultStagingPlace)
+        .staging(reason, ImportDestinations.interimStagingPlace)
     }
 }
 

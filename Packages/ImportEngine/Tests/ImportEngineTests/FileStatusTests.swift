@@ -57,19 +57,22 @@ struct FileStatusTests {
         await h.cleanup()
     }
 
-    @Test func filesGoingToFilesSayWhereTheyWent() async throws {
+    @Test func stagedFilesSayWhereTheyWent() async throws {
         let h = Harness()
         let card = h.singles(["A.JPG"])
         let link = h.link(card)
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         #expect(await h.waitFinished() == .completed)
         let files = await h.engine.currentFiles
-        guard case let .imported(.file(relativePath)?) = files.first?.phase else {
-            Issue.record("expected a Files location, got \(String(describing: files.first?.phase))")
+        guard case let .staged(location?) = files.first?.phase else {
+            Issue.record("expected a staged location, got \(String(describing: files.first?.phase))")
             await h.cleanup()
             return
         }
-        #expect(relativePath.hasSuffix("A.JPG"))
+        #expect(location.root == .onThisIPhone)
+        #expect(location.relativePath.hasSuffix("A.JPG"))
+        #expect(files.first?.phase.isResolved == true)
+        #expect(files.first?.fractionCompleted == 1)
         await h.cleanup()
     }
 

@@ -19,12 +19,13 @@ let benchKeyMaterial = "00000000-0000-0000-0000-00000000c0de"
 @Suite("The Imported badge against the simulated camera", .serialized, .timeLimit(.minutes(5)))
 struct ImportedBadgeAgainstSimulatorTests {
     /// The bench's q-mtp-browse: in MTP (keyed by the link's material, as the app does, and with no folder, as
-    /// ImageCaptureCore gave on 1 Nov), import to Files and stay on Browse. The badges have to come without leaving
+    /// ImageCaptureCore gave on 1 Nov), import to Photos and stay on Browse. The badges have to come without leaving
     /// Browse and without anyone calling `refreshImportedStates()` or `ImportModel.refresh()`: the test waits on the
     /// engine alone, so the badges arrive only through the app's own chain (the engine's progress, the import model's
     /// watch, its imported updates, Browse).
     @Test func filesImportedInMTPGetTheBadgeWithoutLeavingBrowse() async throws {
-        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), keyMaterial: benchKeyMaterial)
+        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), setting: .photos,
+                                                  keyMaterial: benchKeyMaterial)
         #expect(bench.key.rawValue.hasPrefix("usb-device:"))
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
@@ -32,7 +33,7 @@ struct ImportedBadgeAgainstSimulatorTests {
         #expect(Set(browse.selectedItems.map(\.name)) == importableStills)
         #expect(await browse.importSelected() == .started(5))
         try await bench.untilEngine(.finished(.completed))
-        await bench.expectInFiles(importableStills)
+        await bench.expectInPhotos(importableStills)
 
         try await bench.until("the badges after the import") { browse.imported.count == 5 }
         #expect(Set(browse.shown.filter(browse.isImported).map(\.name)) == importableStills)
@@ -44,7 +45,8 @@ struct ImportedBadgeAgainstSimulatorTests {
     }
 }
 
-/// Shamil's rule across USB modes and listings, end to end through the app's models.
+/// Shamil's rule across USB modes and listings, end to end through the app's models. The imports here go to Photos:
+/// a staged file isn't imported (Shamil, 11 Nov), so staging would give no Imported badge.
 @MainActor
 @Suite("Already imported across modes against the simulated camera", .serialized, .timeLimit(.minutes(5)))
 struct AlreadyImportedAcrossModesAgainstSimulatorTests {
@@ -61,7 +63,8 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
     }
 
     @Test func aFileImportedInMSCShowsAsImportedInMTP() async throws {
-        let bench = try await SimulatorBench.make(link: Self.mscLink(), keyMaterial: benchKeyMaterial)
+        let bench = try await SimulatorBench.make(link: Self.mscLink(), setting: .photos,
+                                                  keyMaterial: benchKeyMaterial)
         let mscKey = bench.key
         #expect(mscKey.rawValue.hasPrefix("usb-msc-name:"))
         let msc = bench.browse()
@@ -69,7 +72,7 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
         msc.selectAllNew()
         #expect(await msc.importSelected() == .started(5))
         try await bench.untilImport(.finished(.completed))
-        await bench.expectInFiles(importableStills)
+        await bench.expectInPhotos(importableStills)
         try await bench.until("the badges in MSC") { msc.imported.count == 5 }
         await bench.stopBrowsing()
 
@@ -96,7 +99,8 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
     }
 
     @Test func badgesSurviveAnMTPRelistWhoseFoldersDiffer() async throws {
-        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), keyMaterial: benchKeyMaterial)
+        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), setting: .photos,
+                                                  keyMaterial: benchKeyMaterial)
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
         browse.selectAllNew()
@@ -129,7 +133,8 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
     /// nothing is imported a third time. Neither row is under the key and folder Browse asks for (the MSC key, and
     /// another MTP device's key, both in DCIM/100MSDCF), so only matching by content can give the badges.
     @Test func aFileImportedTwiceBy17_1CountsOnce() async throws {
-        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), keyMaterial: benchKeyMaterial)
+        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), setting: .photos,
+                                                  keyMaterial: benchKeyMaterial)
         let mscKey = CameraKeys.key(for: Self.mscLink().descriptor, material: nil)
         let otherDeviceKey = CameraKeys.key(for: Self.mtpLink().descriptor,
                                             material: "00000000-0000-0000-0000-0000000000ff")
@@ -158,7 +163,8 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
     /// The bench log names what the fixed build needs to tell causes apart, and no key: each file imported with the
     /// identity its row went under, each badge read and why, and each listing with its newest files.
     @Test func theBenchLogTellsWhyABadgeShowsWithoutNamingTheKey() async throws {
-        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), keyMaterial: benchKeyMaterial)
+        let bench = try await SimulatorBench.make(card: standInCard(folder: ""), setting: .photos,
+                                                  keyMaterial: benchKeyMaterial)
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
         browse.selectAllNew()
@@ -172,7 +178,7 @@ struct AlreadyImportedAcrossModesAgainstSimulatorTests {
             && $0.contains("key \(tag), 7 with no folder") && $0.contains("newest: DSC00005.HIF 20261102T100010 12000 B, C0001.MP4 20261102T100005 300000 B, "
                 + "DSC00003.JPG 20261102T100000 22000 B") })
         #expect(lines.contains(
-            "import: imported DSC00005.HIF 20261102T100010 12000 B folder \"\" key \(tag) → Files"))
+            "import: imported DSC00005.HIF 20261102T100010 12000 B folder \"\" key \(tag) → Photos"))
         #expect(lines.contains("import: job ended completed: 5 imported, key \(tag)"))
         #expect(lines.contains { $0.hasPrefix("browse: badges refreshed after import (rev ")
             && $0.hasSuffix("): 7 shown, 6 dated, 5 imported, key \(tag)") })

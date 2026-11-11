@@ -625,6 +625,12 @@ public enum ImportWording {
             case .file?: "Imported to Files"
             case nil: "Imported"
             }
+        case let .staged(location):
+            switch location?.root {
+            case .iCloudDrive?: "Staged in iCloud Drive"
+            case .onThisIPhone?: "Staged on this iPhone"
+            case nil: "Staged"
+            }
         case let .skipped(reason): "Skipped: \(skipped(reason, item: item))"
         case let .failed(reason): "Failed: \(failed(reason))"
         case .notImported: "Not imported: still on the card"
@@ -679,7 +685,7 @@ public enum ImportWording {
         case .queued:
             status.bytesDone > 0 ? ByteWording.progress(status.bytesDone, of: status.item.size)
                 : ByteWording.size(status.item.size)
-        case .committing, .imported, .skipped, .failed, .notImported:
+        case .committing, .imported, .staged, .skipped, .failed, .notImported:
             ByteWording.size(status.item.size)
         }
     }

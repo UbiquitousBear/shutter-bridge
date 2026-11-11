@@ -10,7 +10,7 @@ import Testing
 /// downloads in flight, and a later job continuing from the catalogue. All on the manual clock, waiting on the trace.
 @Suite("Wi-Fi pauses, resume and concurrency", .timeLimit(.minutes(1)))
 struct WiFiPauseAndResumeTests {
-    /// The bytes the Files folder holds for `name`.
+    /// The bytes the staging folder holds for `name`.
     private func imported(_ h: Harness, _ name: String) -> Data? {
         try? Data(contentsOf: h.filesDirectory.appendingPathComponent(name))
     }
@@ -23,6 +23,16 @@ struct WiFiPauseAndResumeTests {
             #expect(imported(h, item.name) == ResumingLink.content(of: item.name, count: item.size),
                     "\(item.name) bytes", sourceLocation: sourceLocation)
         }
+    }
+
+    /// The row of a file a stage job committed: staged, and back to new with its resume cleared (the partial file was
+    /// what was staged; `CatalogueStore.markStaged`).
+    private func expectStagedRow(_ h: Harness, _ item: CameraItem,
+                                 sourceLocation: SourceLocation = #_sourceLocation) async {
+        let row = await h.record(for: item)
+        #expect(row?.state == .new, sourceLocation: sourceLocation)
+        #expect(row?.resumeOffset == 0 && row?.tempURL == nil, sourceLocation: sourceLocation)
+        #expect(row?.staged?.relativePath == "Untitled/\(item.name)", sourceLocation: sourceLocation)
     }
 
     private static func isCheckpoint(_ name: String, _ offset: UInt64) -> @Sendable (EngineTrace) -> Bool {
@@ -39,7 +49,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(1650))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
 
         link.send(.sessionLost)
@@ -60,8 +70,7 @@ struct WiFiPauseAndResumeTests {
         #expect(await link.infoCalls == ["A.JPG"])
         #expect(await link.bytesCalls == ["A.JPG", "A.JPG", "B.JPG"])
         expectImported(h, card)
-        #expect(await h.record(for: card[0])?.state == .imported)
-        #expect(await h.record(for: card[0])?.tempURL == nil)
+        await expectStagedRow(h, card[0])
         #expect(h.stagedFiles == 0)
         await h.cleanup()
     }
@@ -75,7 +84,7 @@ struct WiFiPauseAndResumeTests {
         let a = h.item("A.ARW", size: 5000)
         let link = h.resumingLink([a])
         await link.script("A.ARW", .holdAfter(2400))
-        try await h.start(.items([a]), from: link, to: h.filesRoute)
+        try await h.start(.items([a]), from: link, to: h.stageRoute)
         await h.trace.next(where: Self.isCheckpoint("A.ARW", 1200))
         await h.trace.next(where: Self.isCheckpoint("A.ARW", 2100))
         #expect(await h.record(for: a)?.resumeOffset == 2100)
@@ -88,8 +97,7 @@ struct WiFiPauseAndResumeTests {
 
         await link.release("A.ARW")
         #expect(await h.waitFinished() == .completed)
-        let row = await h.record(for: a)
-        #expect(row?.state == .imported && row?.resumeOffset == 0 && row?.tempURL == nil)
+        await expectStagedRow(h, a)
         expectImported(h, [a])
         await h.cleanup()
     }
@@ -102,7 +110,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG", "C.JPG"])
         let link = h.resumingLink(card)
         await link.script("B.JPG", .holdAfter(1500))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("B.JPG")
 
         await h.engine.flushCheckpoints()
@@ -132,7 +140,7 @@ struct WiFiPauseAndResumeTests {
         let a = h.item("A.JPG", size: 3000)
         let link = h.resumingLink([a])
         await link.script("A.JPG", .holdAfter(1500))
-        let job = try await h.start(.items([a]), from: link, to: h.filesRoute)
+        let job = try await h.start(.items([a]), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
         link.send(.sessionLost)
         await h.trace.next(.paused(.cameraUnreachable))
@@ -159,7 +167,7 @@ struct WiFiPauseAndResumeTests {
         let a = h.item("A.JPG", size: 3000)
         let link = h.resumingLink([a])
         await link.script("A.JPG", .failAfter(1500, .busy))
-        try await h.start(.items([a]), from: link, to: h.filesRoute)
+        try await h.start(.items([a]), from: link, to: h.stageRoute)
         await h.trace.next(where: EngineTrace.isRetrying("A.JPG", 1))
         let folder = h.staging.appendingPathComponent(ImportEngine.partialsFolderName, isDirectory: true)
         let partial = try #require(FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)?
@@ -184,7 +192,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG", "C.JPG"])
         let link = h.resumingLink(card)
         await link.script("B.JPG", .holdAfter(1500))
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("B.JPG")
         link.send(.storeRemoved)
         await h.trace.next(.paused(.cardUnavailable))
@@ -210,7 +218,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(900))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
         link.send(.storeRemoved)
         await h.trace.next(.paused(.cardUnavailable))
@@ -236,7 +244,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .failAfter(900, .cardUnavailable))
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         await h.trace.next(.paused(.cardUnavailable))
         #expect(await h.engine.currentProgress.filesFailed == 0)
         #expect(h.trace.count { if case .retrying = $0 { true } else { false } } == 0)
@@ -253,7 +261,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .failAfter(600, .disconnected))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await h.trace.next(.paused(.cameraRemoved))
         link.send(.sessionLost)
         await h.trace.next(.paused(.cameraUnreachable))
@@ -276,7 +284,7 @@ struct WiFiPauseAndResumeTests {
         let link = h.resumingLink(card)
         await link.script("A.JPG", .failAfter(1500, .busy))
         await link.failInfo("A.JPG", .busy)
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         #expect(await h.waitFinished() == .completed)
         #expect(await link.bytesCalls == ["A.JPG", "A.JPG"])
         #expect(await link.infoCalls == ["A.JPG", "A.JPG"])
@@ -359,7 +367,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG", "C.JPG", "D.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(300))
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
         // A second file would be claimed in the same step on the engine's actor as A: once a call to the actor has
         // returned, B has started if the cap were ignored.
@@ -383,7 +391,7 @@ struct WiFiPauseAndResumeTests {
         let link = h.resumingLink(card, capabilities: caps)
         await link.script("A.JPG", .holdAfter(300))
         await link.script("B.JPG", .holdAfter(300))
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
         if n == 2 { await link.waitUntilHeld("B.JPG") } // both calls are in the link at once
         await link.release("A.JPG")
@@ -399,7 +407,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(300))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
         // Running: nothing to reconnect.
         await #expect(throws: ImportEngineError.cameraNotRemoved) { try await h.engine.reconnect(job, to: link) }
@@ -424,7 +432,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(300))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
 
         try await h.engine.pause(.taskExpired)
@@ -452,7 +460,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG", "B.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(300))
-        let job = try await h.start(.items(card), from: link, to: h.filesRoute)
+        let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
 
         try await h.engine.pause(.cameraUnreachable)
@@ -478,7 +486,7 @@ struct WiFiPauseAndResumeTests {
         let card = h.singles(["A.JPG"])
         let link = h.resumingLink(card)
         await link.script("A.JPG", .holdAfter(300))
-        try await h.start(.items(card), from: link, to: h.filesRoute)
+        try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
         #expect(await h.engine.importRunning(carrier: .wifi))
         #expect(await !h.engine.importRunning(carrier: .usb))
@@ -504,7 +512,7 @@ struct WiFiPauseAndResumeTests {
         let a = h.item("A.ARW", size: 5000)
         let link = h.resumingLink([a])
         await link.script("A.ARW", .holdAfter(2400))
-        try await h.start(.allNew, from: link, to: h.filesRoute)
+        try await h.start(.allNew, from: link, to: h.stageRoute)
         await h.trace.next(where: Self.isCheckpoint("A.ARW", 2100))
         await link.waitUntilHeld("A.ARW")
         await h.engine.cancel()
@@ -512,10 +520,11 @@ struct WiFiPauseAndResumeTests {
         #expect(h.stagedFiles == 1) // the partial file stays where the catalogue points
 
         let mark = h.trace.count
-        try await h.start(.allNew, from: link, to: h.filesRoute)
+        try await h.start(.allNew, from: link, to: h.stageRoute)
         #expect(await h.waitFinished(after: mark) == .completed)
         #expect(await link.resumes == [ResumingLink.Resume(name: "A.ARW", offset: 2100)])
         expectImported(h, [a])
+        await expectStagedRow(h, a)
         #expect(h.stagedFiles == 0)
         await h.cleanup()
     }
@@ -528,17 +537,17 @@ struct WiFiPauseAndResumeTests {
         let a = h.item("A.ARW", size: 5000)
         let wifi = h.resumingLink([a])
         await wifi.script("A.ARW", .holdAfter(2400))
-        try await h.start(.allNew, from: wifi, to: h.filesRoute)
+        try await h.start(.allNew, from: wifi, to: h.stageRoute)
         await h.trace.next(where: Self.isCheckpoint("A.ARW", 2100))
         await h.engine.cancel()
         #expect(h.stagedFiles == 1)
 
         let usb = h.link([a])
         let mark = h.trace.count
-        try await h.start(.allNew, from: usb, to: h.filesRoute)
+        try await h.start(.allNew, from: usb, to: h.stageRoute)
         #expect(await h.waitFinished(after: mark) == .completed)
         #expect(await usb.bytesCalls == ["A.ARW"])
-        #expect(await h.record(for: a)?.state == .imported)
+        await expectStagedRow(h, a)
         #expect(h.stagedFiles == 0)
         await h.cleanup()
     }

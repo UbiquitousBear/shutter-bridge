@@ -19,10 +19,12 @@ public struct ImportFileStatus: Sendable, Hashable, Identifiable {
         case downloading
         /// A real error is being retried after a short wait (decision 4).
         case waitingToRetry
-        /// Downloaded; being saved to Photos or moved into the Files folder.
+        /// Downloaded; being saved to Photos or moved into the staging folder.
         case committing
         /// Done: where it went (nil if the destination didn't say).
         case imported(ImportedLocation?)
+        /// Done: staged at this place in the staging folder (nil if the destination didn't say). Not imported.
+        case staged(StagedLocation?)
         /// Left out, and why.
         case skipped(ImportSkipReason)
         /// Failed after its retries, and why.
@@ -31,10 +33,10 @@ public struct ImportFileStatus: Sendable, Hashable, Identifiable {
         /// card and the next import offers it again.
         case notImported
 
-        /// Imported, skipped, failed or not imported: nothing more will happen to it in this job.
+        /// Imported, staged, skipped, failed or not imported: nothing more will happen to it in this job.
         public var isResolved: Bool {
             switch self {
-            case .imported, .skipped, .failed, .notImported: true
+            case .imported, .staged, .skipped, .failed, .notImported: true
             case .queued, .downloading, .waitingToRetry, .committing: false
             }
         }
@@ -58,7 +60,7 @@ public struct ImportFileStatus: Sendable, Hashable, Identifiable {
         self.attempts = attempts
     }
 
-    /// 0 to 1, by bytes; 1 for an imported, skipped or failed file, and for an empty one once it is committing;
+    /// 0 to 1, by bytes; 1 for an imported, staged, skipped or failed file, and for an empty one once it is committing;
     /// 0 for a file the ended job didn't copy.
     public var fractionCompleted: Double {
         if phase == .notImported { return 0 }
@@ -120,6 +122,7 @@ extension ImportEngine {
                 bytes = size
                 switch outcome {
                 case let .imported(location): phase = .imported(location)
+                case let .staged(location): phase = .staged(location)
                 case let .skipped(reason): phase = .skipped(reason)
                 case let .failed(reason): phase = .failed(reason)
                 }

@@ -71,8 +71,9 @@ struct BrowseAndImportAgainstSimulatorTests {
         await bench.finish()
     }
 
+    /// To Photos: a staged file isn't imported (Shamil, 11 Nov), so only an import gives the Imported badge.
     @Test func selectAllNewPicksStillsOnlyAndAnImportedFileIsNeverPickedAgain() async throws {
-        let bench = try await SimulatorBench.make()
+        let bench = try await SimulatorBench.make(setting: .photos)
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
         browse.selectAllNew()
@@ -92,8 +93,8 @@ struct BrowseAndImportAgainstSimulatorTests {
         #expect(bench.importer.camera?.key == bench.key)
         try await bench.untilImport(.finished(.completed))
         #expect(bench.importer.countsLine == "5 files imported.")
-        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Imported to Files" })
-        await bench.expectInFiles(importableStills)
+        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Imported to Photos" })
+        await bench.expectInPhotos(importableStills)
         #expect(await bench.link.bytesCalls.sorted() == importableStills.sorted())   // each file fetched once
 
         // The badge: Browse follows the import's "more files imported" by itself, with nobody asking it to.
@@ -271,7 +272,8 @@ struct SceneAndCableAgainstSimulatorTests {
         #expect(await again.openCount == 1)
         for name in importableStills {
             let item = try #require(await again.item(named: name))
-            #expect(await bench.state(of: item) == .imported, "\(name)")
+            // Staged, not imported (Shamil, 11 Nov).
+            #expect(await bench.isStaged(item), "\(name)")
         }
         await bench.finish()
     }

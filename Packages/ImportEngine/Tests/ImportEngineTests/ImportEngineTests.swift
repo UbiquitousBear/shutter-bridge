@@ -86,7 +86,10 @@ struct NoDestination: ImportDestination {
 @Suite("The engine's surface", .timeLimit(.minutes(1)))
 struct ImportEngineSurfaceTests {
     let camera = CameraKey(rawValue: "test-camera")
-    var route: ImportRoute { .photos(NoDestination(), filesFolder: NoDestination(), authorisation: { .authorised }) }
+    var route: ImportRoute {
+        .photos(NoDestination(), staging: NoDestination(), onThisIPhone: NoDestination(),
+                stagingPlace: Harness.onThisIPhone, authorisation: { .authorised })
+    }
 
     @Test func startsIdleWithDefaultSettings() async {
         let engine = ImportEngine(catalogue: InMemoryCatalogue())
@@ -169,17 +172,33 @@ struct ImportEngineSurfaceTests {
         let folder = URL(fileURLWithPath: "/nonexistent")
         let photos = FakeDestination(kind: .photos, folder: folder)
         let files = FakeDestination(kind: .staging, folder: folder)
+        let iCloud = FakeDestination(kind: .staging, folder: folder, place: .iCloudDrive)
         let access: @Sendable () async -> PhotosAuthorisation = { .authorised }
-        let forced = try ImportRoute(.stagedHere(.photosRestricted), photos: photos, filesFolder: files,
-                                     authorisation: access)
+        let forced = try ImportRoute(.stagedHere(.photosRestricted), photos: photos, staging: files,
+                                     onThisIPhone: files, stagingPlace: .iCloudDrive, authorisation: access)
         #expect(forced.decision == .stagedHere(.photosRestricted))
         #expect(forced.destination.kind == .staging)
-        let chosen = try ImportRoute(.photos, photos: photos, filesFolder: files, authorisation: access)
+        #expect(forced.purpose == .staging)
+        // A staging decision's own place wins over the one given for a Photos route's fallback.
+        #expect(forced.stagingPlace == Harness.onThisIPhone)
+        let chosen = try ImportRoute(.photos, photos: photos, staging: iCloud, onThisIPhone: files,
+                                     stagingPlace: .iCloudDrive, authorisation: access)
         #expect(chosen.decision == .photos)
         #expect(chosen.destination.kind == .photos)
-        #expect(chosen.filesFolder.kind == .staging)
-        #expect(ImportRoute.photos(photos, filesFolder: files, authorisation: access).decision == chosen.decision)
-        #expect(ImportRoute.filesFolder(files, reason: .photosDenied).decision == .stagedHere(.photosDenied))
+        #expect(chosen.staging.kind == .staging)
+        #expect(chosen.stagingPlace == .iCloudDrive)
+        #expect(chosen.purpose == .photos)
+        let made = ImportRoute.photos(photos, staging: files, onThisIPhone: files, stagingPlace: Harness.onThisIPhone,
+                                      authorisation: access)
+        #expect(made.decision == chosen.decision)
+        let staged = ImportRoute.staging(files, reason: .photosDenied, place: Harness.onThisIPhone,
+                                         onThisIPhone: files)
+        #expect(staged.decision == .stagedHere(.photosDenied))
+        #expect(staged.purpose == .staging)
+        let inICloud = try ImportRoute(.staging(.chosen, .iCloudDrive), photos: photos, staging: iCloud,
+                                       onThisIPhone: files, stagingPlace: .iCloudDrive, authorisation: access)
+        #expect(inICloud.decision == .staging(.chosen, .iCloudDrive))
+        #expect(inICloud.stagingPlace == .iCloudDrive)
     }
 
     /// The app asks for Photos access before a job starts; a route can't be built from "ask first", and saying so is
@@ -187,21 +206,23 @@ struct ImportEngineSurfaceTests {
     @Test func aRouteNeedsPhotosAccessAskedFirst() {
         let folder = URL(fileURLWithPath: "/nonexistent")
         #expect(throws: ImportEngineError.photosAccessNotAsked) {
-            try ImportRoute(.askForPhotosAccess, photos: FakeDestination(kind: .photos, folder: folder),
-                            filesFolder: FakeDestination(kind: .staging, folder: folder),
-                            authorisation: { .notDetermined })
+            let files = FakeDestination(kind: .staging, folder: folder)
+            return try ImportRoute(.askForPhotosAccess, photos: FakeDestination(kind: .photos, folder: folder),
+                                   staging: files, onThisIPhone: files, stagingPlace: Harness.onThisIPhone,
+                                   authorisation: { .notDetermined })
         }
     }
 
     /// After a refused save the reason comes from the access read then: a restriction gets no Settings link.
     @Test func afterADeniedSaveTheReasonFollowsTheAccess() {
         let folder = URL(fileURLWithPath: "/nonexistent")
-        let route = ImportRoute.photos(FakeDestination(kind: .photos, folder: folder),
-                                       filesFolder: FakeDestination(kind: .staging, folder: folder),
+        let files = FakeDestination(kind: .staging, folder: folder)
+        let route = ImportRoute.photos(FakeDestination(kind: .photos, folder: folder), staging: files,
+                                       onThisIPhone: files, stagingPlace: Harness.onThisIPhone,
                                        authorisation: { .denied })
         for access in PhotosAuthorisation.allCases {
             let after = route.afterDeniedSave(access)
-            #expect(after.decision == .afterDeniedSave(authorisation: access, staging: ImportRoute.defaultStagingPlace))
+            #expect(after.decision == .afterDeniedSave(authorisation: access, staging: Harness.onThisIPhone))
             #expect(after.destination.kind == .staging)
         }
         #expect(route.afterDeniedSave(.restricted).decision == .stagedHere(.photosRestricted))
@@ -219,7 +240,7 @@ struct ImportEngineSurfaceTests {
         let link = FakeCameraLink(card: [item])
         await link.setDefaultStep(.hold)
         let files = FakeDestination(kind: .staging, folder: root)
-        try await engine.start(.items([item]), from: link, camera: camera, to: .filesFolder(files, reason: .chosen))
+        try await engine.start(.items([item]), from: link, camera: camera, to: .staging(files, reason: .chosen, place: Harness.onThisIPhone, onThisIPhone: files))
         let zone = try #require(await engine.jobTimeZone())
         #expect(zone != TimeZone.autoupdatingCurrent) // an autoupdating zone equals only another autoupdating one
         #expect(zone == TimeZone(identifier: TimeZone.current.identifier))

@@ -49,7 +49,7 @@ public final class SettingsModel {
     public var forcedFilesReason: StagingReason? {
         guard let photosAccess else { return nil }
         let reason = DestinationDecision.resolve(choice: destination, authorisation: photosAccess,
-                                                 staging: ImportRoute.defaultStagingPlace).stagingReason
+                                                 staging: ImportDestinations.interimStagingPlace).stagingReason
         return reason?.isForced == true ? reason : nil
     }
 

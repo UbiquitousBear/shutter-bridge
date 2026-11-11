@@ -8,9 +8,11 @@ import PhotosBridge
 /// continuing, stalls and retries are its rules, not a link's, because the Wi-Fi link in Iteration 3 needs the same
 /// ones (backlog section 0).
 ///
-/// A job lists the card, leaves out what the catalogue already has as imported (by identity), and for each file
-/// copies the bytes into a temporary file in the staging folder, hands it to the destination (Photos or the Files
-/// folder, which moves it), records a catalogue row saying where it went, and removes the temporary file. It pauses
+/// A job lists the card, leaves out what the catalogue already has as done for the job's purpose (by content: an
+/// import job what is imported, a stage job what is staged), and for each file copies the bytes into a temporary
+/// file in the engine's own folder, hands it to the destination (Photos, or the staging folder, which moves it),
+/// records in the catalogue where it went (`upsert` for Photos, `markStaged` for staging), and removes the temporary
+/// file. It pauses
 /// on *did suspend* and on removal without failing the file in flight (decision 4), continues when the app says so
 /// or the camera is back (decision 7), and retries real errors a limited number of times. Every catalogue write goes
 /// through the `CatalogueStore` actor; nothing here runs on the main actor, and nothing touches UIKit.
@@ -140,6 +142,10 @@ public actor ImportEngine {
     /// The current job, for `reconnect(_:to:knownItems:route:)`; nil when there is none.
     public var currentJobID: ImportJobID? { job.map { ImportJobID($0.id) } }
 
+    /// What the current job is for: `.staging` for a stage job, `.photos` for an import job (`ImportRoute.purpose`);
+    /// nil when there is none. A pick for the other purpose can't be appended to it.
+    public var currentPurpose: DestinationKind? { job?.route.purpose }
+
     /// Whether an import over `carrier` is running, or paused only for what it gets over without the person (a
     /// removal, a lost card or session, a stall it retries by itself). False while the person, the app's leaving,
     /// an expiry or a needed join paused it, and once a stall waits for the person after the automatic retries.
@@ -152,8 +158,9 @@ public actor ImportEngine {
     /// Changes the settings; a job already running keeps the ones it started with.
     public func updateSettings(_ settings: ImportSettings) { self.settings = settings }
 
-    /// Starts a job: the selection from `link`'s card, into `route` (Photos or the Files folder, by the destination
-    /// setting and the Photos access the caller read just before; backlog section 5).
+    /// Starts a job: the selection from `link`'s card, into `route` (Photos or the staging folder, by the choice made
+    /// for this import and the Photos access the caller read just before; backlog section 5; Shamil, 11 Nov). The
+    /// route's purpose makes it an import job or a stage job (`ImportRoute.purpose`).
     ///
     /// - Parameter camera: The catalogue's key for the camera, which identities are made with. The link can't give
     ///   it: how to key a camera in MSC is still open (section 2).
@@ -180,11 +187,17 @@ public actor ImportEngine {
         return ImportJobID(id)
     }
 
-    /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job or already imported
-    /// (both by content: name, capture time and size, whatever the folder or camera key), files without a capture
-    /// date (no identity) and non-stills aren't added. Returns how many were added.
+    /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job or already done for
+    /// the job's purpose (both by content: name, capture time and size, whatever the folder or camera key), files
+    /// without a capture date (no identity) and non-stills aren't added. Returns how many were added.
+    ///
+    /// Done follows the job's purpose (`DoneRule`; Shamil, 11 Nov): an import job leaves out imported files and
+    /// ignores staging; a stage job leaves out staged files, and imported ones too when `newOnly` is set.
+    ///
+    /// - Parameter newOnly: The files come from *Select all new* rather than an explicit pick, so a stage job leaves
+    ///   out imported files as well as staged ones. An explicit pick of an imported file may still be staged.
     @discardableResult
-    public func append(_ items: [CameraItem]) async throws(ImportEngineError) -> Int {
+    public func append(_ items: [CameraItem], newOnly: Bool = false) async throws(ImportEngineError) -> Int {
         guard let job else { throw .noJob }
         let id = job.id
         // "Already in this job" and "already imported" are by content (name, capture time, size; Shamil, 8 Nov), so a
@@ -198,15 +211,21 @@ public actor ImportEngine {
         }
         guard !candidates.isEmpty else { return 0 }
         await settleCommits(ofJobsOtherThan: id)
-        let states: [ObjectIdentity: ObjectState]
+        let facts: DoneFacts?
         do {
-            states = try await catalogue.states(of: candidates.map(\.identity))
+            facts = try await doneFacts(of: candidates.map(\.identity), job: id)
         } catch {
             throw .catalogueUnavailable
         }
-        guard let current = self.job, current.id == id else { throw .noJob }
+        guard let facts, let current = self.job, current.id == id else { throw .noJob }
         var added = 0
-        for c in candidates where current.entry(sameContentAs: c.identity) == nil && states[c.identity] != .imported {
+        for c in candidates where current.entry(sameContentAs: c.identity) == nil {
+            let staged = facts.staged.contains(c.identity)
+            guard DoneRule.isWanted(state: facts.states[c.identity] ?? .new, staged: staged, purpose: facts.purpose,
+                                    newOnly: newOnly, wholeCard: false) else {
+                if staged && facts.purpose == .staging { trace(.alreadyStaged(c.item.name)) }
+                continue
+            }
             let entry = FileEntry(identity: c.identity, index: current.nextIndex, item: c.item)
             current.nextIndex += 1
             current.add(entry)
@@ -251,6 +270,8 @@ public actor ImportEngine {
     ///     `.appInBackground` (the app coming back) lifts only that, so the app's return never undoes a pause the
     ///     person made. A removal, a lost card or session and a needed join are lifted only by `reconnect`.
     ///   - route: A new route for the files not yet committed, after re-reading Photos access (backlog section 5).
+    ///     Refused, keeping the job's own, where it would turn a stage job into an import job or move staging from
+    ///     this iPhone to iCloud Drive (`ImportRoute.mayChange(to:)`).
     public func resume(_ reason: PauseReason? = nil, to route: ImportRoute? = nil) throws(ImportEngineError) {
         guard let job else { throw .noJob }
         if let route { change(job, to: route) }
@@ -295,6 +316,8 @@ public actor ImportEngine {
     ///     only for handles it hasn't seen, W8); empty to have the engine call `list()`. Each file's name and size
     ///     are still checked against the camera before a partial file is continued.
     ///   - route: A new route for the files not yet committed, after re-reading Photos access (backlog section 5).
+    ///     Refused, keeping the job's own, where it would turn a stage job into an import job or move staging from
+    ///     this iPhone to iCloud Drive (`ImportRoute.mayChange(to:)`).
     ///   - keepingExpiry: true leaves `.taskExpired` in place: the new link is the job's and the card is listed, but
     ///     nothing is copied until Continue lifts the expiry (W14: a Wi-Fi recovery that ends after iOS ended the
     ///     continued task).
@@ -365,7 +388,14 @@ public actor ImportEngine {
         offer(currentProgress)
     }
 
+    /// Gives the job a new route for the files not yet committed, unless the job may not take it
+    /// (`ImportRoute.mayChange(to:)`: a stage job never becomes an import job, and staging on this iPhone never moves
+    /// to iCloud Drive mid-job), when it keeps its route and the refusal is traced.
     func change(_ job: Job, to route: ImportRoute) {
+        guard job.route.mayChange(to: route) else {
+            trace(.routeRefused(route.decision))
+            return
+        }
         let before = job.route.decision
         job.route = route
         if route.decision != before { trace(.destinationChanged(route.decision)) }
@@ -603,7 +633,7 @@ public actor ImportEngine {
     }
 
     func snapshot(of job: Job) -> ImportProgress {
-        var filesDone = 0, skipped = 0, failed = 0
+        var filesDone = 0, skipped = 0, failed = 0, staged = 0
         var bytesDone: UInt64 = 0, bytesTotal: UInt64 = 0
         for entry in job.entries.values {
             let size = entry.item.size
@@ -614,6 +644,7 @@ public actor ImportEngine {
                 bytesDone += size
                 switch outcome {
                 case .imported: break
+                case .staged: staged += 1
                 case .skipped: skipped += 1
                 case .failed: failed += 1
                 }
@@ -637,7 +668,7 @@ public actor ImportEngine {
         return ImportProgress(
             filesDone: filesDone, filesTotal: job.entries.count + job.unkeyed.count, bytesDone: bytesDone,
             bytesTotal: bytesTotal, bytesPerSecond: job.rate.bytesPerSecond, state: job.state,
-            destination: job.route.decision, filesSkipped: skipped, filesFailed: failed,
+            destination: job.route.decision, filesSkipped: skipped, filesFailed: failed, filesStaged: staged,
             runningCarrier: job.runningCarrier,
             stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled)
         )

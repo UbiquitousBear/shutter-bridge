@@ -4,11 +4,14 @@ import PhotosBridge
 import Synchronization
 
 /// A destination that records what it was given. As Photos it notes each file's size and leaves the file for the
-/// engine to delete; as the Files folder it moves each file into its folder, never overwriting. It can fail a given
-/// commit, or deny Photos access from a given commit on.
+/// engine to delete; as a staging folder it moves each file into its folder, never overwriting, and says it staged it
+/// in `place`. It can fail a given commit, deny Photos access from a given commit on, or lose iCloud Drive from a
+/// given commit on.
 actor FakeDestination: ImportDestination {
     nonisolated let kind: DestinationKind
     let folder: URL
+    /// Where it stages (staging only).
+    let place: StagingPlace
 
     /// Successful commits, in order.
     private(set) var commits: [CommitUnit] = []
@@ -20,20 +23,25 @@ actor FakeDestination: ImportDestination {
     private var failures: [Int: ImportDestinationFailure] = [:]
     /// From this attempt number on, every commit is refused with `.photosAccessDenied` (3311).
     private var deniesFrom: Int?
+    /// From this attempt number on, every commit fails with `.stagingUnavailable` (iCloud Drive gone).
+    private var unavailableFrom: Int?
 
-    init(kind: DestinationKind, folder: URL) {
+    init(kind: DestinationKind, folder: URL, place: StagingPlace = Harness.onThisIPhone) {
         self.kind = kind
         self.folder = folder
+        self.place = place
     }
 
     func fail(attempt: Int, with failure: ImportDestinationFailure) { failures[attempt] = failure }
     func deny(from attempt: Int) { deniesFrom = attempt }
+    func becomeUnavailable(from attempt: Int) { unavailableFrom = attempt }
 
     var committedNames: [String] { commits.flatMap { $0.files.map(\.filename) } }
 
     func commit(_ unit: CommitUnit) throws(ImportDestinationFailure) -> ImportResult {
         attempts += 1
         if let d = deniesFrom, attempts >= d { throw .photosAccessDenied }
+        if let u = unavailableFrom, attempts >= u { throw .stagingUnavailable }
         if let f = failures[attempts] { throw f }
         let fm = FileManager.default
         for file in unit.files where !fm.fileExists(atPath: file.url.path(percentEncoded: false)) {
@@ -65,7 +73,7 @@ actor FakeDestination: ImportDestination {
                 }
                 locations.append(FileLocation(relativePath: "Untitled/" + name))
             }
-            return .staged(place: ImportRoute.defaultStagingPlace, locations)
+            return .staged(place: place, locations)
         }
     }
 }
@@ -119,9 +127,9 @@ actor HeldPhotosAccess {
 }
 
 extension DestinationDecision {
-    /// Staged on this iPhone for `reason`: the decision a staging route built without a place carries
-    /// (`ImportRoute.defaultStagingPlace`). Was `.files(reason)` before staging replaced the Files folder.
+    /// Staged on this iPhone for `reason`, in the harness's place (`Harness.onThisIPhone`). Was `.files(reason)`
+    /// before staging replaced the Files folder.
     static func stagedHere(_ reason: StagingReason) -> DestinationDecision {
-        .staging(reason, ImportRoute.defaultStagingPlace)
+        .staging(reason, Harness.onThisIPhone)
     }
 }

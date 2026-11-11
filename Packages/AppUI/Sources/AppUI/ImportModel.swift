@@ -46,7 +46,7 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
         switch status.phase {
         case .skipped: tone = .skipped
         case .failed: tone = .failed
-        case .imported: tone = .done
+        case .imported, .staged: tone = .done
         default: tone = .neutral
         }
         isProblem = tone == .skipped || tone == .failed
@@ -127,6 +127,8 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private let importedFanOut = LatestValueFanOut<Int>()
     /// The files of the job shown whose import is in the bench log already.
     @ObservationIgnored private var loggedImports: Set<ObjectIdentity> = []
+    /// Of `loggedImports`, those staged rather than imported.
+    @ObservationIgnored private var loggedStaged: Set<ObjectIdentity> = []
     @ObservationIgnored private var loggedEnd = false
     @ObservationIgnored private let keyTags: CameraKeyTags
     /// The notification permission, asked at the first Import (W13); its reason line is the status line meanwhile.
@@ -393,7 +395,8 @@ public final class ImportModel: BrowseImporting {
         let photos = self.photos
         let route: ImportRoute
         do {
-            route = try ImportRoute(decision, photos: made.photos, filesFolder: made.filesFolder,
+            route = try ImportRoute(decision, photos: made.photos, staging: made.filesFolder,
+                                    onThisIPhone: made.filesFolder, stagingPlace: ImportDestinations.interimStagingPlace,
                                     authorisation: { await photos.authorisation() })
         } catch {
             return remember(.failed(ImportWording.couldNotStart))   // unreachable: `decide` never asks
@@ -403,6 +406,7 @@ public final class ImportModel: BrowseImporting {
         filesFolderName = made.filesFolderName
         importedSoFar = 0
         loggedImports = []
+        loggedStaged = []
         loggedEnd = false
         pausedByPerson = false
         do {
@@ -436,7 +440,7 @@ public final class ImportModel: BrowseImporting {
     /// The destination for a new job: the setting and the authorisation, asking for access once if the setting
     /// says Photos and nobody has asked yet (as `PhotosAccessGate.decision(for:staging:)` does).
     private func decide(_ setting: DestinationSetting) async -> DestinationDecision {
-        let staging = ImportRoute.defaultStagingPlace
+        let staging = ImportDestinations.interimStagingPlace
         let first = DestinationDecision.resolve(choice: setting.preferred, authorisation: await photos.authorisation(),
                                                 staging: staging)
         guard first == .askForPhotosAccess else { return first }
@@ -456,10 +460,11 @@ public final class ImportModel: BrowseImporting {
         guard let made = jobDestinations, progress.destination?.kind != .staging else { return nil }
         let decision = DestinationDecision.resolve(choice: jobSetting.preferred,
                                                    authorisation: await photos.authorisation(),
-                                                   staging: ImportRoute.defaultStagingPlace)
+                                                   staging: ImportDestinations.interimStagingPlace)
         guard decision.kind == .staging, decision != progress.destination else { return nil }
         let photos = self.photos
-        return try? ImportRoute(decision, photos: made.photos, filesFolder: made.filesFolder,
+        return try? ImportRoute(decision, photos: made.photos, staging: made.filesFolder,
+                                onThisIPhone: made.filesFolder, stagingPlace: ImportDestinations.interimStagingPlace,
                                 authorisation: { await photos.authorisation() })
     }
 
@@ -712,8 +717,12 @@ public final class ImportModel: BrowseImporting {
         snapshot = s
         let kind = s.progress.destination?.kind
         rows = s.files.map { ImportRow($0, going: kind) }
+        // Staged files count too, so Browse reads the catalogue again when a stage job commits one.
         let imported = s.files.reduce(0) { n, f in
-            if case .imported = f.phase { n + 1 } else { n }
+            switch f.phase {
+            case .imported, .staged: n + 1
+            default: n
+            }
         }
         logImports(s)
         if imported != importedSoFar {
@@ -727,21 +736,34 @@ public final class ImportModel: BrowseImporting {
     /// tag only), and the job's end once. What the 17.1 bench run lacked to tell why a badge didn't show.
     private func logImports(_ s: ImportSnapshot) {
         for file in s.files {
-            guard case let .imported(location) = file.phase, case let .file(identity) = file.id,
-                  loggedImports.insert(identity).inserted else { continue }
+            guard case let .file(identity) = file.id else { continue }
+            let verb: String
             let destination: String
-            switch location {
-            case .file?: destination = "Files"
-            case .photosAsset?: destination = "Photos"
-            case nil: destination = s.progress.destination?.kind == .photos ? "Photos" : "Files"
+            switch file.phase {
+            case let .imported(location):
+                verb = "imported"
+                switch location {
+                case .file?: destination = "Files"
+                case .photosAsset?: destination = "Photos"
+                case nil: destination = s.progress.destination?.kind == .photos ? "Photos" : "Staging"
+                }
+            case .staged:
+                // Staged, not imported (Shamil, 11 Nov).
+                verb = "staged"
+                destination = "Staging"
+            default:
+                continue
             }
-            log.note("import: imported \(identity.filename) \(identity.captureDate) \(identity.size) B folder "
+            guard loggedImports.insert(identity).inserted else { continue }
+            if verb == "staged" { loggedStaged.insert(identity) }
+            log.note("import: \(verb) \(identity.filename) \(identity.captureDate) \(identity.size) B folder "
                 + "\"\(identity.folder)\" key \(keyTags.tag(for: identity.camera)) → \(destination)")
         }
         guard case let .finished(outcome) = s.progress.state, !loggedEnd, let camera else { return }
         loggedEnd = true
-        log.note("import: job ended \(Self.describe(outcome)): \(loggedImports.count) imported, key "
-            + keyTags.tag(for: camera.key))
+        let staged = loggedStaged.isEmpty ? "" : ", \(loggedStaged.count) staged"
+        log.note("import: job ended \(Self.describe(outcome)): \(loggedImports.count - loggedStaged.count) imported"
+            + "\(staged), key " + keyTags.tag(for: camera.key))
     }
 
     private static func describe(_ outcome: JobOutcome) -> String {

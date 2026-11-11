@@ -70,7 +70,7 @@ final class SimulatorDestinations: ImportDestinationMaking, @unchecked Sendable 
     init(documents: URL) { self.documents = documents }
 
     func destinations(for camera: ImportCamera, startedAt: Date) -> ImportDestinations {
-        let staging = StagingFolderDestination(root: documents, place: ImportRoute.defaultStagingPlace,
+        let staging = StagingFolderDestination(root: documents, place: ImportDestinations.interimStagingPlace,
                                                cameraName: camera.name, timeZone: .current)
         return ImportDestinations(photos: photos, filesFolder: staging,
                                   filesFolderName: StagingFolderDestination.folderName + " › "
@@ -312,6 +312,18 @@ final class SimulatorBench {
             let expected = await content(of: name)
             #expect(files[name] != nil && files[name] == expected, "\(name)'s bytes", sourceLocation: sourceLocation)
         }
+    }
+
+    /// Checks that Photos (the bench's recording fake) got exactly the files named.
+    func expectInPhotos(_ names: Set<String>, sourceLocation: SourceLocation = #_sourceLocation) async {
+        let saved = await destinations.photos.names
+        #expect(Set(saved) == names && saved.count == names.count, sourceLocation: sourceLocation)
+    }
+
+    /// Whether the catalogue has a staged copy of a listed file (by content), by the engine's identity.
+    func isStaged(_ item: CameraItem) async -> Bool {
+        guard let identity = item.identity(camera: key, timeZone: .current) else { return false }
+        return await catalogue.stagedStates(of: [identity]).contains(identity)
     }
 
     /// The catalogue's state for a listed file, by the engine's identity.

@@ -59,6 +59,12 @@ public struct ImportDestinations: Sendable {
     }
 }
 
+extension ImportDestinations {
+    /// Where staging goes until the app reads it from its staging locator for each import: the app's folder on this
+    /// iPhone, because no build can use iCloud Drive until the App ID has iCloud (docs/ci.md). Interim.
+    public static let interimStagingPlace = StagingPlace.onThisIPhone(.containerUnavailable)
+}
+
 /// Makes a job's destinations. Called once per job, so a continued job keeps its own album.
 public protocol ImportDestinationMaking: Sendable {
     func destinations(for camera: ImportCamera, startedAt: Date) -> ImportDestinations
@@ -93,7 +99,7 @@ public struct StandardImportDestinations: ImportDestinationMaking {
                                               options: options, albumPlan: plan)
         // Until the app reads where staging goes (its staging locator), staging is in the app's folder on this iPhone,
         // where the Files folder was: On My iPhone › Shutter Bridge › Staging › camera › day.
-        let staging = StagingFolderDestination(root: documentsDirectory, place: ImportRoute.defaultStagingPlace,
+        let staging = StagingFolderDestination(root: documentsDirectory, place: ImportDestinations.interimStagingPlace,
                                                cameraName: camera.name, timeZone: .current)
         return ImportDestinations(photos: photos, filesFolder: staging,
                                   filesFolderName: StagingFolderDestination.folderName + " › "

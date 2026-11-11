@@ -25,6 +25,9 @@ typealias FailureReason = ImportFailureReason
 
 enum FileOutcome: Sendable, Hashable {
     case imported(ImportedLocation?)
+    /// Staged (a stage job, or an import job staged instead), at this place in the staging folder (nil if the
+    /// destination didn't say). Not imported: the catalogue's state is kept (`CatalogueStore.markStaged`).
+    case staged(StagedLocation?)
     case skipped(SkipReason)
     case failed(FailureReason)
 }

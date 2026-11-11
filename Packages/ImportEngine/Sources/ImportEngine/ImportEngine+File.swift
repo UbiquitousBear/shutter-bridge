@@ -183,8 +183,8 @@ extension ImportEngine {
     /// downloaded again (the staged file vanished) and a new attempt has begun in this lane.
     ///
     /// The commit, the row and the cleanup run in an unstructured task, not in this lane, so ending the job (which
-    /// cancels the driver and its lanes) never cancels a Photos save or a Files move half-way: the file always gets
-    /// its row. The retry after a failed commit runs back in the lane, where ending the job cancels its backoff.
+    /// cancels the driver and its lanes) never cancels a Photos save or a move into the staging folder half-way: the
+    /// file always gets its row. The retry after a failed commit runs back in the lane, where ending the job cancels its backoff.
     func commit(_ url: URL, identity: ObjectIdentity, of id: UUID, download: Download) async -> Bool {
         guard let job = current(id), let entry = job.entries[identity] else { return false }
         entry.phase = .committing
@@ -204,12 +204,12 @@ extension ImportEngine {
         switch result {
         case let .failed(failure):
             return await commitFailed(failure, identity: identity, of: id, download: download, name: item.name)
-        case let .committed(location, kind, written):
+        case let .committed(outcome, kind, written):
             // A commit that finishes after its job ended (cancelled, stopped) still resolves its file on the ended
-            // job, so the finished Import screen's row and counts show it as imported.
+            // job, so the finished Import screen's row and counts show it as imported or staged.
             guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
             entry.resumable = nil // its folder went with the commit
-            resolve(entry, .imported(location), into: kind)
+            resolve(entry, outcome, into: kind)
             guard current(id) != nil else {
                 refreshState()
                 return false
@@ -226,9 +226,10 @@ extension ImportEngine {
         }
     }
 
-    /// How a commit ended: committed (where, into which destination, and whether its row was written), or failed.
+    /// How a commit ended: committed (imported or staged, and where; into which destination; and whether its row was
+    /// written), or failed.
     enum CommitResult: Sendable {
-        case committed(ImportedLocation?, DestinationKind, rowWritten: Bool)
+        case committed(FileOutcome, DestinationKind, rowWritten: Bool)
         case failed(ImportDestinationFailure)
     }
 
@@ -238,6 +239,8 @@ extension ImportEngine {
                          attemptDirectory: URL) async -> CommitResult {
         let unit = commitUnit(for: StagedFile(url: url, filename: item.name, captureDate: item.captureDate))
         var used = route.destination
+        // Whether `used` is the staging folder in iCloud Drive, which can go away mid-job.
+        var usedICloudDrive = route.purpose == .staging && route.stagesInICloudDrive
         var result: ImportResult?
         var failure: ImportDestinationFailure?
         do throws(ImportDestinationFailure) {
@@ -246,10 +249,10 @@ extension ImportEngine {
             failure = error
         }
 
-        // Photos refused the save (3311): not a failed file. This file and the rest are staged, and the
-        // Import screen says why (backlog section 5): a denial links to Settings, a restriction doesn't, so access is
-        // read again now (`DestinationDecision.afterDeniedSave(authorisation:)`). Switched once, however many files
-        // are in flight: another file's refusal may switch it while this one reads access, so it's checked again.
+        // Photos refused the save (3311): not a failed file. This file and the rest are staged, and the Import screen
+        // says why (backlog section 5): a denial links to Settings, a restriction doesn't, so access is read again now
+        // (`DestinationDecision.afterDeniedSave(authorisation:staging:)`). Switched once, however many files are in
+        // flight: another file's refusal may switch it while this one reads access, so it's checked again.
         if failure == .photosAccessDenied, used.kind == .photos {
             if let job = current(id), job.route.decision == .photos {
                 let authorisation = await job.route.authorisation()
@@ -258,7 +261,9 @@ extension ImportEngine {
                     refreshState()
                 }
             }
-            used = (current(id)?.route ?? route).filesFolder
+            let staging = current(id)?.route ?? route
+            used = staging.staging
+            usedICloudDrive = staging.stagesInICloudDrive
             failure = nil
             do throws(ImportDestinationFailure) {
                 result = try await used.commit(unit)
@@ -267,26 +272,63 @@ extension ImportEngine {
             }
         }
 
+        // iCloud Drive went away while staging there (signed out, or iCloud Drive turned off, mid-job): not a failed
+        // file. This file and the rest are staged on this iPhone, and the Import screen says so
+        // (`StagingFallbackReason.lostDuringImport`; Shamil, 11 Nov). Switched once, however many files are in
+        // flight; a file whose commit began on the iCloud route while another switched it goes to this iPhone too.
+        if failure == .stagingUnavailable, usedICloudDrive {
+            if let job = current(id), job.route.stagesInICloudDrive {
+                change(job, to: job.route.afterStagingLost())
+                refreshState()
+            }
+            let next = current(id)?.route ?? route.afterStagingLost()
+            if !next.stagesInICloudDrive {
+                used = next.staging
+                failure = nil
+                do throws(ImportDestinationFailure) {
+                    result = try await used.commit(unit)
+                } catch {
+                    failure = error
+                }
+            }
+        }
+
         if let failure { return .failed(failure) }
         guard let result else { return .failed(.stagedFileMissing) } // unreachable: a commit returns or throws
 
-        // The row, then the cleanup. Written even if the job was cancelled meanwhile: the file was committed.
-        let location = Self.locations(of: result, for: unit).first ?? nil
-        let record = CatalogueRecord(identity: identity, format: item.format, state: .imported, location: location)
-        var written = false
-        for _ in 0 ..< max(1, policy.catalogueWriteAttempts) {
-            do {
-                try await catalogue.upsert(record)
-                written = true
-                break
-            } catch {
-                continue
-            }
+        // The row, then the cleanup. Written even if the job was cancelled meanwhile: the file was committed. An
+        // import writes the imported row (`upsert`, which keeps any staged copy); staging records the staged copy
+        // beside the row's state (`markStaged`, which keeps an imported row imported and sends a partial row back
+        // to new with its resume cleared, since the partial file was what was staged).
+        let outcome = Self.outcomes(of: result, for: unit, at: Date()).first ?? .imported(nil)
+        let written: Bool
+        switch outcome {
+        case let .staged(location):
+            let staged = location ?? Self.unreportedStagedLocation(for: result)
+            written = await writeRow { try await self.catalogue.markStaged(identity, format: item.format, at: staged) }
+        case let .imported(location):
+            let record = CatalogueRecord(identity: identity, format: item.format, state: .imported, location: location)
+            written = await writeRow { try await self.catalogue.upsert(record) }
+        case .skipped, .failed:
+            written = true // unreachable: a commit's outcome is imported or staged
         }
         let fm = FileManager.default
         if fm.fileExists(atPath: url.path(percentEncoded: false)) { try? fm.removeItem(at: url) } // Photos copies
         try? fm.removeItem(at: attemptDirectory)
-        return .committed(location, used.kind, rowWritten: written)
+        return .committed(outcome, used.kind, rowWritten: written)
+    }
+
+    /// Writes a committed file's row, trying up to `policy.catalogueWriteAttempts` times; whether it was written.
+    func writeRow(_ write: () async throws -> Void) async -> Bool {
+        for _ in 0 ..< max(1, policy.catalogueWriteAttempts) {
+            do {
+                try await write()
+                return true
+            } catch {
+                continue
+            }
+        }
+        return false
     }
 
     func commitFailed(_ failure: ImportDestinationFailure, identity: ObjectIdentity, of id: UUID,
@@ -316,12 +358,12 @@ extension ImportEngine {
             return false
         case .photosAccessDenied:
             // From the staging folder, which has no Photos access to lose: treated as a rejection.
-            resolve(entry, .failed(.destination(.rejected(detail: "access denied by the Files folder"))))
+            resolve(entry, .failed(.destination(.rejected(detail: "access denied by the staging folder"))))
             refreshState()
             return false
         case .stagingUnavailable:
-            // iCloud Drive went away mid-job. Until the engine switches to the staging folder on this iPhone (the
-            // staging route), the file fails without a retry, like a rejection.
+            // The staging folder on this iPhone said it was unavailable too, after the switch from iCloud Drive (or
+            // the job had ended): nowhere else to go, so the file fails without a retry, like a rejection.
             resolve(entry, .failed(.destination(failure)))
             refreshState()
             return false
@@ -336,28 +378,48 @@ extension ImportEngine {
         }
         switch outcome {
         case .imported: if let kind { trace(.imported(entry.item.name, kind)) }
+        case let .staged(location): trace(.staged(entry.item.name, location))
         case let .skipped(reason): trace(.skipped(entry.item.name, reason))
         case let .failed(reason): trace(.failed(entry.item.name, reason))
         }
     }
 
-    /// What one staged file is committed as. Every file is its own unit for now; section 5's pairing rule replaces
-    /// this for Photos (a RAW and its JPEG come out of the diff next to each other). For Files every file stays its
-    /// own unit.
+    /// What one downloaded file is committed as. Every file is its own unit for now; section 5's pairing rule
+    /// replaces this for Photos (a RAW and its JPEG come out of the diff next to each other).
     func commitUnit(for file: StagedFile) -> CommitUnit { .single(file) }
 
-    /// Where each file of the unit went, in the unit's order: one Photos asset shared by every file, or one location
-    /// per file in the staging folder (nil for any the destination didn't report). Until the engine records staged
-    /// copies apart (`CatalogueStore.markStaged`), a staged file is recorded as the Files folder's was.
-    static func locations(of result: ImportResult, for unit: CommitUnit) -> [ImportedLocation?] {
+    /// What became of each file of the unit, in the unit's order: imported as one Photos asset shared by every file,
+    /// or staged with one location per file under the staging root the result names, staged at `date` (nil for any
+    /// the destination didn't report).
+    static func outcomes(of result: ImportResult, for unit: CommitUnit, at date: Date) -> [FileOutcome] {
         let count = unit.files.count
         switch result {
         case let .photosAsset(localIdentifier):
-            return Array(repeating: .photosAsset(localIdentifier: localIdentifier), count: count)
-        case let .staged(_, locations):
+            return Array(repeating: .imported(.photosAsset(localIdentifier: localIdentifier)), count: count)
+        case let .staged(place, locations):
+            let root = StagingRoot(place)
             return (0 ..< count).map { i in
-                i < locations.count ? .file(relativePath: locations[i].relativePath) : nil
+                .staged(i < locations.count
+                    ? StagedLocation(root: root, relativePath: locations[i].relativePath, stagedAt: date) : nil)
             }
+        }
+    }
+
+    /// The staged copy recorded for a file whose destination staged it without saying where (no staging destination
+    /// here does that): its root, with an empty path, so the file still reads as staged and isn't staged twice.
+    /// Reconciling the staging folder with the catalogue (a later step) clears such a row.
+    static func unreportedStagedLocation(for result: ImportResult) -> StagedLocation {
+        let root: StagingRoot = if case let .staged(place, _) = result { StagingRoot(place) } else { .onThisIPhone }
+        return StagedLocation(root: root, relativePath: "", stagedAt: Date())
+    }
+}
+
+extension StagingRoot {
+    /// The catalogue's root for a staging place (the place without its reason).
+    init(_ place: StagingPlace) {
+        switch place {
+        case .iCloudDrive: self = .iCloudDrive
+        case .onThisIPhone: self = .onThisIPhone
         }
     }
 }

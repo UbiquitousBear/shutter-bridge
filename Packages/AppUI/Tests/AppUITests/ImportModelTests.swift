@@ -111,13 +111,14 @@ struct ImportModelTests {
         #expect(await h.importAll(card) == .started(3))
         #expect(await h.finished())
         let tag = CameraKeyTags.shared.tag(for: h.camera.key)
-        let imported = log.lines.filter { $0.hasPrefix("import: imported ") }
-        #expect(imported.count == 3)
+        // Staged, not imported (Shamil, 11 Nov), so the log says so.
+        let staged = log.lines.filter { $0.hasPrefix("import: staged ") }
+        #expect(staged.count == 3)
         let date = CaptureDate(card[2].captureDate!, in: .current)!.rawValue
-        #expect(imported.contains(
-            "import: imported DSC00002.JPG \(date) 3000 B folder \"DCIM/100MSDCF\" key \(tag) → Files"))
+        #expect(staged.contains(
+            "import: staged DSC00002.JPG \(date) 3000 B folder \"DCIM/100MSDCF\" key \(tag) → Staging"))
         #expect(log.lines.filter { $0.hasPrefix("import: job ended ") }
-            == ["import: job ended completed: 3 imported, key \(tag)"])
+            == ["import: job ended completed: 0 imported, 3 staged, key \(tag)"])
         for line in log.lines { #expect(!line.contains(h.camera.key.rawValue.suffix(16)), "\(line)") }
     }
 
@@ -159,7 +160,7 @@ struct ImportModelTests {
         #expect(h.model.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › Camera.")
         #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
-        #expect(h.model.rows.allSatisfy { $0.stateText == "Imported to Files" })
+        #expect(h.model.rows.allSatisfy { $0.stateText == "Staged on this iPhone" })
     }
 
     @Test func restrictedGoesToFilesWithoutTheSettingsLink() async {
