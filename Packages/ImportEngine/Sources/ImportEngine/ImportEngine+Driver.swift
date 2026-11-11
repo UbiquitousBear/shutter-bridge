@@ -316,10 +316,7 @@ extension ImportEngine {
     /// attempt has checked it), deleted on one that doesn't, which copies the file from its start (USB, as before).
     /// Only a file inside the staging folder's `Partials` folder is touched.
     func adopt(_ record: CatalogueRecord, into entry: FileEntry, of job: Job) {
-        guard let file = record.partialFile(in: stagingDirectory)?.standardizedFileURL else { return }
-        let folder = file.deletingLastPathComponent()
-        guard folder.deletingLastPathComponent().pathComponents == partialsDirectory.standardizedFileURL.pathComponents
-        else { return }
+        guard case let .inside(file, folder) = partialLocation(of: record) else { return }
         guard job.link.capabilities.resumesPartialFiles else {
             try? FileManager.default.removeItem(at: folder)
             return

@@ -76,6 +76,25 @@ extension ImportEngine {
         return reset
     }
 
+    /// Where a `.partial` row's file lies, for the launch pass (`check(_:)`) and for a job adopting it
+    /// (`adopt(_:into:of:)`), which must agree: only a file in a folder directly under `Partials` is ever touched.
+    enum PartialLocation: Equatable {
+        /// The row names no file.
+        case none
+        /// The file is not in a folder directly under `Partials`.
+        case outside
+        /// The standardised file and its folder, a child of `Partials`.
+        case inside(file: URL, folder: URL)
+    }
+
+    func partialLocation(of record: CatalogueRecord) -> PartialLocation {
+        guard let file = record.partialFile(in: stagingDirectory)?.standardizedFileURL else { return .none }
+        let folder = file.deletingLastPathComponent()
+        guard folder.deletingLastPathComponent().pathComponents == partialsDirectory.standardizedFileURL.pathComponents
+        else { return .outside }
+        return .inside(file: file, folder: folder)
+    }
+
     /// What the pass does with a `.partial` row.
     enum PartialCheck: Equatable {
         case keep
@@ -86,10 +105,9 @@ extension ImportEngine {
     /// Keeps a row whose file is a regular file holding at least its offset, or that the current job holds; resets
     /// the rest.
     func check(_ row: CatalogueRecord) -> PartialCheck {
-        guard let file = row.partialFile(in: stagingDirectory)?.standardizedFileURL else { return .keep }
-        let folder = file.deletingLastPathComponent()
-        guard folder.deletingLastPathComponent().pathComponents == partialsDirectory.standardizedFileURL.pathComponents
-        else { return .reset(folder: nil) }
+        let location = partialLocation(of: row)
+        if case .none = location { return .keep }
+        guard case let .inside(file, folder) = location else { return .reset(folder: nil) }
         if isHeld(folder) { return .keep }
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: file.path(percentEncoded: false), isDirectory: &isDirectory),
