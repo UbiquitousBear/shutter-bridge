@@ -71,6 +71,22 @@ final class FakeLoader: PreviewLoading, @unchecked Sendable {
     private var cost = 1_000
     private var ignoreCancel = false
     private var mode = Mode.plain
+    private var full: PixelSize?
+    private var detailCalls: [DetailCall] = []
+
+    /// One `loadDetail` call.
+    struct DetailCall: Equatable {
+        var name: String
+        var region: LoupeRegion
+        var maxPixelSize: Int
+    }
+
+    var detailRequests: [DetailCall] { lock.withLock { detailCalls } }
+    /// The original's size each final preview carries (`LoadedPreview.fullPixelSize`); nil, the default, for none.
+    var fullPixelSize: PixelSize? {
+        get { lock.withLock { full } }
+        set { lock.withLock { full = newValue } }
+    }
 
     var started: [String] { lock.withLock { startedNames } }
     var cancelled: [String] { lock.withLock { cancelledNames } }
@@ -105,12 +121,13 @@ final class FakeLoader: PreviewLoading, @unchecked Sendable {
     func load(_ source: PreviewSource, maxPixelSize: Int,
               deliver: @Sendable (LoadedPreview<String>) async -> Void) async throws {
         let name = source.file?.identity.filename ?? "none"
-        let (cost, mode) = lock.withLock { () -> (Int, Mode) in
+        let (cost, mode, full) = lock.withLock { () -> (Int, Mode, PixelSize?) in
             startedNames.append(name)
-            return (self.cost, self.mode)
+            return (self.cost, self.mode, self.full)
         }
         func loaded(_ quality: PreviewQuality) -> LoadedPreview<String> {
-            LoadedPreview(image: name, pixelSize: PixelSize(width: 10, height: 10), quality: quality, byteCost: cost)
+            LoadedPreview(image: name, pixelSize: PixelSize(width: 10, height: 10), quality: quality, byteCost: cost,
+                          fullPixelSize: quality == .final ? full : nil)
         }
         if mode == .standInThenFinal { await deliver(loaded(.standIn)) }
         try await waitForRelease(name)
@@ -118,6 +135,14 @@ final class FakeLoader: PreviewLoading, @unchecked Sendable {
         if !lock.withLock({ ignoreCancel }) { try Task.checkCancellation() }
         await deliver(loaded(.final))
         lock.withLock { deliveredNames.append(name) }
+    }
+
+    /// Answers at once with "<name>@detail", the region's pixels as the test sees them.
+    func loadDetail(_ source: PreviewSource, region: LoupeRegion, maxPixelSize: Int) async throws -> LoadedPreview<String> {
+        let name = source.file?.identity.filename ?? "none"
+        lock.withLock { detailCalls.append(DetailCall(name: name, region: region, maxPixelSize: maxPixelSize)) }
+        try Task.checkCancellation()
+        return LoadedPreview(image: name + "@detail", pixelSize: PixelSize(width: 10, height: 10), quality: .final)
     }
 
     private func waitForRelease(_ name: String) async throws {

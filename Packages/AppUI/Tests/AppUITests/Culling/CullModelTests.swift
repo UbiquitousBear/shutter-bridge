@@ -62,6 +62,7 @@ private final class Rig {
     let model: CullModel<String>
 
     init(_ staged: (Rig.Folders) -> [Staged], iCloudAvailable: Bool = false,
+         files: any StagedFileAvailability = AlwaysLocalFiles(),
          catalogue makeCatalogue: (([CatalogueRecord]) -> any CatalogueStore)? = nil) {
         let folders = Folders(documents: documents, iCloud: iCloud)
         let records = staged(folders).map(\.record)
@@ -71,7 +72,7 @@ private final class Rig {
         loader.autoRelease = true
         let reads = exifReads
         model = CullModel(catalogue: makeCatalogue?(records) ?? store, onThisIPhone: documents, locator: locator,
-                          loader: loader, exif: { url in reads.read(url) }, clock: clock, log: log)
+                          loader: loader, files: files, exif: { url in reads.read(url) }, clock: clock, log: log)
     }
 
     struct Folders {
@@ -404,6 +405,135 @@ struct CullModelTests {
         #expect(loupe.exif == nil || loupe.exif?.iso == 200)
         #expect(await waitUntilOnMain { loupe.exif?.iso == 200 })
         #expect(rig.exifReads.read == ["DSC00001.JPG", "DSC00002.JPG"])
+    }
+
+    @Test func anEvictedFilesEXIFLineIsReadOnceItsDownloadHasFinished() async throws {
+        // Reading it before would block on the download (a dataless file) and never be read again once it arrived.
+        let files = FakeAvailability(evicted: ["DSC00001.JPG"])
+        let rig = Rig({ f in
+            [stage("DSC00001.JPG", in: f.documents), stage("DSC00002.JPG", at: "20261105T140001", in: f.documents)]
+        }, files: files)
+        await rig.model.load()
+        rig.model.openLoupe(rig.onlyRow.id)
+        let loupe = try #require(rig.model.loupe)
+        #expect(await waitUntilOnMain { files.started.contains("DSC00001.JPG") })
+        await loupe.settled()
+        #expect(rig.exifReads.read.isEmpty)
+        #expect(loupe.exif == nil)
+
+        files.finish("DSC00001.JPG")
+        #expect(await waitUntilOnMain { loupe.exif?.iso == 100 })
+        #expect(rig.exifReads.read == ["DSC00001.JPG"])
+        await rig.model.closeLoupe()
+    }
+
+    @Test func zoomedInPastThePreviewTheRegionOnScreenIsDecodedFromTheOriginal() async throws {
+        let rig = Rig { f in
+            [stage("DSC00001.JPG", in: f.documents), stage("DSC00002.JPG", at: "20261105T140001", in: f.documents)]
+        }
+        rig.loader.fullPixelSize = PixelSize(width: 7_008, height: 4_672)
+        await rig.model.load()
+        rig.model.openLoupe(rig.onlyRow.id)
+        let loupe = try #require(rig.model.loupe)
+        #expect(await waitUntilOnMain { loupe.preview?.fullPixelSize != nil })
+        // Its 100 % is the original's, not the 10-pixel preview's.
+        let maximum = LoupeZoom.maximumScale(for: loupe.preview, fittingWidth: 393, fittingHeight: 700,
+                                             displayScale: 3)
+        #expect(abs(maximum - 7_008.0 / 1_179.0) < 0.001)
+
+        let region = try #require(LoupeZoom.detailRegion(for: loupe.preview, scale: maximum, offsetX: 0, offsetY: 0,
+                                                         fittingWidth: 393, fittingHeight: 700, displayScale: 3))
+        loupe.showDetail(region, maxPixelSize: 2_100)
+        #expect(await waitUntilOnMain { loupe.detail != nil })
+        #expect(loupe.detail?.preview.image == "DSC00001.JPG@detail")
+        #expect(loupe.detail?.region == region)
+        #expect(loupe.detail?.unit == loupe.current?.id)
+        // The same region again isn't decoded again.
+        loupe.showDetail(region, maxPixelSize: 2_100)
+        await loupe.settled()
+        #expect(rig.loader.detailRequests == [.init(name: "DSC00001.JPG", region: region, maxPixelSize: 2_100)])
+
+        // Another unit drops it, and so does fitting the screen again.
+        loupe.next()
+        #expect(loupe.detail == nil)
+        #expect(await waitUntilOnMain { loupe.preview?.fullPixelSize != nil })
+        loupe.showDetail(region, maxPixelSize: 2_100)
+        #expect(await waitUntilOnMain { loupe.detail?.preview.image == "DSC00002.JPG@detail" })
+        loupe.clearDetail()
+        #expect(loupe.detail == nil)
+        await rig.model.closeLoupe()
+    }
+
+    @Test func aPreviewWithNoOriginalToDecodeZoomsOnlyAsFarAsItsOwnPixels() async throws {
+        // A RAW shown by its embedded preview: there are no more pixels to decode.
+        let rig = Rig { f in [stage("DSC00001.JPG", in: f.documents)] }
+        await rig.model.load()
+        rig.model.openLoupe(rig.onlyRow.id)
+        let loupe = try #require(rig.model.loupe)
+        #expect(await waitUntilOnMain { loupe.preview != nil })
+        #expect(LoupeZoom.detailRegion(for: loupe.preview, scale: 8, offsetX: 0, offsetY: 0, fittingWidth: 393,
+                                       fittingHeight: 700, displayScale: 3) == nil)
+        loupe.showDetail(.whole, maxPixelSize: 2_100)
+        await loupe.settled()
+        #expect(rig.loader.detailRequests.isEmpty && loupe.detail == nil)
+        await rig.model.closeLoupe()
+    }
+
+    @Test func closingALoupeThatIsNoLongerOpenLeavesTheOpenOneAlone() async throws {
+        let rig = Rig { f in
+            [stage("DSC00001.JPG", in: f.documents), stage("DSC00002.JPG", at: "20261105T140001", in: f.documents)]
+        }
+        await rig.model.load()
+        rig.model.openLoupe(rig.onlyRow.id)
+        let first = try #require(rig.model.loupe)
+        rig.model.openLoupe(rig.onlyRow.id, at: 1)
+        let second = try #require(rig.model.loupe)
+        await rig.model.closeLoupe(first)
+        #expect(rig.model.loupe === second)
+        second.keep()
+        await rig.model.closeLoupe(second)
+        #expect(rig.model.loupe == nil)
+        #expect(rig.model.counts(of: rig.onlyRow).kept == 1)
+    }
+
+    @Test func aRefreshThatFailsOverAListAlreadyShownSaysSoUntilClosed() async throws {
+        var failing: SwitchableCatalogue?
+        let rig = Rig({ f in [stage("DSC00001.JPG", in: f.documents)] }, catalogue: { records in
+            let store = SwitchableCatalogue(records: records)
+            failing = store
+            return store
+        })
+        let store = try #require(failing)
+        await rig.model.load()
+        #expect(rig.model.loadFailureNotice == nil)
+
+        await store.setFailsListing(true)
+        await rig.model.load()
+        // The list stays as it was, and a strip says it may be out of date.
+        #expect(rig.model.rows.count == 1)
+        let notice = try #require(rig.model.loadFailureNotice)
+        #expect(notice.text == CullWording.refreshFailed && notice.tone == .problem && !notice.dismissesItself)
+        rig.model.dismissLoadFailure()
+        #expect(rig.model.loadFailureNotice == nil)
+        // A second failure says so again; a refresh that works clears it.
+        await rig.model.load()
+        #expect(rig.model.loadFailureNotice != nil)
+        await store.setFailsListing(false)
+        await rig.model.load()
+        #expect(rig.model.loadFailureNotice == nil && rig.model.phase == .loaded)
+    }
+
+    @Test func aFirstLoadThatFailsHasNoStripTheScreenSaysItInstead() async throws {
+        var failing: SwitchableCatalogue?
+        let rig = Rig({ f in [stage("DSC00001.JPG", in: f.documents)] }, catalogue: { records in
+            let store = SwitchableCatalogue(records: records)
+            failing = store
+            return store
+        })
+        try await #require(failing).setFailsListing(true)
+        await rig.model.load()
+        #expect(rig.model.phase == .failed && rig.model.isEmpty)
+        #expect(rig.model.loadFailureNotice == nil)
     }
 
     @Test func theLogSaysHowManyWithNoNamesOrPaths() async {

@@ -7,14 +7,15 @@ import UIKit
 /// - Swipe left and right moves between units; swipe up keeps, swipe down rejects (`LoupeSwipe`); a Keep or Reject
 ///   moves on to the next unit. Keep and Reject are also buttons, with 0–5 optional stars between them and Undo in the
 ///   bar, which reverts the last mark and goes back to its unit.
-/// - A pinch zooms up to the preview's 100 % (`LoupeZoom`), a double tap goes there and back; while zoomed, a drag pans
-///   and doesn't swipe.
+/// - A pinch zooms up to the original's 100 % (`LoupeZoom`), a double tap goes there and back; while zoomed, a drag pans
+///   and doesn't swipe. Past the screen-sized preview's own pixels, the region on screen is decoded from the original
+///   when the pinch, the pan or the double tap ends (`CullLoupe.showDetail`) and drawn over the preview in its place.
 /// - The preview comes from the prefetcher (the next 3 and the previous 1 decoded, evicted files downloaded further
 ///   ahead), with a progress bar while the unit's iCloud file downloads, and a line when a RAW shows only the camera's
 ///   embedded preview. A small EXIF line sits under the photo (D5).
 /// - VoiceOver: the photo is one adjustable element (swipe up or down with one finger for the next or previous photo),
-///   whose value is its position, mark and stars, with Keep, Reject, Clear Mark, the stars, Undo and the zoom as actions;
-///   each mark is announced. The stars are one adjustable element too.
+///   whose value is its position, mark and stars, with Next Photo, Previous Photo, Keep, Reject, Clear Mark, the stars,
+///   Undo and the zoom as actions; each mark is announced. The stars are one adjustable element too.
 struct LoupeView: View {
     let loupe: CullLoupe<DecodedPreviewImage>
     let close: () -> Void
@@ -71,6 +72,21 @@ struct LoupeView: View {
                 Image(decorative: preview.image.cgImage, scale: 1)
                     .resizable()
                     .scaledToFit()
+                    .overlay {
+                        // The region decoded from the original, over the same part of the preview, scaled with it.
+                        if zoom > 1, let detail = loupe.detail, detail.unit == loupe.current?.id {
+                            GeometryReader { fitted in
+                                let region = detail.region
+                                let (width, height) = (fitted.size.width, fitted.size.height)
+                                Image(decorative: detail.preview.image.cgImage, scale: 1)
+                                    .resizable()
+                                    .frame(width: width * CGFloat(region.width), height: height * CGFloat(region.height))
+                                    .position(x: width * CGFloat(region.x + region.width / 2),
+                                              y: height * CGFloat(region.y + region.height / 2))
+                            }
+                            .allowsHitTesting(false)
+                        }
+                    }
                     .scaleEffect(zoom)
                     .offset(offset)
             } else if loupe.hasNoPreview {
@@ -111,9 +127,11 @@ struct LoupeView: View {
             }
         }
         .contentShape(Rectangle())
-        .gesture(drag)
+        .gesture(drag(in: size))
         .simultaneousGesture(pinch(in: size))
         .onTapGesture(count: 2) { toggleZoom(in: size) }
+        // A RAW's render replacing its stand-in brings the original's size: decode the region if zoomed in past it.
+        .onChange(of: loupe.preview?.fullPixelSize) { _, _ in updateDetail(in: size) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(loupe.accessibilityLabel)
         .accessibilityValue(loupe.accessibilityValue)
@@ -127,6 +145,8 @@ struct LoupeView: View {
             }
         }
         .accessibilityActions {
+            Button(CullWording.nextPhoto) { loupe.next() }
+            Button(CullWording.previousPhoto) { loupe.previous() }
             Button(CullWording.keep) { loupe.keep() }
             Button(CullWording.reject) { loupe.reject() }
             Button(CullWording.clearMark) { loupe.clearDecision() }
@@ -134,14 +154,17 @@ struct LoupeView: View {
                 Button(CullWording.rateAction(rating)) { loupe.setRating(rating) }
             }
             Button(CullWording.undo) { loupe.undo() }
-            if loupe.preview != nil {
-                Button(zoom > 1 ? CullWording.zoomOut : CullWording.zoomIn) { toggleZoom(in: size) }
+            if let preview = loupe.preview {
+                Button(zoom > 1 ? CullWording.zoomOut
+                    : preview.fullPixelSize != nil ? CullWording.zoomIn : CullWording.zoomInPreview) {
+                    toggleZoom(in: size)
+                }
             }
         }
     }
 
     /// Swipes while the photo fits the screen; pans while it is zoomed in.
-    private var drag: some Gesture {
+    private func drag(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
                 guard zoom > 1 else { return }
@@ -153,6 +176,7 @@ struct LoupeView: View {
             .onEnded { value in
                 guard zoom <= 1 else {
                     panStart = nil
+                    updateDetail(in: size)
                     return
                 }
                 let swipe = LoupeSwipe.of(translationX: value.translation.width,
@@ -179,14 +203,27 @@ struct LoupeView: View {
             .onEnded { _ in
                 pinchStart = nil
                 if zoom <= 1.01 { resetZoom() }
+                updateDetail(in: size)
             }
     }
 
+    /// The original's 100 % (or the preview's, when the original's pixels can't be decoded).
     private func maximumZoom(in size: CGSize) -> Double {
-        guard let preview = loupe.preview else { return LoupeZoom.minimumMaximum }
-        return LoupeZoom.maximumScale(pixelWidth: preview.pixelSize.width, pixelHeight: preview.pixelSize.height,
-                                      fittingWidth: size.width, fittingHeight: size.height,
-                                      displayScale: displayScale)
+        LoupeZoom.maximumScale(for: loupe.preview, fittingWidth: size.width, fittingHeight: size.height,
+                               displayScale: displayScale)
+    }
+
+    /// Asks for the region on screen from the original when zoomed in past the preview's own pixels, or drops it.
+    private func updateDetail(in size: CGSize) {
+        let region = LoupeZoom.detailRegion(for: loupe.preview, scale: zoom, offsetX: Double(offset.width),
+                                            offsetY: Double(offset.height), fittingWidth: Double(size.width),
+                                            fittingHeight: Double(size.height), displayScale: Double(displayScale))
+        guard let region else {
+            loupe.clearDetail()
+            return
+        }
+        let side = max(size.width, size.height) * displayScale
+        loupe.showDetail(region, maxPixelSize: side > 0 ? Int(side.rounded(.up)) : 2_800)
     }
 
     private func toggleZoom(in size: CGSize) {
@@ -198,6 +235,7 @@ struct LoupeView: View {
                 zoom = maximumZoom(in: size)
             }
         }
+        updateDetail(in: size)
     }
 
     private func resetZoom() {
@@ -205,6 +243,7 @@ struct LoupeView: View {
         offset = .zero
         pinchStart = nil
         panStart = nil
+        loupe.clearDetail()
     }
 
     // MARK: The controls

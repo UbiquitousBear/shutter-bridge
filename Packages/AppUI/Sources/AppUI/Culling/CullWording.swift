@@ -10,7 +10,6 @@ public enum CullWording {
     /// The Cameras screen's button that opens Staging, until the tab bar gives it a tab (I10).
     public static let openStaging = "Staging"
     public static let openStagingHint = "Shows the staged files, to keep or reject them with no camera connected."
-    public static let close = "Close"
 
     public static let loading = "Reading Staging"
     public static let emptyTitle = "Nothing Staged"
@@ -19,6 +18,8 @@ public enum CullWording {
     public static let loadFailedTitle = "Couldn't Read Staging"
     public static let loadFailedDetail = "Shutter Bridge couldn't read its list of staged files."
     public static let tryAgain = "Try Again"
+    /// A pull to refresh that failed over a list already shown, which stays as it was.
+    public static let refreshFailed = "Couldn't read Staging again, so this list may be out of date."
 
     /// A day's row opens the loupe at its first photo with no mark.
     public static let dayHint = "Opens the photos of this day, at the first one with no mark."
@@ -92,8 +93,10 @@ public enum CullWording {
     public static let nextPhoto = "Next Photo"
     public static let previousPhoto = "Previous Photo"
     public static let ratingTitle = "Stars"
-    /// The VoiceOver actions for the pinch and the double tap.
+    /// The VoiceOver actions for the pinch and the double tap: to the original's 100 %, or, for a RAW shown by its
+    /// embedded preview (no original's pixels to decode), as far as the preview goes.
     public static let zoomIn = "Zoom to Actual Size"
+    public static let zoomInPreview = "Zoom In"
     public static let zoomOut = "Fit to Screen"
     public static let previewFailedTitle = "Couldn't Show This Photo"
     public static let previewFailedDetail = "The staged file couldn't be read."

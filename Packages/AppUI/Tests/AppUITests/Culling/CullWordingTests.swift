@@ -91,7 +91,8 @@ struct CullWordingTests {
                    CullWording.loadFailedTitle, CullWording.loadFailedDetail, CullWording.dayHint,
                    CullWording.loupeHint, CullWording.writeFailed, CullWording.embeddedOnly,
                    CullWording.previewFailedTitle, CullWording.downloading, CullWording.zoomIn,
-                   CullWording.zoomOut]
+                   CullWording.zoomInPreview, CullWording.zoomOut, CullWording.refreshFailed,
+                   CullWording.nextPhoto, CullWording.previousPhoto]
         for line in all {
             #expect(!line.contains("Sony") && !line.contains("color") && !line.contains("catalog "))
             #expect(!line.isEmpty)
@@ -140,5 +141,67 @@ struct LoupeGestureTests {
         #expect(LoupeZoom.clamped(0.5, maximum: 3) == 1)
         #expect(LoupeZoom.clamped(5, maximum: 3) == 3)
         #expect(LoupeZoom.clamped(.nan, maximum: 3) == 1)
+    }
+
+    @Test func zoomReachesTheOriginalsOwnPixelsWhenItCanBeDecoded() {
+        // An α7C II frame (7008 × 4672) shown by a screen-sized preview, fitted 393 points wide on a 3× screen: its
+        // 100 % is the original's, about 5.9×, not the preview's 2,556 pixels (about 2.2×).
+        let decodable = LoadedPreview(image: "", pixelSize: PixelSize(width: 2_556, height: 1_704), quality: .final,
+                                      fullPixelSize: PixelSize(width: 7_008, height: 4_672))
+        let scale = LoupeZoom.maximumScale(for: decodable, fittingWidth: 393, fittingHeight: 700, displayScale: 3)
+        #expect(abs(scale - 7_008.0 / 1_179.0) < 0.001)
+        // A portrait frame fitted by its height (400 of 430 points wide) still reaches the original's 100 %.
+        let portrait = LoadedPreview(image: "", pixelSize: PixelSize(width: 1_704, height: 2_556), quality: .final,
+                                     fullPixelSize: PixelSize(width: 4_672, height: 7_008))
+        let upright = LoupeZoom.maximumScale(for: portrait, fittingWidth: 430, fittingHeight: 600, displayScale: 3)
+        #expect(abs(upright - 4_672.0 / 1_200.0) < 0.001)
+        // A RAW shown by its embedded preview has only the preview's pixels.
+        let embedded = LoadedPreview(image: "", pixelSize: PixelSize(width: 2_556, height: 1_704),
+                                     quality: .embeddedOnly)
+        #expect(abs(LoupeZoom.maximumScale(for: embedded, fittingWidth: 393, fittingHeight: 700, displayScale: 3)
+            - 2_556.0 / 1_179.0) < 0.001)
+        #expect(LoupeZoom.maximumScale(for: Optional<LoadedPreview<String>>.none, fittingWidth: 393, fittingHeight: 700,
+                                       displayScale: 3) == LoupeZoom.minimumMaximum)
+    }
+
+    @Test func theVisibleRegionFollowsTheZoomAndThePan() throws {
+        // 3:2 fitted into 300 × 400 points: 300 × 200, centred.
+        #expect(LoupeZoom.visibleRegion(scale: 1, offsetX: 0, offsetY: 0, fittingWidth: 300, fittingHeight: 400,
+                                        aspect: 1.5) == .whole)
+        // At 2× the middle half of each side.
+        let middle = try #require(LoupeZoom.visibleRegion(scale: 2, offsetX: 0, offsetY: 0, fittingWidth: 300,
+                                                          fittingHeight: 400, aspect: 1.5))
+        #expect(abs(middle.x - 0.25) < 1e-9 && abs(middle.width - 0.5) < 1e-9)
+        // 400 points of a 400-point-high photo: all its height.
+        #expect(abs(middle.y) < 1e-9 && abs(middle.height - 1) < 1e-9)
+        // Panned right by 150 points (the photo moves right): its left quarter-to-half is shown.
+        let left = try #require(LoupeZoom.visibleRegion(scale: 2, offsetX: 150, offsetY: 0, fittingWidth: 300,
+                                                        fittingHeight: 400, aspect: 1.5))
+        #expect(abs(left.x) < 1e-9 && abs(left.width - 0.5) < 1e-9)
+        // Panned right off the photo altogether: nothing.
+        #expect(LoupeZoom.visibleRegion(scale: 2, offsetX: 1_000, offsetY: 0, fittingWidth: 300, fittingHeight: 400,
+                                        aspect: 1.5) == nil)
+    }
+
+    @Test func theOriginalIsDecodedOnlyPastThePreviewsOwnPixels() {
+        let preview = LoadedPreview(image: "", pixelSize: PixelSize(width: 2_358, height: 1_572), quality: .final,
+                                    fullPixelSize: PixelSize(width: 7_008, height: 4_672))
+        // 2,358 pixels fitted 393 points wide at 3× is the preview's 100 % at 2×.
+        func region(at scale: Double) -> LoupeRegion? {
+            LoupeZoom.detailRegion(for: preview, scale: scale, offsetX: 0, offsetY: 0, fittingWidth: 393,
+                                   fittingHeight: 700, displayScale: 3)
+        }
+        #expect(region(at: 1) == nil)
+        #expect(region(at: 2) == nil)
+        let deep = region(at: 5)
+        #expect(deep != nil)
+        #expect(abs((deep?.width ?? 0) - 0.2) < 1e-9)
+    }
+
+    @Test func aRegionIsClippedToThePhoto() {
+        #expect(LoupeRegion(x: -0.5, y: 0.5, width: 1, height: 1).clipped
+            == LoupeRegion(x: 0, y: 0.5, width: 0.5, height: 0.5))
+        #expect(LoupeRegion(x: 1, y: 0, width: 1, height: 1).clipped == nil)
+        #expect(LoupeRegion(x: .nan, y: 0, width: 1, height: 1).clipped == nil)
     }
 }

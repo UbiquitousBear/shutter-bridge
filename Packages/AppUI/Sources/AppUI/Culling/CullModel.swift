@@ -125,6 +125,8 @@ public final class CullModel<Image: Sendable> {
     public private(set) var loupe: CullLoupe<Image>?
     /// The catalogue's marks of the files shown, by content key, as last read or written.
     public private(set) var marks: [ObjectIdentity.ContentKey: CullMark] = [:]
+    /// The last load's failure has been closed by the person.
+    private var loadFailureDismissed = false
 
     @ObservationIgnored private let catalogue: any CatalogueStore
     @ObservationIgnored private let onThisIPhone: URL
@@ -168,6 +170,16 @@ public final class CullModel<Image: Sendable> {
 
     public var isEmpty: Bool { sections.isEmpty }
 
+    /// A refresh that failed over a list already shown, which stays as it was: said in a strip until closed. (With
+    /// nothing listed, the screen shows the failure in place of the list instead.)
+    public var loadFailureNotice: StatusNotice? {
+        guard phase == .failed, !isEmpty, !loadFailureDismissed else { return nil }
+        return StatusNotice(text: CullWording.refreshFailed, tone: .problem, systemImage: "exclamationmark.triangle",
+                            dismissesItself: false)
+    }
+
+    public func dismissLoadFailure() { loadFailureDismissed = true }
+
     /// Every day row, camera by camera.
     public var rows: [CullDayRow] { sections.flatMap(\.days) }
 
@@ -188,7 +200,7 @@ public final class CullModel<Image: Sendable> {
         } catch {
             guard generation == loadGeneration else { return }
             log.note("cull: couldn't read the staged files (\(type(of: error)))", level: .error)
-            phase = .failed
+            failed()
             return
         }
         let iCloud = await locator.locate().iCloudDocuments
@@ -202,7 +214,7 @@ public final class CullModel<Image: Sendable> {
         } catch {
             guard generation == loadGeneration else { return }
             log.note("cull: couldn't read the marks (\(type(of: error)))", level: .error)
-            phase = .failed
+            failed()
             return
         }
         guard generation == loadGeneration else { return }
@@ -213,6 +225,11 @@ public final class CullModel<Image: Sendable> {
         // Counts only: never a name, a path or a camera's folder.
         log.note("cull: listed staged files=\(keys.count) days=\(built.flatMap(\.days).count) "
             + "notShown=\(resolved.unavailable.total)")
+    }
+
+    private func failed() {
+        phase = .failed
+        loadFailureDismissed = false
     }
 
     /// A staged file with the camera name it is listed under.
@@ -336,7 +353,7 @@ public final class CullModel<Image: Sendable> {
         let prefetcher = PreviewPrefetcher<Image>(loader: loader, files: files, clock: clock, policy: policy,
                                                   maxPixelSize: maxPixelSize)
         let made = CullLoupe(row: row, marks: marks, startingAt: start, writer: writer, prefetcher: prefetcher,
-                             exif: exif)
+                             loader: loader, exif: exif)
         // The error's type only: never a file name or a content key.
         let log = self.log
         made.session.onWriteFailure = { failure in
@@ -349,6 +366,13 @@ public final class CullModel<Image: Sendable> {
     /// saves have settled the catalogue's marks are read back.
     public func closeLoupe() async {
         guard let loupe else { return }
+        await closeLoupe(loupe)
+    }
+
+    /// Closes `which` if it is still the open loupe, and does nothing otherwise: a screen that saw one loupe dismissed
+    /// never closes another opened since.
+    public func closeLoupe(_ which: CullLoupe<Image>) async {
+        guard let loupe, loupe === which else { return }
         self.loupe = nil
         finish(loupe)
         await loupe.settled()
@@ -382,6 +406,10 @@ public struct LoupeAnnouncement: Sendable, Hashable {
 /// `PreviewPrefetcher` following its position, and the EXIF line of the unit on screen (D5). Each action says what
 /// VoiceOver should announce (`announcement`), since a custom action changes the photo without VoiceOver reading it.
 ///
+/// Zoomed in past the preview's own pixels, the view asks for the region on screen from the original
+/// (`showDetail(_:maxPixelSize:)`, `LoupeZoom.detailRegion`), so a pinch reaches the original's 100 %: one image at most
+/// screen-sized, the current unit's only, held beside the prefetcher's previews (about 15 MB within the app's 150 MB).
+///
 /// A Keep or Reject moves on to the next unit (not past the last), so a day is culled one gesture a photo; Undo goes
 /// back to the unit it reverts.
 @MainActor
@@ -390,24 +418,42 @@ public final class CullLoupe<Image: Sendable>: Identifiable {
     public let row: CullDayRow
     public let session: CullSession
     public let prefetcher: PreviewPrefetcher<Image>
-    /// The EXIF line's facts for the unit on screen, once read; nil while reading or when the file has none.
+    /// The EXIF line's facts for the unit on screen, once read; nil while reading, while its iCloud file downloads, or
+    /// when the file has none.
     public private(set) var exif: EXIFSummary?
     public private(set) var announcement: LoupeAnnouncement?
+    /// The region on screen decoded from the original, while zoomed in past the preview's own pixels; the current unit's
+    /// only.
+    public private(set) var detail: LoupeDetail<Image>?
 
+    @ObservationIgnored private let loader: any PreviewLoading<Image>
     @ObservationIgnored private let exifReader: (@Sendable (URL) async -> EXIFSummary?)?
     @ObservationIgnored private var exifTask: Task<Void, Never>?
     @ObservationIgnored private var exifUnit: CullUnit.ID?
+    @ObservationIgnored private var detailTask: Task<Void, Never>?
+    @ObservationIgnored private var detailRequest: DetailRequest?
     @ObservationIgnored private var announcements = 0
 
+    private struct DetailRequest: Hashable {
+        var unit: CullUnit.ID
+        var region: LoupeRegion
+    }
+
     init(row: CullDayRow, marks: [ObjectIdentity.ContentKey: CullMark], startingAt start: Int,
-         writer: any CullMarkWriting, prefetcher: PreviewPrefetcher<Image>,
+         writer: any CullMarkWriting, prefetcher: PreviewPrefetcher<Image>, loader: any PreviewLoading<Image>,
          exif: (@Sendable (URL) async -> EXIFSummary?)?) {
         self.row = row
         session = CullSession(units: row.units, marks: marks, startingAt: start, writer: writer)
         session.advancesAfterDecision = true
         self.prefetcher = prefetcher
+        self.loader = loader
         exifReader = exif
         prefetcher.show(row.units, focusing: session.index)
+        // An evicted file's EXIF line is read once its download has finished.
+        prefetcher.onFileLocal = { [weak self] id in
+            guard let self, self.current?.id == id else { return }
+            self.readEXIF()
+        }
         readEXIF()
     }
 
@@ -485,6 +531,7 @@ public final class CullLoupe<Image: Sendable>: Identifiable {
 
     private func moved() {
         prefetcher.focus(on: session.index)
+        clearDetail()
         readEXIF()
     }
 
@@ -493,14 +540,58 @@ public final class CullLoupe<Image: Sendable>: Identifiable {
         announcement = LoupeAnnouncement(id: announcements, announcement: StatusAnnouncement(text))
     }
 
+    // MARK: Zoom
+
+    /// Shows `region` of the current unit decoded from the original, at most `maxPixelSize` on its longer side (the
+    /// screen's), once the decode is done; the region shown before stays until then. Nothing happens for a preview
+    /// with no `fullPixelSize`, or for the region already shown or being decoded.
+    public func showDetail(_ region: LoupeRegion, maxPixelSize: Int) {
+        guard let unit = current, let preview, preview.fullPixelSize != nil, let region = region.clipped,
+              maxPixelSize > 0
+        else {
+            clearDetail()
+            return
+        }
+        let request = DetailRequest(unit: unit.id, region: region)
+        if let detail, detail.unit == unit.id, detail.region == region { return }
+        if detailRequest == request { return }
+        if let detail, detail.unit != unit.id { self.detail = nil }
+        detailTask?.cancel()
+        detailRequest = request
+        let (loader, source) = (loader, unit.previewSource)
+        detailTask = Task { [weak self] in
+            let loaded = try? await loader.loadDetail(source, region: region, maxPixelSize: maxPixelSize)
+            guard !Task.isCancelled, let self, self.detailRequest == request else { return }
+            self.detailRequest = nil
+            if let loaded { self.detail = LoupeDetail(unit: request.unit, region: region, preview: loaded) }
+        }
+    }
+
+    /// Drops the region decoded from the original (the photo fits the screen again, or another unit is shown).
+    public func clearDetail() {
+        detailTask?.cancel()
+        detailTask = nil
+        detailRequest = nil
+        detail = nil
+    }
+
     // MARK: EXIF
 
+    /// Reads the current unit's EXIF line, once its file is on the phone: an evicted iCloud file is read when the
+    /// prefetcher's download finishes (`PreviewPrefetcher.onFileLocal`), never while it would block on the download.
     private func readEXIF() {
         guard let unit = current, unit.id != exifUnit else { return }
-        exifUnit = unit.id
         exifTask?.cancel()
         exif = nil
-        guard let reader = exifReader, let url = unit.previewSource.file?.url else { return }
+        guard let reader = exifReader, let url = unit.previewSource.file?.url else {
+            exifUnit = unit.id
+            return
+        }
+        guard prefetcher.isFileLocal(unit) else {
+            exifUnit = nil
+            return
+        }
+        exifUnit = unit.id
         let id = unit.id
         exifTask = Task { [weak self] in
             let summary = await reader(url)
@@ -514,12 +605,23 @@ public final class CullLoupe<Image: Sendable>: Identifiable {
     /// Stops fetching and releases every preview.
     func stop() {
         exifTask?.cancel()
+        clearDetail()
         prefetcher.stop()
     }
 
-    /// Waits until every mark made so far is saved or has failed, and the EXIF read under way has ended.
+    /// Waits until every mark made so far is saved or has failed, and the EXIF read and the detail decode under way
+    /// have ended.
     public func settled() async {
         await session.settled()
         await exifTask?.value
+        await detailTask?.value
     }
+}
+
+/// A region of a unit decoded from the original, for the loupe zoomed in past the preview's own pixels.
+public struct LoupeDetail<Image: Sendable>: Sendable {
+    public var unit: CullUnit.ID
+    /// Where it sits in the photo.
+    public var region: LoupeRegion
+    public var preview: LoadedPreview<Image>
 }

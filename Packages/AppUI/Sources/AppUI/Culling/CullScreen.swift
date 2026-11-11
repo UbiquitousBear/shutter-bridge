@@ -28,25 +28,36 @@ struct StagingScreen: View {
 /// The cull screen (backlog section 7.3): the staged files by camera and capture day, newest day first, each day with
 /// its counts ("Today: 120 staged, 34 kept, 60 rejected"), from the catalogue with no camera connected. A day opens the
 /// loupe over its photos, full screen, at the first one with no mark. Staged files that can't be shown are counted
-/// under the list, with why. Pull to refresh reads Staging again.
+/// under the list, with why. Pull to refresh reads Staging again; if that fails, the list stays and a strip says so.
 struct CullScreen: View {
     let model: CullModel<DecodedPreviewImage>
     @Environment(\.displayScale) private var displayScale
     /// The screen's size, for the previews' decode size.
     @State private var size: CGSize = .zero
-    /// The loupe's cover; when it closes, however it closes, the model closes its loupe.
+    /// The loupe's cover; when it closes, however it closes, the model closes the loupe it showed.
     @State private var showsLoupe = false
+    /// The loupe the cover shows, so its dismissal closes that one and never one opened since.
+    @State private var presented: CullLoupe<DecodedPreviewImage>?
 
     var body: some View {
         content
             .navigationTitle(CullWording.title)
             .onGeometryChange(for: CGSize.self) { proxy in proxy.size } action: { size = $0 }
+            .safeAreaInset(edge: .top) {
+                if let notice = model.loadFailureNotice {
+                    NoticeStrip(notice: notice) { model.dismissLoadFailure() }
+                        .padding(.horizontal)
+                }
+            }
+            .onChange(of: model.loadFailureNotice) { _, notice in notice?.announcement.post() }
             .task { await model.load() }
             .fullScreenCover(isPresented: $showsLoupe, onDismiss: {
+                guard let dismissed = presented else { return }
+                presented = nil
                 let model = self.model
-                Task { await model.closeLoupe() }
+                Task { await model.closeLoupe(dismissed) }
             }) {
-                if let loupe = model.loupe {
+                if let loupe = presented {
                     LoupeView(loupe: loupe) { showsLoupe = false }
                 }
             }
@@ -83,7 +94,8 @@ struct CullScreen: View {
                         ForEach(section.days) { row in
                             CullDayRowView(row: row, counts: model.counts(of: row)) {
                                 model.openLoupe(row.id, maxPixelSize: maxPixelSize)
-                                showsLoupe = model.loupe != nil
+                                presented = model.loupe
+                                showsLoupe = presented != nil
                             }
                         }
                     }

@@ -269,7 +269,12 @@ struct LiveApp: View {
             SettingsScreen(model: model.settings)
         }
         // Staging (the cull screen) in a sheet with its own stack until I10's tab bar gives it a tab (D5).
-        .sheet(isPresented: $showsStaging, onDismiss: { staging = nil }) {
+        // However the sheet closes (its close button, a swipe, or the reminder opening a camera while the loupe's cover is
+        // up), the loupe is closed too, so its previews are released and its marks counted.
+        .sheet(isPresented: $showsStaging, onDismiss: {
+            if let closing = staging { Task { await closing.closeLoupe() } }
+            staging = nil
+        }) {
             if let staging {
                 StagingScreen(model: staging)
             }
