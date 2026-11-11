@@ -98,18 +98,18 @@ struct FaultMatrixCaseTests {
         // `Partials` and its row stays `.partial` at the old offset until the 7-day prune, though nothing on the card
         // will ever continue it (the backlog: ".partial rows exist only for files the case leaves resumable").
         // Nothing wrong is committed: no bytes of the new file reach the old file. When I15 resets the row and
-        // removes the file with the skip, this passes and `withKnownIssue` fails: delete the wrapper.
-        await withKnownIssue("a skipped Wi-Fi file keeps its partial file and .partial row (ImportEngine+File linkFailed)") {
-            await bench.verify([card, swapped], committed: Self.keys(unchanged), skipped: Self.keys(victim),
-                               purpose: purpose)
-        }
+        // removes the file with the skip, the known-gap check fails: delete the `knownGaps`.
+        // Only those two checks are known to fail: the duplicate, loss and bytes checks stay live.
+        let gaps = MatrixBench.KnownGaps(
+            reason: "a skipped Wi-Fi file keeps its partial file and .partial row (ImportEngine+File linkFailed)",
+            staleRows: Self.keys([arw]), keptPartials: true)
+        await bench.verify([card, swapped], committed: Self.keys(unchanged), skipped: Self.keys(victim),
+                           purpose: purpose, knownGaps: gaps)
         #expect(await again.resumes.isEmpty, "nothing continued a partial file with another file's bytes")
 
         try await bench.start(again, purpose)
         #expect(try await bench.waitFinished() == .completed)
-        await withKnownIssue("the stray partial of the skipped file is still there") {
-            await bench.verify([card, swapped], committed: Self.keys(unchanged + reused), purpose: purpose)
-        }
+        await bench.verify([card, swapped], committed: Self.keys(unchanged + reused), purpose: purpose, knownGaps: gaps)
         await bench.finish()
     }
 
@@ -213,11 +213,13 @@ struct FaultMatrixCaseTests {
         // failed is resolved as failed, and resolving a failed file deletes its partial folder. The catalogue's row
         // stays `.partial` at the old offset, pointing at nothing. Nothing is lost or duplicated: the next job copies
         // the file from 0. When I15 keeps the partial (a `.stopJob` failure isn't the file's), this passes and
-        // `withKnownIssue` fails: delete the wrappers.
-        await withKnownIssue("a full phone deletes the Wi-Fi partial the backlog says is kept (ImportEngine+File resolve)") {
-            await bench.verify([card], committed: got, skipped: rest, partials: [MatrixBench.key(victim)],
-                               purpose: purpose)
-        }
+        // the known-gap check fails: delete the `knownGaps`.
+        // Only the kept-partial-file check is known to fail: the duplicate, loss, bytes and row checks stay live.
+        let gaps = MatrixBench.KnownGaps(
+            reason: "a full phone deletes the Wi-Fi partial the backlog says is kept (ImportEngine+File resolve)",
+            keptPartials: true)
+        await bench.verify([card], committed: got, skipped: rest, partials: [MatrixBench.key(victim)],
+                           purpose: purpose, knownGaps: gaps)
 
         // Room again: the next job copies the file (continuing the partial, once the engine keeps it).
         try await bench.start(link, purpose)
@@ -402,28 +404,35 @@ struct FaultMatrixCaseTests {
         await bench.finish()
     }
 
-    /// The camera's file counter wraps (DSC09999 then DSC00001 in the next folder): the reused names are other files,
-    /// because their seconds differ, and are all copied, none overwriting another.
+    /// The camera's file counter wraps (DSC09999 then DSC00001 in the next folder) and the card still holds an older
+    /// DSC00001: the same name is on the card twice, two files told apart by their seconds, and both are copied with
+    /// their own bytes, none overwriting the other.
     @Test("File names reused after the counter wraps", arguments: Self.usbAndWiFi, MatrixPurpose.allCases)
     func counterWrap(_ flavour: MatrixLink, _ purpose: MatrixPurpose) async throws {
         let bench = MatrixBench()
+        let early = try #require(ScriptedCard.shoot([.rawPlusJPEG, .rawPlusJPEG], start: "20261029T090000",
+                                                     firstNumber: 1)).scaled(down: 1000)
         let before = try #require(ScriptedCard.shoot([.rawPlusJPEG, .rawPlusJPEG], start: "20261101T090000",
                                                       firstNumber: 9998)).scaled(down: 1000)
         let after = try #require(ScriptedCard.shoot([.rawPlusJPEG, .rawPlusJPEG], start: "20261103T090000",
                                                      firstNumber: 1, firstFolder: 101)).scaled(down: 1000)
-        var card = before
-        card.objects += after.objects.map { o in
-            var o = o
-            o.handle = PTPObjectHandle(rawValue: o.handle.rawValue + 100)
-            return o
+        var card = early
+        for (group, offset) in [(before, 100), (after, 200)] {
+            card.objects += group.objects.map { o in
+                var o = o
+                o.handle = PTPObjectHandle(rawValue: o.handle.rawValue + UInt32(offset))
+                return o
+            }
         }
         let link = bench.link(card, flavour)
         try await bench.start(link, purpose)
         #expect(try await bench.waitFinished() == .completed)
-        await bench.verify([card], committed: Self.keys(card.objects), purpose: purpose)
-        // The same name, two files: both are in the destination with their own bytes.
+        // The same name, two files: both are in the destination with their own bytes (`verify` matches each committed
+        // file to a scripted file byte for byte, and expects every key once).
         let wrapped = card.objects.filter { $0.filename == "DSC00001.ARW" }
-        #expect(wrapped.count == 1 && Self.keys(card.objects).count == card.objects.count)
+        #expect(wrapped.count == 2 && Self.keys(card.objects).count == card.objects.count)
+        await bench.verify([card], committed: Self.keys(card.objects), purpose: purpose)
+        #expect(await bench.committedKeys([card]).isSuperset(of: Self.keys(wrapped)))
         await bench.finish()
     }
 

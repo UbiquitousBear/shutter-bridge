@@ -271,7 +271,7 @@ struct FaultMatrixCutTests {
     /// The relaunched engine empties the folder and a new job copies what the catalogue doesn't have, the
     /// interrupted file again from 0 and the committed ones not at all.
     @Test("App killed mid-download over USB", arguments: MatrixCase.halfway.filter { !$0.link.isWiFi })
-    func killedOverUSB(_ c: MatrixCase) async throws {
+    func killedMidDownloadOverUSB(_ c: MatrixCase) async throws {
         let bench = MatrixBench(inFlight: c.inFlight)
         let card = try MatrixBench.card()
         let link = bench.link(card, c.link)
