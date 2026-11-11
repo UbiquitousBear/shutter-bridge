@@ -33,16 +33,49 @@ public enum StagingRoot: String, Sendable, Hashable, Codable, CaseIterable {
 /// Where a staged copy of a file is (Shamil, 11 Nov): the root and the path under it, for example
 /// "Staging/ILCE-7CM2/2026-11-08/DSC00001.ARW", and when it was staged. Relative, because the container's absolute
 /// path changes between installs and updates.
+///
+/// **Resolve it only with `fileURL(in:)`.** Anything that acts on a staged copy (culling, *Import keepers*, the
+/// staging clean-up) gets its file from there, never by appending `relativePath` to a folder itself: the path may be
+/// unknown, and the root's Documents folder also holds the Files folders of builds before 11 Nov, one of which may be
+/// a camera's folder named "Staging" (`FilesFolderNaming.folderName(forCamera:)`).
 public struct StagedLocation: Sendable, Hashable, Codable {
     public var root: StagingRoot
+    /// The path under the root's Documents folder, starting "Staging/". **Empty means unknown**: the file was staged
+    /// but its destination didn't say where (the engine's `unreportedStagedLocation(for:)`). The row still reads as
+    /// staged, so the file isn't staged twice, but the path must never be resolved to a file: `fileURL(in:)` refuses
+    /// it.
     public var relativePath: String
     /// When the file was staged; nil when not known.
     public var stagedAt: Date?
+
+    /// The staging folder under each root's Documents folder: the first component of every path recorded.
+    public static let stagingFolderName = "Staging"
 
     public init(root: StagingRoot, relativePath: String, stagedAt: Date? = nil) {
         self.root = root
         self.relativePath = relativePath
         self.stagedAt = stagedAt
+    }
+
+    /// Whether `relativePath` names a file inside the staging folder: "Staging/" and at least one more component,
+    /// none of them empty, "." or "..", and no leading "/". False for an unknown (empty) path.
+    public var isResolvable: Bool {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count >= 2, components[0] == Self.stagingFolderName else { return false }
+        return components.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+    }
+
+    /// The staged copy's file under `documents`, the Documents folder of the location's root (`root`: the iCloud
+    /// container's or the app's own); nil when the path is unknown (empty) or doesn't name a file inside the staging
+    /// folder (`isResolvable`). The only way code may turn a staged copy into a file to read, move or remove.
+    public func fileURL(in documents: URL) -> URL? {
+        guard isResolvable else { return nil }
+        var url = documents
+        let components = relativePath.split(separator: "/")
+        for (i, component) in components.enumerated() {
+            url = url.appendingPathComponent(String(component), isDirectory: i < components.count - 1)
+        }
+        return url
     }
 }
 

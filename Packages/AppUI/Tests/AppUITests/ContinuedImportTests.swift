@@ -626,8 +626,8 @@ struct ContinuedImportTests {
         #expect(await b.finished())
         #expect(b.model.state == .finished(.completed))
         #expect(b.model.notificationPermission.authorisation == .denied)
-        // Another Import (the files are imported already, so the job ends at once) asks no more.
-        _ = await b.importAll(usbCard)
+        // Another Import (the files are staged already, so no job starts) asks no more.
+        #expect(await b.importAll(usbCard) == .nothingNew(staging: true))
         #expect(await b.finished())
         #expect(notifier.requests == 1)
     }

@@ -110,9 +110,11 @@ extension ImportModelTests {
         let h = await harness()
         let imported = try #require(card[0].identity(camera: h.camera.key, timeZone: .current))
         await h.catalogue.upsert(CatalogueRecord(identity: imported, format: .raw, state: .imported))
+        // The imported file is left out before the job starts, so the count is what is copied.
         #expect(await h.model.importItems(card, from: h.camera, link: h.link, as: .staging, newOnly: true)
-            == .started(3))
+            == .started(2))
         #expect(await h.finished())
+        #expect(h.model.rows.count == 2)
         #expect(await h.destinations.files.names.sorted() == ["DSC00001.JPG", "DSC00002.JPG"])
         #expect(await h.model.importItems([card[0]], from: h.camera, link: await freshLink(), as: .staging,
                                           newOnly: false) == .started(1))
@@ -121,6 +123,48 @@ extension ImportModelTests {
         // Still imported, and staged too.
         #expect(await h.catalogue.record(for: imported)?.state == .imported)
         #expect(await h.catalogue.stagedStates(of: [imported]) == [imported])
+    }
+
+    /// With Photos access off, an *Import to Photos* stages, so it leaves out staged files as a *Stage* does: it
+    /// counts only what it copies, and when every pick is staged it starts nothing and says they are staged.
+    @Test func anImportStagedBecausePhotosIsOffCountsOnlyWhatItCopies() async throws {
+        let h = await harness(photos: FakePhotosAccess(.denied))
+        let staged = try #require(card[1].identity(camera: h.camera.key, timeZone: .current))
+        await h.catalogue.markStaged(staged, format: .jpeg,
+                                     at: StagedLocation(root: .onThisIPhone, relativePath: "Staging/C/D/X.JPG"))
+        let outcome = await h.importAll(card)
+        #expect(outcome == .started(2))
+        #expect(StatusNotice.importRequest(outcome, choice: .photos).text == "Importing 2 files.")
+        #expect(await h.finished())
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
+        #expect(h.model.progress.filesTotal == 2)
+        #expect(await h.destinations.files.names.sorted() == ["DSC00001.ARW", "DSC00002.JPG"])
+
+        // Every pick staged now: no job, and the notice says staged, not imported.
+        let again = await h.model.importItems(card, from: h.camera, link: await freshLink(), as: .photos,
+                                              newOnly: false)
+        #expect(again == .nothingNew(staging: true))
+        #expect(StatusNotice.importRequest(again, choice: .photos).text
+            == "These files are already staged or being staged.")
+        #expect(h.model.state == .finished(.completed))   // the finished job stays shown
+        #expect(h.model.progress.filesTotal == 2)
+        #expect(await h.destinations.files.names.count == 2)
+    }
+
+    /// With Photos access allowed, staged files are imported and nothing new is worded as imported.
+    @Test func anImportToPhotosStillTakesStagedFilesAndSaysImportedWhenNothingIsNew() async throws {
+        let h = await harness(photos: FakePhotosAccess(.authorised))
+        let staged = try #require(card[1].identity(camera: h.camera.key, timeZone: .current))
+        await h.catalogue.markStaged(staged, format: .jpeg,
+                                     at: StagedLocation(root: .onThisIPhone, relativePath: "Staging/C/D/X.JPG"))
+        #expect(await h.importAll(card) == .started(3))
+        #expect(await h.finished())
+        #expect(await h.destinations.photos.names.count == 3)
+        let again = await h.model.importItems(card, from: h.camera, link: await freshLink(), as: .photos,
+                                              newOnly: false)
+        #expect(again == .nothingNew(staging: false))
+        #expect(StatusNotice.importRequest(again, choice: .photos).text
+            == "These files are already imported or in the import.")
     }
 
     @Test func theStagingPlaceIsReadForTheImportMenu() async {
@@ -273,14 +317,14 @@ struct BrowseStagingTests {
         // Only imported ones: nothing to hand over.
         let calls = h.importer.calls.count
         h.model.tap(named("DSC00003.JPG"))
-        #expect(await h.model.importSelected(as: .photos) == .nothingNew)
+        #expect(await h.model.importSelected(as: .photos) == .nothingNew(staging: false))
         #expect(h.importer.calls.count == calls)
         #expect(h.model.importNotice == "These files are already imported or in the import.")
         #expect(h.model.selectedItems.isEmpty && !h.model.isSelecting)
         // Stage leaves out staged photos, imported or not.
         h.model.tap(named("DSC00002.ARW"))
         h.model.toggleSelection(named("DSC00003.JPG"))
-        #expect(await h.model.importSelected(as: .staging) == .nothingNew)
+        #expect(await h.model.importSelected(as: .staging) == .nothingNew(staging: true))
         #expect(h.importer.calls.count == calls)
         #expect(h.model.importNotice == "These files are already staged or being staged.")
         #expect(h.importer.importChoice == .photos) // nothing was handed over, so nothing was remembered
@@ -368,8 +412,13 @@ struct BrowseStagingTests {
         #expect(BrowseWording.stagedBadge == "Staged")
         #expect(BrowseWording.importRequested(.started(3), choice: .staging) == "Staging 3 files.")
         #expect(BrowseWording.importRequested(.appended(2), choice: .staging) == "Added 2 files to staging.")
-        #expect(BrowseWording.importRequested(.nothingNew, choice: .staging)
+        #expect(BrowseWording.importRequested(.nothingNew(staging: true), choice: .staging)
             == "These files are already staged or being staged.")
+        // An Import to Photos that stages (Photos access off) says the files are staged, not imported.
+        #expect(BrowseWording.importRequested(.nothingNew(staging: true), choice: .photos)
+            == "These files are already staged or being staged.")
+        #expect(BrowseWording.importRequested(.nothingNew(staging: false), choice: .photos)
+            == "These files are already imported or in the import.")
         #expect(ImportBackgroundWording.title(staging: true) == "Staging photos")
         #expect(ImportBackgroundWording.title(staging: false) == "Importing photos")
         #expect(ImportWording.stagingReason(.chosen, place: .iCloudDrive)

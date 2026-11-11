@@ -456,14 +456,16 @@ extension BrowseWording {
         }
     }
 
-    /// After Import (or *Import to Photos* or *Stage*) is tapped in Browse. `choice` is what was asked for.
+    /// After Import (or *Import to Photos* or *Stage*) is tapped in Browse. `choice` is what was asked for; nothing new
+    /// is worded by what the import does instead, so an *Import to Photos* staged because Photos access is off says
+    /// the files are already staged.
     public static func importRequested(_ outcome: ImportRequestOutcome, choice: DestinationKind = .photos) -> String? {
         let staging = choice == .staging
         switch outcome {
         case let .started(n): return (staging ? "Staging " : "Importing ") + "\(ByteWording.files(n))."
         case let .appended(n): return "Added \(ByteWording.files(n)) to " + (staging ? "staging." : "the import.")
-        case .nothingNew:
-            return staging ? "These files are already staged or being staged."
+        case let .nothingNew(staged):
+            return staged ? "These files are already staged or being staged."
                 : "These files are already imported or in the import."
         case .busyWithAnotherCamera:
             return "Another camera's import is still running. Let it finish, or cancel it, then import from this camera."

@@ -209,7 +209,6 @@ extension ImportEngine {
         case .alreadyStaged:
             // Staged instead part-way, and staged already: left out, as a stage job's diff would have.
             guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
-            trace(.alreadyStaged(item.name))
             resolve(entry, .skipped(.alreadyStaged))
             refreshState()
             return false
@@ -413,6 +412,8 @@ extension ImportEngine {
         switch outcome {
         case .imported: if let kind { trace(.imported(entry.item.name, kind)) }
         case let .staged(location): trace(.staged(entry.item.name, location))
+        // One line per file: a file left out as staged already reads as the diff's and `append`'s do.
+        case .skipped(.alreadyStaged): trace(.alreadyStaged(entry.item.name))
         case let .skipped(reason): trace(.skipped(entry.item.name, reason))
         case let .failed(reason): trace(.failed(entry.item.name, reason))
         }
@@ -440,8 +441,10 @@ extension ImportEngine {
     }
 
     /// The staged copy recorded for a file whose destination staged it without saying where (no staging destination
-    /// here does that): its root, with an empty path, so the file still reads as staged and isn't staged twice.
-    /// Reconciling the staging folder with the catalogue (a later step) clears such a row.
+    /// here does that): its root, with an empty path, so the file still reads as staged and isn't staged twice. An
+    /// empty path means unknown (`StagedLocation.relativePath`): `StagedLocation.fileURL(in:)` never resolves it, so
+    /// nothing acts on a file it might name. Reconciling the staging folder with the catalogue (a later step) clears
+    /// such a row.
     static func unreportedStagedLocation(for result: ImportResult) -> StagedLocation {
         let root: StagingRoot = if case let .staged(place, _) = result { StagingRoot(place) } else { .onThisIPhone }
         return StagedLocation(root: root, relativePath: "", stagedAt: Date())

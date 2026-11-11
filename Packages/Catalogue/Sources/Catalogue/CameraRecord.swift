@@ -161,4 +161,15 @@ enum StagedMark {
         kept.staged = existing.staged
         return kept
     }
+
+    /// The row a write for one identity builds on, given the row the store keeps (`kept`, the furthest along when it
+    /// holds several) and the staged copies of all of the identity's rows, in the store's order (`kept`'s own among
+    /// them). The others are deleted by the write, so when `kept` has no staged copy it takes the first one another
+    /// row has: healing duplicates never forgets a staged copy, which would leave the file in Staging with no row.
+    /// `upsert` and `markPartial` read the stored row through this in both stores (`markStaged` writes its own copy).
+    static func healed(_ kept: CatalogueRecord?, among staged: [StagedLocation?]) -> CatalogueRecord? {
+        guard var kept, kept.staged == nil, let first = staged.lazy.compactMap(\.self).first else { return kept }
+        kept.staged = first
+        return kept
+    }
 }

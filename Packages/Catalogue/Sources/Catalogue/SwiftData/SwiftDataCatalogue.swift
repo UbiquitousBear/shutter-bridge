@@ -101,10 +101,10 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
     /// (SQLite limits the variables in one statement).
     static let sizesPerFetch = 500
 
-    /// Keeps the stored row's staged copy (`StagedMark.upserting`).
+    /// Keeps the stored row's staged copy (`StagedMark.upserting`), or a duplicate's when healing (`stored(_:)`).
     public func upsert(_ record: CatalogueRecord) throws {
         let existing = try objects(withKey: record.identity.storageKey)
-        let kept = StagedMark.upserting(record, over: furthestAlong(existing)?.row.record)
+        let kept = StagedMark.upserting(record, over: stored(existing))
         try write { context in
             try upsertObject(CatalogueRow(kept), existing: existing, in: context)
         }
@@ -128,12 +128,13 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
 
     /// Looks up the identity's row, applies `PartialMark`'s rule to it and writes the result, all in one actor call,
     /// so a checkpoint and a commit of the same file never interleave. Duplicates for the identity are healed as by
-    /// `upsert`; an imported row is left as it is, duplicates and all.
+    /// `upsert`, keeping a duplicate's staged copy (`stored(_:)`); an imported row is left as it is, duplicates and
+    /// all.
     public func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL,
                             offset: UInt64) throws {
         let existing = try objects(withKey: identity.storageKey)
         guard let record = try PartialMark.record(for: identity, format: format, tempURL: tempURL, offset: offset,
-                                                  existing: furthestAlong(existing)?.row.record) else { return }
+                                                  existing: stored(existing)) else { return }
         try write { context in
             try upsertObject(CatalogueRow(record), existing: existing, in: context)
         }
@@ -295,6 +296,12 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
     /// `cameras()`, the listing and the file rows' link all pick the same one.
     private func preferred(_ rows: [Camera]) -> Camera? {
         CameraOrder.preferred(rows.map(\.columns.record)).map { rows[$0] }
+    }
+
+    /// The stored row a write builds on among one identity's rows: the furthest along, with the first staged copy of
+    /// the others when it has none of its own (`StagedMark.healed(_:among:)`), since the write deletes them.
+    private func stored(_ objects: [CameraObject]) -> CatalogueRecord? {
+        StagedMark.healed(furthestAlong(objects)?.row.record, among: objects.map(\.row.staged))
     }
 
     /// The row to answer with when there are several for one identity: the furthest along, the first of equals.

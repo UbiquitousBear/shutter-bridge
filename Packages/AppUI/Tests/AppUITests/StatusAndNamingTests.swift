@@ -87,7 +87,7 @@ private struct UnusedPhotoLibrary: PhotoLibraryClient {
 @Suite("Status notices: which stay, which go, what VoiceOver hears")
 struct StatusNoticeTests {
     @Test func importConfirmationsGoByThemselves() {
-        for outcome in [ImportRequestOutcome.started(2), .appended(1), .nothingNew] {
+        for outcome in [ImportRequestOutcome.started(2), .appended(1), .nothingNew(staging: false)] {
             let notice = StatusNotice.importRequest(outcome)
             #expect(notice.tone == .info, "\(outcome)")
             #expect(notice.dismissesItself, "\(outcome)")

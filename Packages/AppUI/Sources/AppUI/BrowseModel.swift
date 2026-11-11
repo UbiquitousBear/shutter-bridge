@@ -1338,7 +1338,9 @@ public final class BrowseModel {
     /// Files the chosen import would leave out (Shamil, 11 Nov) aren't handed over, so the notice and the Import
     /// screen count only what it copies: *Import to Photos* leaves out imported files; *Stage* leaves out staged ones,
     /// and imported ones too when the selection came from *Select All New*. When that leaves nothing, no job starts
-    /// and the notice says the files are done already.
+    /// and the notice says the files are done already. The importer leaves out the rest by what the job does: with
+    /// Photos access off an *Import to Photos* stages, so it also leaves out staged files, and its count and its
+    /// nothing-new reason are the notice's.
     ///
     /// - Parameter choice: *Import to Photos* or *Stage*, from the Import button's menu; nil, the button itself, is
     ///   the remembered choice (`importChoice`). The import remembers what was used.
@@ -1351,7 +1353,7 @@ public final class BrowseModel {
         let picked = selected.filter { !isDone($0.id, for: choice, newOnly: newOnly) }
         isStartingImport = true
         defer { isStartingImport = false }
-        let outcome: ImportRequestOutcome = picked.isEmpty ? .nothingNew
+        let outcome: ImportRequestOutcome = picked.isEmpty ? .nothingNew(staging: choice == .staging)
             : await importer.importItems(picked, from: ImportCamera(descriptor: camera, key: key), link: link,
                                          as: choice, newOnly: newOnly)
         switch outcome {

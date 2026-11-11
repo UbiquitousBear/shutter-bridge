@@ -197,8 +197,12 @@ public enum FilesFolderNaming {
     /// A folder name for the camera: the name with "/", ":", "\" and control characters replaced by "_", surrounding
     /// spaces and leading dots removed, at most 64 characters; "Camera" if nothing is left. "Inbox" becomes
     /// "Inbox camera", because iOS keeps Documents/Inbox for files other apps hand over, and "Staging" becomes
-    /// "Staging camera", so a camera's folder is never mistaken for the staging folder (Documents/Staging), where
-    /// the Files folders of builds before 11 Nov sat beside it.
+    /// "Staging camera", so no camera folder this build makes is the staging folder (Documents/Staging). It doesn't
+    /// rule the case out: builds before 11 Nov had no such rule, so a camera named "Staging" imported to Files then
+    /// already has Documents/Staging holding imported originals, and staging on this iPhone nests its camera folders
+    /// inside it. Nothing is overwritten (a name already taken is numbered), but Documents/Staging may hold files that
+    /// aren't staged copies: anything that removes staged files acts only on the paths the catalogue recorded
+    /// (`StagedLocation.fileURL(in:)`), never on everything under Staging.
     public static func folderName(forCamera name: String) -> String {
         var out = cleaned(name).trimmingCharacters(in: .whitespacesAndNewlines)
         while out.hasPrefix(".") { out.removeFirst() }

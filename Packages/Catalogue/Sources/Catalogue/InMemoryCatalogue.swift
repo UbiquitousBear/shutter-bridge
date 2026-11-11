@@ -32,7 +32,7 @@ public actor InMemoryCatalogue: CatalogueStore {
 
     /// Keeps the stored row's staged copy (`StagedMark.upserting`).
     public func upsert(_ record: CatalogueRecord) {
-        write(StagedMark.upserting(record, over: records[record.identity]))
+        write(StagedMark.upserting(record, over: stored(record.identity)))
     }
 
     public func saveListing(_ listing: CardListing) {
@@ -52,7 +52,7 @@ public actor InMemoryCatalogue: CatalogueStore {
     public func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL,
                             offset: UInt64) throws(CatalogueFailure) {
         if let record = try PartialMark.record(for: identity, format: format, tempURL: tempURL, offset: offset,
-                                               existing: records[identity]) {
+                                               existing: stored(identity)) {
             upsert(record)
         }
     }
@@ -92,6 +92,14 @@ public actor InMemoryCatalogue: CatalogueStore {
             }
         }
         return candidates
+    }
+
+    /// The stored row a write builds on, through the same rule as `SwiftDataCatalogue`'s
+    /// (`StagedMark.healed(_:among:)`). This store holds one row per identity, so there is no duplicate to take a
+    /// staged copy from, and the row comes back as it is.
+    private func stored(_ identity: ObjectIdentity) -> CatalogueRecord? {
+        let row = records[identity]
+        return StagedMark.healed(row, among: [row?.staged])
     }
 
     /// Stores the row as given, staged copy and all.

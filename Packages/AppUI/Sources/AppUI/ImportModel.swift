@@ -377,10 +377,14 @@ public final class ImportModel: BrowseImporting {
     /// Photos access; *Import to Photos* asks for it here, at the first Import, while it isn't determined, and is
     /// resolved again with the answer. `.askForPhotosAccess` never reaches the engine. A request the engine takes
     /// (started, added, or nothing new) makes `choice` the remembered one.
+    ///
+    /// What counts as done follows what the job does, not the choice (`ImportEngine.picksToDo(_:camera:for:)`): an
+    /// *Import to Photos* staged because Photos access is off leaves out staged files as a *Stage* does. `.started`
+    /// counts the files the job holds, and when none is left no job starts and `.nothingNew` says why.
     public func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink,
                             as choice: DestinationKind, newOnly: Bool) async -> ImportRequestOutcome {
         message = nil
-        guard !items.isEmpty else { return .nothingNew }
+        guard !items.isEmpty else { return .nothingNew(staging: choice == .staging) }
         guard !starting else { return .stillStarting }
         if await engine.state.isActive {
             guard self.camera?.key == camera.key else { return remember(.busyWithAnotherCamera) }
@@ -389,9 +393,10 @@ public final class ImportModel: BrowseImporting {
             guard choice == jobChoice else { return remember(.busyWithAnotherMode(jobChoice)) }
             do {
                 let added = try await engine.append(items, newOnly: newOnly)
+                let stages = await engine.currentPurpose == .staging
                 await refresh()
                 rememberChoice(choice)
-                return added > 0 ? .appended(added) : .nothingNew
+                return added > 0 ? .appended(added) : .nothingNew(staging: stages)
             } catch .noJob {
                 // It finished meanwhile: start a new one below.
             } catch {
@@ -402,6 +407,7 @@ public final class ImportModel: BrowseImporting {
         starting = true
         defer { starting = false }
         // The new job replaces whatever finished job was shown; its camera is shown while Photos is asked for.
+        let shown = (camera: self.camera, snapshot: snapshot, rows: rows, folder: stagingFolderName)
         self.camera = camera
         snapshot = .none
         rows = []
@@ -416,6 +422,22 @@ public final class ImportModel: BrowseImporting {
         } catch {
             return remember(.failed(ImportWording.couldNotStart))   // unreachable: `decide` never asks
         }
+        // What the job will hold, by the route's purpose rather than the choice: with Photos access off, an *Import to
+        // Photos* stages, and so leaves out staged files too. The notice counts these, and none starts no job. If the
+        // catalogue can't say, every pick goes in and the job ends saying so.
+        let selection: ImportSelection = newOnly ? .newItems(items) : .items(items)
+        let stages = route.purpose == .staging
+        let toDo = (try? await engine.picksToDo(selection, camera: camera.key, for: route)) ?? items
+        guard !toDo.isEmpty else {
+            // No job starts, so the one shown before (if any) stays shown.
+            log.note("import: nothing new to \(decision)")
+            self.camera = shown.camera
+            snapshot = shown.snapshot
+            rows = shown.rows
+            stagingFolderName = shown.folder
+            rememberChoice(choice)
+            return .nothingNew(staging: stages)
+        }
         jobChoice = choice
         jobStagingPlace = made.stagingPlace
         jobDestinations = made
@@ -426,7 +448,7 @@ public final class ImportModel: BrowseImporting {
         loggedEnd = false
         pausedByPerson = false
         do {
-            try await engine.start(newOnly ? .newItems(items) : .items(items), from: link, camera: camera.key,
+            try await engine.start(newOnly ? .newItems(toDo) : .items(toDo), from: link, camera: camera.key,
                                    to: route)
         } catch {
             log.note("import: didn't start: \(error)")
@@ -434,14 +456,14 @@ public final class ImportModel: BrowseImporting {
             stagingFolderName = nil
             if error == .emptySelection {
                 rememberChoice(choice)
-                return .nothingNew
+                return .nothingNew(staging: stages)
             }
             return remember(.failed(ImportWording.couldNotStart))
         }
         rememberChoice(choice)
         await hold(link)
         announceStart(camera)
-        log.note("import: started \(items.count) file(s) to \(decision)")
+        log.note("import: started \(toDo.count) of \(items.count) file(s) to \(decision)")
         // The run starts from the person's tap (iOS's rule), without holding the import up.
         background.begin(progress, staging: isStageJob)
         await refresh()
@@ -456,7 +478,7 @@ public final class ImportModel: BrowseImporting {
             starting = false
             await refresh()
         }
-        return .started(items.count)
+        return .started(toDo.count)
     }
 
     /// Browse's Import button's primary action: the remembered choice, for an explicit pick.

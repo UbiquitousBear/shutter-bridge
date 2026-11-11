@@ -158,7 +158,7 @@ struct BrowseAndImportAgainstSimulatorTests {
         // Picking a file already in the job adds nothing.
         browse.isSelecting = true
         browse.toggleSelection(try #require(browse.shown("DSC00001.ARW")))
-        #expect(await browse.importSelected() == .nothingNew)
+        #expect(await browse.importSelected() == .nothingNew(staging: true))
 
         await bench.link.release("DSC00003.JPG")
         try await bench.untilImport(.finished(.completed))
@@ -494,6 +494,28 @@ struct DestinationAgainstSimulatorTests {
             == "Staged in On My iPhone › Shutter Bridge › Staging › ILCE-7CM2.")
         await bench.expectInFiles(importableStills)
         #expect(await bench.destinations.photos.names.isEmpty)
+        await bench.finish()
+    }
+
+    /// With Photos access off, Browse's *Import to Photos* stages: a staged pick is left out, so the notice counts
+    /// what is copied, and a pick of only staged files says they are staged.
+    @Test func photosDeniedLeavesOutStagedPicksAndSaysSo() async throws {
+        let bench = try await SimulatorBench.make(setting: .photos, photos: FakePhotosAccess(.denied))
+        let browse = bench.browse()
+        try await bench.until("the card to be listed") { browse.phase == .listed }
+        let raw = try #require(browse.shown("DSC00001.ARW"))
+        let identity = try #require(raw.identity(camera: bench.key, timeZone: .current))
+        await bench.catalogue.markStaged(identity, format: .raw, at: StagedLocation(
+            root: .onThisIPhone, relativePath: "Staging/ILCE-7CM2/2026-11-01/DSC00001.ARW"))
+        let picks = ["DSC00003.JPG", "DSC00002.ARW", "DSC00001.ARW"]
+        #expect(try await importFromBrowse(bench, browse, picks, as: .photos) == .started(2))
+        #expect(browse.importNotice == "Importing 2 files.")
+        try await bench.untilImport(.finished(.completed))
+        #expect(bench.importer.progress.destination == .stagedHere(.photosDenied))
+        #expect(Set(bench.importer.rows.map(\.name)) == ["DSC00003.JPG", "DSC00002.ARW"])
+
+        #expect(try await importFromBrowse(bench, browse, picks, as: .photos) == .nothingNew(staging: true))
+        #expect(browse.importNotice == "These files are already staged or being staged.")
         await bench.finish()
     }
 

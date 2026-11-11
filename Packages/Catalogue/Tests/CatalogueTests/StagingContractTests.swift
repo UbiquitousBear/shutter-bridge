@@ -181,4 +181,84 @@ struct StagingContractTests {
         #expect(try await s.store.record(for: first)?.staged == iCloud)
         #expect(try await s.store.record(for: x)?.staged == undated)
     }
+
+    /// A store with one row per identity writes through the same healing rule as one that finds duplicates: an
+    /// upsert and a checkpoint over a staged row keep its copy (the duplicates themselves are SwiftData's,
+    /// `SwiftDataCatalogueTests`; the rule is `StagedMarkTests`').
+    @Test(arguments: StoreKind.available)
+    func upsertAndCheckpointKeepTheStagedCopyThroughTheHealingRule(_ kind: StoreKind) async throws {
+        let s = try await kind.make()
+        try await s.store.markStaged(first, format: .raw, at: local)
+        try await s.store.markPartial(first, format: .raw, tempURL: CameraFixtures.partialFile("DSC00001"),
+                                      offset: 4096)
+        #expect(try await s.store.record(for: first)?.staged == local)
+        try await s.store.upsert(CatalogueRecord(identity: first, format: .raw, state: .imported))
+        #expect(try await s.store.record(for: first)?.staged == local)
+        #expect(try await s.rows().count == 1)
+    }
+}
+
+/// The rule both stores read a stored row through before a write (`StagedMark.healed(_:among:)`).
+@Suite("Staged copies when healing duplicates")
+struct StagedMarkTests {
+    typealias C = CatalogueContractTests
+
+    let identity = C.id("DSC00001.ARW", "20261101T143005", 44_000_000)
+    let a = StagedLocation(root: .onThisIPhone, relativePath: "Staging/Cam/2026-11-01/DSC00001.ARW")
+    let b = StagedLocation(root: .iCloudDrive, relativePath: "Staging/Cam/2026-11-01/DSC00001 (2).ARW")
+
+    @Test func theKeptRowsOwnCopyWins() {
+        let kept = CatalogueRecord(identity: identity, format: .raw, state: .imported, staged: b)
+        #expect(StagedMark.healed(kept, among: [a, b])?.staged == b)
+    }
+
+    @Test func aKeptRowWithoutACopyTakesTheFirstDuplicatesCopy() {
+        let kept = CatalogueRecord(identity: identity, format: .raw, state: .imported)
+        var expected = kept
+        expected.staged = a
+        #expect(StagedMark.healed(kept, among: [nil, a, b]) == expected)
+    }
+
+    @Test func noCopyAnywhereOrNoRowChangesNothing() {
+        let kept = CatalogueRecord(identity: identity, format: .raw, state: .partial)
+        #expect(StagedMark.healed(kept, among: [nil, nil]) == kept)
+        #expect(StagedMark.healed(kept, among: []) == kept)
+        #expect(StagedMark.healed(nil, among: [a]) == nil)
+    }
+}
+
+/// Turning a staged copy into a file (`StagedLocation.fileURL(in:)`): only paths inside the staging folder, never an
+/// unknown (empty) one.
+@Suite("Resolving a staged copy")
+struct StagedLocationResolverTests {
+    let documents = URL(fileURLWithPath: "/nonexistent/Documents", isDirectory: true)
+
+    @Test func aRecordedPathResolvesUnderTheDocumentsFolder() throws {
+        let location = StagedLocation(root: .onThisIPhone, relativePath: "Staging/ILCE-7CM2/2026-11-08/DSC00001.ARW")
+        #expect(location.isResolvable)
+        let url = try #require(location.fileURL(in: documents))
+        #expect(url.path == "/nonexistent/Documents/Staging/ILCE-7CM2/2026-11-08/DSC00001.ARW")
+        #expect(!url.hasDirectoryPath)
+        let spaced = StagedLocation(root: .iCloudDrive, relativePath: "Staging/My Camera/Undated/DSC00001 (2).ARW")
+        #expect(try #require(spaced.fileURL(in: documents)).lastPathComponent == "DSC00001 (2).ARW")
+    }
+
+    @Test(arguments: [
+        "",                                      // unknown: the engine's unreported location
+        "Staging",                               // the staging folder itself
+        "Staging/",                              // likewise
+        "ILCE-7CM2/DSC00001.ARW",                // a Files folder of a build before 11 Nov
+        "staging/Cam/2026-11-08/DSC00001.ARW",   // not the folder the app writes
+        "/Staging/Cam/2026-11-08/DSC00001.ARW",  // absolute
+        "Staging/../Cam/DSC00001.ARW",           // climbs out
+        "Staging/Cam/../../DSC00001.ARW",
+        "Staging/./Cam/DSC00001.ARW",
+        "Staging//DSC00001.ARW",
+        "Staging/Cam/",
+    ])
+    func aPathOutsideTheStagingFolderOrUnknownNeverResolves(_ path: String) {
+        let location = StagedLocation(root: .onThisIPhone, relativePath: path)
+        #expect(!location.isResolvable)
+        #expect(location.fileURL(in: documents) == nil)
+    }
 }

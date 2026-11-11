@@ -172,12 +172,13 @@ public protocol BrowseImporting: AnyObject {
 
 /// What came of an Import tap in Browse.
 public enum ImportRequestOutcome: Sendable, Hashable {
-    /// A job started with this many picked files.
+    /// A job started with this many of the picked files: those it doesn't leave out as done already.
     case started(Int)
     /// Added to the running job's end.
     case appended(Int)
-    /// Everything picked is already imported (or staged, for staging) or already in the job.
-    case nothingNew
+    /// Everything picked is already done or already in the job: imported, for an import to Photos; staged, when the
+    /// import stages (`staging`: a *Stage*, or an *Import to Photos* staged because Photos access is off).
+    case nothingNew(staging: Bool)
     /// A job from another camera is running; one job at a time.
     case busyWithAnotherCamera
     /// A job of the other kind is running from this camera: an import while these were to be staged, or staging while

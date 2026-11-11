@@ -187,6 +187,51 @@ public actor ImportEngine {
         return ImportJobID(id)
     }
 
+    /// The picks of `selection` that a new job for `route` would hold, in their order: those the catalogue doesn't
+    /// already have done for the route's purpose (`DoneRule`, by content, as the first listing's diff reads it), each
+    /// file once. Picks without a capture date are kept: the job shows them as skipped rows. So the app can start a
+    /// job with these and say how many it holds, and start none when nothing is left (Photos access denied makes an
+    /// *Import to Photos* a stage job, which also leaves out staged files). The job's own diff applies the same rule
+    /// again when the card is listed. `.allNew` and `.dateRange` need the card's listing, so they come back empty.
+    ///
+    /// - Parameter camera: The catalogue's key for the camera, as `start(_:from:camera:to:)` takes it.
+    /// - Throws: `.catalogueUnavailable` when the catalogue can't be read.
+    public func picksToDo(_ selection: ImportSelection, camera: CameraKey, for route: ImportRoute) async
+        throws(ImportEngineError) -> [CameraItem] {
+        let picked: [CameraItem]
+        switch selection {
+        case let .items(items), let .newItems(items): picked = items
+        case .allNew, .dateRange: return []
+        }
+        let zone = TimeZone(identifier: timeZone.identifier) ?? timeZone
+        let identities = picked.map { $0.identity(camera: camera, timeZone: zone) }
+        let keyed = identities.compactMap(\.self)
+        let purpose = route.purpose
+        // An ended job may still be committing one of these files: its row has to land first.
+        await settleCommits(ofJobsOtherThan: UUID())
+        let states: [ObjectIdentity: ObjectState]
+        let staged: Set<ObjectIdentity>
+        do {
+            states = keyed.isEmpty ? [:] : try await catalogue.states(of: keyed)
+            staged = purpose == .staging && !keyed.isEmpty ? try await catalogue.stagedStates(of: keyed) : []
+        } catch {
+            throw .catalogueUnavailable
+        }
+        var seen = Set<ObjectIdentity.ContentKey>()
+        var out: [CameraItem] = []
+        for (item, identity) in zip(picked, identities) {
+            guard let identity else {
+                out.append(item)
+                continue
+            }
+            guard DoneRule.isWanted(state: states[identity] ?? .new, staged: staged.contains(identity),
+                                    purpose: purpose, newOnly: selection.newOnly, wholeCard: false),
+                  seen.insert(identity.contentKey).inserted else { continue }
+            out.append(item)
+        }
+        return out
+    }
+
     /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job or already done for
     /// the job's purpose (both by content: name, capture time and size, whatever the folder or camera key), files
     /// without a capture date (no identity) and non-stills aren't added. Returns how many were added.

@@ -27,7 +27,8 @@ struct ImportWordingTests {
         for reason in StagingReason.allCases {
             lines += places.map { ImportWording.stagingReason(reason, place: $0) }
         }
-        let outcomes: [ImportRequestOutcome] = [.started(2), .appended(1), .nothingNew, .busyWithAnotherCamera,
+        let outcomes: [ImportRequestOutcome] = [.started(2), .appended(1), .nothingNew(staging: false),
+                                                .nothingNew(staging: true), .busyWithAnotherCamera,
                                                 .busyWithAnotherMode(.photos), .busyWithAnotherMode(.staging),
                                                 .stillStarting]
         for choice in [DestinationKind.photos, .staging] {

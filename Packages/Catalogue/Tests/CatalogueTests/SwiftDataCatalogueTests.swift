@@ -602,6 +602,35 @@ struct SwiftDataCatalogueTests {
         #expect(try await store.allRecords() == [skipped])
     }
 
+    /// Healing duplicates keeps a staged copy recorded on a row that is deleted (`StagedMark.healed(_:among:)`), for
+    /// an upsert and for a checkpoint, so the staged file never loses its row.
+    @Test func healingDuplicatesKeepsAStagedCopyFromALessAdvancedRow() async throws {
+        let staged = StagedLocation(root: .onThisIPhone, relativePath: "Staging/ILCE-7CM2/2026-11-01/DSC00003.ARW")
+        for write in ["upsert", "markPartial"] {
+            let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
+            let identity = C.id("DSC00003.ARW", "20261101T143007", 44_000_000)
+            // The furthest-along row has no staged copy; the less advanced one has.
+            let context = ModelContext(container)
+            context.insert(CameraObject(row: CatalogueRow(CatalogueRecord(identity: identity, format: .raw,
+                                                                          state: .new, staged: staged))))
+            context.insert(CameraObject(row: CatalogueRow(CatalogueRecord(identity: identity, format: .raw,
+                                                                          state: .skipped))))
+            try context.save()
+
+            let store = SwiftDataCatalogue(modelContainer: container)
+            if write == "upsert" {
+                try await store.upsert(CatalogueRecord(identity: identity, format: .raw, state: .skipped))
+            } else {
+                try await store.markPartial(identity, format: .raw, tempURL: CameraFixtures.partialFile("DSC00003"),
+                                            offset: 4096)
+            }
+            let rows = try await store.allRecords()
+            #expect(rows.count == 1, "\(write)")
+            #expect(rows.first?.staged == staged, "\(write)")
+            #expect(try await store.stagedStates(of: [identity]) == [identity], "\(write)")
+        }
+    }
+
     @Test func duplicateCameraRowsWrittenElsewhereReadAlikeAndAreAllWritten() async throws {
         let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
         let key = CameraFixtures.key

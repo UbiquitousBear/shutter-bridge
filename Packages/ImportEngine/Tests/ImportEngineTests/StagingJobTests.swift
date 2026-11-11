@@ -73,6 +73,31 @@ struct StagingJobTests {
         #expect(ImportSelection.newItems([]).isEmpty)
     }
 
+    /// What a job would hold, read before it starts so the app counts what it copies: the same rule as the diff,
+    /// by the route's purpose (an import staged because Photos access is off leaves out staged files), each file
+    /// once, in the pick's order.
+    @Test func picksToDoFollowTheRoutesPurpose() async throws {
+        let (h, card) = await Self.seeded()   // A imported, B staged, C both, D neither
+        func names(_ selection: ImportSelection, _ route: ImportRoute) async throws -> [String] {
+            try await h.engine.picksToDo(selection, camera: h.camera, for: route).map(\.name)
+        }
+        #expect(try await names(.items(card), h.photosRoute) == ["B.JPG", "D.JPG"])
+        #expect(try await names(.items(card), h.stageRoute(reason: .photosDenied)) == ["A.JPG", "D.JPG"])
+        #expect(try await names(.newItems(card), h.stageRoute) == ["D.JPG"])
+        #expect(try await names(.items([card[3], card[3], card[1]]), h.stageRoute) == ["D.JPG"])
+        #expect(try await names(.items([card[1], card[2]]), h.stageRoute).isEmpty)
+        #expect(try await names(.allNew, h.photosRoute).isEmpty)
+        // The job then holds exactly those.
+        let link = h.link(card)
+        let denied = h.stageRoute(reason: .photosDenied)
+        let toDo = try await h.engine.picksToDo(.items(card), camera: h.camera, for: denied)
+        try await h.start(.items(toDo), from: link, to: denied)
+        #expect(await h.waitFinished() == .completed)
+        #expect(await h.engine.currentProgress.filesTotal == 2)
+        #expect(await h.files.committedNames.sorted() == ["A.JPG", "D.JPG"])
+        await h.cleanup()
+    }
+
     /// *Stage* with all new: staged files and imported ones are left out, by content whatever the camera key or
     /// folder, and saying which were staged already.
     @Test func allNewStagesOnlyWhatIsNeitherStagedNorImported() async throws {
@@ -319,7 +344,9 @@ struct StagingJobTests {
         #expect(await h.waitFinished() == .completed)
         #expect(await h.files.committedNames == ["D.JPG"])
         #expect(await h.outcome(of: card[1]) == .skipped(.alreadyStaged))
-        #expect(h.trace.log.contains(.alreadyStaged("B.JPG")))
+        // One line for the file, as when a stage job's diff leaves it out.
+        #expect(h.trace.count { $0 == .alreadyStaged("B.JPG") } == 1)
+        #expect(h.trace.count { $0 == .skipped("B.JPG", .alreadyStaged) } == 0)
         #expect(await h.record(for: card[1]) == nil) // no second row with a second staged copy
         let b = h.identity(of: card[1])
         #expect(try await h.catalogue.stagedStates(of: [b]) == [b]) // the other row's copy still counts
@@ -342,6 +369,8 @@ struct StagingJobTests {
         #expect(await h.photos.attempts == 0)
         #expect(await h.files.committedNames == ["D.JPG"])
         #expect(await h.outcome(of: card[1]) == .skipped(.alreadyStaged))
+        #expect(h.trace.count { $0 == .alreadyStaged("B.JPG") } == 1)
+        #expect(h.trace.count { $0 == .skipped("B.JPG", .alreadyStaged) } == 0)
         #expect(await h.record(for: card[1]) == nil)
         await h.cleanup()
     }

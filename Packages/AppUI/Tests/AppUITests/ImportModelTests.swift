@@ -145,11 +145,14 @@ struct ImportModelTests {
         #expect(await eventually { await h.link.closed })
         #expect(h.destinations.cameras.map(\.key) == [h.camera.key])
 
-        // The next import doesn't ask again.
+        // The next import doesn't ask again. The file is imported already, so no job starts and the finished one
+        // stays shown.
         let again = await h.model.importItems([card[0]], from: h.camera, link: await freshLink())
-        #expect(again == .started(1))
+        #expect(again == .nothingNew(staging: false))
         #expect(photos.askCount == 1)
-        #expect(await h.finished())
+        #expect(h.model.state == .finished(.completed))
+        #expect(h.model.camera?.key == h.camera.key)
+        #expect(h.model.countsLine == "3 files imported.")
     }
 
     @Test func deniedAtThePromptStagesWithTheSettingsLink() async {
@@ -247,7 +250,7 @@ struct ImportModelTests {
         #expect(h.model.statusLine == "0 of 3 files done")
         #expect(h.model.progress.bytesTotal == card[0].size + card[1].size + card[2].size)
         #expect(h.model.bytesLine == ByteWording.progress(0, of: h.model.progress.bytesTotal))
-        #expect(await h.importAll([card[0]]) == .nothingNew)
+        #expect(await h.importAll([card[0]]) == .nothingNew(staging: false))
         #expect(h.model.keepsScreenOn)
         await h.model.cancel()
         #expect(h.model.state == .finished(.cancelled))
