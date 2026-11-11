@@ -73,7 +73,8 @@ struct TitleCaseTests {
             BrowseWording.limitDates, BrowseWording.readingTimesButton, BrowseWording.connectingTitle,
             BrowseWording.reconnect, WiFiWording.failedTitle,
             JPEGWording.copyAction, JPEGWording.shareAction, JPEGWording.cancel,
-            SettingsWording.title, SettingsWording.destinationHeader,
+            SettingsWording.title, SettingsWording.stagingHeader, BrowseWording.stageAction,
+            BrowseWording.importToPhotos, BrowseWording.stagedBadge,
             ImportWording.title, ImportWording.pause, ImportWording.resume, ImportWording.cancel,
             CamerasWording.discoveryFailedTitle,
             ImportWording.openSettings, ImportWording.filesHeader, ImportWording.noJobTitle,
@@ -81,6 +82,12 @@ struct TitleCaseTests {
         ]
         for title in titles {
             #expect(TitleCase.holds(title), "\(title)")
+        }
+        // Apple's names keep their own case (iCloud, iPhone); the rest of the menu's titles are in title case.
+        for title in [BrowseWording.stageInICloudDrive, BrowseWording.stageOnIPhone] {
+            let apple = title.replacingOccurrences(of: "iCloud", with: "ICloud")
+                .replacingOccurrences(of: "iPhone", with: "IPhone")
+            #expect(TitleCase.holds(apple), "\(title)")
         }
         // Counted titles too.
         #expect(BrowseWording.selectingTitle(SelectionSummary(count: 3, bytes: 1)) == "3 Selected")
@@ -114,7 +121,6 @@ struct BrowseBarWordingTests {
 
     @Test func theCellValueLeavesOutWhatTheLabelSays() {
         #expect(BrowseWording.cellAccessibilityValue(nil) == nil)
-        #expect(BrowseWording.cellAccessibilityValue(.imported) == nil)
         #expect(BrowseWording.cellAccessibilityValue(.notAPhoto) == nil)
         #expect(BrowseWording.cellAccessibilityValue(.video) == "Videos can't be imported yet.")
         #expect(BrowseWording.cellAccessibilityValue(.noCaptureDate) == "No capture date, so it can't be imported yet.")
@@ -278,55 +284,50 @@ extension ImportModelTests {
     }
 }
 
-// MARK: - Settings: what Photos access does to the setting
+// MARK: - Settings: what Photos access does to Import to Photos
 
 @MainActor
-@Suite("Settings: what Photos access does to the setting")
+@Suite("Settings: what Photos access does to Import to Photos")
 struct SettingsPhotosAccessTests {
-    @Test func aDenialSaysImportsGoToFilesAndOffersSettings() async {
+    @Test func aDenialSaysImportToPhotosStagesAndOffersSettings() async {
         let photos = FakePhotosAccess(.denied)
-        let model = SettingsModel(store: InMemoryDestinationSettingStore(), photos: photos)
+        let model = SettingsModel(photos: photos)
         #expect(model.photosAccess == nil)   // not read yet: nothing said
-        #expect(model.forcedFilesLine == nil)
-        await model.refreshPhotosAccess()
+        #expect(model.forcedStagingLine == nil)
+        await model.refresh()
         #expect(model.photosAccess == .denied)
-        #expect(model.destination == .photos)   // the setting itself is left alone
-        #expect(model.forcedFilesReason == .photosDenied)
-        #expect(model.forcedFilesLine == "Photos access is off, so imports go to Files.")
+        #expect(model.forcedStagingReason == .photosDenied)
+        #expect(model.forcedStagingLine == "Photos access is off, so Import to Photos stages the photos instead.")
         #expect(model.offersPhotosSettingsLink)
         #expect(photos.askCount == 0)   // reading never asks: that is the first Import's job
     }
 
     @Test func aRestrictionSaysSoWithoutASettingsButton() async {
-        let model = SettingsModel(store: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(.restricted))
-        await model.refreshPhotosAccess()
-        #expect(model.forcedFilesReason == .photosRestricted)
-        #expect(model.forcedFilesLine == "Photos is restricted on this iPhone, so imports go to Files.")
+        let model = SettingsModel(photos: FakePhotosAccess(.restricted))
+        await model.refresh()
+        #expect(model.forcedStagingReason == .photosRestricted)
+        #expect(model.forcedStagingLine
+            == "Photos is restricted on this iPhone, so Import to Photos stages the photos instead.")
         #expect(!model.offersPhotosSettingsLink)
     }
 
-    @Test func choosingFilesOrHavingAccessSaysNothing() async {
+    @Test func havingAccessSaysNothing() async {
         let photos = FakePhotosAccess(.denied)
-        let model = SettingsModel(store: InMemoryDestinationSettingStore(), photos: photos)
-        await model.refreshPhotosAccess()
-        model.destination = .filesFolder
-        #expect(model.forcedFilesLine == nil)
-        #expect(!model.offersPhotosSettingsLink)
-        model.destination = .photos
+        let model = SettingsModel(photos: photos)
         for access in [PhotosAuthorisation.authorised, .limited, .notDetermined] {
             photos.set(access)
-            await model.refreshPhotosAccess()
+            await model.refresh()
             #expect(model.photosAccess == access)
-            #expect(model.forcedFilesLine == nil, "\(access)")
+            #expect(model.forcedStagingLine == nil, "\(access)")
             #expect(!model.offersPhotosSettingsLink, "\(access)")
         }
     }
 
     @Test func withoutAWayToReadAccessNothingIsSaid() async {
-        let model = SettingsModel(store: InMemoryDestinationSettingStore())
-        await model.refreshPhotosAccess()
+        let model = SettingsModel()
+        await model.refresh()
         #expect(model.photosAccess == nil)
-        #expect(model.forcedFilesLine == nil)
+        #expect(model.forcedStagingLine == nil)
     }
 
     @Test func theAppReadsAccessAgainWhenItComesBack() async {
@@ -339,13 +340,15 @@ struct SettingsPhotosAccessTests {
                            destinations: FakeDestinations(), cameraKey: CameraKeys.fromDescriptor)
         await app.scenePhaseChanged(.active)
         #expect(app.settings.photosAccess == .authorised)
-        #expect(app.settings.forcedFilesLine == nil)
+        #expect(app.settings.forcedStagingLine == nil)
+        // Where staging goes is read with it (the fakes stage on this iPhone).
+        #expect(app.settings.stagingPlace == testStagingPlace)
         // Turned off in Settings while the app was away.
         photos.set(.denied)
         await app.scenePhaseChanged(.background)
         #expect(app.settings.photosAccess == .authorised)
         await app.scenePhaseChanged(.active)
-        #expect(app.settings.forcedFilesLine == "Photos access is off, so imports go to Files.")
+        #expect(app.settings.forcedStagingLine == "Photos access is off, so Import to Photos stages the photos instead.")
         #expect(photos.askCount == 0)
     }
 }

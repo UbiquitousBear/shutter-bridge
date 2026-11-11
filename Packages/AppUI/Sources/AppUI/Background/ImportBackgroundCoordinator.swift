@@ -27,6 +27,8 @@ final class ImportBackgroundCoordinator {
     private var beginAgain = false
     private var expiryTask: Task<Void, Never>?
     private var latest: ImportProgress?
+    /// The job being run was started as *Stage*: the run's title says so.
+    private var staging = false
     private var reported: (done: UInt64, total: UInt64, subtitle: String)?
     /// Made-up bytes a recovery's waits have shown on top of the job's (`nudge()`): what the run shows until the job's
     /// own bytes pass it. 0 for none.
@@ -47,9 +49,12 @@ final class ImportBackgroundCoordinator {
     var isRunning: Bool { handle != nil || beginningGeneration == generation || beginAgain }
 
     /// Begins a run unless one is live or being begun. Call only from a person's tap (iOS's rule).
-    func begin(_ progress: ImportProgress) {
+    ///
+    /// - Parameter staging: The job was started as *Stage*, so the system's UI says "Staging photos".
+    func begin(_ progress: ImportProgress, staging: Bool = false) {
         guard !isRunning else { return }
         latest = progress
+        self.staging = staging
         guard beginningGeneration == nil else {
             beginAgain = true   // an older request is still in flight; begun once it returns
             return
@@ -65,9 +70,10 @@ final class ImportBackgroundCoordinator {
         endedWhileBeginning = nil
         let run = self.run
         let subtitle = ImportBackgroundWording.subtitle(progress)
+        let title = ImportBackgroundWording.title(staging: staging)
         Task { @MainActor [weak self] in
             do {
-                let handle = try await run.begin(title: ImportBackgroundWording.title, subtitle: subtitle)
+                let handle = try await run.begin(title: title, subtitle: subtitle)
                 guard let self else {
                     handle.finish(success: false)
                     return

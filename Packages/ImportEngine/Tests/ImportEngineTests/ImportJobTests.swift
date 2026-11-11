@@ -7,7 +7,7 @@ import Testing
 
 @Suite("Importing a selection", .timeLimit(.minutes(1)))
 struct ImportJobTests {
-    @Test(arguments: [DestinationKind.photos, .filesFolder])
+    @Test(arguments: [DestinationKind.photos, .staging])
     func importsEverySelectedFile(_ kind: DestinationKind) async throws {
         let h = Harness()
         let frames = h.card(frames: 2)
@@ -40,13 +40,22 @@ struct ImportJobTests {
         for (i, name) in order.enumerated() {
             let item = try #require(frames.first { $0.name == name })
             let row = try #require(await h.record(for: item))
-            #expect(row.state == .imported)
             #expect(row.format == item.format)
             switch kind {
-            case .photos: #expect(row.location == .photosAsset(localIdentifier: "asset-\(i + 1)"))
-            case .filesFolder: #expect(row.location == .file(relativePath: "Untitled/\(name)"))
+            case .photos:
+                #expect(row.state == .imported)
+                #expect(row.location == .photosAsset(localIdentifier: "asset-\(i + 1)"))
+                #expect(row.staged == nil)
+            case .staging:
+                // Staged, not imported (Shamil, 11 Nov): the row stays new, with its staged copy beside the state.
+                #expect(row.state == .new)
+                #expect(row.location == nil)
+                #expect(row.staged?.root == .onThisIPhone)
+                #expect(row.staged?.relativePath == "Untitled/\(name)")
+                #expect(row.staged?.stagedAt != nil)
+                #expect(await h.outcome(of: item) == .staged(row.staged))
             }
-            if kind == .filesFolder {
+            if kind == .staging {
                 let moved = h.filesDirectory.appendingPathComponent(name)
                 let data = try Data(contentsOf: moved)
                 #expect(UInt64(data.count) == item.size)
@@ -63,8 +72,10 @@ struct ImportJobTests {
         #expect(p.bytesTotal == total)
         #expect(p.filesFailed == 0)
         #expect(p.filesSkipped == 0)
+        #expect(p.filesStaged == (kind == .photos ? 0 : 4))
+        #expect(p.filesImported == (kind == .photos ? 4 : 0))
         #expect(p.state == .finished(.completed))
-        #expect(p.destination == (kind == .photos ? .photos : .files(.chosen)))
+        #expect(p.destination == (kind == .photos ? .photos : .stagedHere(.chosen)))
         #expect(await h.engine.state == .finished(.completed))
         await h.cleanup()
     }
@@ -281,9 +292,9 @@ struct ImportJobTests {
         a.release()
         await h.trace.next(.imported("A.JPG", .photos))
         if let b { b.release() } else { await link.nextHeldCall("B.JPG").release() }
-        let files = DestinationDecision.files(.photosDenied)
+        let files = DestinationDecision.stagedHere(.photosDenied)
         await h.trace.next(.destinationChanged(files))
-        await h.trace.next(.imported("B.JPG", .filesFolder))
+        await h.trace.next { if case .staged("B.JPG", _) = $0 { true } else { false } }
         await link.nextHeldCall("C.JPG").release()
         await link.nextHeldCall("D.JPG").release()
         #expect(await h.waitFinished() == .completed)
@@ -294,11 +305,13 @@ struct ImportJobTests {
         let p = await h.engine.currentProgress
         #expect(p.filesFailed == 0)
         #expect(p.destination == files)
-        #expect(p.destination?.filesReason?.offersSettingsLink == true)
+        #expect(p.destination?.stagingReason?.offersSettingsLink == true)
         #expect(h.photosAccess.reads == 1) // read once, after the refusal, for the reason
+        #expect(p.filesStaged == 3)
         let rows = await h.records()
         #expect(rows.count { if case .photosAsset = $0.location { true } else { false } } == 1)
-        #expect(rows.count { if case .file = $0.location { true } else { false } } == 3)
+        // Staged instead: recorded with `markStaged`, so they stay new and Import to Photos still offers them.
+        #expect(rows.count { $0.state == .new && $0.staged?.root == .onThisIPhone } == 3)
         #expect(h.trace.count { $0.isDestinationChanged } == 1)
         #expect(h.stagedFiles == 0)
         await h.cleanup()
@@ -314,7 +327,7 @@ struct ImportJobTests {
         h.photosAccess.set(.restricted)
         try await h.start(.items(card), from: link)
         #expect(await h.waitFinished() == .completed)
-        let restricted = DestinationDecision.files(.photosRestricted)
+        let restricted = DestinationDecision.stagedHere(.photosRestricted)
         #expect(h.trace.log.contains(.destinationChanged(restricted)))
         #expect(h.trace.count { $0.isDestinationChanged } == 1)
         #expect(await h.photos.committedNames == ["A.JPG"])
@@ -322,7 +335,7 @@ struct ImportJobTests {
         let p = await h.engine.currentProgress
         #expect(p.filesFailed == 0)
         #expect(p.destination == restricted)
-        #expect(p.destination?.filesReason?.offersSettingsLink == false)
+        #expect(p.destination?.stagingReason?.offersSettingsLink == false)
         await h.cleanup()
     }
 
@@ -351,7 +364,8 @@ struct ImportJobTests {
         let link = h.link(card)
         let photos = DenyAllTogether(n: 2)
         let access = HeldPhotosAccess(n: 2, answers: [.denied, .restricted])
-        let route = ImportRoute.photos(photos, filesFolder: h.files, authorisation: { await access.read() })
+        let route = ImportRoute.photos(photos, staging: h.files, onThisIPhone: h.files,
+                                       stagingPlace: Harness.onThisIPhone, authorisation: { await access.read() })
         try await h.engine.start(.items(card), from: link, camera: h.camera, to: route)
         #expect(await h.waitFinished() == .completed)
         #expect(await photos.attempts == 2)
@@ -374,15 +388,15 @@ struct ImportJobTests {
         a.release()
         await h.trace.next(.imported("A.JPG", .photos))
         await h.trace.next(.idle(queued: 2, inFlight: 0))
-        let restricted = DestinationDecision.files(.photosRestricted)
-        try await h.engine.resume(to: .filesFolder(h.files, reason: .photosRestricted))
+        let restricted = DestinationDecision.stagedHere(.photosRestricted)
+        try await h.engine.resume(to: h.stageRoute(reason: .photosRestricted))
         #expect(await h.waitFinished() == .completed)
         #expect(await h.photos.committedNames == ["A.JPG"])
         #expect(await h.files.committedNames == ["B.JPG", "C.JPG"])
         #expect(h.trace.log.contains(.destinationChanged(restricted)))
         let p = await h.engine.currentProgress
         #expect(p.destination == restricted)
-        #expect(p.destination?.filesReason?.offersSettingsLink == false)
+        #expect(p.destination?.stagingReason?.offersSettingsLink == false)
         await h.cleanup()
     }
 

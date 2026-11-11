@@ -1,4 +1,5 @@
 import CameraTransport
+import Catalogue
 import PhotosBridge
 
 /// What the engine did, in its own order: emitted synchronously on the actor (or, for a discarded late file, by the
@@ -13,12 +14,18 @@ enum EngineTrace: Sendable, Hashable {
     case stalled(String, count: Int)
     case sizeMismatch(String, expected: UInt64, actual: UInt64)
     case imported(String, DestinationKind)
+    /// Committed to the staging folder and recorded with `markStaged`.
+    case staged(String, StagedLocation?)
+    /// A stage job left this file out: the catalogue has a staged copy of it (by content).
+    case alreadyStaged(String)
     case skipped(String, SkipReason)
     /// A second copy of a file already in the listing or the pick (same name, capture second and size, another
     /// folder; Shamil's rule of 8 Nov): left out, since it is the same file.
     case sameFileListedTwice(String)
     case failed(String, FailureReason)
     case destinationChanged(DestinationDecision)
+    /// A continue or a reconnect offered a route the job may not take (`ImportRoute.mayChange(to:)`): it kept its own.
+    case routeRefused(DestinationDecision)
     case linkEvent(CameraLinkEvent)
     case paused(PauseReason)
     case resumed
@@ -29,6 +36,10 @@ enum EngineTrace: Sendable, Hashable {
     case discardedLateFile
     /// A resumable download's checkpoint was written to the catalogue (`markPartial`) at this offset.
     case checkpointSaved(String, offset: UInt64)
+    /// A file's commit is waiting for a checkpoint write that was in flight when it began, before it writes its row.
+    case waitingForCheckpointWrites(String)
+    /// That wait ran out (`ImportPolicy.checkpointWriteWait`): the row is written without it.
+    case checkpointWritesUnsettled(String)
     /// The camera's file under this item's ID has another name or size than the partial file was begun from: the
     /// partial was dropped and the card is listed again.
     case identityChanged(String)

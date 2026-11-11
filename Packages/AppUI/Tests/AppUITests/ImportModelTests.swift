@@ -56,7 +56,8 @@ struct ImportModelTests {
 
     func harness(setting: DestinationKind = .photos, photos: FakePhotosAccess = FakePhotosAccess(),
                  hangs: Bool = false, catalogue: InMemoryCatalogue = InMemoryCatalogue(),
-                 log: any BenchLog = SilentBenchLog()) async -> Harness {
+                 log: any BenchLog = SilentBenchLog(),
+                 staging: StagingAvailability = .unavailable(.containerUnavailable)) async -> Harness {
         let link = FakeLink(items: card)
         await link.set(writesListedSize: true)
         await link.set(bytesHangs: hangs)
@@ -66,7 +67,7 @@ struct ImportModelTests {
             ? ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging(), clock: FrozenClock())
             : ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
         let settings = InMemoryDestinationSettingStore(DestinationSetting(preferred: setting))
-        let destinations = FakeDestinations()
+        let destinations = FakeDestinations(staging: staging)
         let leases = LinkLeases()
         let finder = FakeFinder()
         let model = ImportModel(engine: engine, settings: settings, photos: photos, destinations: destinations,
@@ -83,7 +84,7 @@ struct ImportModelTests {
         final class Seen: @unchecked Sendable {
             var revisions: [Int] = []
         }
-        let h = await harness(setting: .filesFolder)
+        let h = await harness(setting: .staging)
         let seen = Seen()
         let updates = h.model.importedUpdates()
         let reader = Task { @MainActor in
@@ -107,17 +108,18 @@ struct ImportModelTests {
 
     @Test func eachImportedFileIsLoggedWithItsIdentityAndNoKey() async {
         let log = RecordingLog()
-        let h = await harness(setting: .filesFolder, log: log)
+        let h = await harness(setting: .staging, log: log)
         #expect(await h.importAll(card) == .started(3))
         #expect(await h.finished())
         let tag = CameraKeyTags.shared.tag(for: h.camera.key)
-        let imported = log.lines.filter { $0.hasPrefix("import: imported ") }
-        #expect(imported.count == 3)
+        // Staged, not imported (Shamil, 11 Nov), so the log says so.
+        let staged = log.lines.filter { $0.hasPrefix("import: staged ") }
+        #expect(staged.count == 3)
         let date = CaptureDate(card[2].captureDate!, in: .current)!.rawValue
-        #expect(imported.contains(
-            "import: imported DSC00002.JPG \(date) 3000 B folder \"DCIM/100MSDCF\" key \(tag) → Files"))
+        #expect(staged.contains(
+            "import: staged DSC00002.JPG \(date) 3000 B folder \"DCIM/100MSDCF\" key \(tag) → Staging"))
         #expect(log.lines.filter { $0.hasPrefix("import: job ended ") }
-            == ["import: job ended completed: 3 imported, key \(tag)"])
+            == ["import: job ended completed: 0 imported, 3 staged, key \(tag)"])
         for line in log.lines { #expect(!line.contains(h.camera.key.rawValue.suffix(16)), "\(line)") }
     }
 
@@ -132,7 +134,7 @@ struct ImportModelTests {
         #expect(h.model.state == .finished(.completed))
         #expect(await h.destinations.photos.names.sorted() == ["DSC00001.ARW", "DSC00001.JPG", "DSC00002.JPG"])
         #expect(h.model.destinationLine == "Imported to Photos.")
-        #expect(h.model.filesReasonLine == nil)
+        #expect(h.model.stagingReasonLine == nil)
         #expect(!h.model.offersPhotosSettingsLink)
         #expect(h.model.statusLine == "Import finished.")
         #expect(h.model.countsLine == "3 files imported.")
@@ -143,32 +145,38 @@ struct ImportModelTests {
         #expect(await eventually { await h.link.closed })
         #expect(h.destinations.cameras.map(\.key) == [h.camera.key])
 
-        // The next import doesn't ask again.
+        // The next import doesn't ask again. The file is imported already, so no job starts and the finished one
+        // stays shown.
         let again = await h.model.importItems([card[0]], from: h.camera, link: await freshLink())
-        #expect(again == .started(1))
+        #expect(again == .nothingNew(staging: false))
         #expect(photos.askCount == 1)
-        #expect(await h.finished())
+        #expect(h.model.state == .finished(.completed))
+        #expect(h.model.camera?.key == h.camera.key)
+        #expect(h.model.countsLine == "3 files imported.")
     }
 
-    @Test func deniedAtThePromptGoesToFilesWithTheSettingsLink() async {
+    @Test func deniedAtThePromptStagesWithTheSettingsLink() async {
         let h = await harness(photos: FakePhotosAccess(.notDetermined, answer: .denied))
         #expect(await h.importAll(card) == .started(3))
         #expect(await h.finished())
         #expect(await h.destinations.files.names.count == 3)
         #expect(await h.destinations.photos.names.isEmpty)
-        #expect(h.model.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › Camera.")
-        #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosDenied))
+        #expect(h.model.destinationLine == "Staged in On My iPhone › Shutter Bridge › Staging › Camera.")
+        #expect(h.model.stagingReasonLine == ImportWording.stagingReason(.photosDenied, place: testStagingPlace))
+        // Still an import job: the remembered choice stays Import to Photos.
+        #expect(h.model.importChoice == .photos)
         #expect(h.model.offersPhotosSettingsLink)
-        #expect(h.model.rows.allSatisfy { $0.stateText == "Imported to Files" })
+        #expect(h.model.rows.allSatisfy { $0.stateText == "Staged on this iPhone" })
     }
 
-    @Test func restrictedGoesToFilesWithoutTheSettingsLink() async {
+    @Test func restrictedStagesWithoutTheSettingsLink() async {
         let photos = FakePhotosAccess(.restricted)
         let h = await harness(photos: photos)
         #expect(await h.importAll(card) == .started(3))
         #expect(await h.finished())
         #expect(photos.askCount == 0)
-        #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosRestricted))
+        #expect(h.model.stagingReasonLine
+            == ImportWording.stagingReason(.photosRestricted, place: testStagingPlace))
         #expect(!h.model.offersPhotosSettingsLink)
     }
 
@@ -180,26 +188,36 @@ struct ImportModelTests {
         #expect(await h.destinations.photos.names.count == 3)
     }
 
-    @Test func choosingFilesNeverAsksAndSaysItWasChosen() async {
+    @Test func stagingNeverAsksAndSaysNothingGoesToPhotos() async {
         let photos = FakePhotosAccess(.notDetermined)
-        let h = await harness(setting: .filesFolder, photos: photos)
+        let h = await harness(setting: .staging, photos: photos)
         _ = await h.importAll(card)
         #expect(await h.finished())
         #expect(photos.askCount == 0)
-        #expect(h.model.progress.destination == .files(.chosen))
-        #expect(h.model.filesReasonLine == "You chose Files in Settings.")
+        #expect(h.model.progress.destination == .stagedHere(.chosen))
+        #expect(h.model.stagingReasonLine
+            == "Not added to Photos. iCloud Drive isn't available to Shutter Bridge, so they stay on this iPhone.")
         #expect(!h.model.offersPhotosSettingsLink)
+        #expect(h.model.countsLine == "3 files staged.")
+        #expect(h.model.destinationLine == "Staged in On My iPhone › Shutter Bridge › Staging › Camera.")
     }
 
-    @Test func theNextImportFollowsTheSetting() async {
-        let h = await harness(setting: .filesFolder)
+    @Test func theChoiceIsMadeAtEachImportAndTheLastOneIsRemembered() async {
+        let h = await harness(setting: .staging)
+        #expect(h.model.importChoice == .staging)
         _ = await h.importAll([card[0]])
         #expect(await h.finished())
-        #expect(h.model.progress.destination == .files(.chosen))
-        h.settings.save(DestinationSetting(preferred: .photos))
-        _ = await h.model.importItems([card[2]], from: h.camera, link: await freshLink())
+        #expect(h.model.progress.destination == .stagedHere(.chosen))
+        // Import to Photos from the Import button's menu, this time.
+        _ = await h.model.importItems([card[2]], from: h.camera, link: await freshLink(), as: .photos, newOnly: false)
         #expect(await h.state(.finished(.completed)))
         #expect(h.model.progress.destination == .photos)
+        #expect(h.model.importChoice == .photos)
+        #expect(h.settings.load() == DestinationSetting(preferred: .photos))
+        // The button's own tap follows it.
+        _ = await h.model.importItems([card[1]], from: h.camera, link: await freshLink())
+        #expect(await h.state(.finished(.completed)))
+        #expect(await h.destinations.photos.names.sorted() == ["DSC00001.JPG", "DSC00002.JPG"])
     }
 
     @Test func aDenialMidImportSendsTheRestToFiles() async {
@@ -209,7 +227,7 @@ struct ImportModelTests {
         photos.change(afterNextReadTo: .denied)   // read as allowed at the start, denied after the refused save
         _ = await h.importAll(card)
         #expect(await h.finished())
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         #expect(await h.destinations.files.names.count == 3)
         #expect(h.model.progress.filesFailed == 0)
@@ -232,7 +250,7 @@ struct ImportModelTests {
         #expect(h.model.statusLine == "0 of 3 files done")
         #expect(h.model.progress.bytesTotal == card[0].size + card[1].size + card[2].size)
         #expect(h.model.bytesLine == ByteWording.progress(0, of: h.model.progress.bytesTotal))
-        #expect(await h.importAll([card[0]]) == .nothingNew)
+        #expect(await h.importAll([card[0]]) == .nothingNew(staging: false))
         #expect(h.model.keepsScreenOn)
         await h.model.cancel()
         #expect(h.model.state == .finished(.cancelled))
@@ -280,7 +298,7 @@ struct ImportModelTests {
         await h.model.pause()
         photos.set(.denied)   // turned off in Settings while the app was away
         await h.model.resume()
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         await h.model.cancel()
     }
@@ -293,16 +311,16 @@ struct ImportModelTests {
         _ = await h.importAll(card)
         #expect(await eventually { await h.link.bytesStarted == 1 })
         await h.model.refresh()
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         await h.model.pause()
         photos.set(.authorised)   // allowed in Settings while the app was away
         await h.model.resume()
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         await h.model.scenePhaseChanged(.background)
         await h.model.scenePhaseChanged(.active)
-        #expect(h.model.progress.destination == .files(.photosDenied))
-        #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
+        #expect(h.model.stagingReasonLine == ImportWording.stagingReason(.photosDenied, place: testStagingPlace))
         await h.model.cancel()
     }
 

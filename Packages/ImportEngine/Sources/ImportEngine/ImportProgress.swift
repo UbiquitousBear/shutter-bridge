@@ -4,7 +4,7 @@ import PhotosBridge
 /// Where a job is, counted in bytes (decision 4): what the Import screen and, later, the Live Activity show. The
 /// engine publishes it at most four times a second (backlog section 3).
 public struct ImportProgress: Sendable, Hashable {
-    /// Files resolved one way or another: imported, skipped or failed.
+    /// Files resolved one way or another: imported, staged, skipped or failed.
     public var filesDone: Int
     /// Every file in the job, including files appended while it runs.
     public var filesTotal: Int
@@ -26,6 +26,9 @@ public struct ImportProgress: Sendable, Hashable {
     public var filesSkipped: Int
     /// Files that failed after their retries (part of `filesDone`).
     public var filesFailed: Int
+    /// Files staged (part of `filesDone`): every committed file of a stage job, and those of an import job staged
+    /// instead (Photos refused a save). The rest of `filesDone`, less skipped and failed, are imported.
+    public var filesStaged: Int
     /// The carrier of an import that is running, or paused only for what it gets over without the person (a
     /// removal, a lost card or session, a stall it retries by itself); nil otherwise
     /// (`ImportEngine.importRunning(carrier:)`).
@@ -37,7 +40,8 @@ public struct ImportProgress: Sendable, Hashable {
     public init(
         filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil,
         state: ImportJobState = .idle, destination: DestinationDecision? = nil, filesSkipped: Int = 0,
-        filesFailed: Int = 0, runningCarrier: CameraCarrier? = nil, stallWaitsForPerson: Bool = false
+        filesFailed: Int = 0, filesStaged: Int = 0, runningCarrier: CameraCarrier? = nil,
+        stallWaitsForPerson: Bool = false
     ) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
@@ -48,6 +52,7 @@ public struct ImportProgress: Sendable, Hashable {
         self.destination = destination
         self.filesSkipped = filesSkipped
         self.filesFailed = filesFailed
+        self.filesStaged = filesStaged
         self.runningCarrier = runningCarrier
         self.stallWaitsForPerson = stallWaitsForPerson
     }
@@ -62,6 +67,9 @@ public struct ImportProgress: Sendable, Hashable {
     public static let none = ImportProgress(filesDone: 0, filesTotal: 0, bytesDone: 0, bytesTotal: 0)
 
     public var bytesRemaining: UInt64 { bytesTotal > bytesDone ? bytesTotal - bytesDone : 0 }
+
+    /// Files imported (part of `filesDone`): resolved, and neither staged, skipped nor failed.
+    public var filesImported: Int { max(0, filesDone - filesSkipped - filesFailed - filesStaged) }
 
     /// 0 to 1, by bytes; 0 for an empty job.
     public var fractionCompleted: Double {

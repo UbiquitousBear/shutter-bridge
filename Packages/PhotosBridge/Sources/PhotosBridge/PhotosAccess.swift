@@ -10,14 +10,14 @@ public enum PhotosAuthorisation: String, Sendable, Hashable, CaseIterable {
     case limited
     case authorised
 
-    /// Where an import goes with this access alone, ignoring the destination setting. Nil means ask first: iOS shows
-    /// the prompt once, at the first import. `.restricted` goes to Files as well (decision 9, 8 Nov). With the
-    /// setting, use `DestinationDecision.resolve(setting:authorisation:)`, which also gives the reason for Files.
+    /// Where *Import to Photos* goes with this access alone. Nil means ask first: iOS shows the prompt once, at the
+    /// first import to Photos. Denied and restricted are staged instead (decision 9, 8 Nov; Shamil, 11 Nov). With the
+    /// choice, use `DestinationDecision.resolve(choice:authorisation:staging:)`, which also gives the reason.
     public var destination: DestinationKind? {
         switch self {
         case .notDetermined: nil
         case .limited, .authorised: .photos
-        case .denied, .restricted: .filesFolder
+        case .denied, .restricted: .staging
         }
     }
 }

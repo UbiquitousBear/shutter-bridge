@@ -61,17 +61,24 @@ actor SimulatedDiscovery: CameraDiscovery {
     }
 }
 
-/// Photos as a recording fake (Photos isn't reachable on Linux or in a package test), and the real Files folder
-/// (`FilesFolderDestination`) in the bench's temporary Documents folder.
+/// Photos as a recording fake (Photos isn't reachable on Linux or in a package test), and the real staging folder
+/// (`StagingFolderDestination`, which replaced the Files folder) in the bench's temporary Documents folder.
 final class SimulatorDestinations: ImportDestinationMaking, @unchecked Sendable {
     let documents: URL
     let photos = RecordingDestination(kind: .photos)
 
     init(documents: URL) { self.documents = documents }
 
-    func destinations(for camera: ImportCamera, startedAt: Date) -> ImportDestinations {
-        let files = FilesFolderDestination(documentsDirectory: documents, cameraName: camera.name)
-        return ImportDestinations(photos: photos, filesFolder: files, filesFolderName: files.folderName)
+    /// iCloud Drive isn't reachable in a package test: staging is on this iPhone, as on every build until the App ID
+    /// has iCloud.
+    func locate() async -> StagingAvailability { .unavailable(.containerUnavailable) }
+
+    func destinations(for camera: ImportCamera, startedAt: Date,
+                      staging availability: StagingAvailability) -> ImportDestinations {
+        let staging = StagingFolderDestination(root: documents, place: availability.place,
+                                               cameraName: camera.name, timeZone: .current)
+        return ImportDestinations(photos: photos, staging: staging, stagingOnThisIPhone: staging,
+                                  stagingPlace: availability.place, stagingFolderName: staging.cameraFolderName)
     }
 }
 
@@ -141,7 +148,7 @@ final class SimulatorBench {
     ///   - keyMaterial: Keys cameras as the app does (`LiveRoot`): an MTP link by this material, any other mode by
     ///     its mode and name. Nil keys every camera by its descriptor.
     static func make(card: ScriptedCard = standInCard(), link: SimulatedCameraLink? = nil,
-                     setting: DestinationKind = .filesFolder, photos: FakePhotosAccess = FakePhotosAccess(),
+                     setting: DestinationKind = .staging, photos: FakePhotosAccess = FakePhotosAccess(),
                      keyMaterial: String? = nil) async throws -> SimulatorBench {
         let bench = SimulatorBench(link: link ?? SimulatedCameraLink(card: card, chunkSize: 4096), setting: setting,
                                    photos: photos, keyMaterial: keyMaterial)
@@ -269,17 +276,29 @@ final class SimulatorBench {
 
     // MARK: - Reading the results
 
-    /// The camera's folder in Files, named with the app's display name ("Camera" in MSC).
+    /// The camera's staging folder, Documents/Staging/camera, named with the app's display name ("Camera" in MSC).
     var filesFolder: URL {
         let name = CamerasWording.displayName(for: camera)
-        return documents.appendingPathComponent(FilesFolderNaming.folderName(forCamera: name))
+        return documents.appendingPathComponent(StagingFolderDestination.folderName)
+            .appendingPathComponent(FilesFolderNaming.folderName(forCamera: name))
     }
 
-    /// The files in the camera's Files folder, by name.
+    /// Where a file staged in the camera's staging folder is, whichever capture-day folder it is in.
+    func stagedFile(named name: String) -> URL? {
+        let days = (try? FileManager.default.contentsOfDirectory(atPath: filesFolder.path)) ?? []
+        return days.map { filesFolder.appendingPathComponent($0).appendingPathComponent(name) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// The files in the camera's staging folder, by name, from every capture-day folder.
     func importedFiles() -> [String: Data] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: filesFolder.path)) ?? []
+        let days = (try? FileManager.default.contentsOfDirectory(atPath: filesFolder.path)) ?? []
         var out: [String: Data] = [:]
-        for name in names { out[name] = try? Data(contentsOf: filesFolder.appendingPathComponent(name)) }
+        for day in days {
+            let folder = filesFolder.appendingPathComponent(day)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for name in names { out[name] = try? Data(contentsOf: folder.appendingPathComponent(name)) }
+        }
         return out
     }
 
@@ -297,6 +316,18 @@ final class SimulatorBench {
             let expected = await content(of: name)
             #expect(files[name] != nil && files[name] == expected, "\(name)'s bytes", sourceLocation: sourceLocation)
         }
+    }
+
+    /// Checks that Photos (the bench's recording fake) got exactly the files named.
+    func expectInPhotos(_ names: Set<String>, sourceLocation: SourceLocation = #_sourceLocation) async {
+        let saved = await destinations.photos.names
+        #expect(Set(saved) == names && saved.count == names.count, sourceLocation: sourceLocation)
+    }
+
+    /// Whether the catalogue has a staged copy of a listed file (by content), by the engine's identity.
+    func isStaged(_ item: CameraItem) async -> Bool {
+        guard let identity = item.identity(camera: key, timeZone: .current) else { return false }
+        return await catalogue.stagedStates(of: [identity]).contains(identity)
     }
 
     /// The catalogue's state for a listed file, by the engine's identity.

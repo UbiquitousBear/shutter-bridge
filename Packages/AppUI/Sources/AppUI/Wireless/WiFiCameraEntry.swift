@@ -15,7 +15,7 @@ import Foundation
 public struct WiFiCameraEntry: Sendable, Hashable, CustomStringConvertible {
     /// The descriptor discovery lists. Its ID is made once, from the initiator GUID, and never changes, so a camera
     /// being browsed isn't dropped when its key becomes known. Its name is the person's (the catalogue's friendly
-    /// name) or "Camera": the model name from DeviceInfo isn't used, so the Files folder and album a first import makes
+    /// name) or "Camera": the model name from DeviceInfo isn't used, so the staging folder and album a first import makes
     /// carry the same name as every later one.
     public var descriptor: CameraDescriptor
     /// The catalogue's key once a session has read the serial.
@@ -39,7 +39,7 @@ public struct WiFiCameraEntry: Sendable, Hashable, CustomStringConvertible {
     public var id: CameraDescriptor.ID { descriptor.id }
     public var isConnectedBefore: Bool { key != nil }
 
-    /// The name every Wi-Fi camera has until the person can rename one (the Files folder and album are named from it).
+    /// The name every Wi-Fi camera has until the person can rename one (the staging folder and album are named from it).
     public static let defaultName = CamerasWording.genericName
 
     /// The descriptor's ID for an initiator GUID.

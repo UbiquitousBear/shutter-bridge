@@ -1,31 +1,44 @@
 import CameraTransport
 import Catalogue
 import Foundation
+import ImportEngine
 import PhotosBridge
 import Testing
 @testable import AppUI
 
 @MainActor
-@Suite("Settings: the destination setting and where it is kept")
+@Suite("Settings: the remembered choice, where it is kept, and where staging goes")
 struct SettingsTests {
-    @Test func theDefaultIsPhotos() {
+    @Test func theDefaultIsImportToPhotos() {
         let suite = TemporaryDefaults()
         defer { suite.drop() }
         #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load() == .default)
-        #expect(SettingsModel(store: InMemoryDestinationSettingStore()).destination == .photos)
+        #expect(DestinationSetting.default.preferred == .photos)
     }
 
-    @Test func theSettingIsSavedAndReadBack() {
+    @Test func theChoiceIsSavedAndReadBack() {
         let suite = TemporaryDefaults()
         defer { suite.drop() }
-        let model = SettingsModel(store: UserDefaultsDestinationSettingStore(defaults: suite.defaults))
-        model.destination = .filesFolder
+        UserDefaultsDestinationSettingStore(defaults: suite.defaults).save(DestinationSetting(preferred: .staging))
         // A later launch reads it back.
-        #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load().preferred == .filesFolder)
-        #expect(SettingsModel(store: UserDefaultsDestinationSettingStore(defaults: suite.defaults)).destination
-            == .filesFolder)
-        model.destination = .photos
+        #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load().preferred == .staging)
+        UserDefaultsDestinationSettingStore(defaults: suite.defaults).save(DestinationSetting(preferred: .photos))
         #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load().preferred == .photos)
+    }
+
+    /// Someone who had chosen Files in an earlier build gets Stage as the remembered choice (Shamil, 11 Nov), and
+    /// the Import button says so.
+    @Test func anEarlierBuildsFilesSettingReadsAsStage() async {
+        let suite = TemporaryDefaults()
+        defer { suite.drop() }
+        suite.defaults.set(Data(#"{"preferred":"filesFolder"}"#.utf8), forKey: UserDefaultsDestinationSettingStore.key)
+        let store = UserDefaultsDestinationSettingStore(defaults: suite.defaults)
+        #expect(store.load() == DestinationSetting(preferred: .staging))
+        let catalogue = InMemoryCatalogue()
+        let model = ImportModel(engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
+                                settings: store, photos: FakePhotosAccess(), destinations: FakeDestinations())
+        #expect(model.importChoice == .staging)
+        #expect(BrowseWording.importButtonTitle(model.importChoice) == "Stage")
     }
 
     @Test func anUnreadableOrUnknownValueReadsAsPhotos() {
@@ -38,20 +51,58 @@ struct SettingsTests {
         #expect(store.load() == .default)
     }
 
-    @Test func choicesAndCopy() {
-        #expect(SettingsModel.choices == [.photos, .filesFolder])
-        #expect(SettingsModel.label(for: .photos) == "Photos")
-        #expect(SettingsModel.label(for: .filesFolder) == "Files")
-        let footer = SettingsWording.destinationFooter
-        #expect(footer.contains("On My iPhone › Shutter Bridge"))
-        #expect(footer.contains("a folder for each camera"))
-        #expect(footer.contains("The next import follows this setting."))
-        // What Photos access does is said in its own row, only when it applies.
+    @Test func copy() {
+        let footer = SettingsWording.stagingFooter
+        #expect(footer.contains("a folder for each camera and capture day"))
+        #expect(footer.contains("leaves Photos alone"))
+        #expect(footer.contains("Import to Photos or Stage"))
+        // Nothing promised that isn't built yet, and what Photos access does is said in its own row.
+        #expect(!footer.lowercased().contains("cull"))
         #expect(!footer.contains("Photos access"))
-        #expect(SettingsWording.forcedFiles(.chosen) == nil)
-        #expect(SettingsWording.forcedFiles(.photosDenied) == "Photos access is off, so imports go to Files.")
-        #expect(SettingsWording.forcedFiles(.photosRestricted)
-            == "Photos is restricted on this iPhone, so imports go to Files.")
+        #expect(SettingsWording.stagingHeader == "Staging")
+        #expect(SettingsWording.forcedStaging(.chosen) == nil)
+        #expect(SettingsWording.forcedStaging(.photosDenied)
+            == "Photos access is off, so Import to Photos stages the photos instead.")
+        #expect(SettingsWording.forcedStaging(.photosRestricted)
+            == "Photos is restricted on this iPhone, so Import to Photos stages the photos instead.")
+        #expect(SettingsWording.stagingLocation(.iCloudDrive) == "iCloud Drive › Shutter Bridge › Staging")
+        #expect(SettingsWording.stagingLocation(.onThisIPhone(.iCloudDriveOff))
+            == "On My iPhone › Shutter Bridge › Staging")
+        #expect(SettingsWording.stagingLocationAccessibility(.iCloudDrive)
+            == "Staging folder, iCloud Drive › Shutter Bridge › Staging")
+        #expect(SettingsWording.stagingFallback(.iCloudDrive) == nil)
+        #expect(SettingsWording.stagingFallback(.onThisIPhone(.iCloudDriveOff))
+            == "iCloud Drive is off or you're not signed in to iCloud, so staging is on this iPhone.")
+        #expect(SettingsWording.stagingFallback(.onThisIPhone(.containerUnavailable))
+            == "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone.")
+    }
+
+    @Test func settingsSaysWhereStagingGoesAndWhy() async {
+        let locator = FakeStagingLocator(.unavailable(.iCloudDriveOff))
+        let model = SettingsModel(staging: locator)
+        // Not read yet: nothing said.
+        #expect(model.stagingPlace == nil)
+        #expect(model.stagingLocation == nil)
+        #expect(model.stagingFallbackLine == nil)
+        await model.refresh()
+        #expect(model.stagingPlace == .onThisIPhone(.iCloudDriveOff))
+        #expect(model.stagingLocation == "On My iPhone › Shutter Bridge › Staging")
+        #expect(model.stagingFallbackLine
+            == "iCloud Drive is off or you're not signed in to iCloud, so staging is on this iPhone.")
+        // Signed in meanwhile: read again on return to the app.
+        await locator.set(.iCloudDrive(documents: URL(fileURLWithPath: "/nonexistent/iCloud/Documents")))
+        await model.refresh()
+        #expect(model.stagingPlace == .iCloudDrive)
+        #expect(model.stagingLocation == "iCloud Drive › Shutter Bridge › Staging")
+        #expect(model.stagingFallbackLine == nil)
+        #expect(await locator.locateCount == 2)
+    }
+
+    @Test func withoutALocatorNothingIsSaidAboutStaging() async {
+        let model = SettingsModel()
+        await model.refresh()
+        #expect(model.stagingPlace == nil)
+        #expect(model.stagingLocation == nil)
     }
 
     @Test func albumIdentifiersAreKeptPerKey() async {

@@ -1,20 +1,38 @@
 import CameraTransport
+import Catalogue
 import Foundation
+import PhotosBridge
 
 /// What to import from the card (proposal, `ImportJob.selection`: all-new, range or explicit).
+///
+/// What counts as done depends on the job's purpose (`ImportRoute.purpose`; Shamil, 11 Nov): an import job leaves out
+/// files already imported and ignores staging; a stage job leaves out files already staged and, where only new files
+/// were asked for (`allNew`, `dateRange`, `newItems`), files already imported too. An explicit pick (`items`) of an
+/// imported file may still be staged.
 public enum ImportSelection: Sendable, Hashable {
-    /// Everything the catalogue doesn't have as imported: the default (Browse's *Select all new*).
+    /// Everything that is new for the job's purpose: the default.
     case allNew
-    /// Files taken in this range that aren't imported yet.
+    /// Files taken in this range that are new for the job's purpose.
     case dateRange(ClosedRange<Date>)
     /// Files picked in Browse. Kept as whole items, not link handles, because handles don't survive a replug and
     /// the engine finds the files left by identity (decision 7).
     case items([CameraItem])
+    /// Files picked by Browse's *Select all new*: matched like `items`, but only new ones are copied, so a stage
+    /// job also leaves out those already imported.
+    case newItems([CameraItem])
 
     /// True only for an explicit pick of nothing.
     public var isEmpty: Bool {
-        if case let .items(items) = self { return items.isEmpty }
-        return false
+        switch self {
+        case let .items(items), let .newItems(items): items.isEmpty
+        case .allNew, .dateRange: false
+        }
+    }
+
+    /// Whether only new files were asked for, rather than an explicit pick: a stage job then leaves out imported
+    /// files too.
+    var newOnly: Bool {
+        if case .items = self { false } else { true }
     }
 }
 
@@ -41,4 +59,31 @@ public struct ImportSettings: Sendable, Hashable, Codable {
     }
 
     private static func clamp(_ n: Int) -> Int { min(2, max(1, n)) }
+}
+
+/// What a job leaves out as done, by its purpose (Shamil, 11 Nov), for the first listing's diff and for `append`.
+enum DoneRule {
+    /// Whether a file is still to do.
+    ///
+    /// - Parameters:
+    ///   - state: The catalogue's state for the file, matched by content (`CatalogueStore.states(of:)`).
+    ///   - staged: Whether the catalogue has a staged copy of it, matched by content
+    ///     (`CatalogueStore.stagedStates(of:)`). Read only for a stage job.
+    ///   - purpose: The job's (`ImportRoute.purpose`).
+    ///   - newOnly: Only new files were asked for (`ImportSelection.newOnly`), not an explicit pick.
+    ///   - wholeCard: The card was listed for them (`allNew`, `dateRange`): only new and partial rows are wanted, so
+    ///     a skipped file waits for an explicit pick, as before staging.
+    static func isWanted(state: ObjectState, staged: Bool, purpose: DestinationKind, newOnly: Bool,
+                         wholeCard: Bool) -> Bool {
+        switch purpose {
+        case .photos:
+            // An import job ignores staging: a staged file is imported like any other.
+            if state == .imported { return false }
+        case .staging:
+            if staged { return false }
+            // An explicit pick of an imported file may still be staged.
+            if newOnly && state == .imported { return false }
+        }
+        return wholeCard ? (state == .new || state == .partial) : true
+    }
 }

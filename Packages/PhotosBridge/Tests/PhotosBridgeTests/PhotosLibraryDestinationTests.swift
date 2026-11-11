@@ -219,7 +219,7 @@ struct PhotosLibraryDestinationTests {
         #expect(await store.all.keys.sorted() == ["camera:serial-1", "import:job-1"])
     }
 
-    @Test("3311 on a save is a denial, not a failed file, and the staged files stay for Files")
+    @Test("3311 on a save is a denial, not a failed file, and the staged files stay for staging")
     func deniedSave() async throws {
         let s = try Scratch()
         let raw = try s.stage("A.ARW"), jpg = try s.stage("A.JPG")
@@ -232,10 +232,14 @@ struct PhotosLibraryDestinationTests {
         #expect(FileManager.default.fileExists(atPath: raw.url.path))
         #expect(FileManager.default.fileExists(atPath: jpg.url.path))
 
-        // The engine's next step: the Files folder takes the same staged files.
-        let files = FilesFolderDestination(documentsDirectory: s.root.appendingPathComponent("Documents"), cameraName: "ILCE-7CM2")
-        let result = try await files.commit(.pair(raw: raw, processed: jpg))
-        #expect(result == .files([FileLocation(relativePath: "ILCE-7CM2/A.ARW"), FileLocation(relativePath: "ILCE-7CM2/A.JPG")]))
+        // The engine's next step: the staging folder takes the same staged files.
+        let staging = StagingFolderDestination(root: s.root.appendingPathComponent("Documents"),
+                                               place: .onThisIPhone(.containerUnavailable), cameraName: "ILCE-7CM2",
+                                               timeZone: TimeZone(identifier: "UTC")!)
+        let result = try await staging.commit(.pair(raw: raw, processed: jpg))
+        #expect(result == .staged(place: .onThisIPhone(.containerUnavailable),
+                                  [FileLocation(relativePath: "Staging/ILCE-7CM2/Undated/A.ARW"),
+                                   FileLocation(relativePath: "Staging/ILCE-7CM2/Undated/A.JPG")]))
     }
 
     @Test("3311 while creating the album is a denial too")

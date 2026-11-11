@@ -105,8 +105,8 @@ enum PartialMark {
     /// The row a checkpoint leaves for `identity`, given the row the store holds for it (if any); nil when the row is
     /// to stay as it is because the file is already imported (a checkpoint flushed after the commit must not undo
     /// it). Otherwise the row reads `.partial` with the offset and temporary file (its relative part, `stored(_:)`),
-    /// keeping any location it had. Throws `CatalogueFailure.resumeOffsetPastEnd` when `offset` is past the file's
-    /// size, and `.partialFileNotRelative` when `tempURL` is absolute.
+    /// keeping any location and staged copy it had. Throws `CatalogueFailure.resumeOffsetPastEnd` when `offset` is
+    /// past the file's size, and `.partialFileNotRelative` when `tempURL` is absolute.
     static func record(for identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64,
                        existing: CatalogueRecord?) throws(CatalogueFailure) -> CatalogueRecord? {
         guard offset <= identity.size else {
@@ -115,7 +115,7 @@ enum PartialMark {
         let stored = try stored(tempURL)
         if existing?.state == .imported { return nil }
         return CatalogueRecord(identity: identity, format: format, state: .partial, location: existing?.location,
-                               resumeOffset: offset, tempURL: stored)
+                               resumeOffset: offset, tempURL: stored, staged: existing?.staged)
     }
 
     /// The form of a partial file's URL the catalogue keeps: its part relative to the staging folder, with no base
@@ -128,5 +128,48 @@ enum PartialMark {
             throw .partialFileNotRelative
         }
         return relative
+    }
+}
+
+/// The staging rules, for both stores (Shamil, 11 Nov): what `markStaged` leaves, and what `upsert` keeps.
+enum StagedMark {
+    /// The row `markStaged` leaves for `identity`, given the row the store holds for it (if any): a new `.new` row
+    /// when there is none; otherwise the same row, state and location kept, with the staged copy at `location`. A
+    /// `.partial` row goes back to `.new` with its offset and temporary file cleared: the partial file was the
+    /// staging commit's. An imported row stays imported.
+    static func record(for identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation,
+                       existing: CatalogueRecord?) -> CatalogueRecord {
+        guard var record = existing else {
+            return CatalogueRecord(identity: identity, format: format, state: .new, staged: location)
+        }
+        if record.state == .partial {
+            record.state = .new
+            record.resumeOffset = 0
+            record.tempURL = nil
+        }
+        record.format = format
+        record.staged = location
+        return record
+    }
+
+    /// What `upsert` writes for `record` over the row the store holds (if any): the record, with the stored row's
+    /// staged copy rather than its own, because only `markStaged` and `clearStaged` change it. A row it inserts
+    /// takes the record's.
+    static func upserting(_ record: CatalogueRecord, over existing: CatalogueRecord?) -> CatalogueRecord {
+        guard let existing else { return record }
+        var kept = record
+        kept.staged = existing.staged
+        return kept
+    }
+
+    /// The row a write for one identity builds on, given the row the store keeps (`kept`, the furthest along when it
+    /// holds several) and the staged copies of all of the identity's rows, in the store's order (`kept`'s own among
+    /// them). The others are deleted by the write, so when `kept` has no staged copy it takes the first one another
+    /// row has: healing duplicates never forgets a staged copy, which would leave the file in Staging with no row.
+    /// `upsert` and `markPartial` read the stored row through this in both stores (`markStaged` writes its own copy).
+    static func healed(_ kept: CatalogueRecord?, among staged: [StagedLocation?]) -> CatalogueRecord? {
+        guard var kept, kept.staged == nil, let first = staged.lazy.compactMap(\.self).first else { return kept }
+        kept.staged = first
+        return kept
     }
 }

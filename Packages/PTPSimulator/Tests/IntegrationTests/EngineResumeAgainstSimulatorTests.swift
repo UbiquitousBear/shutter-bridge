@@ -70,7 +70,7 @@ struct EngineResumeAgainstSimulatorTests {
         #expect(await link.listCount == 2) // the engine's first listing and the app's reopen; none after it
         #expect(await link.bytesCalls.filter { $0 == victim.filename }.count == 2)
         #expect(bench.stagedFiles() == 0)
-        for item in known { #expect(await bench.state(of: item) == .imported, "\(item.name)") }
+        for item in known { #expect(await bench.isStaged(item), "\(item.name)") }
     }
 
     /// A 40 MiB file: the catalogue gets the 16 MiB checkpoint while it downloads; on expiry the app flushes (the
@@ -113,7 +113,10 @@ struct EngineResumeAgainstSimulatorTests {
         bench.expectImported(["DSC00001.ARW", "DSC00002.JPG"], from: card)
         #expect(await link.resumes == [SimulatedCameraLink.Resume(filename: "DSC00001.ARW", offset: 22 * mib)])
         #expect(await link.delivered.sorted() == ["DSC00001.ARW", "DSC00002.JPG"])
-        #expect(await bench.catalogue.record(for: identity)?.state == .imported)
+        // The partial row goes back to new with its resume cleared, staged (the partial file was what was staged).
+        let row = await bench.catalogue.record(for: identity)
+        #expect(row?.state == .new && row?.resumeOffset == 0 && row?.tempURL == nil)
+        #expect(row?.staged?.root == .onThisIPhone)
         #expect(bench.stagedFiles() == 0)
     }
 

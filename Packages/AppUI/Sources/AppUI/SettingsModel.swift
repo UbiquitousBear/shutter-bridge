@@ -2,67 +2,68 @@ import Foundation
 import Observation
 import PhotosBridge
 
-/// The Settings screen's model (backlog section 6, *Settings, destination*; decision 9, 8 Nov): the destination,
-/// Photos or Files, app-wide, default Photos, saved as soon as it changes. A job already running keeps its route;
-/// the next import follows the setting (`ImportModel` reads the store at each start).
+/// The Settings screen's model (backlog section 6; Shamil, 11 Nov). There is no destination choice: since 11 Nov the
+/// Import button offers *Import to Photos* and *Stage* at each import and remembers the last one used (`ImportModel`),
+/// which replaced the app-wide Photos-or-Files setting decided on 8 Nov.
 ///
-/// The screen binds a picker to `destination` and shows `SettingsWording.destinationFooter` under it. It also shows
-/// what the app will actually do when Photos access overrides the setting (`forcedFilesLine`, with Open Settings when
-/// `offersPhotosSettingsLink`), reading the access in `refreshPhotosAccess()` when it appears and when the app comes
-/// back to the foreground (the person may have changed it in Settings). The rule itself is the import's
-/// (`DestinationDecision.resolve(setting:authorisation:)`); nothing here changes it. It is reached from the Cameras
-/// screen's toolbar.
+/// The screen shows where staging goes (`stagingLocation`: iCloud Drive › Shutter Bridge › Staging, or On My iPhone ›
+/// Shutter Bridge › Staging) and, when it is on this iPhone, why (`stagingFallbackLine`). It also says what *Import to
+/// Photos* will do when Photos access is off or restricted (`forcedStagingLine`, with Open Settings when
+/// `offersPhotosSettingsLink`). Both are read in `refresh()`, when the screen appears and when the app comes back to
+/// the foreground (the person may have changed them in Settings). The rules are the import's
+/// (`DestinationDecision.resolve(choice:authorisation:staging:)`); nothing here changes them. It is reached from the
+/// Cameras screen's toolbar.
 @MainActor
 @Observable
 public final class SettingsModel {
-    /// Where imports go when Photos access allows it. Saved on every change.
-    public var destination: DestinationKind {
-        didSet {
-            guard destination != oldValue else { return }
-            store.save(DestinationSetting(preferred: destination))
+    /// Photos access as last read; nil before the first read, or without a way to read it.
+    public private(set) var photosAccess: PhotosAuthorisation?
+    /// Where staging goes, as last read; nil before the first read, or without a staging locator.
+    public private(set) var stagingPlace: StagingPlace?
+
+    @ObservationIgnored private let photos: (any PhotosAuthorising)?
+    @ObservationIgnored private let staging: (any StagingLocator)?
+
+    /// - Parameters:
+    ///   - photos: Reads Photos access (never asks); without it the screen says nothing about access.
+    ///   - staging: Finds where staging goes (the app's `ImportDestinationMaking`); without it the screen says
+    ///     nothing about staging.
+    public init(photos: (any PhotosAuthorising)? = nil, staging: (any StagingLocator)? = nil) {
+        self.photos = photos
+        self.staging = staging
+    }
+
+    /// Reads Photos access and where staging goes again. Never asks for Photos access: that happens at the first
+    /// *Import to Photos*.
+    public func refresh() async {
+        if let photos {
+            let read = await photos.authorisation()
+            if read != photosAccess { photosAccess = read }
+        }
+        if let staging {
+            let place = await staging.locate().place
+            if place != stagingPlace { stagingPlace = place }
         }
     }
 
-    /// Photos access as last read; nil before the first read, or without a way to read it.
-    public private(set) var photosAccess: PhotosAuthorisation?
+    /// Where staging goes, as Files names it; nil before it is read.
+    public var stagingLocation: String? { stagingPlace.map(SettingsWording.stagingLocation) }
 
-    @ObservationIgnored private let store: any DestinationSettingStore
-    @ObservationIgnored private let photos: (any PhotosAuthorising)?
+    /// Why staging is on this iPhone rather than in iCloud Drive; nil when it is in iCloud Drive or not read yet.
+    public var stagingFallbackLine: String? { stagingPlace.flatMap(SettingsWording.stagingFallback) }
 
-    /// - Parameter photos: Reads Photos access (never asks); without it the screen says nothing about access.
-    public init(store: any DestinationSettingStore, photos: (any PhotosAuthorising)? = nil) {
-        self.store = store
-        self.photos = photos
-        destination = store.load().preferred
-    }
-
-    /// Reads Photos access again. Never asks for it: that happens at the first Import.
-    public func refreshPhotosAccess() async {
-        guard let photos else { return }
-        let read = await photos.authorisation()
-        if read != photosAccess { photosAccess = read }
-    }
-
-    /// Why the next import goes to Files although the setting says Photos: access denied or restricted; nil when the
-    /// setting is followed (or says Files, or access isn't read yet).
-    public var forcedFilesReason: FilesReason? {
+    /// Why *Import to Photos* stages instead: access denied or restricted; nil when it imports to Photos (or access
+    /// isn't read yet).
+    public var forcedStagingReason: StagingReason? {
         guard let photosAccess else { return nil }
-        let reason = DestinationDecision.resolve(setting: DestinationSetting(preferred: destination),
-                                                 authorisation: photosAccess).filesReason
+        let reason = DestinationDecision.resolve(choice: .photos, authorisation: photosAccess,
+                                                 staging: stagingPlace ?? .iCloudDrive).stagingReason
         return reason?.isForced == true ? reason : nil
     }
 
-    /// "Photos access is off, so imports go to Files." when access overrides the setting.
-    public var forcedFilesLine: String? { forcedFilesReason.flatMap(SettingsWording.forcedFiles) }
+    /// "Photos access is off, so Import to Photos stages the photos instead." when access overrides it.
+    public var forcedStagingLine: String? { forcedStagingReason.flatMap(SettingsWording.forcedStaging) }
 
     /// Open Settings beside that line: for a denial only (a restriction can't be changed there).
-    public var offersPhotosSettingsLink: Bool { forcedFilesReason?.offersSettingsLink == true }
-
-    /// The choices, in the order the picker shows them.
-    public static let choices: [DestinationKind] = [.photos, .filesFolder]
-
-    /// The picker's label for a choice.
-    public static func label(for kind: DestinationKind) -> String {
-        SettingsWording.destinationLabel(kind)
-    }
+    public var offersPhotosSettingsLink: Bool { forcedStagingReason?.offersSettingsLink == true }
 }

@@ -28,6 +28,11 @@ struct ImportPolicy: Sendable {
     /// download is interrupted and on `flushCheckpoints()`: the proposal's 16 MiB, one write per 1–2 s at the Wi-Fi
     /// rates measured (9.1–17.4 MB/s). The resume point in memory is the link's latest checkpoint, whatever this is.
     var checkpointInterval: UInt64 = 16 * 1024 * 1024
+    /// How long a file's commit waits, before it writes its row, for a checkpoint write to the catalogue that was in
+    /// flight when the commit began, so the checkpoint can't land after the row. A catalogue write takes milliseconds;
+    /// this only stops a catalogue that never answers from holding the file (and its job) for ever. 10 s is a choice,
+    /// not a measurement.
+    var checkpointWriteWait: Duration = .seconds(10)
     /// How long a partial file from an earlier run is kept in the staging folder's `Partials` folder, counted from
     /// its last write: a catalogue row may point to it (a later job resumes from it), but a file whose row was
     /// overwritten (the file imported over another link, under another camera key) has nothing to clean it up.

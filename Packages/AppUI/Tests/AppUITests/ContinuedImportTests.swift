@@ -228,13 +228,14 @@ struct ContinuedImportTests {
                        frozenClock: Bool = false, run: FakeBackgroundRun = FakeBackgroundRun(),
                        notifier: FakeNotifier = FakeNotifier(), asks: any NotificationAskRecord =
                            InMemoryNotificationAskRecord(),
-                       abort: @escaping @Sendable (any CameraLink) async -> Void = { _ in }) -> Bench {
+                       abort: @escaping @Sendable (any CameraLink) async -> Void = { _ in },
+                       choice: DestinationKind = .staging) -> Bench {
         let engine = frozenClock
             ? ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging(), clock: FrozenClock())
             : ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
         let destinations = FakeDestinations()
         let model = ImportModel(engine: engine,
-                                settings: InMemoryDestinationSettingStore(DestinationSetting(preferred: .filesFolder)),
+                                settings: InMemoryDestinationSettingStore(DestinationSetting(preferred: choice)),
                                 photos: FakePhotosAccess(), destinations: destinations, background: run,
                                 notifier: notifier, notificationAsks: asks, abortTransfer: abort)
         let finder = FakeFinder()
@@ -297,7 +298,8 @@ struct ContinuedImportTests {
         #expect(await b.importAll(items) == .started(3))
         let handle = try #require(await b.handle())
         #expect(b.run.begins.count == 1)
-        #expect(b.run.begins.first?.title == "Importing photos")
+        // A Stage job (Shamil, 11 Nov): the system's UI says so.
+        #expect(b.run.begins.first?.title == "Staging photos")
         await link.waitUntilHeld(Self.victim)
         // Progress in bytes (backlog section 9): the job's total, and the bytes copied so far.
         #expect(await eventually {
@@ -416,7 +418,7 @@ struct ContinuedImportTests {
             "post", "finish false", "abort at \(Self.cut) \(String(describing: ImportJobState.paused(.taskExpired)))",
         ])
         #expect(first.finishes == [false])
-        #expect(b.notifier.posts == [.importPaused])
+        #expect(b.notifier.posts == [.stagingPaused])
         #expect(await catalogue.record(for: identity)?.resumeOffset == Self.cut)
         #expect(await b.engine.currentProgress.filesFailed == 0)
         #expect(b.model.canResume)
@@ -438,9 +440,9 @@ struct ContinuedImportTests {
         #expect(await b.destinations.files.names.sorted() == ["DSC00001.ARW", "DSC00002.JPG", "DSC00003.ARW"])
         #expect(await link.delivered.sorted() == ["DSC00001.ARW", "DSC00002.JPG", "DSC00003.ARW"])
         #expect(await link.resumes == [SimulatedCameraLink.Resume(filename: Self.victim, offset: Self.cut)])
-        #expect(b.notifier.posts == [.importPaused])
+        #expect(b.notifier.posts == [.stagingPaused])
         // Taken back once Continue had the job going: "Import paused" no longer held.
-        #expect(b.notifier.withdrawals == [.importPaused])
+        #expect(b.notifier.withdrawals == [.stagingPaused])
     }
 
     @Test func anExpiryAfterThePersonPausedAndTheSessionWentPostsNothing() async throws {
@@ -518,7 +520,7 @@ struct ContinuedImportTests {
     }
 
     @Test func aUSBImportPausedByLeavingPostsOneNotificationPerStayAway() async throws {
-        let b = bench(link: await hangingUSB(), frozenClock: true)
+        let b = bench(link: await hangingUSB(), frozenClock: true, choice: .photos)
         #expect(await b.importAll(usbCard) == .started(3))
         await b.model.scenePhaseChanged(.inactive)
         await b.model.scenePhaseChanged(.background)
@@ -528,6 +530,8 @@ struct ContinuedImportTests {
         await b.model.scenePhaseChanged(.background)
         #expect(b.notifier.posts == [.importPaused])
         #expect(b.notifier.withdrawals.isEmpty)
+        // An import job's run says Importing.
+        #expect(b.run.begins.first?.title == "Importing photos")
         // Back: the import goes on by itself, so the notification is taken back.
         await b.model.scenePhaseChanged(.inactive)
         await b.model.scenePhaseChanged(.active)
@@ -622,8 +626,8 @@ struct ContinuedImportTests {
         #expect(await b.finished())
         #expect(b.model.state == .finished(.completed))
         #expect(b.model.notificationPermission.authorisation == .denied)
-        // Another Import (the files are imported already, so the job ends at once) asks no more.
-        _ = await b.importAll(usbCard)
+        // Another Import (the files are staged already, so no job starts) asks no more.
+        #expect(await b.importAll(usbCard) == .nothingNew(staging: true))
         #expect(await b.finished())
         #expect(notifier.requests == 1)
     }
@@ -712,11 +716,16 @@ struct NotificationPermissionModelTests {
 
     @Test func theCopyIsBritishAndNamesNoCamera() {
         #expect(AppNotification.importPaused.body == "Import paused. Open Shutter Bridge to continue.")
+        #expect(AppNotification.stagingPaused.body == "Staging paused. Open Shutter Bridge to continue.")
+        // One pause notification at a time: either replaces the other.
+        #expect(AppNotification.stagingPaused.identifier == AppNotification.importPaused.identifier)
+        #expect(AppNotification.stagingPaused.category == .importPaused)
         #expect(AppNotification.importPaused.title.isEmpty)
         #expect(AppNotification.importPaused.identifier == AppNotificationCategory.importPaused.identifier)
         #expect(AppNotificationCategory.all.contains(.importPaused))
         #expect(NotificationWording.reason.contains("tell you if an import pauses"))
-        for text in [NotificationWording.importPaused, NotificationWording.reason, ImportBackgroundWording.title] {
+        for text in [NotificationWording.importPaused, NotificationWording.stagingPaused, NotificationWording.reason,
+                     ImportBackgroundWording.title, ImportBackgroundWording.stagingTitle] {
             #expect(!text.contains { $0.isNumber }, "\(text)")
             #expect(!text.contains("ILCE"), "\(text)")
         }

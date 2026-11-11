@@ -71,8 +71,9 @@ struct BrowseAndImportAgainstSimulatorTests {
         await bench.finish()
     }
 
+    /// To Photos: a staged file isn't imported (Shamil, 11 Nov), so only an import gives the Imported badge.
     @Test func selectAllNewPicksStillsOnlyAndAnImportedFileIsNeverPickedAgain() async throws {
-        let bench = try await SimulatorBench.make()
+        let bench = try await SimulatorBench.make(setting: .photos)
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
         browse.selectAllNew()
@@ -92,15 +93,15 @@ struct BrowseAndImportAgainstSimulatorTests {
         #expect(bench.importer.camera?.key == bench.key)
         try await bench.untilImport(.finished(.completed))
         #expect(bench.importer.countsLine == "5 files imported.")
-        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Imported to Files" })
-        await bench.expectInFiles(importableStills)
+        #expect(bench.importer.rows.allSatisfy { $0.stateText == "Imported to Photos" })
+        await bench.expectInPhotos(importableStills)
         #expect(await bench.link.bytesCalls.sorted() == importableStills.sorted())   // each file fetched once
 
         // The badge: Browse follows the import's "more files imported" by itself, with nobody asking it to.
         #expect(bench.importer.importedRevision > 0)
         try await bench.until("the badges after the import") { browse.imported.count == importableStills.count }
         #expect(Set(browse.shown.filter(browse.isImported).map(\.name)) == importableStills)
-        #expect(browse.selectionBlock(for: try #require(browse.shown("DSC00002.ARW"))) == .imported)
+        #expect(browse.selectionBlock(for: try #require(browse.shown("DSC00002.ARW"))) == nil) // to stage it
         for item in browse.shown where importableStills.contains(item.name) {
             #expect(await bench.state(of: item) == .imported, "\(item.name)")
         }
@@ -149,7 +150,7 @@ struct BrowseAndImportAgainstSimulatorTests {
         browse.toggleSelection(try #require(browse.shown("DSC00001.ARW")))
         browse.toggleSelection(try #require(browse.shown("DSC00002.ARW")))
         #expect(await browse.importSelected() == .appended(2))
-        #expect(browse.importNotice == "Added 2 files to the import.")
+        #expect(browse.importNotice == "Added 2 files to staging.")
         await bench.importer.refresh()
         #expect(bench.importer.rows.map(\.name) == ["DSC00003.JPG", "DSC00002.ARW", "DSC00001.ARW"])
         #expect(bench.importer.rows.first?.stateText == "Copying from the camera")
@@ -157,12 +158,12 @@ struct BrowseAndImportAgainstSimulatorTests {
         // Picking a file already in the job adds nothing.
         browse.isSelecting = true
         browse.toggleSelection(try #require(browse.shown("DSC00001.ARW")))
-        #expect(await browse.importSelected() == .nothingNew)
+        #expect(await browse.importSelected() == .nothingNew(staging: true))
 
         await bench.link.release("DSC00003.JPG")
         try await bench.untilImport(.finished(.completed))
         #expect(await bench.link.bytesCalls == ["DSC00003.JPG", "DSC00002.ARW", "DSC00001.ARW"])
-        #expect(bench.importer.countsLine == "3 files imported.")
+        #expect(bench.importer.countsLine == "3 files staged.")
         await bench.expectInFiles(["DSC00003.JPG", "DSC00002.ARW", "DSC00001.ARW"])
         await bench.finish()
     }
@@ -262,7 +263,7 @@ struct SceneAndCableAgainstSimulatorTests {
         let again = await bench.replug()
         await bench.discovery.send(.appeared(bench.camera))
         try await bench.untilImport(.finished(.completed))
-        #expect(bench.importer.countsLine == "5 files imported.")
+        #expect(bench.importer.countsLine == "5 files staged.")
         await bench.expectInFiles(importableStills)   // no second copy of anything ("DSC00005 (1).HIF" and so on)
         let refetched = await again.bytesCalls
         #expect(refetched.first == "DSC00002.ARW")   // the interrupted file again, from its start
@@ -271,7 +272,8 @@ struct SceneAndCableAgainstSimulatorTests {
         #expect(await again.openCount == 1)
         for name in importableStills {
             let item = try #require(await again.item(named: name))
-            #expect(await bench.state(of: item) == .imported, "\(name)")
+            // Staged, not imported (Shamil, 11 Nov).
+            #expect(await bench.isStaged(item), "\(name)")
         }
         await bench.finish()
     }
@@ -437,37 +439,42 @@ extension BrowseModel {
 @Suite("The destination against the simulated camera", .serialized, .timeLimit(.minutes(5)))
 struct DestinationAgainstSimulatorTests {
     /// Lists the card and imports `names` (every new still if nil).
-    func importFromBrowse(_ bench: SimulatorBench, _ browse: BrowseModel, _ names: [String]? = nil) async throws
-        -> ImportRequestOutcome? {
+    func importFromBrowse(_ bench: SimulatorBench, _ browse: BrowseModel, _ names: [String]? = nil,
+                          as choice: DestinationKind? = nil) async throws -> ImportRequestOutcome? {
         if let names {
             browse.isSelecting = true
             for name in names { browse.toggleSelection(try #require(browse.shown(name))) }
         } else {
             browse.selectAllNew()
         }
-        return await browse.importSelected()
+        return await browse.importSelected(as: choice)
     }
 
-    @Test func settingFilesSendsTheFilesToTheCamerasFolderAndNeverAsksForPhotos() async throws {
+    @Test func stageFromTheMenuSendsTheFilesToTheStagingFolderAndNeverAsksForPhotos() async throws {
         let photos = FakePhotosAccess(.notDetermined)
         let bench = try await SimulatorBench.make(setting: .photos, photos: photos)
-        bench.app.settings.destination = .filesFolder   // the Settings screen's picker
-        #expect(bench.settingsStore.load() == DestinationSetting(preferred: .filesFolder))
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
-        #expect(try await importFromBrowse(bench, browse) == .started(5))
+        #expect(browse.importButtonTitle == "Import")
+        // The Import button's menu: Stage, this time.
+        #expect(try await importFromBrowse(bench, browse, as: .staging) == .started(5))
         try await bench.untilImport(.finished(.completed))
         #expect(photos.askCount == 0)
-        #expect(bench.importer.progress.destination == .files(.chosen))
-        #expect(bench.importer.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › ILCE-7CM2.")
-        #expect(bench.importer.filesReasonLine == "You chose Files in Settings.")
+        // Remembered, app-wide, as the button's default.
+        #expect(bench.settingsStore.load() == DestinationSetting(preferred: .staging))
+        #expect(browse.importButtonTitle == "Stage")
+        #expect(bench.importer.progress.destination == .stagedHere(.chosen))
+        #expect(bench.importer.destinationLine
+            == "Staged in On My iPhone › Shutter Bridge › Staging › ILCE-7CM2.")
+        #expect(bench.importer.stagingReasonLine
+            == "Not added to Photos. iCloud Drive isn't available to Shutter Bridge, so they stay on this iPhone.")
         #expect(!bench.importer.offersPhotosSettingsLink)
         await bench.expectInFiles(importableStills)
         #expect(await bench.destinations.photos.names.isEmpty)
         // Dated by the camera's capture date, so Files sorts them by it.
         let jpg = try #require(await bench.link.item(named: "DSC00003.JPG"))
-        let modified = try FileManager.default
-            .attributesOfItem(atPath: bench.filesFolder.appendingPathComponent("DSC00003.JPG").path)[.modificationDate]
+        let staged = try #require(bench.stagedFile(named: "DSC00003.JPG"))
+        let modified = try FileManager.default.attributesOfItem(atPath: staged.path)[.modificationDate]
         #expect(modified as? Date == jpg.captureDate)
         await bench.finish()
     }
@@ -480,12 +487,35 @@ struct DestinationAgainstSimulatorTests {
         #expect(try await importFromBrowse(bench, browse) == .started(5))
         try await bench.untilImport(.finished(.completed))
         #expect(photos.askCount == 0)   // denied isn't asked again; iOS wouldn't show the prompt
-        #expect(bench.importer.progress.destination == .files(.photosDenied))
-        #expect(bench.importer.filesReasonLine == ImportWording.filesReason(.photosDenied))
+        #expect(bench.importer.progress.destination == .stagedHere(.photosDenied))
+        #expect(bench.importer.stagingReasonLine == ImportWording.stagingReason(.photosDenied, place: testStagingPlace))
         #expect(bench.importer.offersPhotosSettingsLink)
-        #expect(bench.importer.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › ILCE-7CM2.")
+        #expect(bench.importer.destinationLine
+            == "Staged in On My iPhone › Shutter Bridge › Staging › ILCE-7CM2.")
         await bench.expectInFiles(importableStills)
         #expect(await bench.destinations.photos.names.isEmpty)
+        await bench.finish()
+    }
+
+    /// With Photos access off, Browse's *Import to Photos* stages: a staged pick is left out, so the notice counts
+    /// what is copied, and a pick of only staged files says they are staged.
+    @Test func photosDeniedLeavesOutStagedPicksAndSaysSo() async throws {
+        let bench = try await SimulatorBench.make(setting: .photos, photos: FakePhotosAccess(.denied))
+        let browse = bench.browse()
+        try await bench.until("the card to be listed") { browse.phase == .listed }
+        let raw = try #require(browse.shown("DSC00001.ARW"))
+        let identity = try #require(raw.identity(camera: bench.key, timeZone: .current))
+        await bench.catalogue.markStaged(identity, format: .raw, at: StagedLocation(
+            root: .onThisIPhone, relativePath: "Staging/ILCE-7CM2/2026-11-01/DSC00001.ARW"))
+        let picks = ["DSC00003.JPG", "DSC00002.ARW", "DSC00001.ARW"]
+        #expect(try await importFromBrowse(bench, browse, picks, as: .photos) == .started(2))
+        #expect(browse.importNotice == "Importing 2 files.")
+        try await bench.untilImport(.finished(.completed))
+        #expect(bench.importer.progress.destination == .stagedHere(.photosDenied))
+        #expect(Set(bench.importer.rows.map(\.name)) == ["DSC00003.JPG", "DSC00002.ARW"])
+
+        #expect(try await importFromBrowse(bench, browse, picks, as: .photos) == .nothingNew(staging: true))
+        #expect(browse.importNotice == "These files are already staged or being staged.")
         await bench.finish()
     }
 

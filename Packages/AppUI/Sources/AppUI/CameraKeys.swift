@@ -22,7 +22,7 @@ public typealias CameraKeying = @Sendable (CameraDescriptor, any CameraLink) asy
 /// - **MSC:** the link gives no material (the device is named after the card's volume, answers no PTP, and whether
 ///   its UUID carries the serial isn't recorded), so the key is the mode and the volume name ("Untitled"), hashed
 ///   the same way. Every card with that name shares the key, so MSC and MTP imports of one camera still go to two
-///   albums and Files folders (open for Shamil), and a job paused by a pulled cable continues only in the same mode.
+///   albums and staging folders (open for Shamil), and a job paused by a pulled cable continues only in the same mode.
 /// - **Remote Shoot:** nothing is imported, so the MSC-style fallback is fine.
 /// - **Wi-Fi** (wireless plan W15): the camera's serial number from the PTP/IP DeviceInfo (`IPLink`, through
 ///   `CameraIdentifying`), hashed before it becomes a key, like the MTP material: `wifi-serial:<hash>`. The key is the

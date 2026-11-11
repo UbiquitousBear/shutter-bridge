@@ -36,6 +36,18 @@ actor FailingCatalogue: CatalogueStore {
         records[identity] = CatalogueRecord(identity: identity, format: format, state: .partial,
                                             resumeOffset: offset, tempURL: tempURL)
     }
+    // Staging (Catalogue V3): not exercised by the engine yet.
+    func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {
+        if failUpserts { throw Broken() }
+        var record = records[identity] ?? CatalogueRecord(identity: identity, format: format, state: .new)
+        record.staged = location
+        records[identity] = record
+    }
+    func clearStaged(_ identity: ObjectIdentity) throws { records[identity]?.staged = nil }
+    func stagedStates(of identities: [ObjectIdentity]) throws -> Set<ObjectIdentity> {
+        if failStates { throw Broken() }
+        return Set(identities.filter { records[$0]?.staged != nil })
+    }
     func camera(_ key: CameraKey) throws -> CameraRecord? { nil }
     func cameras() throws -> [CameraRecord] { [] }
     func upsertCamera(_ record: CameraRecord) throws {}

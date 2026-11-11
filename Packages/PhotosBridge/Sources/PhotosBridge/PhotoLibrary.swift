@@ -66,7 +66,8 @@ public struct PhotoLibraryFailure: Error, Sendable, Hashable, CustomStringConver
 extension ImportDestinationFailure {
     /// The mapping from a Photos error to a commit failure (backlog section 5):
     /// - 3311 (`accessUserDenied`) and 3310 (`accessRestricted`) are a denial, not a failed file: the engine sends
-    ///   this file and the rest to Files (`DestinationDecision.afterDeniedSave(authorisation:)` picks the reason);
+    ///   this file and the rest to staging (`DestinationDecision.afterDeniedSave(authorisation:staging:)` picks the
+    ///   reason);
     /// - 3305 is no room; 3303, or a Cocoa "no such file", is a staged file gone;
     /// - anything else is rejected, with the domain and code for the log. A 3302 lands here: staged files are
     ///   complete-until-first-unlock, so it means something else is wrong with the file.

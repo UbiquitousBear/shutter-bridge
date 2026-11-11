@@ -11,6 +11,9 @@ public enum ImportSkipReason: Sendable, Hashable {
     case notAStill
     /// The link gave no capture date, so the file has no identity (section 4 decides what to do with these).
     case noCaptureDate
+    /// An import job was staged instead part-way (Photos access was turned off: a refused save, or a continue), and
+    /// the catalogue already has a staged copy of this file (by content), so it isn't staged a second time.
+    case alreadyStaged
 }
 
 /// Why a file failed: real errors only, after the retries (decision 4). Public for the Import screen's rows.
@@ -25,6 +28,9 @@ typealias FailureReason = ImportFailureReason
 
 enum FileOutcome: Sendable, Hashable {
     case imported(ImportedLocation?)
+    /// Staged (a stage job, or an import job staged instead), at this place in the staging folder (nil if the
+    /// destination didn't say). Not imported: the catalogue's state is kept (`CatalogueStore.markStaged`).
+    case staged(StagedLocation?)
     case skipped(SkipReason)
     case failed(FailureReason)
 }
@@ -77,6 +83,12 @@ final class FileEntry {
     var shownBytes: UInt64 = 0
     /// Its partial copy, on a link that resumes; nil on one that doesn't (each attempt has a folder of its own).
     var resumable: ResumableFile?
+    /// Queued under a stage job's done rule, which already left it out if it was staged. False for a file queued by
+    /// an import job, which ignores staging: if that job is staged instead, the file is checked for a staged copy
+    /// before it is committed (`ImportEngine.commitAndRecord`), so it is never staged twice.
+    var queuedUnderStagingRule = false
+    /// Its checkpoint writes in flight (`markPartial`), which its commit waits for before it writes its row.
+    let checkpointWrites = CheckpointWrites()
 
     init(identity: ObjectIdentity, index: Int, item: CameraItem) {
         self.identity = identity
@@ -90,6 +102,17 @@ final class FileEntry {
 
     var outcome: FileOutcome? {
         if case let .done(o) = phase { o } else { nil }
+    }
+
+    /// Whether a checkpoint may still be written to the catalogue for it: not once its commit has begun
+    /// (`ImportEngine.commit`), because the commit's row (`markStaged` or `upsert`) must be the file's last write. A
+    /// late checkpoint can't undo an imported row (the catalogue keeps it), but a staged one stays `.new`, and a
+    /// `.partial` written over it would bring back the resume the staging commit cleared.
+    var takesCheckpoints: Bool {
+        switch phase {
+        case .queued, .downloading, .waitingToRetry: true
+        case .committing, .done: false
+        }
     }
 
     /// Downloading, waiting to retry or committing: owned by a running file task.

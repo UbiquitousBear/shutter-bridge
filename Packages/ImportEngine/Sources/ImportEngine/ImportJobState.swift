@@ -105,6 +105,6 @@ public enum ImportEngineError: Error, Sendable, Hashable {
     /// The catalogue couldn't say which of the appended files are already imported.
     case catalogueUnavailable
     /// An `ImportRoute` built from `DestinationDecision.askForPhotosAccess`: the app asks for Photos access before
-    /// a job starts (`PhotosAccessGate.decision(for:)` never returns it) and builds the route from the answer.
+    /// a job starts (`PhotosAccessGate.decision(for:staging:)` never returns it) and builds the route from the answer.
     case photosAccessNotAsked
 }

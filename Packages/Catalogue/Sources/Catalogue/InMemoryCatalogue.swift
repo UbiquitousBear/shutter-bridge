@@ -27,19 +27,12 @@ public actor InMemoryCatalogue: CatalogueStore {
 
     /// By content, whatever the camera or folder (`ContentMatch`).
     public func states(of identities: [ObjectIdentity]) -> [ObjectIdentity: ObjectState] {
-        var candidates: [CatalogueRow] = []
-        for key in Set(identities.map(\.contentKey)) {
-            for identity in byContent[key] ?? [] {
-                if let record = records[identity] { candidates.append(CatalogueRow(record)) }
-            }
-        }
-        return ContentMatch.states(of: identities, among: candidates)
+        ContentMatch.states(of: identities, among: candidates(for: identities))
     }
 
+    /// Keeps the stored row's staged copy (`StagedMark.upserting`).
     public func upsert(_ record: CatalogueRecord) {
-        records[record.identity] = record
-        byContent[record.identity.contentKey, default: []].insert(record.identity)
-        ensureCamera(record.identity.camera)
+        write(StagedMark.upserting(record, over: stored(record.identity)))
     }
 
     public func saveListing(_ listing: CardListing) {
@@ -59,9 +52,24 @@ public actor InMemoryCatalogue: CatalogueStore {
     public func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL,
                             offset: UInt64) throws(CatalogueFailure) {
         if let record = try PartialMark.record(for: identity, format: format, tempURL: tempURL, offset: offset,
-                                               existing: records[identity]) {
+                                               existing: stored(identity)) {
             upsert(record)
         }
+    }
+
+    public func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) {
+        write(StagedMark.record(for: identity, format: format, at: location, existing: records[identity]))
+    }
+
+    public func clearStaged(_ identity: ObjectIdentity) {
+        guard var record = records[identity], record.staged != nil else { return }
+        record.staged = nil
+        records[identity] = record
+    }
+
+    /// By content, whatever the camera or folder (`ContentMatch`).
+    public func stagedStates(of identities: [ObjectIdentity]) -> Set<ObjectIdentity> {
+        ContentMatch.staged(of: identities, among: candidates(for: identities))
     }
 
     public func camera(_ key: CameraKey) -> CameraRecord? { cameraRows[key] }
@@ -74,6 +82,32 @@ public actor InMemoryCatalogue: CatalogueStore {
 
     /// Every row, in no particular order.
     public var allRecords: [CatalogueRecord] { Array(records.values) }
+
+    /// Every row with the content of one of `identities`.
+    private func candidates(for identities: [ObjectIdentity]) -> [CatalogueRow] {
+        var candidates: [CatalogueRow] = []
+        for key in Set(identities.map(\.contentKey)) {
+            for identity in byContent[key] ?? [] {
+                if let record = records[identity] { candidates.append(CatalogueRow(record)) }
+            }
+        }
+        return candidates
+    }
+
+    /// The stored row a write builds on, through the same rule as `SwiftDataCatalogue`'s
+    /// (`StagedMark.healed(_:among:)`). This store holds one row per identity, so there is no duplicate to take a
+    /// staged copy from, and the row comes back as it is.
+    private func stored(_ identity: ObjectIdentity) -> CatalogueRecord? {
+        let row = records[identity]
+        return StagedMark.healed(row, among: [row?.staged])
+    }
+
+    /// Stores the row as given, staged copy and all.
+    private func write(_ record: CatalogueRecord) {
+        records[record.identity] = record
+        byContent[record.identity.contentKey, default: []].insert(record.identity)
+        ensureCamera(record.identity.camera)
+    }
 
     /// A camera row with empty fields for `key` when there is none, as SwiftData's store makes one for a file row.
     private func ensureCamera(_ key: CameraKey) {

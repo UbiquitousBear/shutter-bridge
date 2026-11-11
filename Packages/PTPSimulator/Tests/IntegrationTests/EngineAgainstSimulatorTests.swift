@@ -9,10 +9,10 @@ import SimulatedLink
 import Testing
 
 /// The engine end to end against the simulated link, through its public surface only: a real `ImportEngine` on the
-/// continuous clock, the in-memory catalogue and the real Files destination in a temporary Documents folder. The
-/// engine's own tests cover its rules with fakes on a manual clock; these check that the rules hold against a link
-/// that behaves like ImageCaptureCore (backlog sections 3 and 7). Photos isn't reachable on Linux or in a package
-/// test, so every job goes to Files.
+/// continuous clock, the in-memory catalogue and the real staging destination (which replaced the Files folder) in a
+/// temporary Documents folder. The engine's own tests cover its rules with fakes on a manual clock; these check that
+/// the rules hold against a link that behaves like ImageCaptureCore (backlog sections 3 and 7). Photos isn't reachable
+/// on Linux or in a package test, so every job is staged.
 final class Bench {
     static let zone = TimeZone(identifier: "UTC")!
     let root: URL
@@ -21,7 +21,7 @@ final class Bench {
     let catalogue = InMemoryCatalogue()
     let camera = CameraKey(rawValue: "simulated-a7c2")
     let engine: ImportEngine
-    let files: FilesFolderDestination
+    let files: StagingFolderDestination
 
     init(downloadsInFlight: Int = 1) {
         root = FileManager.default.temporaryDirectory
@@ -31,12 +31,17 @@ final class Bench {
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         engine = ImportEngine(catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),
                               stagingDirectory: staging, timeZone: Bench.zone)
-        files = FilesFolderDestination(documentsDirectory: documents, cameraName: "ILCE-7CM2")
+        files = StagingFolderDestination(root: documents, place: Bench.place,
+                                         cameraName: "ILCE-7CM2", timeZone: Bench.zone)
     }
 
     deinit { try? FileManager.default.removeItem(at: root) }
 
-    var route: ImportRoute { .filesFolder(files, reason: .chosen) }
+    /// Where the bench stages: this iPhone, as every build does until the App ID has iCloud.
+    static let place = StagingPlace.onThisIPhone(.containerUnavailable)
+
+    /// *Stage* (Shamil, 11 Nov): the bench's jobs are stage jobs.
+    var route: ImportRoute { .staging(files, reason: .chosen, place: Bench.place, onThisIPhone: files) }
 
     func link(_ card: ScriptedCard, mode: CameraMode = .usb(.mtp)) -> SimulatedCameraLink {
         SimulatedCameraLink(card: card, mode: mode, timeZone: Bench.zone, chunkSize: 4096)
@@ -67,12 +72,15 @@ final class Bench {
         return nil
     }
 
-    /// The files in the camera's Files folder, by name.
+    /// The files in the camera's staging folder, by name, from every capture-day folder.
     func importedFiles() -> [String: Data] {
-        let folder = files.folderURL
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        let days = (try? FileManager.default.contentsOfDirectory(atPath: files.cameraFolderURL.path)) ?? []
         var out: [String: Data] = [:]
-        for name in names { out[name] = try? Data(contentsOf: folder.appendingPathComponent(name)) }
+        for day in days {
+            let folder = files.cameraFolderURL.appendingPathComponent(day)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for name in names { out[name] = try? Data(contentsOf: folder.appendingPathComponent(name)) }
+        }
         return out
     }
 
@@ -89,6 +97,12 @@ final class Bench {
     func state(of item: CameraItem) async -> ObjectState? {
         guard let identity = item.identity(camera: camera, timeZone: Bench.zone) else { return nil }
         return await catalogue.states(of: [identity])[identity]
+    }
+
+    /// Whether the catalogue has a staged copy of the file (by content): what a stage job's commit records.
+    func isStaged(_ item: CameraItem) async -> Bool {
+        guard let identity = item.identity(camera: camera, timeZone: Bench.zone) else { return false }
+        return await catalogue.stagedStates(of: [identity]).contains(identity)
     }
 
     /// Checks that every object of `card` named in `names` was imported with exactly its scripted bytes.
@@ -120,9 +134,13 @@ struct EngineAgainstSimulatorTests {
         #expect(progress.filesDone == 7 && progress.filesTotal == 7 && progress.filesSkipped == 0)
         #expect(progress.bytesDone == card.objects.reduce(0) { $0 + $1.size })
         #expect(bench.stagedFiles() == 0)
-        for item in try await link.list() { #expect(await bench.state(of: item) == .imported, "\(item.name)") }
+        // Staged, not imported (Shamil, 11 Nov): each file has its staged copy and stays new.
+        for item in try await link.list() {
+            #expect(await bench.isStaged(item), "\(item.name)")
+            #expect(await bench.state(of: item) == .new, "\(item.name)")
+        }
         // Files are dated by their capture date.
-        let first = bench.files.folderURL.appendingPathComponent("DSC00001.ARW")
+        let first = bench.files.cameraFolderURL.appendingPathComponent("2026-11-01/DSC00001.ARW")
         let modified = try FileManager.default.attributesOfItem(atPath: first.path)[.modificationDate] as? Date
         #expect(modified == PTPDateTime.parse("20261101T090000", defaultTimeZone: Bench.zone))
 
@@ -134,6 +152,22 @@ struct EngineAgainstSimulatorTests {
         let all = await link.card
         bench.expectImported(all.objects.map(\.filename), from: all)
         #expect(await link.bytesCalls.count == 9)
+    }
+
+    /// A stage job leaves out what is already staged (by content), even when every file is picked by hand: nothing is
+    /// copied twice, and the job has nothing to do.
+    @Test func aSecondStageOfTheSameFilesCopiesNothing() async throws {
+        let bench = Bench()
+        let card = try shoot()
+        let link = bench.link(card)
+        try await bench.start(link)
+        #expect(try await bench.waitFinished() == .completed)
+        let listed = try await link.list()
+        try await bench.engine.start(.items(listed), from: link, camera: bench.camera, to: bench.route)
+        #expect(try await bench.waitFinished() == .completed)
+        #expect(await link.bytesCalls.count == card.objects.count)
+        #expect(await bench.engine.currentProgress.filesTotal == 0)
+        bench.expectImported(card.objects.map(\.filename), from: card) // no "DSC00001 (1).ARW"
     }
 
     @Test func aSlowCatalogueHoldsTheJobUntilItIsListed() async throws {

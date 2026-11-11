@@ -34,9 +34,12 @@ extension AppModel {
     /// - one `ImportEngine` with it, staging under the temporary folder (`tmp/Imports`, the engine's default, which it
     ///   empties at start-up);
     /// - Photos through `SystemPhotoLibrary` (`PhotosLibraryDestination`, one album per camera by default), and the
-    ///   Files folder under Documents, one folder per camera (`FilesFolderDestination`), which the Info.plist shows in
-    ///   Files as On My iPhone › Shutter Bridge;
-    /// - the destination setting and the album identifiers in `UserDefaults`;
+    ///   staging folder, one folder per camera and capture day (`StagingFolderDestination`): in the app's iCloud Drive
+    ///   folder when `UbiquityStagingLocator` finds it (iCloud Drive › Shutter Bridge › Staging, moved in with
+    ///   `UbiquitousFileMover`), otherwise under Documents, which the Info.plist shows in Files as On My iPhone ›
+    ///   Shutter Bridge › Staging;
+    /// - the Import button's remembered choice (*Import to Photos* or *Stage*) and the album identifiers in
+    ///   `UserDefaults`;
     /// - discovery through `USBCameraBrowser`, and the camera key from the USB link's key material
     ///   (`CameraKeys.keying(material:)`: hashed device UUID in MTP, mode and volume name in MSC; unverified, backlog
     ///   sections 2 and 4). The key groups imports (album, Camera row, last-known card, reconnecting); whether a file
@@ -57,7 +60,11 @@ extension AppModel {
             library: library,
             albumStore: UserDefaultsAlbumIdentifierStore(),
             metadata: ImageIOMetadataReader(),
-            documentsDirectory: URL.documentsDirectory
+            documentsDirectory: URL.documentsDirectory,
+            // Until the App ID has iCloud and the app is signed with its entitlements (docs/ci.md), the locator finds
+            // no container and staging goes to the app's folder on this iPhone.
+            stagingLocator: UbiquityStagingLocator(),
+            iCloudDriveMover: UbiquitousFileMover()
         )
         let wifiLog = OSLogBenchLog()
         let connections = WirelessConnections(

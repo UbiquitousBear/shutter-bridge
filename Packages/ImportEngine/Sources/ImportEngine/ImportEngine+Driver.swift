@@ -1,6 +1,7 @@
 import CameraTransport
 import Catalogue
 import Foundation
+import PhotosBridge
 
 extension ImportEngine {
     /// One job from start to finish: list and diff, download, and on a removal wait for the camera, relist and find
@@ -81,9 +82,11 @@ extension ImportEngine {
         }
     }
 
-    /// The first listing: what to import, against the catalogue (stage 3), which answers by content (Shamil, 8 Nov).
+    /// The first listing: what to copy, against the catalogue (stage 3), which answers by content (Shamil, 8 Nov).
     /// A picked file is found on this listing by content too, since Browse's catalogue and this one may report its
-    /// folder differently; its row keeps the pick's identity.
+    /// folder differently; its row keeps the pick's identity. What counts as done follows the job's purpose
+    /// (`DoneRule`; Shamil, 11 Nov): an import job leaves out imported files, a stage job staged ones (and imported
+    /// ones where only new files were asked for).
     func diff(_ listed: [CameraItem], id: UUID, generation: Int) async {
         guard let job = currentListing(id, generation) else { return }
         let camera = job.camera
@@ -109,8 +112,8 @@ extension ImportEngine {
                 }
                 planned.append((item, identity, .queue))
             }
-        case let .items(picked):
-            // An explicit pick: in the order picked, matched by content against this listing for current handles.
+        case let .items(picked), let .newItems(picked):
+            // A pick: in the order picked, matched by content against this listing for current handles.
             keepSkippedRows = true
             let onCard = Self.byContent(listed, camera: camera, timeZone: zone)
             for item in picked {
@@ -132,13 +135,15 @@ extension ImportEngine {
         // the file would be queued, copied and saved again.
         await settleCommits(ofJobsOtherThan: id)
         guard currentListing(id, generation) != nil else { return }
-        let states: [ObjectIdentity: ObjectState]
+        let facts: DoneFacts
         do {
-            states = try await catalogue.states(of: planned.map(\.identity))
+            guard let read = try await doneFacts(of: planned.map(\.identity), job: id) else { return }
+            facts = read
         } catch {
             if let job = currentListing(id, generation) { end(job, .catalogueUnavailable) }
             return
         }
+        let states = facts.states
         // Partial files an earlier job left (its checkpoints, `markPartial`), for the files about to be queued.
         var partials: [ObjectIdentity: CatalogueRecord] = [:]
         for p in planned where states[p.identity] == .partial {
@@ -157,14 +162,19 @@ extension ImportEngine {
         for p in planned {
             defer { index += 1 }
             let state = states[p.identity] ?? .new
-            let wanted = keepSkippedRows ? state != .imported : (state == .new || state == .partial)
-            guard wanted else { continue }
+            let staged = facts.staged.contains(p.identity)
+            guard DoneRule.isWanted(state: state, staged: staged, purpose: facts.purpose,
+                                    newOnly: job.selection.newOnly, wholeCard: !keepSkippedRows) else {
+                if staged && facts.purpose == .staging { trace(.alreadyStaged(p.item.name)) }
+                continue
+            }
             // Picked twice (one file in two folders): one file, imported once.
             guard seen.insert(p.identity.contentKey).inserted else {
                 trace(.sameFileListedTwice(p.item.name))
                 continue
             }
             let entry = FileEntry(identity: p.identity, index: index, item: p.item)
+            entry.queuedUnderStagingRule = facts.purpose == .staging
             job.add(entry)   // replaces a file of the same content appended during the listing
             switch p.plan {
             case .queue:
@@ -184,6 +194,30 @@ extension ImportEngine {
         job.hasListed = true
         trace(.listed(onCard: listed.count, queued: queued.count))
         refreshState()
+    }
+
+    /// What the catalogue says about some files, as the done rule needs it for a job's purpose.
+    struct DoneFacts {
+        var states: [ObjectIdentity: ObjectState]
+        /// The files with a staged copy; read only for a stage job (empty for an import job).
+        var staged: Set<ObjectIdentity>
+        /// The job's purpose the answers were read for.
+        var purpose: DestinationKind
+    }
+
+    /// The states of `identities` and, for a stage job, which are staged, both by content. Read again when the job's
+    /// purpose changed meanwhile (a continue that stages an import job), so the answers match the purpose they are
+    /// used with; a purpose only ever changes from import to stage, so that happens at most once. Nil once the job
+    /// has gone.
+    func doneFacts(of identities: [ObjectIdentity], job id: UUID) async throws -> DoneFacts? {
+        guard var purpose = current(id)?.route.purpose else { return nil }
+        while true {
+            let states = try await catalogue.states(of: identities)
+            let staged = purpose == .staging ? try await catalogue.stagedStates(of: identities) : []
+            guard let job = current(id) else { return nil }
+            if job.route.purpose == purpose { return DoneFacts(states: states, staged: staged, purpose: purpose) }
+            purpose = job.route.purpose
+        }
     }
 
     /// A listing after a replug: every file left is found again by content (name, capture time, size, so a listing

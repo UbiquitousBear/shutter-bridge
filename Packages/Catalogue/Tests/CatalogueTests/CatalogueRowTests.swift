@@ -204,3 +204,103 @@ struct CatalogueRowTests {
         #expect(decoded.identity == r.identity && decoded.state == .partial && decoded.location == nil)
     }
 }
+
+/// The staged copy's columns (schema version 3; Shamil, 11 Nov), in plain values.
+@Suite("Catalogue rows: staged copy")
+struct StagedRowTests {
+    typealias C = CatalogueContractTests
+
+    let identity = C.id("DSC00001.ARW", "20261101T143005", 44_000_000)
+    let location = StagedLocation(root: .iCloudDrive, relativePath: "Staging/ILCE-7CM2/2026-11-01/DSC00001.ARW",
+                                  stagedAt: Date(timeIntervalSinceReferenceDate: 815_000_100.25))
+
+    @Test func stagedColumnsAreWhatTheSchemaStores() {
+        let row = CatalogueRow(CatalogueRecord(identity: identity, format: .raw, state: .imported,
+                                               location: .photosAsset(localIdentifier: "A/L0/001"), staged: location))
+        #expect(row.stagedRelativePath == "Staging/ILCE-7CM2/2026-11-01/DSC00001.ARW")
+        #expect(row.stagedRoot == "iCloudDrive")
+        #expect(row.stagedAt == Date(timeIntervalSinceReferenceDate: 815_000_100.25))
+        #expect(row.assetLocalID == "A/L0/001")
+        let local = CatalogueRow(CatalogueRecord(identity: identity, format: .raw, state: .new,
+                                                 staged: StagedLocation(root: .onThisIPhone, relativePath: "p")))
+        #expect(local.stagedRoot == "onThisIPhone")
+        #expect(local.stagedAt == nil)
+        let none = CatalogueRow(CatalogueRecord(identity: identity, format: .raw, state: .new))
+        #expect(none.stagedRelativePath == nil && none.stagedRoot == nil && none.stagedAt == nil)
+    }
+
+    @Test func rowsRoundTripTheStagedCopy() {
+        for root in StagingRoot.allCases {
+            for stagedAt in [nil, Date(timeIntervalSinceReferenceDate: 815_000_200.5)] {
+                for state in ObjectState.allCases {
+                    let r = CatalogueRecord(identity: identity, format: .raw, state: state,
+                                            staged: StagedLocation(root: root, relativePath: "Staging/A/B/C.ARW",
+                                                                   stagedAt: stagedAt))
+                    #expect(CatalogueRow(r).record == r)
+                }
+            }
+        }
+    }
+
+    @Test("A root this build doesn't know, or a root without a path, reads as not staged rather than failing")
+    func unknownStagedRootReadsAsNotStaged() {
+        var row = CatalogueRow(CatalogueRecord(identity: identity, format: .raw, state: .imported, staged: location))
+        row.stagedRoot = "aRootFromALaterVersion"
+        #expect(row.record?.staged == nil)
+        #expect(row.record?.state == .imported)
+        row.stagedRoot = nil
+        #expect(row.record?.staged == nil)
+        row.stagedRoot = "iCloudDrive"
+        row.stagedRelativePath = nil
+        #expect(row.record?.staged == nil)
+    }
+
+    @Test("Staged is matched by content, as imported is; rows with an unknown root don't count")
+    func stagedByContent() {
+        let otherCamera = C.id("dsc00001.arw", "20261101T143005", 44_000_000, folder: "", camera: C.otherCamera)
+        let otherSize = C.id("DSC00001.ARW", "20261101T143005", 44_000_001)
+        let rows = [CatalogueRow(CatalogueRecord(identity: identity, format: .raw, state: .new, staged: location))]
+        #expect(ContentMatch.staged(of: [identity, otherCamera, otherSize], among: rows) == [identity, otherCamera])
+        var unknown = rows[0]
+        unknown.stagedRoot = "later"
+        #expect(ContentMatch.staged(of: [identity], among: [unknown]).isEmpty)
+    }
+
+    @Test("A record encoded before staging decodes as not staged; an unknown root decodes as not staged")
+    func recordCodable() throws {
+        let staged = CatalogueRecord(identity: identity, format: .raw, state: .imported, staged: location)
+        let data = try JSONEncoder().encode(staged)
+        #expect(try JSONDecoder().decode(CatalogueRecord.self, from: data) == staged)
+
+        let unstaged = CatalogueRecord(identity: identity, format: .raw, state: .imported)
+        let old = try JSONEncoder().encode(unstaged)
+        #expect(!String(decoding: old, as: UTF8.self).contains("staged"))
+        #expect(try JSONDecoder().decode(CatalogueRecord.self, from: old) == unstaged)
+
+        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var stagedObject = try #require(object["staged"] as? [String: Any])
+        stagedObject["root"] = "aRootFromALaterVersion"
+        object["staged"] = stagedObject
+        let later = try JSONSerialization.data(withJSONObject: object)
+        #expect(try JSONDecoder().decode(CatalogueRecord.self, from: later) == unstaged)
+    }
+
+    @Test("markStaged's rule: new row, kept state and location, partial back to new with the resume cleared")
+    func stagedMarkRule() {
+        #expect(StagedMark.record(for: identity, format: .raw, at: location, existing: nil)
+            == CatalogueRecord(identity: identity, format: .raw, state: .new, staged: location))
+        let imported = CatalogueRecord(identity: identity, format: .raw, state: .imported,
+                                       location: .photosAsset(localIdentifier: "A/L0/001"))
+        var importedStaged = imported
+        importedStaged.staged = location
+        #expect(StagedMark.record(for: identity, format: .raw, at: location, existing: imported) == importedStaged)
+        let partial = CatalogueRecord(identity: identity, format: .raw, state: .partial, resumeOffset: 4096,
+                                      tempURL: CameraFixtures.partialFile("DSC00001"))
+        #expect(StagedMark.record(for: identity, format: .raw, at: location, existing: partial)
+            == CatalogueRecord(identity: identity, format: .raw, state: .new, staged: location))
+        // upsert's rule: the stored copy wins over the record's on an update; an insert takes the record's.
+        #expect(StagedMark.upserting(imported, over: importedStaged) == importedStaged)
+        #expect(StagedMark.upserting(importedStaged, over: imported) == imported)
+        #expect(StagedMark.upserting(importedStaged, over: nil) == importedStaged)
+    }
+}

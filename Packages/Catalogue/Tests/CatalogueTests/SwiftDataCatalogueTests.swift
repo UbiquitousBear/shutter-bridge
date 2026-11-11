@@ -6,8 +6,9 @@ import Testing
 @testable import Catalogue
 
 /// What only the SwiftData store has: the schema opening, a store on disk reopening, a version-1 store (as every
-/// build before Catalogue V2, 17.1 and 18.1, wrote it) migrating to version 2, and duplicates written by someone else
-/// being healed. Runs where SwiftData exists (a Mac, CI's iOS Simulator run), not on Linux.
+/// build before Catalogue V2, 17.1 and 18.1, wrote it) and a version-2 store (every build from then until staging)
+/// migrating to the current version, and duplicates written by someone else being healed. Runs where SwiftData exists
+/// (a Mac, CI's iOS Simulator run), not on Linux.
 @Suite("SwiftData catalogue")
 struct SwiftDataCatalogueTests {
     typealias C = CatalogueContractTests
@@ -15,15 +16,18 @@ struct SwiftDataCatalogueTests {
     @Test func theSchemaIsVersionedWithAPlan() {
         #expect(CatalogueSchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
         #expect(CatalogueSchemaV2.versionIdentifier == Schema.Version(2, 0, 0))
+        #expect(CatalogueSchemaV3.versionIdentifier == Schema.Version(3, 0, 0))
         #expect(CatalogueSchemaV1.models.count == 3)
         #expect(CatalogueSchemaV2.models.count == 3)
-        #expect(CatalogueMigrationPlan.schemas.count == 2)
-        #expect(CatalogueMigrationPlan.stages.count == 1)
+        #expect(CatalogueSchemaV3.models.count == 3)
+        #expect(CatalogueMigrationPlan.schemas.count == 3)
+        #expect(CatalogueMigrationPlan.stages.count == 2)
         // The store opens the current version.
-        #expect(ObjectIdentifier(CatalogueCurrentSchema.self) == ObjectIdentifier(CatalogueSchemaV2.self))
+        #expect(ObjectIdentifier(CatalogueCurrentSchema.self) == ObjectIdentifier(CatalogueSchemaV3.self))
         // CloudKit-compatible: nothing is unique, neither an attribute nor a `#Unique` constraint on the model (the
-        // store enforces identity), and every relationship is optional. Both versions.
-        for version in [CatalogueSchemaV1.self, CatalogueSchemaV2.self] as [any VersionedSchema.Type] {
+        // store enforces identity), and every relationship is optional. Every version.
+        for version in [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self]
+            as [any VersionedSchema.Type] {
             let schema = Schema(versionedSchema: version)
             for entity in schema.entities {
                 #expect(entity.uniquenessConstraints.isEmpty, "\(entity.name)")
@@ -62,6 +66,47 @@ struct SwiftDataCatalogueTests {
         }
     }
 
+    /// Version 3 (staging, 11 Nov) is version 2 plus three optional attributes on `CameraObject`, which is what makes
+    /// the stage lightweight. Pins version 3's names, as version 1's and 2's are pinned.
+    @Test func versionThreeAddsOnlyTheOptionalStagedCopy() throws {
+        let v2 = Schema(versionedSchema: CatalogueSchemaV2.self)
+        let v3 = Schema(versionedSchema: CatalogueSchemaV3.self)
+        func names(_ schema: Schema) -> [String: Set<String>] {
+            Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, Set($0.attributes.map(\.name))) })
+        }
+        func relationships(_ schema: Schema) -> [String: Set<String>] {
+            Dictionary(uniqueKeysWithValues: schema.entities.map { ($0.name, Set($0.relationships.map(\.name))) })
+        }
+        let added: Set<String> = ["stagedRelativePath", "stagedRoot", "stagedAt"]
+        var expected = names(v2)
+        expected["CameraObject", default: []].formUnion(added)
+        #expect(names(v3) == expected)
+        #expect(relationships(v3) == relationships(v2))
+        let object = try #require(v3.entities.first { $0.name == "CameraObject" })
+        for name in added {
+            let attribute = try #require(object.attributes.first { $0.name == name })
+            #expect(attribute.isOptional, "\(name)")
+        }
+        // Version 3's names, pinned.
+        #expect(Set(v3.entities.map { Set($0.attributes.map(\.name)) }) == [
+            // Camera
+            ["serial", "model", "friendlyName", "lastSeen", "preferredCarrier", "autoImport", "wifiSSID", "lastIP",
+             "ptpipGUID", "bluetoothPeripheralID", "lastListedAt", "lastListing"],
+            // CameraObject
+            ["cameraKey", "identityKey", "folder", "filename", "captureDate", "size", "format", "state",
+             "resumeOffset", "tempURL", "assetLocalID", "fileRelativePath", "pairStem",
+             "stagedRelativePath", "stagedRoot", "stagedAt"],
+            // ImportJob
+            ["jobID", "startedAt", "finishedAt", "selection", "bytesTotal", "bytesDone", "outcome"],
+        ])
+        #expect(Set(v3.entities.map { Set($0.relationships.map(\.name)) }) == [["objects", "jobs"], ["camera"]])
+        for entity in v3.entities {
+            for attribute in entity.attributes {
+                #expect(!attribute.name.lowercased().contains("pass"), "\(entity.name).\(attribute.name)")
+            }
+        }
+    }
+
     /// The schema every build before Catalogue V2 (17.1 and 18.1) shipped, which every later build has to open as it
     /// is: changing a version-1 model without a new version and a stage would leave the store unopenable ("Shutter
     /// Bridge couldn't start"). Shamil's rule of 8 Nov needed no change (it reads the name, date and size columns every
@@ -72,7 +117,8 @@ struct SwiftDataCatalogueTests {
         #expect(CatalogueSchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
         // Version 1 stays first in the plan, so a store it wrote migrates rather than failing to open.
         #expect(CatalogueMigrationPlan.schemas.map { ObjectIdentifier($0) }
-            == [ObjectIdentifier(CatalogueSchemaV1.self), ObjectIdentifier(CatalogueSchemaV2.self)])
+            == [ObjectIdentifier(CatalogueSchemaV1.self), ObjectIdentifier(CatalogueSchemaV2.self),
+                ObjectIdentifier(CatalogueSchemaV3.self)])
         let schema = Schema(versionedSchema: CatalogueSchemaV1.self)
         let attributes = Set(schema.entities.map { Set($0.attributes.map(\.name)) })
         #expect(attributes == [
@@ -257,6 +303,147 @@ struct SwiftDataCatalogueTests {
         #expect(try await store.camera(CameraFixtures.key) == CameraFixtures.full)
     }
 
+    // MARK: - Version 2 → version 3 (staging, 11 Nov)
+
+    /// The plan every build from Catalogue V2 until staging shipped with: versions 1 and 2.
+    enum Version2Plan: SchemaMigrationPlan, Sendable {
+        static var schemas: [any VersionedSchema.Type] { [CatalogueSchemaV1.self, CatalogueSchemaV2.self] }
+        static var stages: [MigrationStage] {
+            [MigrationStage.lightweight(fromVersion: CatalogueSchemaV1.self, toVersion: CatalogueSchemaV2.self)]
+        }
+    }
+
+    /// A container on disk as every build from Catalogue V2 until staging made one: version 2's schema and plan,
+    /// CloudKit off.
+    static func makeVersion2Container(storeURL: URL) throws -> ModelContainer {
+        try FileManager.default.createDirectory(at: storeURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let schema = Schema(versionedSchema: CatalogueSchemaV2.self)
+        let configuration = ModelConfiguration(schema: schema, url: storeURL,
+                                               cloudKitDatabase: ModelConfiguration.CloudKitDatabase.none)
+        return try ModelContainer(for: schema, migrationPlan: Version2Plan.self, configurations: configuration)
+    }
+
+    /// A version-2 store holding real data (a camera with its peripheral, imported, partial and Files rows, a job)
+    /// opens as version 3 with every value carried and nothing staged, and takes version 3's staging writes, which
+    /// survive a reopen.
+    @Test func aVersion2StoreWithRealDataOpensAsVersion3WithEverythingCarried() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "catalogue-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "Catalogue.store", directoryHint: .notDirectory)
+        let key = C.camera
+        let imported = CatalogueRecord(identity: C.id("DSC04512.ARW", "20261108T101530", 40_329_216),
+                                       format: .raw, state: .imported,
+                                       location: .photosAsset(localIdentifier: "E/L0/001"))
+        let partialFile = CameraFixtures.partialFile("DSC04513")
+        let partial = CatalogueRecord(identity: C.id("DSC04513.ARW", "20261108T101602", 41_000_000),
+                                      format: .raw, state: .partial, resumeOffset: 16_777_216, tempURL: partialFile)
+        let toFiles = CatalogueRecord(identity: C.id("DSC04515.HIF", "20261108T101604", 9_000_000, folder: ""),
+                                      format: .heif, state: .imported,
+                                      location: .file(relativePath: "ILCE-7CM2/DSC04515.HIF"))
+        let camera = CameraRecord(key: key, model: "ILCE-7CM2", friendlyName: "Shamil's camera",
+                                  lastSeen: Date(timeIntervalSinceReferenceDate: 815_000_200.5),
+                                  preferredCarrier: .wifi, autoImport: false, wifiSSID: CameraFixtures.ssid,
+                                  lastIP: CameraFixtures.ip, ptpipGUID: CameraFixtures.guid,
+                                  bluetoothPeripheralID: CameraFixtures.peripheral)
+        do {
+            let container = try Self.makeVersion2Container(storeURL: url)
+            let context = ModelContext(container)
+            let row = CatalogueSchemaV2.Camera(serial: key.rawValue)
+            context.insert(row)
+            row.apply(CameraColumns(camera))
+            for record in [imported, partial, toFiles] {
+                let object = CatalogueSchemaV2.CameraObject(row: CatalogueRow(record))
+                context.insert(object)
+                object.camera = row
+            }
+            let job = CatalogueSchemaV2.ImportJob(startedAt: Date(timeIntervalSinceReferenceDate: 815_000_000))
+            context.insert(job)
+            job.camera = row
+            try context.save()
+        }
+
+        let staged = StagedLocation(root: .iCloudDrive, relativePath: "Staging/ILCE-7CM2/2026-11-08/DSC04512.ARW",
+                                    stagedAt: Date(timeIntervalSinceReferenceDate: 815_000_300.75))
+        do {
+            let store = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+            #expect(Set(try await store.allRecords()) == [imported, partial, toFiles])
+            #expect(try await store.stagedStates(of: [imported.identity, partial.identity, toFiles.identity]).isEmpty)
+            #expect(try await store.camera(key) == camera)
+            let context = ModelContext(store.modelContainer)
+            let cameras = try context.fetch(FetchDescriptor<Camera>())
+            #expect(cameras.count == 1)
+            #expect(cameras.first?.objects?.count == 3)
+            #expect(cameras.first?.jobs?.count == 1)
+
+            // Version 3's writes.
+            try await store.markStaged(imported.identity, format: .raw, at: staged)
+            try await store.markStaged(partial.identity, format: .raw,
+                                       at: StagedLocation(root: .onThisIPhone, relativePath: "Staging/x/y/z.ARW"))
+        }
+
+        let reopened = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+        var importedStaged = imported
+        importedStaged.staged = staged
+        #expect(try await reopened.record(for: imported.identity) == importedStaged)
+        #expect(try await reopened.record(for: partial.identity)
+            == CatalogueRecord(identity: partial.identity, format: .raw, state: .new,
+                               staged: StagedLocation(root: .onThisIPhone, relativePath: "Staging/x/y/z.ARW")))
+        #expect(try await reopened.record(for: toFiles.identity) == toFiles)
+        #expect(try await reopened.stagedStates(of: [imported.identity, partial.identity, toFiles.identity])
+            == [imported.identity, partial.identity])
+    }
+
+    /// A version-2 store with no rows at all opens too.
+    @Test func anEmptyVersion2StoreOpensAsVersion3() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "catalogue-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appending(path: "Catalogue.store", directoryHint: .notDirectory)
+        do {
+            let container = try Self.makeVersion2Container(storeURL: url)
+            try ModelContext(container).save()
+        }
+        let store = SwiftDataCatalogue(modelContainer: try SwiftDataCatalogue.makeContainer(storeURL: url))
+        #expect(try await store.allRecords().isEmpty)
+        let identity = C.id("DSC00001.ARW", "20261101T143005", 44_000_000)
+        try await store.markStaged(identity, format: .raw,
+                                   at: StagedLocation(root: .iCloudDrive, relativePath: "Staging/a/b/c.ARW"))
+        #expect(try await store.stagedStates(of: [identity]) == [identity])
+    }
+
+    /// The staged copy's columns as SwiftData stores them, and a root this build doesn't know read as not staged.
+    @Test func theStagedColumnsAreStoredRawAndAnUnknownRootReadsAsNotStaged() async throws {
+        let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
+        let identity = C.id("DSC00001.ARW", "20261101T143005", 44_000_000)
+        let at = Date(timeIntervalSinceReferenceDate: 815_000_100.25)
+        do {
+            // A row as a later version might write it, with a root this build doesn't know.
+            var row = CatalogueRow(CatalogueRecord(identity: identity, format: .raw, state: .imported))
+            row.stagedRelativePath = "Staging/a/b/c.ARW"
+            row.stagedRoot = "aRootFromALaterVersion"
+            row.stagedAt = at
+            let context = ModelContext(container)
+            context.insert(CameraObject(row: row))
+            try context.save()
+        }
+        let store = SwiftDataCatalogue(modelContainer: container)
+        #expect(try await store.record(for: identity)
+            == CatalogueRecord(identity: identity, format: .raw, state: .imported))
+        #expect(try await store.stagedStates(of: [identity]).isEmpty)
+
+        try await store.markStaged(identity, format: .raw,
+                                   at: StagedLocation(root: .onThisIPhone, relativePath: "Staging/d/e/f.ARW",
+                                                      stagedAt: at))
+        let objects = try ModelContext(container).fetch(FetchDescriptor<CameraObject>())
+        #expect(objects.count == 1)
+        #expect(objects.first?.stagedRelativePath == "Staging/d/e/f.ARW")
+        #expect(objects.first?.stagedRoot == "onThisIPhone")
+        #expect(objects.first?.stagedAt == at)
+        #expect(objects.first?.state == "imported")
+    }
+
     @Test func aCheckpointHealsDuplicatesAndLinksTheCameraRow() async throws {
         let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
         let identity = C.id("DSC00004.ARW", "20261101T143008", 44_000_000)
@@ -413,6 +600,35 @@ struct SwiftDataCatalogueTests {
         let skipped = CatalogueRecord(identity: identity, format: .raw, state: .skipped)
         try await store.upsert(skipped)
         #expect(try await store.allRecords() == [skipped])
+    }
+
+    /// Healing duplicates keeps a staged copy recorded on a row that is deleted (`StagedMark.healed(_:among:)`), for
+    /// an upsert and for a checkpoint, so the staged file never loses its row.
+    @Test func healingDuplicatesKeepsAStagedCopyFromALessAdvancedRow() async throws {
+        let staged = StagedLocation(root: .onThisIPhone, relativePath: "Staging/ILCE-7CM2/2026-11-01/DSC00003.ARW")
+        for write in ["upsert", "markPartial"] {
+            let container = try SwiftDataCatalogue.makeContainer(storeURL: nil)
+            let identity = C.id("DSC00003.ARW", "20261101T143007", 44_000_000)
+            // The furthest-along row has no staged copy; the less advanced one has.
+            let context = ModelContext(container)
+            context.insert(CameraObject(row: CatalogueRow(CatalogueRecord(identity: identity, format: .raw,
+                                                                          state: .new, staged: staged))))
+            context.insert(CameraObject(row: CatalogueRow(CatalogueRecord(identity: identity, format: .raw,
+                                                                          state: .skipped))))
+            try context.save()
+
+            let store = SwiftDataCatalogue(modelContainer: container)
+            if write == "upsert" {
+                try await store.upsert(CatalogueRecord(identity: identity, format: .raw, state: .skipped))
+            } else {
+                try await store.markPartial(identity, format: .raw, tempURL: CameraFixtures.partialFile("DSC00003"),
+                                            offset: 4096)
+            }
+            let rows = try await store.allRecords()
+            #expect(rows.count == 1, "\(write)")
+            #expect(rows.first?.staged == staged, "\(write)")
+            #expect(try await store.stagedStates(of: [identity]) == [identity], "\(write)")
+        }
     }
 
     @Test func duplicateCameraRowsWrittenElsewhereReadAlikeAndAreAllWritten() async throws {

@@ -22,7 +22,7 @@ struct AppModelTests {
         let app = appModel(discovery: discovery)
         #expect(app.cameras.importModel === app.importer)
         #expect(app.importer.cameraFinder === app.cameras)
-        #expect(app.settings.destination == .photos)
+        #expect(app.importer.importChoice == .photos)
         #expect(!app.keepsScreenOn)
 
         await discovery.allow()

@@ -74,7 +74,7 @@ public enum CamerasWording {
     static let volumeDefaultNames: Set<String> = ["untitled", "no name"]
 
     /// The one name the app shows and files under for a camera: the Browse title, the Cameras row, the disconnect
-    /// message, and the album and Files folder made for a new import. In Image Transfer (MSC) ImageCaptureCore names
+    /// message, and the album and staging folder made for a new import. In Image Transfer (MSC) ImageCaptureCore names
     /// the device after the card's volume ("Untitled"), which reads like a placeholder, so the app says "Camera"
     /// there, and for a volume default or an empty name in any mode; otherwise the camera's own name.
     public static func displayName(for camera: CameraDescriptor) -> String {
@@ -323,7 +323,33 @@ extension BrowseWording {
     public static let deselectAll = "Deselect All"
     public static let importAction = "Import"
     public static let importedBadge = "Imported"
+    /// A photo with a staged copy (Shamil, 11 Nov). Imported takes its place on the cell when both apply.
+    public static let stagedBadge = "Staged"
     public static let new = "New"
+
+    // The Import button (Shamil, 11 Nov): its primary action is the remembered choice, and its menu offers both.
+    /// The primary action when the remembered choice is *Stage*.
+    public static let stageAction = "Stage"
+    public static let importToPhotos = "Import to Photos"
+    public static let stageInICloudDrive = "Stage in iCloud Drive"
+    public static let stageOnIPhone = "Stage on iPhone"
+    /// The Import button's VoiceOver hint: what it does, not the gesture (VoiceOver reaches the menu its own way;
+    /// how it announces a menu with a primary action is to be confirmed on the iPhone).
+    public static let importButtonHint = "Uses the last choice. Import to Photos and Stage are in its menu."
+
+    /// The Import button's title: "Import", or "Stage" when the remembered choice is *Stage*.
+    public static func importButtonTitle(_ choice: DestinationKind) -> String {
+        switch choice {
+        case .photos: importAction
+        case .staging: stageAction
+        }
+    }
+
+    /// The menu's *Stage* item: "Stage in iCloud Drive", or "Stage on iPhone" when staging is on this iPhone (or
+    /// where it goes isn't read yet).
+    public static func stageMenuTitle(_ place: StagingPlace?) -> String {
+        place == .iCloudDrive ? stageInICloudDrive : stageOnIPhone
+    }
 
     /// The title while selecting, as Photos and Files report the selection: "Select Items", then "3 Selected".
     public static func selectingTitle(_ summary: SelectionSummary) -> String {
@@ -345,7 +371,6 @@ extension BrowseWording {
         switch reason {
         case .video: videosNotYet
         case .notAPhoto: "This kind of file can't be imported."
-        case .imported: "Already imported."
         case .noCaptureDate: "No capture date, so it can't be imported yet."
         case .cardNotRead: "Wait until the card has been read."
         }
@@ -399,10 +424,11 @@ extension BrowseWording {
     /// describes the result (HIG Accessibility).
     public static let importStripHint = "Opens the import."
 
-    /// The grid cell's VoiceOver label: name, date, type and, for a still, Imported or New. Selection is the
-    /// `.isSelected` trait, not words, so it isn't said twice. `date` is formatted by the screen for the locale; nil
-    /// for a file without one.
-    public static func cellAccessibility(name: String, date: String?, kind: CardCellKind, isImported: Bool) -> String {
+    /// The grid cell's VoiceOver label: name, date, type and, for a still, Imported, Staged, both ("Imported,
+    /// staged": the cell shows only Imported) or New. Selection is the `.isSelected` trait, not words, so it isn't
+    /// said twice. `date` is formatted by the screen for the locale; nil for a file without one.
+    public static func cellAccessibility(name: String, date: String?, kind: CardCellKind, isImported: Bool,
+                                         isStaged: Bool = false) -> String {
         var parts = [name]
         parts.append(date ?? undatedHeader)
         switch kind {
@@ -410,60 +436,88 @@ extension BrowseWording {
         case .video: parts.append(typeLabel(.video))
         case .other: parts.append(otherLabel)
         }
-        if kind.offersJPEGActions { parts.append(isImported ? importedBadge : new) }
+        if kind.offersJPEGActions {
+            switch (isImported, isStaged) {
+            case (true, true): parts.append(importedBadge + ", " + stagedBadge.lowercased())
+            case (true, false): parts.append(importedBadge)
+            case (false, true): parts.append(stagedBadge)
+            case (false, false): parts.append(new)
+            }
+        }
         return parts.joined(separator: ", ")
     }
 
-    /// The grid cell's VoiceOver value: why it can't be selected, unless the label says so already (Imported, Not a
-    /// photo); nil when it can be.
+    /// The grid cell's VoiceOver value: why it can't be selected, unless the label says so already (Not a photo); nil
+    /// when it can be.
     public static func cellAccessibilityValue(_ block: BrowseModel.SelectionBlock?) -> String? {
         switch block {
-        case nil, .imported?, .notAPhoto?: nil
+        case nil, .notAPhoto?: nil
         case let block?: notSelectable(block)
         }
     }
 
-    /// After Import is tapped in Browse.
-    public static func importRequested(_ outcome: ImportRequestOutcome) -> String? {
+    /// After Import (or *Import to Photos* or *Stage*) is tapped in Browse. `choice` is what was asked for; nothing new
+    /// is worded by what the import does instead, so an *Import to Photos* staged because Photos access is off says
+    /// the files are already staged.
+    public static func importRequested(_ outcome: ImportRequestOutcome, choice: DestinationKind = .photos) -> String? {
+        let staging = choice == .staging
         switch outcome {
-        case let .started(n): "Importing \(ByteWording.files(n))."
-        case let .appended(n): "Added \(ByteWording.files(n)) to the import."
-        case .nothingNew: "These files are already imported or in the import."
+        case let .started(n): return (staging ? "Staging " : "Importing ") + "\(ByteWording.files(n))."
+        case let .appended(n): return "Added \(ByteWording.files(n)) to " + (staging ? "staging." : "the import.")
+        case let .nothingNew(staged):
+            return staged ? "These files are already staged or being staged."
+                : "These files are already imported or in the import."
         case .busyWithAnotherCamera:
-            "Another camera's import is still running. Let it finish, or cancel it, then import from this camera."
-        case .stillStarting: "The import is starting. Try again in a moment."
-        case let .failed(message): message
+            return "Another camera's import is still running. Let it finish, or cancel it, then import from this camera."
+        case .busyWithAnotherMode(.photos): return "An import is running. Stage these when it's done."
+        case .busyWithAnotherMode(.staging): return "Staging is running. Import these when it's done."
+        case .stillStarting: return "The import is starting. Try again in a moment."
+        case let .failed(message): return message
         }
     }
 }
 
-/// The Settings screen (backlog section 6, *Settings, destination*; decision 9, 8 Nov).
+/// The Settings screen (backlog section 6; Shamil, 11 Nov). There is no destination choice any more: the Import
+/// button offers *Import to Photos* and *Stage* at each import. Settings says where staging goes, and why it is on
+/// this iPhone when it is.
 public enum SettingsWording {
     public static let title = "Settings"
-    public static let destinationHeader = "Import To"
+    public static let stagingHeader = "Staging"
 
-    public static func destinationLabel(_ kind: DestinationKind) -> String {
-        switch kind {
-        case .photos: "Photos"
-        case .filesFolder: "Files"
+    /// Under the staging section: what *Stage* does, and where the choice is made. It promises nothing about culling,
+    /// which isn't built yet.
+    public static let stagingFooter = "Stage copies the camera's originals into this folder, in a folder for each "
+        + "camera and capture day, and leaves Photos alone. Choose Import to Photos or Stage from the Import button "
+        + "each time you import."
+
+    /// Where staging goes, as Files names it.
+    public static func stagingLocation(_ place: StagingPlace) -> String { place.folderPath }
+
+    /// The VoiceOver label of the location row: "Staging folder, iCloud Drive › Shutter Bridge › Staging".
+    public static func stagingLocationAccessibility(_ place: StagingPlace) -> String {
+        "Staging folder, " + place.folderPath
+    }
+
+    /// Why staging is on this iPhone; nil when it is in iCloud Drive. No Settings button: the app's page in Settings
+    /// has no iCloud switch.
+    public static func stagingFallback(_ place: StagingPlace) -> String? {
+        switch place.fallbackReason {
+        case nil: nil
+        case .iCloudDriveOff?: "iCloud Drive is off or you're not signed in to iCloud, so staging is on this iPhone."
+        case .containerUnavailable?: "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone."
+        case .lostDuringImport?: "iCloud Drive became unavailable, so staging is on this iPhone."
         }
     }
 
-    /// Under the control: where files go in Files, and when a change applies. What Photos access does to the
-    /// setting is said in its own row when it applies (`forcedFiles(_:)`).
-    public static let destinationFooter = "In Files, imports are in On My iPhone › Shutter Bridge, in a folder for "
-        + "each camera. The next import follows this setting."
-
-    /// What the app will do when Photos access overrides the setting (HIG Settings: show what will happen); nil when
-    /// it doesn't. A denial comes with Open Settings; a restriction can't be changed there.
-    public static func forcedFiles(_ reason: FilesReason) -> String? {
+    /// What *Import to Photos* will do when Photos access is off or restricted (HIG Settings: show what will happen);
+    /// nil when it isn't. A denial comes with Open Settings; a restriction can't be changed there.
+    public static func forcedStaging(_ reason: StagingReason) -> String? {
         switch reason {
         case .chosen: nil
-        case .photosDenied: "Photos access is off, so imports go to Files."
-        case .photosRestricted: "Photos is restricted on this iPhone, so imports go to Files."
+        case .photosDenied: "Photos access is off, so Import to Photos stages the photos instead."
+        case .photosRestricted: "Photos is restricted on this iPhone, so Import to Photos stages the photos instead."
         }
     }
-
 }
 
 /// The Import screen (backlog section 6, *Import*; decisions 1, 4 and 9).
@@ -565,48 +619,71 @@ public enum ImportWording {
         }
     }
 
-    /// Files imported so far: done, less skipped and failed.
+    /// Files imported or staged so far: done, less skipped and failed.
     public static func importedCount(_ progress: ImportProgress) -> Int {
         max(0, progress.filesDone - progress.filesSkipped - progress.filesFailed)
     }
 
-    /// "38 files imported." or "38 files imported, 2 skipped, 1 failed."
+    /// "38 files imported.", "38 files imported, 2 skipped, 1 failed.", "38 files staged." or, when Photos refused
+    /// a save part-way, "10 files imported, 28 staged."
     public static func counts(_ progress: ImportProgress) -> String {
-        let imported = importedCount(progress)
-        var line = "\(ByteWording.files(imported)) imported"
+        let imported = progress.filesImported
+        let staged = progress.filesStaged
+        var line: String
+        if staged == 0 {
+            line = "\(ByteWording.files(imported)) imported"
+        } else if imported == 0 {
+            line = "\(ByteWording.files(staged)) staged"
+        } else {
+            line = "\(ByteWording.files(imported)) imported, \(staged) staged"
+        }
         if progress.filesSkipped > 0 { line += ", \(progress.filesSkipped) skipped" }
         if progress.filesFailed > 0 { line += ", \(progress.filesFailed) failed" }
         return line + "."
     }
 
-    /// Where the files go, named from the first file (backlog section 5, *It says so*): Photos, or Files with the
-    /// folder. `imported` is how many files the job has imported (as `counts` works it out); a finished job that
-    /// imported none has no destination line, rather than claim "Imported to Photos.".
+    /// Where the files go (backlog section 5, *It says so*): Photos, or the staging folder with the camera's folder
+    /// ("Staging to iCloud Drive › Shutter Bridge › Staging › ILCE-7CM2."). `imported` is how many files the job has
+    /// imported or staged (as `importedCount` works it out); a finished job that did neither has no destination line,
+    /// rather than claim "Imported to Photos.".
     public static func destination(_ decision: DestinationDecision?, folder: String?, finished: Bool,
                                    imported: Int) -> String? {
-        guard let kind = decision?.kind else { return nil }
+        guard let decision, decision.kind != nil else { return nil }
         if finished && imported <= 0 { return nil }
-        let verb = finished ? "Imported to" : "Importing to"
-        switch kind {
-        case .photos:
-            return "\(verb) Photos."
-        case .filesFolder:
-            let path = ["On My iPhone", "Shutter Bridge", folder].compactMap { $0 }.joined(separator: " › ")
-            return "\(verb) Files: \(path)."
+        switch decision {
+        case .photos, .askForPhotosAccess:
+            return (finished ? "Imported to" : "Importing to") + " Photos."
+        case let .staging(_, place):
+            let path = [place.folderPath, folder].compactMap { $0 }.joined(separator: " › ")
+            return (finished ? "Staged in " : "Staging to ") + path + "."
         }
     }
 
-    /// Why the files go to Files. Forced: Photos access is off (with the Settings button) or restricted (no button,
-    /// the person can't change it there). Chosen: it says so, with no button.
-    public static func filesReason(_ reason: FilesReason) -> String {
-        switch reason {
+    /// Why the files are staged, and why on this iPhone when they are. Chosen: nothing goes to Photos (no button).
+    /// Forced: Photos access is off (with the Settings button) or restricted (no button, the person can't change it
+    /// there). It promises nothing about culling, which isn't built yet.
+    public static func stagingReason(_ reason: StagingReason, place: StagingPlace) -> String {
+        let why = switch reason {
         case .chosen:
-            "You chose Files in Settings."
+            place == .iCloudDrive
+                ? "Not added to Photos. iCloud Drive uploads the files in the background." : "Not added to Photos."
         case .photosDenied:
-            "Photos access is off, so photos are going to Files. Allow access in Settings to import to Photos next "
-                + "time."
+            "Photos access is off, so photos are being staged instead. Allow access in Settings to import to Photos "
+                + "next time."
         case .photosRestricted:
-            "Photos is restricted on this iPhone, by Screen Time or device management, so photos are going to Files."
+            "Photos is restricted on this iPhone, by Screen Time or device management, so photos are being staged "
+                + "instead."
+        }
+        guard let fallback = place.fallbackReason else { return why }
+        return why + " " + stagingFallback(fallback)
+    }
+
+    /// Why the files are staged on this iPhone rather than in iCloud Drive.
+    public static func stagingFallback(_ reason: StagingFallbackReason) -> String {
+        switch reason {
+        case .iCloudDriveOff: "iCloud Drive is off or you're not signed in to iCloud, so they stay on this iPhone."
+        case .containerUnavailable: "iCloud Drive isn't available to Shutter Bridge, so they stay on this iPhone."
+        case .lostDuringImport: "iCloud Drive became unavailable, so the rest are staged on this iPhone."
         }
     }
 
@@ -618,12 +695,18 @@ public enum ImportWording {
         case .downloading: "Copying from the camera"
         case .waitingToRetry: "Trying again"
         // One word per idea (HIG Writing): "Saving to", then "Imported to", as the summary says.
-        case .committing: kind == .filesFolder ? "Saving to Files" : "Saving to Photos"
+        case .committing: kind == .staging ? "Saving to Staging" : "Saving to Photos"
         case let .imported(location):
             switch location {
             case .photosAsset?: "Imported to Photos"
             case .file?: "Imported to Files"
             case nil: "Imported"
+            }
+        case let .staged(location):
+            switch location?.root {
+            case .iCloudDrive?: "Staged in iCloud Drive"
+            case .onThisIPhone?: "Staged on this iPhone"
+            case nil: "Staged"
             }
         case let .skipped(reason): "Skipped: \(skipped(reason, item: item))"
         case let .failed(reason): "Failed: \(failed(reason))"
@@ -636,6 +719,7 @@ public enum ImportWording {
         // The row says it plainly; the thumbnail's "Video: from 1.1" is Shamil's on-screen label (9 Nov).
         case .notAStill: item.format == .video ? "videos can't be imported yet" : "not a photo"
         case .noCaptureDate: "no capture date"
+        case .alreadyStaged: "already staged"
         case let .link(kind):
             switch kind {
             case .itemNotFound: "no longer on the card"
@@ -665,6 +749,7 @@ public enum ImportWording {
             case .notEnoughSpace: "this iPhone is out of space"
             case .stagedFileMissing: "the copy went missing before it was saved"
             case .photosAccessDenied: "Photos access is off"
+            case .stagingUnavailable: "iCloud Drive isn't available"
             case .rejected: "it couldn't be saved"
             }
         }
@@ -678,7 +763,7 @@ public enum ImportWording {
         case .queued:
             status.bytesDone > 0 ? ByteWording.progress(status.bytesDone, of: status.item.size)
                 : ByteWording.size(status.item.size)
-        case .committing, .imported, .skipped, .failed, .notImported:
+        case .committing, .imported, .staged, .skipped, .failed, .notImported:
             ByteWording.size(status.item.size)
         }
     }

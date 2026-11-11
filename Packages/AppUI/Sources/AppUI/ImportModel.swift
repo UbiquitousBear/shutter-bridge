@@ -46,7 +46,7 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
         switch status.phase {
         case .skipped: tone = .skipped
         case .failed: tone = .failed
-        case .imported: tone = .done
+        case .imported, .staged: tone = .done
         default: tone = .neutral
         }
         isProblem = tone == .skipped || tone == .failed
@@ -60,16 +60,18 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
 }
 
 /// The Import screen's model (backlog section 6, *Import*), one per app over the one `ImportEngine`. It starts jobs
-/// from Browse (resolving the destination and asking for Photos access at the first Import), adds files picked while
-/// a job runs, pauses, continues and cancels, follows the scene's phase (decision 1: pause when the app leaves the
+/// from Browse, as *Import to Photos* or *Stage* (Shamil, 11 Nov: the choice is made at each import, and the last one
+/// used is remembered app-wide as the Import button's default, `importChoice`), reading where staging goes before each
+/// job and asking for Photos access at the first *Import to Photos* (never for *Stage*), adds files picked while a job
+/// runs, pauses, continues and cancels, follows the scene's phase (decision 1: pause when the app leaves the
 /// foreground over USB, carry on when it is back), reconnects after a removed cable (decision 7), and says all of it
 /// in the person's words.
 ///
 /// How the app uses it:
-/// - Browse's Import calls `importItems(_:from:link:)` (as `BrowseImporting`).
+/// - Browse's Import calls `importItems(_:from:link:as:newOnly:)` (as `BrowseImporting`).
 /// - The scene's phase goes to `scenePhaseChanged(_:)`; `keepsScreenOn` drives `UIApplication.isIdleTimerDisabled`.
 /// - `cameraFinder` is the Cameras model, and `cameraConnected()` is called when discovery reports a camera.
-/// - The screen shows `statusLine`, `destinationLine`, `filesReasonLine` (with the Settings button when
+/// - The screen shows `statusLine`, `destinationLine`, `stagingReasonLine` (with the Settings button when
 ///   `offersPhotosSettingsLink`), `bytesLine`, `rateLine`, `timeLeftLine`, `rows`, and the buttons as `canPause`,
 ///   `canResume`, `canCancel` and `isFinished` say.
 ///
@@ -94,8 +96,13 @@ public final class ImportModel: BrowseImporting {
     public private(set) var rows: [ImportRow] = []
     /// The camera of the job shown; nil when there is none (before the first job, or after `dismiss()`).
     public private(set) var camera: ImportCamera?
-    /// The job's folder in Files (On My iPhone › Shutter Bridge › this).
-    public private(set) var filesFolderName: String?
+    /// The camera's folder under Staging, for a job that stages (the staging folder's path › this).
+    public private(set) var stagingFolderName: String?
+    /// What Browse's Import button does by default: the last choice used, *Import to Photos* or *Stage*, remembered
+    /// app-wide in the settings store (Shamil, 11 Nov). An earlier build's Files setting reads as *Stage*.
+    public private(set) var importChoice: DestinationKind
+    /// Where staging goes, as last read (`refreshStagingPlace()`, and before each job); nil before the first read.
+    public private(set) var stagingPlace: StagingPlace?
     /// True while the Photos prompt is up, at the first Import.
     public private(set) var isAskingForPhotosAccess = false
     /// Goes up each time more files are imported. Browse follows it through `importedUpdates()`.
@@ -115,9 +122,12 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private var watchTask: Task<Void, Never>?
     /// The link the job uses, held in `leases` until the job ends.
     @ObservationIgnored private var link: (any CameraLink)?
-    /// The setting the job started with: a continue re-reads Photos access, not the setting (the next import
-    /// follows the setting).
-    @ObservationIgnored private var jobSetting = DestinationSetting.default
+    /// The choice the job started with: a continue re-reads Photos access and where staging goes, not the choice,
+    /// and files added to the job must be for the same choice.
+    @ObservationIgnored private var jobChoice = DestinationKind.photos
+    /// Where the job's staging folder was when it started: a continue moves it from iCloud Drive to this iPhone, never
+    /// back.
+    @ObservationIgnored private var jobStagingPlace: StagingPlace = .onThisIPhone(.containerUnavailable)
     @ObservationIgnored private var jobDestinations: ImportDestinations?
     @ObservationIgnored private var starting = false
     @ObservationIgnored private var reconnecting = false
@@ -127,6 +137,8 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private let importedFanOut = LatestValueFanOut<Int>()
     /// The files of the job shown whose import is in the bench log already.
     @ObservationIgnored private var loggedImports: Set<ObjectIdentity> = []
+    /// Of `loggedImports`, those staged rather than imported.
+    @ObservationIgnored private var loggedStaged: Set<ObjectIdentity> = []
     @ObservationIgnored private var loggedEnd = false
     @ObservationIgnored private let keyTags: CameraKeyTags
     /// The notification permission, asked at the first Import (W13); its reason line is the status line meanwhile.
@@ -139,7 +151,7 @@ public final class ImportModel: BrowseImporting {
     /// A pause notification was posted since the app last left the foreground: one per stay away.
     @ObservationIgnored private var notifiedWhileAway = false
     /// A pause notification is up: withdrawn once the job goes again or ends, when it no longer holds.
-    @ObservationIgnored private var pauseNotificationShown = false
+    @ObservationIgnored private var pauseNotificationShown: AppNotification?
     /// The person paused the job and hasn't continued it. Kept here because the engine's state shows only the pause
     /// that comes first (`PauseReason.precedence`, where the person's is last): a removal or an expiry on top of it
     /// hides it.
@@ -183,6 +195,7 @@ public final class ImportModel: BrowseImporting {
         self.background = ImportBackgroundCoordinator(run: background, log: log)
         self.engine = engine
         self.settings = settings
+        importChoice = settings.load().preferred
         self.photos = photos
         self.destinations = destinations
         self.leases = leases
@@ -300,7 +313,7 @@ public final class ImportModel: BrowseImporting {
 
     public var destinationLine: String? {
         guard camera != nil else { return nil }
-        return ImportWording.destination(progress.destination, folder: filesFolderName, finished: isFinished,
+        return ImportWording.destination(progress.destination, folder: stagingFolderName, finished: isFinished,
                                          imported: ImportWording.importedCount(progress))
     }
 
@@ -309,16 +322,16 @@ public final class ImportModel: BrowseImporting {
         if case let .usb(mode)? = camera?.descriptor.mode { mode } else { nil }
     }
 
-    /// Why Files, when it is Files.
-    public var filesReasonLine: String? {
-        guard camera != nil, let reason = progress.destination?.filesReason else { return nil }
-        return ImportWording.filesReason(reason)
+    /// Why the files are staged, and why on this iPhone when they are, when the job stages.
+    public var stagingReasonLine: String? {
+        guard camera != nil, case let .staging(reason, place)? = progress.destination else { return nil }
+        return ImportWording.stagingReason(reason, place: place)
     }
 
     /// The button to the app's page in Settings: only when Photos access is off (restricted can't be changed there,
-    /// and a chosen Files needs nothing).
+    /// and a chosen *Stage* needs nothing).
     public var offersPhotosSettingsLink: Bool {
-        camera != nil && progress.destination?.filesReason?.offersSettingsLink == true
+        camera != nil && progress.destination?.stagingReason?.offersSettingsLink == true
     }
 
     public var bytesLine: String? {
@@ -358,21 +371,32 @@ public final class ImportModel: BrowseImporting {
 
     // MARK: - Starting and adding
 
-    /// Starts a job with `items` from `camera`, or adds them to the running job from the same camera. Before a
-    /// job starts, Photos access is read and the destination resolved from the setting (decision 9); while access
-    /// isn't determined and the setting says Photos, it is asked for here, at the first Import, and the destination
-    /// resolved again with the answer. `.askForPhotosAccess` never reaches the engine.
-    public func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink) async
-        -> ImportRequestOutcome {
+    /// Starts a job with `items` from `camera`, or adds them to the running job from the same camera and for the same
+    /// choice. Before a job starts, where staging goes is read (`ImportDestinationMaking.locate()`), then the destination
+    /// is resolved from the choice and Photos access (decision 9; Shamil, 11 Nov): *Stage* never reads or asks for
+    /// Photos access; *Import to Photos* asks for it here, at the first Import, while it isn't determined, and is
+    /// resolved again with the answer. `.askForPhotosAccess` never reaches the engine. A request the engine takes
+    /// (started, added, or nothing new) makes `choice` the remembered one.
+    ///
+    /// What counts as done follows what the job does, not the choice (`ImportEngine.picksToDo(_:camera:for:)`): an
+    /// *Import to Photos* staged because Photos access is off leaves out staged files as a *Stage* does. `.started`
+    /// counts the files the job holds, and when none is left no job starts and `.nothingNew` says why.
+    public func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink,
+                            as choice: DestinationKind, newOnly: Bool) async -> ImportRequestOutcome {
         message = nil
-        guard !items.isEmpty else { return .nothingNew }
+        guard !items.isEmpty else { return .nothingNew(staging: choice == .staging) }
         guard !starting else { return .stillStarting }
         if await engine.state.isActive {
             guard self.camera?.key == camera.key else { return remember(.busyWithAnotherCamera) }
+            // One job at a time, of one kind: an import job forced to staging by Photos access still takes more
+            // *Import to Photos* picks (they are staged with it), but never *Stage* picks, and the other way round.
+            guard choice == jobChoice else { return remember(.busyWithAnotherMode(jobChoice)) }
             do {
-                let added = try await engine.append(items)
+                let added = try await engine.append(items, newOnly: newOnly)
+                let stages = await engine.currentPurpose == .staging
                 await refresh()
-                return added > 0 ? .appended(added) : .nothingNew
+                rememberChoice(choice)
+                return added > 0 ? .appended(added) : .nothingNew(staging: stages)
             } catch .noJob {
                 // It finished meanwhile: start a new one below.
             } catch {
@@ -382,42 +406,66 @@ public final class ImportModel: BrowseImporting {
 
         starting = true
         defer { starting = false }
-        let setting = settings.load()
         // The new job replaces whatever finished job was shown; its camera is shown while Photos is asked for.
+        let shown = (camera: self.camera, snapshot: snapshot, rows: rows, folder: stagingFolderName)
         self.camera = camera
         snapshot = .none
         rows = []
-        filesFolderName = nil
-        let decision = await decide(setting)
-        let made = destinations.destinations(for: camera, startedAt: now())
-        let photos = self.photos
+        stagingFolderName = nil
+        let availability = await destinations.locate()
+        stagingPlace = availability.place
+        let decision = await decide(choice, staging: availability.place)
+        let made = destinations.destinations(for: camera, startedAt: now(), staging: availability)
         let route: ImportRoute
         do {
-            route = try ImportRoute(decision, photos: made.photos, filesFolder: made.filesFolder,
-                                    authorisation: { await photos.authorisation() })
+            route = try self.route(decision, in: made)
         } catch {
             return remember(.failed(ImportWording.couldNotStart))   // unreachable: `decide` never asks
         }
-        jobSetting = setting
+        // What the job will hold, by the route's purpose rather than the choice: with Photos access off, an *Import to
+        // Photos* stages, and so leaves out staged files too. The notice counts these, and none starts no job. If the
+        // catalogue can't say, every pick goes in and the job ends saying so.
+        let selection: ImportSelection = newOnly ? .newItems(items) : .items(items)
+        let stages = route.purpose == .staging
+        let toDo = (try? await engine.picksToDo(selection, camera: camera.key, for: route)) ?? items
+        guard !toDo.isEmpty else {
+            // No job starts, so the one shown before (if any) stays shown.
+            log.note("import: nothing new to \(decision)")
+            self.camera = shown.camera
+            snapshot = shown.snapshot
+            rows = shown.rows
+            stagingFolderName = shown.folder
+            rememberChoice(choice)
+            return .nothingNew(staging: stages)
+        }
+        jobChoice = choice
+        jobStagingPlace = made.stagingPlace
         jobDestinations = made
-        filesFolderName = made.filesFolderName
+        stagingFolderName = made.stagingFolderName
         importedSoFar = 0
         loggedImports = []
+        loggedStaged = []
         loggedEnd = false
         pausedByPerson = false
         do {
-            try await engine.start(.items(items), from: link, camera: camera.key, to: route)
+            try await engine.start(newOnly ? .newItems(toDo) : .items(toDo), from: link, camera: camera.key,
+                                   to: route)
         } catch {
             log.note("import: didn't start: \(error)")
             self.camera = nil
-            filesFolderName = nil
-            return error == .emptySelection ? .nothingNew : remember(.failed(ImportWording.couldNotStart))
+            stagingFolderName = nil
+            if error == .emptySelection {
+                rememberChoice(choice)
+                return .nothingNew(staging: stages)
+            }
+            return remember(.failed(ImportWording.couldNotStart))
         }
+        rememberChoice(choice)
         await hold(link)
         announceStart(camera)
-        log.note("import: started \(items.count) file(s) to \(decision)")
+        log.note("import: started \(toDo.count) of \(items.count) file(s) to \(decision)")
         // The run starts from the person's tap (iOS's rule), without holding the import up.
-        background.begin(progress)
+        background.begin(progress, staging: isStageJob)
         await refresh()
         // Once, at the first Import on either link: the reason line, then iOS's prompt. After the job has started, so
         // it never waits on the answer and the Photos prompt (above) never meets this one.
@@ -430,33 +478,86 @@ public final class ImportModel: BrowseImporting {
             starting = false
             await refresh()
         }
-        return .started(items.count)
+        return .started(toDo.count)
     }
 
-    /// The destination for a new job: the setting and the authorisation, asking for access once if the setting
-    /// says Photos and nobody has asked yet (as `PhotosAccessGate.decision(for:)` does).
-    private func decide(_ setting: DestinationSetting) async -> DestinationDecision {
-        let first = DestinationDecision.resolve(setting: setting, authorisation: await photos.authorisation())
+    /// Browse's Import button's primary action: the remembered choice, for an explicit pick.
+    public func importItems(_ items: [CameraItem], from camera: ImportCamera, link: any CameraLink) async
+        -> ImportRequestOutcome {
+        await importItems(items, from: camera, link: link, as: importChoice, newOnly: false)
+    }
+
+    /// Reads where staging goes again (Browse, for the Import menu's wording).
+    public func refreshStagingPlace() async {
+        let place = await destinations.locate().place
+        if place != stagingPlace { stagingPlace = place }
+    }
+
+    /// The job shown was started as *Stage* (not an import staged because of Photos access).
+    var isStageJob: Bool { camera != nil && jobChoice == .staging }
+
+    /// Makes `choice` the Import button's default, saved app-wide.
+    private func rememberChoice(_ choice: DestinationKind) {
+        guard choice != importChoice else { return }
+        importChoice = choice
+        settings.save(DestinationSetting(preferred: choice))
+    }
+
+    /// The destination for a new job from the choice and the authorisation: *Stage* stages, without reading or
+    /// asking for Photos access; *Import to Photos* asks for access once if nobody has asked yet (as
+    /// `PhotosAccessGate.decision(for:staging:)` does).
+    private func decide(_ choice: DestinationKind, staging: StagingPlace) async -> DestinationDecision {
+        guard choice == .photos else { return .staging(.chosen, staging) }
+        let first = DestinationDecision.resolve(choice: .photos, authorisation: await photos.authorisation(),
+                                                staging: staging)
         guard first == .askForPhotosAccess else { return first }
         isAskingForPhotosAccess = true
         defer { isAskingForPhotosAccess = false }
         let answered = await photos.requestReadWriteAuthorisation()
-        let second = DestinationDecision.resolve(setting: setting, authorisation: answered)
-        // Still not determined (the prompt couldn't be shown): Files for this import, rather than loop.
-        return second == .askForPhotosAccess ? .files(.photosDenied) : second
+        let second = DestinationDecision.resolve(choice: .photos, authorisation: answered, staging: staging)
+        // Still not determined (the prompt couldn't be shown): staged for this import, rather than loop.
+        return second == .askForPhotosAccess ? .staging(.photosDenied, staging) : second
     }
 
-    /// A route for the files not yet committed, after reading Photos access again (backlog section 5: before a paused
-    /// or interrupted import continues); nil when nothing changes. A continue can move a Photos job to Files when
-    /// access was turned off or restricted meanwhile, but never moves a Files job to Photos: granting access mid-job
-    /// applies from the next import, which follows the setting (decision 9; the Photos-denied line says "next time").
-    func continuingRoute() async -> ImportRoute? {
-        guard let made = jobDestinations, progress.destination?.kind != .filesFolder else { return nil }
-        let decision = DestinationDecision.resolve(setting: jobSetting, authorisation: await photos.authorisation())
-        guard decision.kind == .filesFolder, decision != progress.destination else { return nil }
+    /// The route for `decision` with the job's destinations: staging in the decision's place (or the job's), Photos
+    /// with the staging folder ready in case Photos refuses a save.
+    private func route(_ decision: DestinationDecision, in made: ImportDestinations,
+                       stagingPlace: StagingPlace? = nil) throws(ImportEngineError) -> ImportRoute {
+        let place = decision.stagingPlace ?? stagingPlace ?? made.stagingPlace
         let photos = self.photos
-        return try? ImportRoute(decision, photos: made.photos, filesFolder: made.filesFolder,
-                                authorisation: { await photos.authorisation() })
+        return try ImportRoute(decision, photos: made.photos, staging: made.staging(in: place),
+                               onThisIPhone: made.stagingOnThisIPhone, stagingPlace: place,
+                               authorisation: { await photos.authorisation() })
+    }
+
+    /// A route for the files not yet committed, after reading Photos access and where staging goes again (backlog
+    /// section 5: before a paused or interrupted import continues); nil when nothing changes.
+    /// - An import job moves to staging when Photos access was turned off or restricted meanwhile, but a staged job
+    ///   never moves to Photos: granting access mid-job applies from the next import (decision 9; the Photos-denied
+    ///   line says "next time"), and a *Stage* job is never imported.
+    /// - Staging moves from iCloud Drive to this iPhone when iCloud Drive went away meanwhile
+    ///   (`StagingFallbackReason.lostDuringImport`), never back, so one job's staged files never come back from this
+    ///   iPhone to iCloud Drive half-way.
+    func continuingRoute() async -> ImportRoute? {
+        guard let made = jobDestinations, let current = progress.destination else { return nil }
+        let wasPlace = current.stagingPlace ?? jobStagingPlace
+        var place = wasPlace
+        if wasPlace == .iCloudDrive, await destinations.locate().place != .iCloudDrive {
+            place = .onThisIPhone(.lostDuringImport)
+        }
+        let decision: DestinationDecision
+        if current.kind == .staging {
+            decision = current.staged(in: place)
+        } else {
+            decision = DestinationDecision.resolve(choice: .photos, authorisation: await photos.authorisation(),
+                                                   staging: place)
+            // Access may have been granted or limited meanwhile: still Photos. Not determined can't come back once
+            // asked; if it does, the job carries on as it is.
+            guard decision != .askForPhotosAccess else { return nil }
+        }
+        guard decision != current || place != wasPlace else { return nil }
+        if place != wasPlace { jobStagingPlace = place }
+        return try? route(decision, in: made, stagingPlace: place)
     }
 
     private func remember(_ outcome: ImportRequestOutcome) -> ImportRequestOutcome {
@@ -481,7 +582,7 @@ public final class ImportModel: BrowseImporting {
     /// written once. The link is the camera finder's for the job's camera, or the job's own; W16 puts the Wi-Fi
     /// reopen (`WirelessSession.prepareImport()`) and its listing of known handles in front of it.
     public func resume() async {
-        if camera != nil, await engine.state.isActive { background.begin(progress) }
+        if camera != nil, await engine.state.isActive { background.begin(progress, staging: isStageJob) }
         let route = await continuingRoute()
         if await engine.state == .paused(.taskExpired), await continueAfterExpiry(route: route) {
             await refresh()
@@ -534,7 +635,7 @@ public final class ImportModel: BrowseImporting {
         camera = nil
         rows = []
         snapshot = .none
-        filesFolderName = nil
+        stagingFolderName = nil
         message = nil
     }
 
@@ -606,6 +707,10 @@ public final class ImportModel: BrowseImporting {
         }
     }
 
+    /// The pause notification for the job shown: "Staging paused." for a *Stage* job, "Import paused." otherwise.
+    /// Both have the same identifier, so either replaces the other.
+    private var pauseNotification: AppNotification { isStageJob ? .stagingPaused : .importPaused }
+
     /// Posts the pause notification, once per stay away, and only when iOS allows it (a notification posted while
     /// permission is undetermined fails: UNErrorDomain 2003). W14's `.needsJoin` pause posts through it too.
     func notifyPausedWhileAway() async {
@@ -615,8 +720,9 @@ public final class ImportModel: BrowseImporting {
             log.note("import: paused while away; notifications aren't allowed")
             return
         }
-        await notifier.post(.importPaused)
-        pauseNotificationShown = true
+        let notification = pauseNotification
+        await notifier.post(notification)
+        pauseNotificationShown = notification
         log.note("import: posted the pause notification")
     }
 
@@ -669,11 +775,11 @@ public final class ImportModel: BrowseImporting {
                 background.update(s.progress)
             }
         }
-        if pauseNotificationShown, s.progress.state == .running || !s.progress.state.isActive {
+        if let shown = pauseNotificationShown, s.progress.state == .running || !s.progress.state.isActive {
             // The import is going again (the app is back, Continue, a reconnect) or has ended: "Import paused" no
             // longer holds.
-            pauseNotificationShown = false
-            await notifier.withdraw(.importPaused)
+            pauseNotificationShown = nil
+            await notifier.withdraw(shown)
             log.note("import: withdrew the pause notification")
         }
         if s.progress.state == .paused(.cameraRemoved) {
@@ -708,8 +814,12 @@ public final class ImportModel: BrowseImporting {
         snapshot = s
         let kind = s.progress.destination?.kind
         rows = s.files.map { ImportRow($0, going: kind) }
+        // Staged files count too, so Browse reads the catalogue again when a stage job commits one.
         let imported = s.files.reduce(0) { n, f in
-            if case .imported = f.phase { n + 1 } else { n }
+            switch f.phase {
+            case .imported, .staged: n + 1
+            default: n
+            }
         }
         logImports(s)
         if imported != importedSoFar {
@@ -723,21 +833,34 @@ public final class ImportModel: BrowseImporting {
     /// tag only), and the job's end once. What the 17.1 bench run lacked to tell why a badge didn't show.
     private func logImports(_ s: ImportSnapshot) {
         for file in s.files {
-            guard case let .imported(location) = file.phase, case let .file(identity) = file.id,
-                  loggedImports.insert(identity).inserted else { continue }
+            guard case let .file(identity) = file.id else { continue }
+            let verb: String
             let destination: String
-            switch location {
-            case .file?: destination = "Files"
-            case .photosAsset?: destination = "Photos"
-            case nil: destination = s.progress.destination?.kind == .photos ? "Photos" : "Files"
+            switch file.phase {
+            case let .imported(location):
+                verb = "imported"
+                switch location {
+                case .file?: destination = "Files"
+                case .photosAsset?: destination = "Photos"
+                case nil: destination = s.progress.destination?.kind == .photos ? "Photos" : "Staging"
+                }
+            case .staged:
+                // Staged, not imported (Shamil, 11 Nov).
+                verb = "staged"
+                destination = "Staging"
+            default:
+                continue
             }
-            log.note("import: imported \(identity.filename) \(identity.captureDate) \(identity.size) B folder "
+            guard loggedImports.insert(identity).inserted else { continue }
+            if verb == "staged" { loggedStaged.insert(identity) }
+            log.note("import: \(verb) \(identity.filename) \(identity.captureDate) \(identity.size) B folder "
                 + "\"\(identity.folder)\" key \(keyTags.tag(for: identity.camera)) → \(destination)")
         }
         guard case let .finished(outcome) = s.progress.state, !loggedEnd, let camera else { return }
         loggedEnd = true
-        log.note("import: job ended \(Self.describe(outcome)): \(loggedImports.count) imported, key "
-            + keyTags.tag(for: camera.key))
+        let staged = loggedStaged.isEmpty ? "" : ", \(loggedStaged.count) staged"
+        log.note("import: job ended \(Self.describe(outcome)): \(loggedImports.count - loggedStaged.count) imported"
+            + "\(staged), key " + keyTags.tag(for: camera.key))
     }
 
     private static func describe(_ outcome: JobOutcome) -> String {
