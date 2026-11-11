@@ -170,6 +170,13 @@ public struct PTPResponder: Sendable {
         self.card = card
     }
 
+    /// A data phase is going out, which is not idle time: a transfer that keeps making progress never trips the PTP/IP
+    /// flavour's idle drop (`WholeCardBehaviour.idleDropAfter`). The initiator can't send a keep-alive during a
+    /// transaction, so the senders call this (through `PTPIPResponderCore.noteTransferActivity()`) as payload goes out.
+    mutating func noteTransferActivity() {
+        idle = .zero
+    }
+
     /// Ends the session without a CloseSession, as the camera does when the initiator's connection drops.
     public mutating func endSession() {
         sessionID = nil

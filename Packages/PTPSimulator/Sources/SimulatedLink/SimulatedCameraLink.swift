@@ -161,7 +161,6 @@ public actor SimulatedCameraLink: CameraLink {
 
     private var budget: ThroughputBudget?
     private var throughputWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
-    private var throttleObservers: [CheckedContinuation<Void, Never>] = []
 
     private var injected: [Operation: [CameraLinkFailure.Kind]] = [:]
     private var scripts: [String: [BytesStep]] = [:]
@@ -181,9 +180,9 @@ public actor SimulatedCameraLink: CameraLink {
     ///   - capabilities: The link's rules; the mode's carrier baseline when nil.
     ///   - isPoweredOff: The camera starts off (`powerOn()` switches it on).
     ///   - location: Where the camera answers: the camera's own network address by default.
-    ///   - dialing: Where the link dials when it has no provider; `location` when nil.
+    ///   - dialling: Where the link dials when it has no provider; `location` when nil.
     ///   - locationProvider: Asked at every `open()` where to dial, as the app's locator is: a camera that moved is
-    ///     found there. Without one the link keeps dialling `dialing`.
+    ///     found there. Without one the link keeps dialling `dialling`.
     public init(
         card: ScriptedCard,
         mode: CameraMode = .usb(.mtp),
@@ -196,13 +195,13 @@ public actor SimulatedCameraLink: CameraLink {
         capabilities: CameraLinkCapabilities? = nil,
         isPoweredOff: Bool = false,
         location: PTPIPEndpoint = .cameraNetwork,
-        dialing: PTPIPEndpoint? = nil,
+        dialling: PTPIPEndpoint? = nil,
         locationProvider: (@Sendable () -> PTPIPEndpoint)? = nil
     ) {
         self.card = card
         self.isPoweredOff = isPoweredOff
         cameraLocation = location
-        dialLocation = dialing ?? location
+        dialLocation = dialling ?? location
         self.locationProvider = locationProvider
         descriptor = CameraDescriptor(id: .init(rawValue: descriptorID), name: name, mode: mode)
         self.capabilities = capabilities ?? .defaults(for: mode.carrier)
@@ -433,6 +432,8 @@ public actor SimulatedCameraLink: CameraLink {
 
     /// Sends the `.sessionLost` of a session `loseSessionAndReopen(announcing: .late)` replaced, one per call, in the
     /// order they were replaced. The link's state doesn't change: the session now open is not the one that was lost.
+    /// The event carries no generation yet, so the engine can't tell this loss from a real loss of the new session: when
+    /// I13 adds one to `CameraLinkEvent.sessionLost`, this hook must stamp the replaced session's generation.
     /// Returns whether one was waiting.
     @discardableResult
     public func sendLateSessionLoss() -> Bool {
@@ -471,7 +472,11 @@ public actor SimulatedCameraLink: CameraLink {
     /// From now downloads write `bytesPerTick` bytes per `tick` of simulated time (`advance(by:)`), sharing the budget
     /// when two run at once; progress is reported after each piece, however small. Replaces any earlier limit, with
     /// nothing banked.
+    ///
+    /// `bytesPerTick` must be at least 1 and `tick` positive (a precondition: 0 is not "stalled" and not "unlimited").
     public func limitThroughput(bytesPerTick: UInt64, every tick: Duration = .seconds(1)) {
+        precondition(bytesPerTick > 0 && tick > .zero,
+                     "a limit grants at least one byte per positive tick; removeThroughputLimit() is the way to lift it")
         budget = ThroughputBudget(bytesPerTick: bytesPerTick, every: tick)
         wakeAll(.throughput)
     }
@@ -490,10 +495,17 @@ public actor SimulatedCameraLink: CameraLink {
         if (budget?.available ?? 0) > 0 { wakeAll(.throughput) }
     }
 
-    /// Returns once a download is waiting for the throughput budget to grow.
-    public func waitUntilThrottled() async {
-        if !throughputWaiters.isEmpty { return }
-        await withCheckedContinuation { throttleObservers.append($0) }
+    /// Returns true once a download is waiting for the throughput budget to grow, polling for at most `timeout` of
+    /// real time (10 s by default) and returning false if none parks by then (or the task is cancelled), so a
+    /// download that never parks fails a test instead of hanging it: a wait on a continuation can't be ended by a
+    /// suite's time limit.
+    public func waitUntilThrottled(timeout: Duration = .seconds(10)) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while throughputWaiters.isEmpty {
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return true
     }
 
     /// Sends any event as it is, without changing the link's state.
@@ -518,7 +530,7 @@ public actor SimulatedCameraLink: CameraLink {
         SimulatedCameraLink(card: card, mode: descriptor.mode, name: descriptor.name,
                             descriptorID: descriptor.id.rawValue, timeZone: timeZone, generation: generation + 1,
                             honoursCancellation: honoursCancellation, chunkSize: chunkSize, capabilities: capabilities,
-                            isPoweredOff: isPoweredOff, location: cameraLocation, dialing: dialLocation,
+                            isPoweredOff: isPoweredOff, location: cameraLocation, dialling: dialLocation,
                             locationProvider: locationProvider)
     }
 
@@ -657,11 +669,7 @@ public actor SimulatedCameraLink: CameraLink {
                 case .suspension: suspensionWaiters[token] = continuation
                 case .catalogue: catalogueWaiters[token] = continuation
                 case .localNetwork: localNetworkWaiters[token] = continuation
-                case .throughput:
-                    throughputWaiters[token] = continuation
-                    let observers = throttleObservers
-                    throttleObservers = []
-                    for observer in observers { observer.resume() }
+                case .throughput: throughputWaiters[token] = continuation
                 }
                 if honours && Task.isCancelled { wake(list, token) }
             }

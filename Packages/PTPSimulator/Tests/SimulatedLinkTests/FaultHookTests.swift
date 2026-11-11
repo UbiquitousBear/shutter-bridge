@@ -69,10 +69,10 @@ private func nextEvent(_ iterator: inout AsyncStream<CameraLinkEvent>.Iterator) 
 
 /// A Wi-Fi link over the small card whose first file is the one these tests download.
 private func wifiLink(chunkSize: UInt64 = 4096, location: PTPIPEndpoint = .cameraNetwork,
-                      dialing: PTPIPEndpoint? = nil,
+                      dialling: PTPIPEndpoint? = nil,
                       provider: (@Sendable () -> PTPIPEndpoint)? = nil) throws -> SimulatedCameraLink {
     SimulatedCameraLink(card: try smallCard(), mode: .wifi(.cameraNetwork), timeZone: utc, chunkSize: chunkSize,
-                        location: location, dialing: dialing, locationProvider: provider)
+                        location: location, dialling: dialling, locationProvider: provider)
 }
 
 @Suite("Simulator fault hooks: the link", .timeLimit(.minutes(1)))
@@ -94,7 +94,7 @@ struct LinkFaultHookTests {
             try await link.bytes(of: item.id, into: folder, resuming: nil, checkpoint: { _ in },
                                  progress: progress.callback)
         }
-        await link.waitUntilThrottled()
+        #expect(await link.waitUntilThrottled())
         #expect(progress.all.isEmpty)                                  // no tick has passed: nothing is written
 
         var granted: UInt64 = 0
@@ -104,7 +104,7 @@ struct LinkFaultHookTests {
             ticks += 1
             granted = min(object.size, granted + 10_000)
             if granted == object.size { break }
-            await link.waitUntilThrottled()                            // the tick's bytes are all written
+            #expect(await link.waitUntilThrottled())                            // the tick's bytes are all written
             #expect(progress.last == granted)
             #expect(try Data(contentsOf: folder.appendingPathComponent(object.filename))
                 == ScriptedCard.content(of: object.handle, in: 0 ..< granted))
@@ -131,13 +131,13 @@ struct LinkFaultHookTests {
             try await link.bytes(of: item.id, into: folder, resuming: nil, checkpoint: { _ in },
                                  progress: progress.callback)
         }
-        await link.waitUntilThrottled()
+        #expect(await link.waitUntilThrottled())
         await link.advance(by: .milliseconds(600))
         await link.advance(by: .milliseconds(399))
         #expect(await link.throttledDownloads == 1)
         #expect(progress.all.isEmpty)
         await link.advance(by: .milliseconds(1))                       // the tick completes
-        await link.waitUntilThrottled()
+        #expect(await link.waitUntilThrottled())
         #expect(progress.last == 6_000)
         await link.removeThroughputLimit()
         #expect(await finished(download) != nil)
@@ -181,7 +181,7 @@ struct LinkFaultHookTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         await link.limitThroughput(bytesPerTick: 1)
         let download = Task { try await link.bytes(of: item.id, into: folder) }
-        await link.waitUntilThrottled()
+        #expect(await link.waitUntilThrottled())
         await link.removeThroughputLimit()
         let url = try await #require(finished(download)).get()
         #expect(try Data(contentsOf: url) == ScriptedCard.content(of: object.handle, in: 0 ..< object.size))
@@ -202,9 +202,9 @@ struct LinkFaultHookTests {
             try await link.bytes(of: item.id, into: folder, resuming: nil, checkpoint: { _ in },
                                  progress: progress.callback)
         }
-        await link.waitUntilThrottled()
+        #expect(await link.waitUntilThrottled())
         await link.advance(by: .seconds(1))
-        await link.waitUntilThrottled()
+        #expect(await link.waitUntilThrottled())
         #expect(progress.last == 5_000)
         await link.powerOff()
         #expect(await nextEvent(&events) == .sessionLost)
@@ -344,7 +344,7 @@ struct LinkFaultHookTests {
         #expect(refused?.kind == .refused)
         #expect(refused?.outcome == .stopJob)
         let provided = Box(sameHost)
-        let follower = try wifiLink(location: sameHost, dialing: sameHost, provider: { provided.value })
+        let follower = try wifiLink(location: sameHost, dialling: sameHost, provider: { provided.value })
         try await follower.open()
         #expect(await follower.dialled == [sameHost])
     }

@@ -56,6 +56,16 @@ struct CameraFaultHookTests {
         try? await Task.sleep(for: .milliseconds(5))
     }
 
+    /// The download's result, or nil if it hasn't ended within 10 s of real time (the task is then cancelled).
+    private func finishedReply(_ task: Task<PTPIPConnection.Reply, any Error>) async -> Result<PTPIPConnection.Reply, any Error>? {
+        let outcome = Mutex<Result<PTPIPConnection.Reply, any Error>?>(nil)
+        let waiter = Task { let r = await task.result; outcome.withLock { $0 = r } }
+        if await eventually({ outcome.withLock { $0 != nil } }) { return outcome.withLock { $0 } }
+        task.cancel()
+        waiter.cancel()
+        return nil
+    }
+
     private func openSession(_ connection: PTPIPConnection) async throws {
         _ = try await connection.connect()
         #expect(try await connection.perform(PTPCommand.openSession(sessionID: 1)).code == .ok)
@@ -95,6 +105,47 @@ struct CameraFaultHookTests {
         try await download.value
         #expect(outcome.reply?.code == .ok && outcome.reply?.dataIsComplete == true)
         #expect(received.data == ScriptedCard.content(of: object.handle, in: 0 ..< object.size))
+        await connection.close()
+    }
+
+    /// The PTP/IP flavour drops a session that has sent no command for 30 s, and the initiator can't send one while a
+    /// transfer is under way: a slow file that keeps making progress must not trip it, however long it takes.
+    @Test func aSlowTransferThatKeepsMovingOutlastsTheIdleDrop() async throws {
+        let card = try #require(ScriptedCard.shoot([.rawPlusJPEG, .jpeg])).scaled(down: 1000)
+        let camera = try InMemoryPTPIPCamera(card: card, flavour: .ptpIP, packetSize: 4096)
+        let connection = Self.connection(to: camera)
+        _ = try await connection.connect()
+        #expect(try await connection.perform(PTPCommand.sonySDIOOpenSession(functionMode: 1, tx: 1)).code == .ok)
+        #expect(try await connection.perform(PTPCommand.sonySetContentsTransferMode(2, 1, 0, tx: 2)).code == .ok)
+        camera.advance(by: .seconds(1))                                 // the card's arrival
+        let object = try #require(camera.card.objects.first)
+        let perTick: UInt64 = 1_000
+        #expect(object.size > 31 * perTick)                             // more than the idle limit's worth of ticks
+
+        camera.limitThroughput(bytesPerTick: perTick, every: .seconds(1))
+        let received = Received()
+        let download = Task {
+            try await connection.perform(PTPCommand.getObject(object.handle, tx: 3)) { received.append($0) }
+        }
+        var granted: UInt64 = 0
+        var ticks = 0
+        while granted < object.size {
+            camera.advance(by: .seconds(1))
+            ticks += 1
+            granted = min(object.size, granted + perTick)
+            let expected = granted
+            let arrived = await eventually { UInt64(received.data.count) == expected }
+            #expect(arrived, "expected \(granted) bytes, have \(received.data.count) after \(ticks) s")
+            if !arrived { break }
+        }
+        #expect(ticks > 30)                                             // past the 30 s a quiet session lasts
+        guard case let .success(reply)? = await finishedReply(download) else {
+            Issue.record("the download did not finish")
+            return
+        }
+        #expect(reply.code == .ok && reply.dataIsComplete)
+        #expect(received.data == ScriptedCard.content(of: object.handle, in: 0 ..< object.size))
+        #expect(camera.isConnected)
         await connection.close()
     }
 
@@ -157,7 +208,7 @@ struct CameraFaultHookTests {
 
     // MARK: A camera at another endpoint
 
-    @Test func aRestartAtAnotherEndpointRefusesTheOldOneAndAnswersTheNew() async throws {
+    @Test func aRestartAtAnotherEndpointLeavesTheOldOneSilentAndAnswersTheNew() async throws {
         let camera = try Self.camera()
         let moved = PTPIPEndpoint(host: "192.168.1.50", port: PTPIP.defaultPort)
         let otherPort = PTPIPEndpoint(host: PTPIPEndpoint.cameraNetwork.host, port: 15741)
@@ -171,10 +222,12 @@ struct CameraFaultHookTests {
         for await _ in events {}                                        // the session ended with the camera
         #expect(await first.linkFailure == .linkLost(posix: 53))
 
-        for old in [PTPIPEndpoint.cameraNetwork, otherPort] {
-            await #expect(throws: PTPIPConnectionFailure.refused(initFailReason: nil)) {
-                try await Self.connection(to: camera, at: old).connect()
-            }
+        // The old address, now silent: nobody answers, so the connect times out.
+        await #expect(throws: PTPIPConnectionFailure.timedOut(.connect)) {
+            try await Self.connection(to: camera, at: .cameraNetwork).connect()
+        }
+        await #expect(throws: PTPIPConnectionFailure.timedOut(.connect)) {
+            try await Self.connection(to: camera, at: otherPort).connect()
         }
         let again = Self.connection(to: camera, at: moved)
         _ = try await again.connect()
@@ -184,10 +237,23 @@ struct CameraFaultHookTests {
         #expect(camera.dialled.first == .cameraNetwork)
     }
 
+    @Test func aRestartAtAnotherPortOfTheSameHostRefusesTheOldPort() async throws {
+        let camera = try Self.camera()
+        let moved = PTPIPEndpoint(host: PTPIPEndpoint.cameraNetwork.host, port: 15741)
+        camera.restart(at: moved)
+        // The host answers and nothing listens on the old port.
+        await #expect(throws: PTPIPConnectionFailure.refused(initFailReason: nil)) {
+            try await Self.connection(to: camera).connect()
+        }
+        let again = Self.connection(to: camera, at: moved)
+        _ = try await again.connect()
+        await again.close()
+    }
+
     @Test func restartingAtNilAnswersEverywhereAgain() async throws {
         let camera = try Self.camera()
         camera.restart(at: PTPIPEndpoint(host: "192.168.1.50"))
-        await #expect(throws: PTPIPConnectionFailure.refused(initFailReason: nil)) {
+        await #expect(throws: PTPIPConnectionFailure.timedOut(.connect)) {
             try await Self.connection(to: camera).connect()
         }
         camera.restart(at: nil)

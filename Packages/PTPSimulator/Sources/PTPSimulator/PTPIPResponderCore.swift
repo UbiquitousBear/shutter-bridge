@@ -146,6 +146,15 @@ public struct PTPIPResponderCore: Sendable {
         return actions
     }
 
+    /// Payload of a data phase is going out: the session is not idle (the idle drop counts from the last command or
+    /// the last payload sent, whichever is later). The sender calls it for each Data packet it puts on the wire, so a
+    /// throttled transfer that keeps making progress is not cut off by the 30 s drop; one that makes none for
+    /// `idleDropAfter` of simulated time still is. An `advance(by:)` longer than the limit drops the session whatever
+    /// was sent since the last one.
+    public mutating func noteTransferActivity() {
+        responder.noteTransferActivity()
+    }
+
     /// Lets the caller script the responder (`inject(_:forNext:times:)`).
     public mutating func withResponder<T>(_ body: (inout PTPResponder) -> T) -> T { body(&responder) }
 

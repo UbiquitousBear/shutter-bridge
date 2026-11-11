@@ -35,23 +35,41 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
         var dialled: [PTPIPEndpoint] = []
     }
 
-    /// The throughput limit's budget, shared by every channel: one link's bandwidth.
+    /// The throughput limit's budget, shared by every channel: one link's bandwidth. It also notes that payload went
+    /// out, for the camera's idle clock (a transfer in progress is not idle).
     final class Throughput: Sendable {
-        private let budget = Mutex<ThroughputBudget?>(nil)
+        private struct Inner {
+            var budget: ThroughputBudget?
+            var sentPayload = false
+        }
 
-        func set(_ new: ThroughputBudget?) { budget.withLock { $0 = new } }
-        var isLimited: Bool { budget.withLock { $0 != nil } }
+        private let inner = Mutex(Inner())
 
-        func advance(by elapsed: Duration) { budget.withLock { $0?.advance(by: elapsed) } }
+        func set(_ new: ThroughputBudget?) { inner.withLock { $0.budget = new } }
+        var isLimited: Bool { inner.withLock { $0.budget != nil } }
+
+        func advance(by elapsed: Duration) { inner.withLock { $0.budget?.advance(by: elapsed) } }
 
         /// How many of `wanted` bytes may go now: all of them with no limit, else what the budget grants (0 when
         /// it is spent).
         func take(upTo wanted: Int) -> Int {
-            budget.withLock { current in
-                guard var b = current else { return wanted }
+            inner.withLock { current in
+                guard var b = current.budget else {
+                    current.sentPayload = current.sentPayload || wanted > 0
+                    return wanted
+                }
                 let granted = b.take(upTo: UInt64(wanted))
-                current = b
+                current.budget = b
+                if granted > 0 { current.sentPayload = true }
                 return Int(granted)
+            }
+        }
+
+        /// Whether payload went out since the last call.
+        func consumeSentPayload() -> Bool {
+            inner.withLock { current in
+                defer { current.sentPayload = false }
+                return current.sentPayload
             }
         }
     }
@@ -98,7 +116,7 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
 
     /// The camera restarts its responder at `endpoint` (another port, or another address on its network): every
     /// connection ends as the camera going away ends them (`dropAll`), and from now a connection to any other endpoint
-    /// is refused. Pass nil to answer anywhere again.
+    /// fails: refused if the host is the same (nothing listens on that port), `.timedOut` if it isn't (nobody answers). Pass nil to answer anywhere again.
     public func restart(at endpoint: PTPIPEndpoint?, as failure: ByteChannelFailure = .linkLost(posix: 53)) {
         state.withLock { $0.listensAt = endpoint }
         dropAll(as: failure)
@@ -108,7 +126,11 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     /// by every connection; the reader sees nothing more until `advance(by:)` grants more. Packets shrink to what the
     /// budget allows, so a tick's worth can arrive in several short ones. Replaces any earlier limit, with nothing
     /// banked.
+    ///
+    /// `bytesPerTick` must be at least 1 and `tick` positive (a precondition: 0 is not "stalled" and not "unlimited").
     public func limitThroughput(bytesPerTick: UInt64, every tick: Duration = .seconds(1)) {
+        precondition(bytesPerTick > 0 && tick > .zero,
+                     "a limit grants at least one byte per positive tick; removeThroughputLimit() is the way to lift it")
         throughput.set(ThroughputBudget(bytesPerTick: bytesPerTick, every: tick))
         wakeChannels()
     }
@@ -144,7 +166,11 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     /// drives a link on a virtual clock moves the camera with it.
     public func advance(by elapsed: Duration) {
         throughput.advance(by: elapsed)
-        let wake = state.withLock { s in Self.apply(s.core.advance(by: elapsed), to: &s, packetSize: packetSize) }
+        let wake = state.withLock { s -> [Wake] in
+            // Payload read since the last advance means a transfer is under way, which is not idle time.
+            if throughput.consumeSentPayload() { s.core.noteTransferActivity() }
+            return Self.apply(s.core.advance(by: elapsed), to: &s, packetSize: packetSize)
+        }
         wake.forEach { $0() }
         wakeChannels()
     }
@@ -192,18 +218,24 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
 
     public func open(_ endpoint: PTPIPEndpoint, timeout: Duration,
                      state report: @escaping @Sendable (ByteChannelState) -> Void) async throws(ByteChannelFailure) -> any ByteChannel {
-        let (channel, states) = state.withLock { s -> (InMemoryByteChannel?, [ByteChannelState]) in
+        let (channel, failure, states) = state.withLock { s -> (InMemoryByteChannel?, ByteChannelFailure?, [ByteChannelState]) in
             s.opens += 1
             s.dialled.append(endpoint)
-            guard !s.refusing, s.listensAt == nil || s.listensAt == endpoint else { return (nil, [.connecting]) }
+            if s.refusing { return (nil, .refused, [.connecting]) }
+            if let at = s.listensAt, at != endpoint {
+                // The same address with another port: the host answers and nothing listens (refused). Another
+                // address: nobody answers, so the connect times out, as `SimulatedCameraLink` fails that dial.
+                return (nil, at.host == endpoint.host ? .refused : .timedOut, [.connecting])
+            }
             let id = s.nextID
             s.nextID += 1
             let channel = InMemoryByteChannel(id: id, camera: self, throughput: throughput)
             s.channels[id] = channel
             s.core.connected(id)
-            return (channel, s.statesOnOpen)
+            return (channel, nil, s.statesOnOpen)
         }
         states.forEach(report)
+        if let failure { throw failure }
         guard let channel else { throw .refused }
         return channel
     }

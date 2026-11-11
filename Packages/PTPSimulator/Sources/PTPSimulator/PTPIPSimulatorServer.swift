@@ -148,7 +148,11 @@ public actor PTPIPSimulatorServer {
 
     /// From now a data phase goes out `bytesPerTick` payload bytes per `tick` of simulated time, waiting for
     /// `advance(by:)` when the budget is spent. Replaces any earlier limit, with nothing banked.
+    ///
+    /// `bytesPerTick` must be at least 1 and `tick` positive (a precondition: 0 is not "stalled" and not "unlimited").
     public func limitThroughput(bytesPerTick: UInt64, every tick: Duration = .seconds(1)) {
+        precondition(bytesPerTick > 0 && tick > .zero,
+                     "a limit grants at least one byte per positive tick; removeThroughputLimit() is the way to lift it")
         budget = ThroughputBudget(bytesPerTick: bytesPerTick, every: tick)
         resumeBudgetWaiters()
     }
@@ -271,6 +275,7 @@ public actor PTPIPSimulatorServer {
                         }
                     }
                     guard let packet = packets.next(payloadLimit: granted) else { break }
+                    core.noteTransferActivity()
                     await send(packet, on: id)
                 }
             case let .close(id):
