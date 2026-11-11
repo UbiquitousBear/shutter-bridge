@@ -150,6 +150,15 @@ public actor SimulatedCameraLink: CameraLink {
     public private(set) var lateSessionLosses = 0
     /// Downloads waiting for the throughput budget to grow.
     public var throttledDownloads: Int { throughputWaiters.count }
+    /// `bytes` calls running now that are not parked (held by `.holdAfter`, or mid-file waiting for the throughput
+    /// budget or out a suspension, which only the test ends), so their files may still grow, including any the caller
+    /// has walked away from: a link that ignores cancellation (USB) goes on writing such a file until the call returns.
+    public var downloadsWriting: Int { bytesInFlight - held.count - throughputWaiters.count - suspendedMidFile }
+    /// The file each `bytes` call whose task was cancelled by the time it returned or threw was to write, in order:
+    /// calls the caller walked away from. One that threw first (a scripted failure) may have written nothing. A link
+    /// that ignores cancellation (USB) writes such a file to its end, and what becomes of it is the caller's business
+    /// (the engine deletes it, unless its attempts keep their files).
+    public private(set) var lateFiles: [URL] = []
     /// The throughput limit, if one is set.
     public var throughputLimit: (bytesPerTick: UInt64, tick: Duration)? {
         budget.map { ($0.bytesPerTick, $0.tick) }
@@ -157,6 +166,8 @@ public actor SimulatedCameraLink: CameraLink {
     /// Counts `loseSession()`s: a call that began in an earlier session ends as `disconnected`.
     private var sessionEpoch = 0
     private var bytesInFlight = 0
+    /// `bytes` calls parked mid-file by a suspension.
+    private var suspendedMidFile = 0
     private var closed = false
 
     private var budget: ThroughputBudget?
@@ -297,16 +308,19 @@ public actor SimulatedCameraLink: CameraLink {
             throw CameraLinkFailure(.itemNotFound, detail: "bytes: not on the card")
         }
         bytesCalls.append(object.filename)
+        var url = directory.appendingPathComponent(object.filename, isDirectory: false)
         bytesInFlight += 1
         maxBytesInFlight = max(maxBytesInFlight, bytesInFlight)
-        defer { bytesInFlight -= 1 }
+        defer {
+            bytesInFlight -= 1
+            if Task.isCancelled { lateFiles.append(url) }
+        }
 
         // A scripted failure comes before anything touches the caller's partial file or `resumes`.
         let step = nextStep(for: object.filename)
         if case let .fail(kind) = step {
             throw CameraLinkFailure(kind, detail: "bytes: scripted")
         }
-        var url = directory.appendingPathComponent(object.filename, isDirectory: false)
         var start: UInt64 = 0
         if let partial = resuming, capabilities.resumesPartialFiles {
             url = partial.file
@@ -624,7 +638,7 @@ public actor SimulatedCameraLink: CameraLink {
             if granted > 0 { return granted }
             await park(.throughput)
             try throwIfCancelled(.bytes)
-            try await waitWhileSuspended(.bytes)
+            try await waitWhileSuspendedMidFile()
             try requireSession(session.epoch, .bytes)
             try requireStore(.bytes)
         }
@@ -647,6 +661,14 @@ public actor SimulatedCameraLink: CameraLink {
         }
         if operation != .open { try requireOpen(operation) }
         else if isRemoved { throw CameraLinkFailure(.disconnected, detail: "open: the camera has gone") }
+    }
+
+    /// `waitWhileSuspended(.bytes)` for a download with its file begun, counted out of `downloadsWriting` while it
+    /// waits.
+    private func waitWhileSuspendedMidFile() async throws(CameraLinkFailure) {
+        suspendedMidFile += 1
+        defer { suspendedMidFile -= 1 }
+        try await waitWhileSuspended(.bytes)
     }
 
     private func throwIfCancelled(_ operation: Operation) throws(CameraLinkFailure) {
@@ -763,7 +785,7 @@ public actor SimulatedCameraLink: CameraLink {
             if offset < object.size { session.checkpoint?(PartialDownload(file: url, bytesWritten: offset)) }
             guard offset < end else { break }
             await Task.yield()
-            try await waitWhileSuspended(.bytes)
+            try await waitWhileSuspendedMidFile()
             try throwIfCancelled(.bytes)
             try requireSession(session.epoch, .bytes)
             try requireStore(.bytes)
