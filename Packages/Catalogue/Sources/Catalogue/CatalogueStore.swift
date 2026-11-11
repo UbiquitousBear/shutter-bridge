@@ -374,6 +374,9 @@ extension CatalogueStore {
 // doubles written before it (`InMemoryCatalogue` and `SwiftDataCatalogue` implement every one). Writes to what isn't
 // kept are dropped and reads answer empty; `finishCommit` still writes its rows, through `upsert` and `markStaged` (not
 // in one save); `stagedRecords` and `forgetImports`, which need every row, throw `CatalogueFailure.notSupported`.
+// These are for test doubles only. A store that ships, including a wrapper that forwards to another store, implements
+// every call here: with these defaults it would compile and quietly drop the pending-commit marker (section 3.1's
+// duplicate protection), History's job records and the cull marks.
 extension CatalogueStore {
     public func setMark(_ decision: MarkRecord.Decision?, rating: Int, for keys: [ObjectIdentity.ContentKey],
                         at date: Date) throws {
