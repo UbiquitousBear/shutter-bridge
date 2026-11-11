@@ -298,16 +298,30 @@ public struct DataPhasePackets: Sequence, IteratorProtocol, Sendable {
         self.packetSize = Swift.max(1, packetSize)
     }
 
+    /// The payload bytes the next packet can carry at most: 0 for Start_Data and for an End_Data with nothing left
+    /// to send, otherwise up to `packetSize`. A throttled sender takes this many bytes from its budget first.
+    public var nextPayloadSize: Int {
+        guard started, !ended else { return 0 }
+        return Int(Swift.min(phase.length - offset, UInt64(packetSize)))
+    }
+
     public mutating func next() -> Data? {
+        next(payloadLimit: packetSize)
+    }
+
+    /// The next packet with at most `payloadLimit` payload bytes (at least 1; `packetSize` still caps it), so a
+    /// throttled sender can send what its budget allows. Start_Data carries no payload and ignores the limit.
+    public mutating func next(payloadLimit: Int) -> Data? {
         if ended { return nil }
         if !started {
             started = true
             return PTPIP.startData(transactionID: transactionID, totalLength: phase.length).encode()
         }
+        let size = Swift.min(packetSize, Swift.max(1, payloadLimit))
         let left = phase.length - offset
-        if left > UInt64(packetSize) {
-            let bytes = phase.read(from: offset, count: packetSize)
-            offset += UInt64(packetSize)
+        if left > UInt64(size) {
+            let bytes = phase.read(from: offset, count: size)
+            offset += UInt64(size)
             return PTPIP.data(transactionID: transactionID, bytes: bytes).encode()
         }
         ended = true

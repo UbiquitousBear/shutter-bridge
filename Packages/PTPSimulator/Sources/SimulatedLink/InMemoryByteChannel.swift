@@ -14,7 +14,13 @@ import Synchronization
 /// is read, never held whole. When the camera closes a connection, bytes already queued are still delivered, then the
 /// channel ends, as TCP does.
 ///
-/// Thread-safe. Lock order is camera, then channel; no continuation is resumed with a lock held.
+/// **Fault hooks:** `limitThroughput(bytesPerTick:every:)` makes a data phase flow only as fast as a budget that grows
+/// with `advance(by:)` (a slow link; the camera's time passes only through `advance(by:)`), and `restart(at:)` has the
+/// camera listen at another endpoint, so the old one is refused (`ByteChannelFailure.refused`) and a link that dials
+/// the new one, from its location provider, gets through.
+///
+/// Thread-safe. Lock order is camera, then channel, then the throughput budget (a leaf); no continuation is resumed
+/// with a lock held.
 public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     private struct State: ~Copyable {
         var core: PTPIPResponderCore
@@ -23,9 +29,35 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
         var refusing = false
         var statesOnOpen: [ByteChannelState] = [.connecting, .ready]
         var opens = 0
+        /// Where the camera listens; nil answers at any endpoint.
+        var listensAt: PTPIPEndpoint?
+        /// Endpoints dialled, in order, refused ones included.
+        var dialled: [PTPIPEndpoint] = []
+    }
+
+    /// The throughput limit's budget, shared by every channel: one link's bandwidth.
+    final class Throughput: Sendable {
+        private let budget = Mutex<ThroughputBudget?>(nil)
+
+        func set(_ new: ThroughputBudget?) { budget.withLock { $0 = new } }
+        var isLimited: Bool { budget.withLock { $0 != nil } }
+
+        func advance(by elapsed: Duration) { budget.withLock { $0?.advance(by: elapsed) } }
+
+        /// How many of `wanted` bytes may go now: all of them with no limit, else what the budget grants (0 when
+        /// it is spent).
+        func take(upTo wanted: Int) -> Int {
+            budget.withLock { current in
+                guard var b = current else { return wanted }
+                let granted = b.take(upTo: UInt64(wanted))
+                current = b
+                return Int(granted)
+            }
+        }
     }
 
     private let state: Mutex<State>
+    let throughput = Throughput()
     /// The payload of each Data packet in a data phase (the camera's own size isn't recorded).
     public let packetSize: Int
 
@@ -58,6 +90,35 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     /// Connections opened so far, refused ones included.
     public var openCount: Int { state.withLock { $0.opens } }
 
+    /// The endpoint each `open` dialled, in order, refused ones included.
+    public var dialled: [PTPIPEndpoint] { state.withLock { $0.dialled } }
+
+    /// Where the camera listens now; nil, the default, answers at any endpoint.
+    public var listensAt: PTPIPEndpoint? { state.withLock { $0.listensAt } }
+
+    /// The camera restarts its responder at `endpoint` (another port, or another address on its network): every
+    /// connection ends as the camera going away ends them (`dropAll`), and from now a connection to any other endpoint
+    /// is refused. Pass nil to answer anywhere again.
+    public func restart(at endpoint: PTPIPEndpoint?, as failure: ByteChannelFailure = .linkLost(posix: 53)) {
+        state.withLock { $0.listensAt = endpoint }
+        dropAll(as: failure)
+    }
+
+    /// From now a data phase goes out `bytesPerTick` payload bytes per `tick` of simulated time, with the budget shared
+    /// by every connection; the reader sees nothing more until `advance(by:)` grants more. Packets shrink to what the
+    /// budget allows, so a tick's worth can arrive in several short ones. Replaces any earlier limit, with nothing
+    /// banked.
+    public func limitThroughput(bytesPerTick: UInt64, every tick: Duration = .seconds(1)) {
+        throughput.set(ThroughputBudget(bytesPerTick: bytesPerTick, every: tick))
+        wakeChannels()
+    }
+
+    /// Back to full speed; a read waiting for budget goes on.
+    public func removeThroughputLimit() {
+        throughput.set(nil)
+        wakeChannels()
+    }
+
     /// Whether an initiator has finished the handshake on both channels.
     public var isConnected: Bool { state.withLock { $0.core.isConnected } }
 
@@ -82,8 +143,10 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     /// channels end with `.closed`, as the camera closing them does). Time passes only through this, so a test that
     /// drives a link on a virtual clock moves the camera with it.
     public func advance(by elapsed: Duration) {
+        throughput.advance(by: elapsed)
         let wake = state.withLock { s in Self.apply(s.core.advance(by: elapsed), to: &s, packetSize: packetSize) }
         wake.forEach { $0() }
+        wakeChannels()
     }
 
     /// The camera drops its card from the session: StoreRemoved on the event channel, and the card's operations
@@ -131,10 +194,11 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
                      state report: @escaping @Sendable (ByteChannelState) -> Void) async throws(ByteChannelFailure) -> any ByteChannel {
         let (channel, states) = state.withLock { s -> (InMemoryByteChannel?, [ByteChannelState]) in
             s.opens += 1
-            guard !s.refusing else { return (nil, [.connecting]) }
+            s.dialled.append(endpoint)
+            guard !s.refusing, s.listensAt == nil || s.listensAt == endpoint else { return (nil, [.connecting]) }
             let id = s.nextID
             s.nextID += 1
-            let channel = InMemoryByteChannel(id: id, camera: self)
+            let channel = InMemoryByteChannel(id: id, camera: self, throughput: throughput)
             s.channels[id] = channel
             s.core.connected(id)
             return (channel, s.statesOnOpen)
@@ -147,6 +211,13 @@ public final class InMemoryPTPIPCamera: ByteChannelFactory, Sendable {
     // MARK: From the channels
 
     typealias Wake = @Sendable () -> Void
+
+    /// Lets every channel try its pending read again: a throughput budget grew or went.
+    private func wakeChannels() {
+        let channels = state.withLock { Array($0.channels.values) }
+        let wake = channels.flatMap { $0.retry() }
+        wake.forEach { $0() }
+    }
 
     func received(_ bytes: Data, from id: Int) {
         let wake = state.withLock { s -> [Wake] in
@@ -201,11 +272,13 @@ public final class InMemoryByteChannel: ByteChannel, Sendable {
 
     let id: Int
     private let camera: InMemoryPTPIPCamera
+    private let throughput: InMemoryPTPIPCamera.Throughput
     private let state = Mutex(State())
 
-    init(id: Int, camera: InMemoryPTPIPCamera) {
+    init(id: Int, camera: InMemoryPTPIPCamera, throughput: InMemoryPTPIPCamera.Throughput) {
         self.id = id
         self.camera = camera
+        self.throughput = throughput
     }
 
     public func send(_ data: Data) async throws(ByteChannelFailure) {
@@ -217,7 +290,7 @@ public final class InMemoryByteChannel: ByteChannel, Sendable {
     public func receive(atMost: Int) async throws(ByteChannelFailure) -> Data {
         let result = await withCheckedContinuation { (c: CheckedContinuation<Result<Data, ByteChannelFailure>, Never>) in
             let ready = state.withLock { s -> Result<Data, ByteChannelFailure>? in
-                if let r = Self.take(&s, atMost: atMost) { return r }
+                if let r = Self.take(&s, atMost: atMost, throughput: throughput) { return r }
                 s.pending = (atMost, c)
                 return nil
             }
@@ -251,11 +324,16 @@ public final class InMemoryByteChannel: ByteChannel, Sendable {
         }
     }
 
+    /// Tries a pending read again (the throughput budget changed); returns its wake-up, if it can go now.
+    func retry() -> [InMemoryPTPIPCamera.Wake] {
+        deliver { _ in }
+    }
+
     private func deliver(_ change: (inout State) -> Void) -> [InMemoryPTPIPCamera.Wake] {
         let resume = state.withLock { s -> (CheckedContinuation<Result<Data, ByteChannelFailure>, Never>, Result<Data, ByteChannelFailure>)? in
             guard !s.closed else { return nil }
             change(&s)
-            guard let p = s.pending, let r = Self.take(&s, atMost: p.atMost) else { return nil }
+            guard let p = s.pending, let r = Self.take(&s, atMost: p.atMost, throughput: throughput) else { return nil }
             s.pending = nil
             return (p.continuation, r)
         }
@@ -263,11 +341,15 @@ public final class InMemoryByteChannel: ByteChannel, Sendable {
         return [{ c.resume(returning: r) }]
     }
 
-    private static func take(_ s: inout State, atMost: Int) -> Result<Data, ByteChannelFailure>? {
+    /// What a read gets now. Payload bytes of a data phase are taken from the throughput budget when the packet that
+    /// carries them is made; with the budget spent the read finds nothing (it waits for `retry()`), though bytes queued
+    /// before it are still delivered.
+    private static func take(_ s: inout State, atMost: Int,
+                             throughput: InMemoryPTPIPCamera.Throughput) -> Result<Data, ByteChannelFailure>? {
         if s.closed { return .failure(.closed) }
         let limit = max(1, atMost)
         var out = Data()
-        while out.count < limit, !s.queue.isEmpty {
+        loop: while out.count < limit, !s.queue.isEmpty {
             switch s.queue[0] {
             case var .bytes(data):
                 let n = min(limit - out.count, data.count)
@@ -275,7 +357,13 @@ public final class InMemoryByteChannel: ByteChannel, Sendable {
                 data = Data(data.dropFirst(n))
                 if data.isEmpty { s.queue.removeFirst() } else { s.queue[0] = .bytes(data) }
             case var .packets(packets):
-                if let next = packets.next() {
+                var granted = packets.packetSize
+                let wanted = packets.nextPayloadSize
+                if wanted > 0 {
+                    granted = throughput.take(upTo: wanted)
+                    if granted == 0 { break loop }
+                }
+                if let next = packets.next(payloadLimit: granted) {
                     s.queue[0] = .bytes(next)
                     s.queue.insert(.packets(packets), at: 1)
                 } else {
