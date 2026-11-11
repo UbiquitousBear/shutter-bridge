@@ -168,31 +168,52 @@ final class FinishedJobs: Sendable {
         case listed
     }
 
-    private let log = Mutex<[Entry]>([])
+    private struct State {
+        var log: [Entry] = []
+        /// How many entries earlier `leaks` calls have judged.
+        var judged = 0
+        /// The engine whose events count: a relaunch parks the one before, and nothing it does is part of the case.
+        var engine = 0
+    }
 
-    func record(_ event: EngineTrace, work: URL) {
+    private let state = Mutex(State())
+
+    /// Makes the next engine's events the ones that count; the number its sink passes to `record`.
+    func nextEngine() -> Int {
+        state.withLock { s in
+            s.engine += 1
+            return s.engine
+        }
+    }
+
+    func record(_ event: EngineTrace, work: URL, engine: Int) {
+        guard state.withLock({ $0.engine == engine }) else { return }
         switch event {
         case .finished:
             let files = MatrixBench.workFiles(in: work).others.map { $0.resolvingSymlinksInPath() }
-            log.withLock { $0.append(.finished(files)) }
+            state.withLock { $0.log.append(.finished(files)) }
         case let .imported(name, _), let .staged(name, _), let .alreadyStaged(name), let .skipped(name, _),
              let .failed(name, _):
-            log.withLock { $0.append(.result(name)) }
+            state.withLock { $0.log.append(.result(name)) }
         case .listed:
-            log.withLock { $0.append(.listed) }
+            state.withLock { $0.log.append(.listed) }
         default:
             break
         }
     }
 
-    /// The names of the files in the work folder at the end of any job that were neither written by an abandoned
-    /// call (`late`: resolved paths) nor a file whose result was traced after that job finished, up to the next
-    /// listing or job end: a commit still under way when the job ended holds its staged file until it is done, and
-    /// traces its result when it is.
+    /// The names of the files in the work folder at the end of each job that ended since the last call (so a leak
+    /// is reported by the check after the job that left it, not again by later ones) that were neither written by an
+    /// abandoned call (`late`: resolved paths) nor a file whose result was traced after that job finished, up to the
+    /// next listing or job end: a commit still under way when the job ended holds its staged file until it is done,
+    /// and traces its result when it is.
     func leaks(excluding late: Set<String>) -> [String] {
-        let entries = log.withLock { $0 }
+        let (entries, from) = state.withLock { s -> ([Entry], Int) in
+            defer { s.judged = s.log.count }
+            return (s.log, s.judged)
+        }
         var leaks: [String] = []
-        for (i, entry) in entries.enumerated() {
+        for (i, entry) in entries.enumerated() where i >= from {
             guard case let .finished(files) = entry else { continue }
             var resolved: Set<String> = []
             for later in entries[(i + 1)...] {
@@ -261,13 +282,15 @@ final class MatrixBench {
 
     private static func makeEngine(catalogue: InMemoryCatalogue, work: URL, clock: CameraClock, inFlight: Int,
                                    finished: FinishedJobs) -> ImportEngine {
-        ImportEngine(catalogue: catalogue, settings: ImportSettings(downloadsInFlight: inFlight),
-                     stagingDirectory: work, clock: clock, timeZone: zone,
-                     trace: EngineTraceSink { event in finished.record(event, work: work) })
+        let number = finished.nextEngine()
+        return ImportEngine(catalogue: catalogue, settings: ImportSettings(downloadsInFlight: inFlight),
+                            stagingDirectory: work, clock: clock, timeZone: zone,
+                            trace: EngineTraceSink { event in finished.record(event, work: work, engine: number) })
     }
 
     /// The app was killed and started again: a new engine over what the first left on disk and in the catalogue.
-    /// The first engine is only parked, never told anything, so nothing it would do is part of the case.
+    /// The first engine is only parked, never told anything, so nothing it would do is part of the case (its trace
+    /// no longer reaches `finished`).
     func relaunch() {
         retired.append(engine)
         engine = Self.makeEngine(catalogue: catalogue, work: work, clock: clock, inFlight: inFlight, finished: finished)
@@ -735,12 +758,14 @@ final class MatrixBench {
             abandoned = await settleAbandonedCalls(until: deadline, sourceLocation: sourceLocation)
             (kept, after) = workFiles()
         }
-        var others = finished.leaks(excluding: abandoned.late).map { "\($0) (when a job ended)" }
+        let atEnd = finished.leaks(excluding: abandoned.late)
+        var others = atEnd.map { "\($0) (when a job ended)" }
+        var named = Set(atEnd) // each file once, by its bare name, whichever look saw it first
         for url in before where !abandoned.late.contains(url.resolvingSymlinksInPath().path)
-            && !others.contains(url.lastPathComponent) {
+            && named.insert(url.lastPathComponent).inserted {
             others.append(url.lastPathComponent)
         }
-        for url in after where !others.contains(url.lastPathComponent) { others.append(url.lastPathComponent) }
+        for url in after where named.insert(url.lastPathComponent).inserted { others.append(url.lastPathComponent) }
         let late = abandoned.undiscarded.isEmpty ? "" : " (late, not discarded: \(abandoned.undiscarded))"
         #expect(others.isEmpty, "work folder holds \(others)\(late)", sourceLocation: sourceLocation)
         if knownGaps?.keptPartials == true {
