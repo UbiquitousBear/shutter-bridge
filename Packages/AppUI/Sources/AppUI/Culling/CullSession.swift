@@ -53,8 +53,8 @@ public struct CullWriteFailure: Sendable, Hashable {
 /// and an undo of the last mark. Pure logic on the main actor, so it runs on Linux against a fake writer.
 ///
 /// - **Marks apply at once** in memory and are saved in order, one write after another, so a slow store never
-///   reorders two marks on the same unit. A failed write puts the earlier mark back (if nothing newer has replaced
-///   it) and sets `writeFailure`.
+///   reorders two marks on the same unit. A failed write puts back the last mark the store accepted for that unit (if
+///   nothing newer has replaced the failed one) and sets `writeFailure`.
 /// - **Undo** reverts the last mark made (up to `undoLimit` of them), shows that unit again and saves the earlier
 ///   mark. There is no redo.
 /// - Navigation never wraps: at either end it stays put and says so.
@@ -81,6 +81,8 @@ public final class CullSession {
     @ObservationIgnored private let writer: any CullMarkWriting
     @ObservationIgnored private let indexByID: [CullUnit.ID: Int]
     @ObservationIgnored private var writeTail: Task<Void, Never>?
+    /// The last mark the store accepted for each unit (absent: unmarked), seeded from the catalogue's marks.
+    @ObservationIgnored private var saved: [CullUnit.ID: CullMark] = [:]
 
     /// - Parameters:
     ///   - marks: what the catalogue holds, by content key (a unit's mark is read under its keys, see `CullMark.of`).
@@ -98,6 +100,7 @@ public final class CullSession {
             if !mark.isUnmarked { initial[unit.id] = mark }
         }
         self.marks = initial
+        self.saved = initial
         self.indexByID = lookup
     }
 
@@ -175,7 +178,7 @@ public final class CullSession {
         guard let position = indexByID[entry.unit] else { return false }
         index = position
         marks[entry.unit] = entry.before.isUnmarked ? nil : entry.before
-        enqueueWrite(entry.before, for: units[position], revertingTo: entry.after)
+        enqueueWrite(entry.before, for: units[position])
         return true
     }
 
@@ -185,7 +188,7 @@ public final class CullSession {
         undoStack.append(UndoEntry(unit: unit.id, before: old, after: new))
         if undoStack.count > Self.undoLimit { undoStack.removeFirst(undoStack.count - Self.undoLimit) }
         marks[unit.id] = new.isUnmarked ? nil : new
-        enqueueWrite(new, for: unit, revertingTo: old)
+        enqueueWrite(new, for: unit)
     }
 
     // MARK: Saving
@@ -201,17 +204,19 @@ public final class CullSession {
 
     public func dismissWriteFailure() { writeFailure = nil }
 
-    private func enqueueWrite(_ mark: CullMark, for unit: CullUnit, revertingTo old: CullMark) {
+    private func enqueueWrite(_ mark: CullMark, for unit: CullUnit) {
         let previous = writeTail
         let (writer, keys, id) = (writer, unit.keys, unit.id)
         writeTail = Task {
             await previous?.value
             do {
                 try await writer.write(mark, for: keys)
+                self.saved[id] = mark.isUnmarked ? nil : mark
             } catch {
-                // Only if nothing newer has replaced the mark: a later change owns the unit now.
+                // Only if nothing newer has replaced the mark: a later change owns the unit now. Back to what the
+                // store holds, which is not always the mark this change replaced (that one may have failed too).
                 if self.mark(of: unit) == mark {
-                    self.marks[id] = old.isUnmarked ? nil : old
+                    self.marks[id] = self.saved[id]
                     self.undoStack.removeAll { $0.unit == id && $0.after == mark }
                 }
                 self.writeFailure = CullWriteFailure(unit: id, detail: String(describing: type(of: error)))

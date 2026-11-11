@@ -207,4 +207,27 @@ struct CullSessionTests {
         #expect(s.currentMark.decision == .reject)
         #expect(writer.writes.map(\.mark.decision) == [.reject])
     }
+
+    @Test func twoFailedWritesOnOneUnitLeaveWhatTheStoreHolds() async {
+        let (s, writer) = session(1)
+        writer.failNext(2)
+        s.keep()
+        s.reject()
+        await s.settled()
+        #expect(writer.writes.isEmpty)
+        #expect(s.currentMark.isUnmarked)
+        #expect(s.writeFailure?.unit == s.units[0].id)
+    }
+
+    @Test func aFailureAfterASavedMarkRestoresThatMarkNotTheOneItReplacedInMemory() async {
+        let (s, writer) = session(1)
+        s.keep()
+        await s.settled()
+        writer.failNext(2)
+        s.reject()
+        s.setRating(3)
+        await s.settled()
+        #expect(s.currentMark == CullMark(decision: .keep))
+        #expect(writer.writes.map(\.mark.decision) == [.keep])
+    }
 }

@@ -181,6 +181,8 @@ public final class PreviewPrefetcher<Image: Sendable> {
         let (clock, delay) = (clock, policy.settleDelay)
         settleTask = Task { [weak self] in
             do { try await clock.sleep(for: delay) } catch { return }
+            // A swipe may have cancelled this task after the sleep ended and before this job ran.
+            guard !Task.isCancelled else { return }
             self?.releaseAhead()
         }
     }
@@ -351,7 +353,11 @@ public struct UbiquitousFileAvailability: StagedFileAvailability {
 
     public func isLocal(_ file: CullFile) -> Bool {
         // A file that isn't an iCloud item has no status: it is on the phone.
-        guard let status = try? file.url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
+        // Foundation caches resource values on the URL and flushes them on a run-loop pass, which never comes on the
+        // cooperative pool: read through a fresh copy with its cache cleared, or a finished download looks pending.
+        var url = file.url
+        url.removeAllCachedResourceValues()
+        guard let status = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
             .ubiquitousItemDownloadingStatus
         else { return true }
         return status == .current || status == .downloaded

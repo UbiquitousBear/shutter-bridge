@@ -63,7 +63,7 @@ public struct PreviewLoadingFailure: Error, Sendable, Hashable {
     public init(_ detail: String) { self.detail = detail }
 }
 
-#if canImport(CoreImage) && canImport(ImageIO) && canImport(CoreGraphics)
+#if canImport(CoreImage) && canImport(ImageIO) && canImport(CoreGraphics) && canImport(UniformTypeIdentifiers)
 import CoreGraphics
 import CoreImage
 import ImageIO
@@ -79,6 +79,9 @@ public struct DecodedPreviewImage: @unchecked Sendable {
 /// screen size. Each decode runs off the main actor and holds one image at a time. Compiled only by CI's Xcode job.
 public struct ImageIOPreviewLoader: PreviewLoading {
     public typealias Image = DecodedPreviewImage
+
+    /// One context for every decode: setting one up (Metal device, caches) is costly, and it is thread-safe.
+    private static let context = CIContext(options: [.cacheIntermediates: false])
 
     public init() {}
 
@@ -126,7 +129,7 @@ public struct ImageIOPreviewLoader: PreviewLoading {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
         ] as CFDictionary
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options).map(DecodedPreviewImage.init)
+        return CGImageSourceCreateThumbnailAtIndex(source, CGImageSourceGetPrimaryImageIndex(source), options).map(DecodedPreviewImage.init)
     }
 
     /// The RAW's largest embedded image, upright, scaled down to `maxPixelSize` if it is larger.
@@ -156,7 +159,6 @@ public struct ImageIOPreviewLoader: PreviewLoading {
         guard longSide > 0, longSide.isFinite else { return nil }
         let scale = min(1, CGFloat(maxPixelSize) / longSide)
         let scaled = scale < 1 ? image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : image
-        let context = CIContext(options: [.cacheIntermediates: false])
         return context.createCGImage(scaled, from: scaled.extent.integral).map(DecodedPreviewImage.init)
     }
 }
