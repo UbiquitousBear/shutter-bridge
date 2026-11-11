@@ -141,26 +141,186 @@ The proposal: "cable pulled at 10 %, 50 %, 99 % of a file; Wi-Fi drop then recon
 | *Did suspend* mid-file | yes | n/a | **Built** | `didSuspendPausesUntilTheAppReturns`. |
 | Short file | yes | yes | **Built** | `aShortFileIsCaughtBySizeAndFetchedAgain`. |
 | App killed mid-job, relaunched | yes | yes | **To do** | I22 for the download phase (Wi-Fi continues from the catalogue's partial row; USB from 0). I15 for the commit boundary (below). |
-| Killed between the Photos save and the catalogue write | yes | yes | **To do** | I15, with the marker I20 designs. The asset exists, the row doesn't, and the next import saves it again. The stage-job equivalent: killed between placing the file in Staging and the `markStaged` write. |
-| Catalogue write fails after the save, every retry used | yes | yes | **To do** | I15. `commitAndRecord` returns `rowWritten: false` and the job ends `.catalogueUnavailable` with the asset in Photos and no row, so the next import saves it again; the test Support folder's `FailingCatalogue` scripts it. The stage-job equivalent: the file placed in Staging, then the `markStaged` write lost. |
+| Killed between the Photos save and the catalogue write | yes | yes | **To do** | I15, with the pending-commit marker of section 3.1 (I9 writes it). The asset exists, the row doesn't, and the next import saves it again. The stage-job equivalent: killed between placing the file in Staging and the `markStaged` write. |
+| Catalogue write fails after the save, every retry used | yes | yes | **To do** | I15. `commitAndRecord` returns `rowWritten: false` and the job ends `.catalogueUnavailable` with the asset in Photos and no row, so the next import saves it again; the test Support folder's `FailingCatalogue` scripts it. The stage-job equivalent: the file placed in Staging, then the `markStaged` write lost. Resolved as section 3.1 designs. |
 | Stage-job cases: iCloud lost mid-job; on-iPhone fallback; storage full while staging | yes | yes | **To do** | I15, after staging lands (the staging branch tests its own route; the harness adds "no duplicates, no loss" across Staging). |
 | Keeper cases: a staged file missing, changed or evicted before *Import keepers*; Photos denied during it | n/a | n/a | **To do** | I15, after I12. |
 
 Acceptance criteria:
 
 - **Every case above runs in one suite on Linux and in CI**, and asserts the five points. The suite is the evidence for exit criterion 1.
-- **A commit whose catalogue write is lost doesn't duplicate.** Two ways lose it: the app is killed between the save and the catalogue write, or the write fails after the save with every retry used (and the same two for a stage job: the file placed in Staging, the `markStaged` write lost). Before committing a unit the engine writes a pending-commit marker; if the marker can't be written, the unit isn't committed and the job ends `.catalogueUnavailable` as today. A marker left behind is resolved before any diff at the next launch, and again whenever the catalogue becomes available after a `.catalogueUnavailable` end: for a Photos commit the engine looks for the asset by the original filename and capture date (`PHAssetResource.originalFilename`) and writes `.imported` if found, else clears the marker; for a stage commit it checks the file at its Staging path and size and writes the staged fact if found. Where the marker lives and how the lookup works, including with Limited Access and with the album setting off, is I20's design, settled in wave 1 so I7 can put it in V4; I9 writes the marker and I15 implements the resolution. The Linux tests use the fake library and `FailingCatalogue`; the Photos lookup is CI only. If no lookup proves reliable, the fallback is to leave the file `.new` and accept one possible duplicate, said in the outcome line, for Shamil to accept.
+- **A commit whose catalogue write is lost doesn't duplicate.** Two ways lose it: the app is killed between the save and the catalogue write, or the write fails after the save with every retry used (and the same two for a stage job: the file placed in Staging, the `markStaged` write lost). Before committing a unit the engine writes a pending-commit marker; if the marker can't be written, the unit isn't committed and the job ends `.catalogueUnavailable` as today. A marker left behind is resolved before any diff at the next launch, and again whenever the catalogue becomes available after a `.catalogueUnavailable` end: for a Photos commit the engine looks for the asset by the original filename and capture date (`PHAssetResource.originalFilename`) and writes `.imported` if found, else clears the marker; for a stage commit it looks for the file in its Staging day folder, under its name or a numbered one, with its size, and writes the staged fact if found. Section 3.1 (I20's design) settles where the marker lives (`PendingCommitFile`, a model of its own in V4), how the lookup works with Limited Access and with the album setting on and off, and the API: I7 adds the store calls, I9 writes and clears the marker, and I15 implements the resolution. The Linux tests use the fake library and `FailingCatalogue`; the Photos lookup is CI only. If no lookup proves reliable, the fallback is to leave the file `.new` and accept one possible duplicate, said in the outcome line, for Shamil to accept.
 - **Engine bugs the harness finds are fixed in the engine, not worked around in the tests.** The harness (I22) records a failing case with `withKnownIssue` and a note, so its pull request stays a test change; I15 fixes them.
 - **Bench:** a cable pull and a Wi-Fi drop at three points in a real file, and a camera powered off mid-import (I5).
 
 Could change with: D1 (what exit 2 times); the staging branch's fallback for a Photos denial; D11 (same-name cameras sharing a folder).
+
+### 3.1 Pending commits (I20's design)
+
+Written on 11 Nov from `main` at f7a4f9e (`ImportEngine+File.swift`'s `commit` and `commitAndRecord`, `PhotosLibraryDestination`, `SystemPhotoLibrary`) and the staging branch's first commit (37b4f87: `StagingFolderDestination`, `FolderPlacer`, Catalogue V3's `markStaged`). Nothing here is built; I7, I9 and I15 build it, and the bench proves the Photos side. It is written to D1–D14's recommendations; the end of this section says where another answer changes it.
+
+**The gap it closes.** `commitAndRecord` calls the destination (`used.commit(unit)`), then upserts the `.imported` row with up to `catalogueWriteAttempts` (2) tries and no backoff. Between the two the file is in Photos (or placed in Staging) and the catalogue doesn't know. Two things lose the row: iOS ends the app (or it crashes) after the save, and the write fails every try (the job then ends `.catalogueUnavailable` with `rowWritten: false`). Either way the next diff reads the file as new and the next import saves it again. The commit itself runs in an unstructured task, so cancelling or stopping the job doesn't cause the gap; only a kill or a failing store does. A Photos change interrupted by the app's death may still be completed by the system's photo library service (`unverified` either way), so the design assumes the asset may or may not exist.
+
+**Which way to be wrong.** A lookup that answers "found" for a file that isn't there marks it imported (or staged) and it is never offered again: a loss. One that answers "not found" for a file that is there gives a second copy: a duplicate. The exit forbids both, but a loss can't be undone by the person and a duplicate can, so every doubtful answer below is "not found", and the resolution never writes to Photos or to Staging, only to the catalogue.
+
+**Where the marker lives: a model of its own (recommended).** The three options I20's entry names:
+
+| Option | For | Against |
+| --- | --- | --- |
+| A list on the V4 job record | No new model. | Written per unit, so a read-modify-write of an encoded list on the job record with two commits in flight; ties commit safety to History's fields, which D6 can still change or push to V5. |
+| A field on the unit's `CameraObject` rows | The clearing write is the row write itself. | A pair's marker is split over two rows and needs a unit id to regroup; the destination's details (Staging root and day folder, the date the asset was given) widen `CameraObject` for a few seconds' use; if the catalogue syncs after 1.0, a device-local fact would ride on a synced row. |
+| **`PendingCommitFile`, a model of its own** | One row per file, grouped by commit, so a pair is one commit with two rows (as `CullMark` writes both halves together); independent of D6 and of `CameraObject`'s meaning; can be kept out of any synced configuration later (it names this iPhone's Photos library and Staging root); "every unresolved commit" is one fetch of a table that is empty almost always. | A second write per unit. Clearing it in the same store save as the row (below) makes that write as safe as a row field. |
+
+`PendingCommitFile` (V4, I7): `commitID: UUID?`, `jobID: UUID?`, `writtenAt: Date?`, `destination: String` (`"photos"` or `"staging"`, default `"photos"`), `stagingRoot: String?` (V3's `StagingRoot` raw value), `stagingFolder: String?` (the day folder relative to the root, `Staging/<camera>/<YYYY-MM-DD>`), the file's identity as `CameraObject` keeps it (`cameraKey`, `identityKey`, `folder`, `filename`, `captureDate`, `size: Int64`), `format: String`, `role: String` (`"single"`, `"raw"` or `"processed"`) and `assetDate: Date?` (the exact `Date` the asset or the placed file was given: `StagedFile.captureDate`). Every attribute optional or defaulted, no unique attribute, no relationship (forgetting a camera removes its markers by `cameraKey`, explicitly), pinned names.
+
+**Written and cleared.** All of it in `commitAndRecord`, which already runs whether or not the job is current:
+
+1. **Before the destination is called**, the engine writes the unit's marker (`beginCommit`), with the same number of tries as the row. The marker's id is the commit's existing token (`commitsInFlight`'s key), so the engine can tell its own live commits from leftovers. If the marker can't be written, nothing is sent to the destination: the downloaded copy is deleted (a resumable partial too, since no checkpoint could be recorded either), the file goes back to the queue with no retry counted and not failed, and the job ends `.catalogueUnavailable`, as a failed row write ends it today.
+2. **A Photos refusal that switches the job to Staging** (3311, the staging branch's fallback) rewrites the marker under the same id with the staging destination before the staging commit; if that write fails, step 1's ending applies (Photos refused, so nothing was saved and the downloaded file is still there to delete).
+3. **A commit that fails** (no space, rejected, staged file missing) removes the marker (`abandonCommit`, one try; a leftover is harmless, below).
+4. **A commit that succeeds** writes its rows and removes the marker **in one store save** (`finishCommit`): `.imported` upserts for a Photos asset, `markStaged` for a staged copy, then the marker rows deleted, then one `save()`, rolled back as a whole if it fails (`SwiftDataCatalogue` already rolls back a failed save). A row written with its marker left behind, or a marker cleared with no row, can't happen. Same number of tries as today's upsert. If every try fails, the result is `rowWritten: false` as today, and the engine also keeps the writes it couldn't make in memory (`unrecordedCommits[id]`), so a resolution later in the same launch writes exactly them with no lookup.
+
+Writing the asset's identifier into the marker as soon as `save` returns, before the row, was considered and dropped: it is a catalogue write that can fail the same way, and the window it would cover (between `save` returning and `finishCommit`) is far shorter than the save itself, which is where a kill lands. Nor can the marker be written from inside the change block, where the placeholder's identifier is first known: the block is synchronous and runs on Photos' own queue, so the catalogue's actor can't be awaited from it.
+
+**A Photos commit is resolved by a lookup in the library** (I15, in `PhotosBridge`, behind `#if canImport(Photos)`):
+
+- **Only with read access.** `PHPhotoLibrary.authorizationStatus(for: .readWrite)` is read, never requested (no prompt at launch). `.authorized` and `.limited` look; `.notDetermined`, `.denied` and `.restricted` answer *can't look* and the marker waits (below).
+- **By the date the asset was given, then by original file names.** `PHAsset.fetchAssets(with: .image, options:)` with a predicate on `creationDate` from `assetDate` − 1 s to `assetDate` + 1 s (the asset's date is the camera's whole second, set as `PHAssetCreationRequest.creationDate`; that Photos keeps it as set and to the second is `unverified`, hence the window) and `includeHiddenAssets = true` (a hidden photo is still imported). For each candidate, `PHAssetResource.assetResources(for:)`: a match is an asset whose original resources (types `.photo` and `.alternatePhoto`) are exactly the unit's, role for role, by `originalFilename` with ASCII case folded (D13). A single ARW doesn't match a pair's asset, nor the other way round. Size can't be compared (no public size on `PHAssetResource`), so the match is the 8 Nov rule's name and second, with the role standing in for size; two cameras' files with one name and second already count as one (the accepted risk).
+- **One match or more:** found; the first match's `localIdentifier` becomes the rows' location (several matches mean the photo is in Photos already, more than once, and nothing here makes that worse). **None:** not found. Assets in Recently Deleted aren't fetched, so a photo deleted since reads as not found and may be imported again, which is what the person would expect.
+- **The album, on or off, resolves the same way.** The lookup is library-wide and never consults the album: the photo may be outside the album because the album refused content (`AlbumIssue.doesNotAcceptPhotos`), the person removed it or deleted the album, or the setting changed since. A found asset that is not in the album isn't added to it: the resolution doesn't write to Photos.
+- **Under Limited Access** a fetch returns the person's selection; assets the app created are added to it (Apple's WWDC 2020 session on the limited library), which is `unverified` on iOS 27, as is whether the person can take them out of the selection afterwards. If they aren't visible, the lookup answers not found and the photo is saved again. Until the bench confirms visibility, a not-found under `.limited` is counted apart and worded as a possible duplicate (below), never silent.
+- Also `unverified`: that `originalFilename` reads back as `PHAssetResourceCreationOptions.originalFilename` set it for the α7C II's ARW and JPG, and that assets saved into an iCloud Shared Library are returned by the default fetch.
+
+**A stage commit is resolved by looking in its day folder** (I15, `PhotosBridge`'s `StagedCopyFinder`, pure Foundation, Linux-tested over temporary folders). The final name isn't known when the marker is written: `FolderPlacer` gives a clashing file "NAME (2).EXT" and a pair one shared number. So the marker holds the folder, and the finder lists it:
+
+- The root from the `StagingLocator` now (the iCloud container's Documents folder, or the app's own); a marker for iCloud Drive while iCloud Drive isn't available answers *can't look*.
+- For each file of the unit, a candidate is a regular file named as `FilesFolderNaming.fileName(forCameraFile:)` makes it, or its `numbered(_:_:)` form, with ASCII case folded, whose size equals the identity's. A pair matches only with both files under the same number. Where several numbers match, the highest wins (the newest placement); an older copy with the same name and size is the same file's bytes, so picking it marks the file staged correctly and leaves only a spare copy, never a loss.
+- The modification date (`FolderPlacer` sets it to the capture date before the move) breaks ties when it is readable, but is not required: whether it survives an iCloud upload and eviction is `unverified`.
+- An evicted file shows as an iCloud placeholder; whether its size can be read without downloading it (the URL's resource values) is `unverified`, and one whose size can't be read is not a match. A freshly placed file is unlikely to be evicted before the next launch.
+- Found: `markStaged` with the found path and `stagedAt` from the marker's `writtenAt`. Not found: the marker is removed and the file stays new; if it was in fact placed under a name the finder didn't recognise, Staging holds a copy no row points to (the bench check below shows whether it happens; reconciling staged files deleted or added in Files is the staging branch's PR 7).
+
+**When resolution runs.** `resolvePendingCommits()` runs in the engine, one pass at a time (a caller arriving during a pass awaits it), and skips any marker whose id is a commit still in flight in this process.
+
+- **At launch**, called by `AppModel` once the catalogue is open and the engine made (after the engine's work-folder prune), before anything else asks the engine for a diff. Browse may read its badges meanwhile; when the pass reports a change, Browse reloads them.
+- **Before every engine diff**: the listing in `runJob` and `append` call it right after the existing `settleCommits(ofJobsOtherThan:)`. With no markers it is one empty fetch. This is what covers "when the catalogue becomes available after a `.catalogueUnavailable` end": nothing uses the catalogue again until the next job, reconnect or append, and that diff resolves first, writing the in-memory `unrecordedCommits` for this launch's own commits and looking up the rest.
+- **Order with I13**: work-folder prune, then pending commits, then I13's reset of `.partial` rows whose file is missing, then the diff. A Photos commit found writes `.imported`, which already clears a `.partial` row's offset and file; a stage commit found goes through `markStaged`, which turns a `.partial` row back to new and clears them. Not found touches only the marker, and I13's reset deals with a partial file the commit consumed.
+- **Outcomes per marker:** *found* (rows written, marker removed in one save, `finishCommit`); *not found* (marker removed, `abandonCommit`; the file reads new); *can't look* (marker kept; the file reads as its rows say, new or partial, so nothing is held back and nothing is lost; the next pass tries again). A marker kept because Photos access is denied is harmless: no Photos save can happen until access returns, and the first diff after it returns resolves the marker first. A marker left by a failed `abandonCommit` resolves as not found, or as found if a later retry of the same file saved it, which is also right. No age limit is needed.
+- `pendingCommits()` failing (the store still unavailable) ends the pass with nothing done; the diff that follows fails as today and the job ends `.catalogueUnavailable`.
+
+**The fallback**, if the bench shows a lookup isn't reliable (say, app-created assets invisible under Limited Access): the marker is still written and resolved, but in the failing case the lookup answers not found without looking (counted in `possibleDuplicates`), the marker is removed, the file is left new, and the possible duplicate is said, in the log and in the next Import outcome ("1 photo from an interrupted import may now be in Photos twice"), for Shamil to accept as section 3 says. The marker is still worth writing in that case: without it the app couldn't even say so.
+
+**The API.** Catalogue (I7, in `CatalogueStore`, both stores, in the shared contract tests):
+
+```swift
+public struct PendingCommit: Sendable, Hashable, Codable {
+    public enum Destination: Sendable, Hashable, Codable {
+        case photos
+        case staging(root: StagingRoot, folder: String)   // folder: "Staging/<camera>/<YYYY-MM-DD>"
+    }
+    public enum Role: String, Sendable, Hashable, Codable { case single, raw, processed }
+    public struct File: Sendable, Hashable, Codable {
+        public var identity: ObjectIdentity
+        public var format: PTPMediaKind
+        public var role: Role
+        public var assetDate: Date?
+    }
+    public var id: UUID             // the commit's token
+    public var jobID: UUID?
+    public var destination: Destination
+    public var files: [File]        // a pair: the RAW first, as CommitUnit.files
+    public var writtenAt: Date
+}
+
+public enum CommitWrite: Sendable, Hashable {
+    case imported(CatalogueRecord)
+    case staged(ObjectIdentity, format: PTPMediaKind, at: StagedLocation)
+}
+
+// CatalogueStore gains:
+func beginCommit(_ pending: PendingCommit) throws        // inserts, or replaces the commit with the same id
+func finishCommit(_ id: UUID, writing writes: [CommitWrite]) throws   // the writes and the marker's removal, one save;
+                                                                     // the writes alone when no marker has that id
+func abandonCommit(_ id: UUID) throws                    // removes it; nothing happens when there is none
+func pendingCommits() throws -> [PendingCommit]          // every unresolved commit, oldest first
+```
+
+`forgetImports(camera:)` also removes that camera key's markers, so a later pass can't mark forgotten files imported again. Contract tests: begin then finish leaves the rows and no marker; begin then abandon leaves neither; a replace keeps one commit; `finishCommit` on a store whose save fails leaves the marker and no row (`InMemoryCatalogue` applies all or nothing within one actor call; SwiftData's half in CI); a pair's two files round-trip as one commit.
+
+PhotosBridge (I9 adds `commitTarget`; I15 the lookups):
+
+```swift
+public enum CommitTarget: Sendable, Hashable {
+    case photosLibrary
+    case stagingFolder(place: StagingPlace, folderPath: String)
+}
+// ImportDestination gains (nonisolated, synchronous):
+func commitTarget(for unit: CommitUnit) -> CommitTarget
+// StagingFolderDestination computes folderPath with the same function its commit uses, so the two can't drift.
+
+public struct AssetQuery: Sendable, Hashable {
+    public var creationDate: Date
+    public var resources: [AssetCreation.Resource]   // roles and original file names only; fileURL unused
+    public init(_ asset: AssetCreation)              // built from AssetCreation(unit:options:), so roles match the save
+}
+public enum AssetSearch: Sendable, Hashable {
+    case found(localIdentifier: String)
+    case notFound(underLimitedAccess: Bool)
+    case cannotSearch
+}
+// PhotoLibraryClient gains:
+func findAsset(_ query: AssetQuery) async -> AssetSearch
+
+public struct StagedCopyFinder: Sendable {
+    public struct Wanted: Sendable, Hashable {
+        public var filename: String          // the camera's name, as the marker keeps it
+        public var size: UInt64
+        public var modificationDate: Date?   // the marker's assetDate; a tie-breaker only
+    }
+    public init()
+    // Each file's path relative to `root`, in the unit's order; nil unless every file is found (a pair under one number).
+    public func find(_ wanted: [Wanted], in folder: String, under root: URL) -> [FileLocation]?
+}
+```
+
+Engine (I9 writes and clears; I15 resolves):
+
+```swift
+// ImportEngine's init gains:
+commitLookup: any CommitLookup = NoCommitLookup()   // NoCommitLookup answers .cannotLook: markers wait, nothing guessed
+
+public protocol CommitLookup: Sendable {
+    func look(for pending: PendingCommit) async -> CommitLookupAnswer
+}
+public enum CommitLookupAnswer: Sendable, Hashable {
+    case found([CommitWrite])
+    case notFound(underLimitedAccess: Bool)
+    case cannotLook
+}
+
+extension ImportEngine {
+    public func resolvePendingCommits() async -> PendingCommitReport
+}
+public struct PendingCommitReport: Sendable, Hashable {
+    public var foundInPhotos: Int
+    public var foundInStaging: Int
+    public var notFound: Int
+    public var possibleDuplicates: Int    // not found under Limited Access, or by the fallback
+    public var waiting: Int               // can't look yet
+}
+```
+
+`CommitLookup` and its answer are declared in `ImportEngine`, which already sees both `Catalogue` and `PhotosBridge`; the engine maps a `CommitTarget` to a `PendingCommit.Destination` (`StagingPlace` to V3's `StagingRoot`) when it writes the marker. `CommitResult` gains `.markerNotWritten` for step 1. The production `CommitLookup` (AppUI wiring, I15) composes `SystemPhotoLibrary.findAsset` with a `StagedCopyFinder` over the app's `StagingLocator`; Linux tests use a fake that answers from what a recording destination committed. `EngineTrace` gains one case per marker resolved (camera file name and outcome only), worded by I8's `EngineTraceWording`; `possibleDuplicates` reaches the next Import outcome's wording.
+
+**Tests that prove it** (I15 unless named). Linux: a kill between the save and the row, simulated by an engine whose destination commits and whose `finishCommit` never lands, then a second engine over the same `InMemoryCatalogue` and a lookup that answers found: one `.imported` row with the asset's identifier, no marker, and the next job doesn't commit the file again; the same with not found (the file reads new and is imported once); a write that fails every try then a job later in the same launch (replayed from memory, no lookup asked); a marker that can't be written (nothing committed, the job ends `.catalogueUnavailable`, the file queued again next time; I9); the 3311 switch rewriting the marker (I9); a pair resolved as one commit; a marker of a commit still in flight not touched by a pass run from `append`; each of these for a stage commit too, with `StagedCopyFinder` over a temporary folder that holds "DSC00001 (2).ARW". CI only: `SystemPhotoLibrary.findAsset` against an asset the test saves, with and without an album. **Bench** (I15 adds the check to [iteration-2-bench.md](iteration-2-bench.md)): a Debug-only launch argument that ends the app right after a destination returns and before `finishCommit`; relaunch and import again, with full access, with Limited Access and nothing selected, with the album setting on and off, and once staging to iCloud Drive; each time the photo is in Photos or Staging once and Browse reads it imported or staged.
+
+**Where another answer changes this.** D13 (b): names compare byte for byte in the Photos match and the finder. D10 (b) or (c): undated files get the modification date as `assetDate`, and the lookup works unchanged because the marker keeps the exact `Date` given. D11 (a): Staging folders named by display name change the stored `stagingFolder`, not the resolution; the Photos lookup ignores albums either way. D6: none, because the marker isn't on the job record. D2, D3: none; a file whose stage commit is unresolved has no staged row, so the cull screen doesn't list it and removal can't reach it. The staging branch: if its engine route ends up recording staged copies as `.imported` rows with a `.file` location (its interim form) rather than `markStaged`, `CommitWrite.staged` becomes an `.imported` write and the finder's result its location. iCloud sync of the catalogue (after 1.0): `PendingCommitFile` stays in a local-only configuration.
 
 ## 4. History screen and the tab bar
 
 | Requirement | Status | Note |
 | --- | --- | --- |
 | `ImportJob` model | **Built**, unused | V1 and V2: camera, jobID, startedAt, finishedAt, selection, bytesTotal, bytesDone, outcome, cascade from `Camera.jobs`. "Nothing writes these yet." |
-| Fields History needs: files imported / skipped / failed, purpose (import, stage, keepers), destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files), and the pending-commit marker where I20 puts it | **To do** | I7 (schema V4). V1's `selection` is only the string "all-new", "range" or "picked", which leaves nothing to re-queue a range or picked job from. |
+| Fields History needs: files imported / skipped / failed, purpose (import, stage, keepers), destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files) | **To do** | I7 (schema V4). The pending-commit marker isn't a job-record field: it is a model of its own (section 3.1). V1's `selection` is only the string "all-new", "range" or "picked", which leaves nothing to re-queue a range or picked job from. |
 | A store API for jobs (record, update, list per camera and overall) | **To do** | I7, in both stores. |
 | The engine writes a job record at start, at each pause and at the end | **To do** | I9. |
 | History screen: past jobs with counts, bytes, duration and outcome; tap opens the album in Photos | **To do** | I10. |
@@ -345,10 +505,10 @@ See section 8: V3 is staging's; cull marks and job records go in V4.
 | V1 (1.0.0) | Camera, CameraObject, ImportJob | **Built**, frozen | #83; builds 17.1 and 18.1. `theShippedSchemaIsUnchanged` pins it. |
 | V2 (2.0.0) | V1 + `Camera.bluetoothPeripheralID` | **Built** | W4 #92; lightweight V1 → V2. |
 | V3 | The *staged* fact (`StagedLocation`: relative path, root, staged-at) on `CameraObject` | **Staging** | The staging branch; lightweight V2 → V3, pinned names. |
-| V4 | `CullMark` (content key, mark, rating, marked-at); `ImportJob` gains files imported / skipped / failed, purpose, destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files, as a related model or an encoded list, I7's choice within the CloudKit rules); the pending-commit marker on whichever model I20 chooses | **To do** | I7, after V3 is on `main` and I20 has chosen where the marker lives, so it doesn't need a stage of its own. |
+| V4 | `CullMark` (content key, mark, rating, marked-at); `ImportJob` gains files imported / skipped / failed, purpose, destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files, as a related model or an encoded list, I7's choice within the CloudKit rules); `PendingCommitFile`, the pending-commit marker (section 3.1) | **To do** | I7, after V3 is on `main`; I20 chose the marker's model (section 3.1), so it doesn't need a stage of its own. |
 | V5 (reserved) | An indexed content-key column filled in the stage's `didMigrate` | **Later** | Only if a slow diff is measured. |
 
-Why one V4 for marks and job records: both are Iteration 2's, both are additive, and every stage is compiled and tested only by CI's SwiftData run; one stage instead of two halves the migrations shipped between the staging build and the internal TestFlight. If the job-record fields aren't settled when the marks are ready (D6), the marks ship as V4 and the job records become V5, and the order stays V3 → V4 → V5. The pending-commit marker is designed first (I20, wave 1) for the same reason: wherever it lives, a job record or a row field, it goes into the same V4 rather than a stage of its own.
+Why one V4 for marks and job records: both are Iteration 2's, both are additive, and every stage is compiled and tested only by CI's SwiftData run; one stage instead of two halves the migrations shipped between the staging build and the internal TestFlight. If the job-record fields aren't settled when the marks are ready (D6), the marks ship as V4 and the job records become V5, and the order stays V3 → V4 → V5. The pending-commit marker was designed first (I20, wave 1) for the same reason: it is a model of its own (`PendingCommitFile`, section 3.1) and goes into the same V4 rather than a stage of its own. If the job records move to V5 (D6), the marker stays in V4 with the marks.
 
 Acceptance criteria (each stage):
 
@@ -418,7 +578,7 @@ Items are numbered I1 to I22, so they don't clash with the wireless plan's W-num
 | --- | --- | --- |
 | 1 | I1, I2, I3, I4, I5, I20 | Now, beside the staging branch. |
 | 2 | I6, I7, I8, I22 | The staging branch (V3, stage jobs, the Import menu) is merged; I7 also needs I20. |
-| 3 | I9, I11, I13 | Their wave 2 dependencies are merged. I9 and I13 both touch `ImportEngine.swift`: merge one, rebase the other. |
+| 3 | I9, I11, I13 | Their wave 2 dependencies are merged. I9 and I13 both touch `ImportEngine.swift` and `ImportEngine+File.swift`: merge one, rebase the other. |
 | 4 | I10, I12, I14, I21 | Their wave 3 dependencies are merged. I12 and I14 both touch `ImportModel.swift` and the Import screen's wording, I12 and I21 both touch ImportEngine, and I14 and I21 both touch `Wording.swift`: merge one, rebase the others. |
 | 5 | I15, I16, I18 | Their wave 4 dependencies are merged. |
 | 6 | I17, I19 | Before the 15 Jan build. |
@@ -435,13 +595,13 @@ Items are numbered I1 to I22, so they don't clash with the wireless plan's W-num
 
 **I5. Iteration 2 bench sheet.** *Goal:* one sheet for what only the camera and the iPhone can prove, so Shamil can run the checks while code is built. *Files:* `docs/iteration-2-bench.md` (new). Contents: Iteration 1's open checks (first file after *Continue* compared byte for byte, *did suspend* without a continued task, screen on, a 100-file import in MSC and MTP with its memory peak, the RAW decode check); a 200-file import with its count of error-level log entries (the definition of done), its memory peak and its throughput (the budget rows section 9 lists); MSC and MTP capture second and size for three files; cable pulls at three points; Wi-Fi drops at three points; camera powered off mid-import; replug-to-resume times for D1; the loupe's preview times, local and evicted; staged-file eviction and removal on iCloud; each intent; the export's contents; VoiceOver and Dynamic Type on the new screens. Each check names the log line that records it, and lists lines that don't exist yet for I8. *Depends on:* nothing. *Parallel with staging:* yes. *Model:* sonnet, medium. *Tests:* none (a document).
 
-**I20. Pending-commit design.** *Goal:* settle, before I7 fixes V4, how a commit whose catalogue write is lost is found again (section 3). *Files:* a design section in this backlog (docs only). It picks where the marker lives (the V4 job record, a field on the unit's rows, or a small model of its own) and when it is written and cleared; how a Photos lookup by original filename and capture date resolves it (`PHAssetResource.originalFilename` over assets fetched by creation date), with the album setting on and off and with Limited Access (`unverified` that assets the app saved stay fetchable under Limited Access); how a stage commit is resolved (the file at its Staging path, with its size); when resolution runs (at launch before any diff, and when the catalogue becomes available after a `.catalogueUnavailable` end); and the fallback if no lookup is reliable (leave the file new, say so in the outcome, for Shamil to accept). *Depends on:* nothing (reads `ImportEngine+File.swift` and the staging branch). *Parallel with staging:* yes (a document). *Model:* opus, high. *Tests:* none (a document); I7, I9 and I15 test what it settles.
+**I20. Pending-commit design.** *Goal:* settle, before I7 fixes V4, how a commit whose catalogue write is lost is found again (section 3). *Files:* a design section in this backlog (docs only). It picks where the marker lives (the V4 job record, a field on the unit's rows, or a small model of its own) and when it is written and cleared; how a Photos lookup by original filename and capture date resolves it (`PHAssetResource.originalFilename` over assets fetched by creation date), with the album setting on and off and with Limited Access (`unverified` that assets the app saved stay fetchable under Limited Access); how a stage commit is resolved (the file at its Staging path, with its size); when resolution runs (at launch before any diff, and when the catalogue becomes available after a `.catalogueUnavailable` end); and the fallback if no lookup is reliable (leave the file new, say so in the outcome, for Shamil to accept). *Depends on:* nothing (reads `ImportEngine+File.swift` and the staging branch). *Parallel with staging:* yes (a document). *Model:* opus, high. *Tests:* none (a document); I7, I9 and I15 test what it settles. *Status:* written on 11 Nov as section 3.1, to D1–D14's recommendations, for Shamil's review: a `PendingCommitFile` model of its own in V4, written before the destination is called and cleared in the same store save as the rows; a library-wide Photos lookup by the asset's date and original file names (the album not consulted; created assets' visibility under Limited Access `unverified`); a stage commit found in its day folder by name, numbered name and size; resolution at launch and before every engine diff.
 
 ### Wave 2 (after staging merges)
 
 **I6. RAW+JPEG pairs in the engine.** *Goal:* a pair is one Photos asset through the engine, for every link and job kind (section 7.1). *Packages and files:* `ImportEngine`: `ImportEngine+File.swift` (`commitUnit`), `ImportEngine+Driver.swift` (pair-aware ordering and holding a half), `ImportJob.swift`, `DownloadAttempt.swift`; reads `PhotosBridge`'s `Pairing.swift`; folder placement of pairs in Staging if the staging branch's placer needs it. *Depends on:* staging merged. *Parallel with staging:* no. *Model:* opus, high (commit and resume logic). *Tests:* Linux: pairs, partial pairs, a pause mid-pair, a stall on one half, 1 and 2 in flight, a half already imported, stage jobs keeping pairs together.
 
-**I7. Catalogue V4: cull marks, job records, staged records and *Forget imports*.** *Goal:* the one planned schema stage after V3, and the store calls culling and History need (sections 4, 7.4, 8). *Packages and files:* `Catalogue`: `SwiftData/CatalogueSchemaV4.swift` (new), `CatalogueMigrationPlan`, `CatalogueStore.swift` (`setMark`, `marks(of:)`, `clearMarks`, `recordJob`, `updateJob`, `jobs(camera:)`, `stagedRecords(camera:)`, `forgetImports(camera:)`, the pending-commit marker where I20 puts it), `InMemoryCatalogue.swift`, `CullMark.swift`, `JobRecord.swift` (with the selection's parameters: date-range bounds, picked and failed content keys); contract and migration tests. *Depends on:* staging merged (V3); I20; D3, D4, D6 (written to their recommendations). *Parallel with staging:* no. *Model:* opus, high (schema; the SwiftData side is verified only by CI). *Tests:* contract tests on Linux and in CI, including *Forget imports* on a camera with one imported-and-staged file (it stays in `stagedRecords`, back to new) and one imported file with no staged location (deleted), and a job record's selection parameters round-tripped; migration tests opening V1, V2 and V3 stores as V4 (CI only); pinned names.
+**I7. Catalogue V4: cull marks, job records, staged records and *Forget imports*.** *Goal:* the one planned schema stage after V3, and the store calls culling and History need (sections 4, 7.4, 8). *Packages and files:* `Catalogue`: `SwiftData/CatalogueSchemaV4.swift` (new), `CatalogueMigrationPlan`, `CatalogueStore.swift` (`setMark`, `marks(of:)`, `clearMarks`, `recordJob`, `updateJob`, `jobs(camera:)`, `stagedRecords(camera:)`, `forgetImports(camera:)`, and the pending-commit calls `beginCommit`, `finishCommit(_:writing:)`, `abandonCommit` and `pendingCommits()` as section 3.1 gives them), `InMemoryCatalogue.swift`, `CullMark.swift`, `JobRecord.swift`, `PendingCommit.swift` (`PendingCommit`, `CommitWrite`; the SwiftData model `PendingCommitFile`, one row per file, in `CatalogueSchemaV4.swift`) (with the selection's parameters: date-range bounds, picked and failed content keys); contract and migration tests. *Depends on:* staging merged (V3); I20; D3, D4, D6 (written to their recommendations). *Parallel with staging:* no. *Model:* opus, high (schema; the SwiftData side is verified only by CI). *Tests:* contract tests on Linux and in CI, including *Forget imports* on a camera with one imported-and-staged file (it stays in `stagedRecords`, back to new) and one imported file with no staged location (deleted), and a job record's selection parameters round-tripped; the pending-commit contract tests section 3.1 lists (begin then finish, begin then abandon, a replace, a failing save leaving the marker and no row, a pair as one commit, *Forget imports* removing the camera's markers); migration tests opening V1, V2 and V3 stores as V4 (CI only); pinned names.
 
 **I8. Diagnostics wiring, the engine's trace in the log, and the export in Settings.** *Goal:* the export a person can use, and the engine's decisions in the log (section 6). *Packages and files:* `ImportEngine`: `EngineTrace.swift` (public sink with a `.none` default), `ImportEngine.swift` (init takes it); `AppUI`: `EngineTraceWording.swift` (new), `SettingsModel.swift`, `SettingsScreen.swift` (the row), `SharePresenter.swift`, `LiveRoot.swift` (wiring), `SystemServices.swift` (`OSLogBenchLog` maps a level to the logger's; today every line goes out at notice level, so the definition of done's "no new errors" can't fail) and `BenchLog` (a level-aware `note`, notice by default); the log lines I5 lists as missing (reconnect, resume, first byte after). Real failures go out at error level: a file failed after its retries, catalogue unavailable, a destination error, recovery giving up; pauses, stalls that recover and skips stay at notice. *Depends on:* I4, I5, staging merged. *Parallel with staging:* no. *Model:* sonnet, high. *Tests:* Linux: wording, privacy and level of every `EngineTrace` case (each failure case at error, the rest at notice), the settings model's export flow with a fake reader; the row CI only. Rebase on I6 if both touch `ImportEngine.swift`.
 
@@ -449,7 +609,7 @@ Items are numbered I1 to I22, so they don't clash with the wireless plan's W-num
 
 ### Wave 3
 
-**I9. Job records written by the engine.** *Goal:* every job leaves one record matching its last progress (section 4). *Packages and files:* `ImportEngine`: `JobRecorder.swift` (new), `ImportEngine.swift` (start, pause, end, reconnect), the pending-commit marker written before a Photos save or a placement in Staging and cleared with the row, as I20 designs it. *Depends on:* I6, I7. *Parallel with staging:* no. *Model:* sonnet, high. *Tests:* Linux: every outcome, a kill mid-job, counts equal to the last progress, a reconnect continuing one record.
+**I9. Job records written by the engine, and the pending-commit marker.** *Goal:* every job leaves one record matching its last progress (section 4), and every commit is bracketed by a pending-commit marker (section 3.1). *Packages and files:* `ImportEngine`: `JobRecorder.swift` (new), `ImportEngine.swift` (start, pause, end, reconnect), and the pending-commit marker as section 3.1 designs it: `ImportEngine+File.swift`'s `commitAndRecord` writes it (`beginCommit`) before the destination is called, rewrites it on the 3311 switch to Staging, removes it on a failed commit, and replaces today's upsert loop with `finishCommit`, keeping unwritten writes in `unrecordedCommits`; `CommitResult.markerNotWritten`; `PhotosBridge`'s `CommitTarget` and `ImportDestination.commitTarget(for:)` (both destinations and the test fakes). *Depends on:* I6, I7. *Parallel with staging:* no. *Model:* opus, high (it now changes the commit boundary, which `CLAUDE.md` gives to opus). *Tests:* Linux: every outcome, a kill mid-job, counts equal to the last progress, a reconnect continuing one record; a marker written before every commit and gone after it (Photos and stage, single and pair), a marker that can't be written (nothing committed, the job ends `.catalogueUnavailable`, the file queued again), the 3311 switch rewriting it, a failed commit removing it, a `finishCommit` that fails every try leaving the marker and the writes in memory (`FailingCatalogue` gains switches for each call).
 
 **I11. The cull screen and the loupe, wired.** *Goal:* culling a person can use, from a Staging tab (section 7.3). *Packages and files:* `AppUI`: `Culling/CullScreen.swift`, `LoupeView.swift`, `CullModel.swift` (new; the I3 session over `stagedRecords` and I7's marks), and a Staging screen opened from Cameras until I10's tab bar gives it a tab. *Depends on:* I3, I7, D2–D5. *Parallel with staging:* no. *Model:* opus, high (SwiftUI compiled only by CI). *Tests:* Linux: the model against `InMemoryCatalogue` and a fake preview loader; CI: the views, gestures' VoiceOver actions.
 
@@ -467,7 +627,7 @@ Items are numbered I1 to I22, so they don't clash with the wireless plan's W-num
 
 ### Wave 5
 
-**I15. Fault matrix: engine fixes, destination, stage-job and keeper cases, and the commit boundary.** *Goal:* every row of section 3's table green, and exit criterion 1 met. *Packages and files:* `PTPSimulator` integration tests (the harness's new cases), `ImportEngine` (fixes for I1's known issues; the pending-commit resolution at launch), `PhotosBridge` (the lookup by original filename and date behind `#if canImport(Photos)`). The resolution follows I20's design: at launch before any diff, and again when the catalogue becomes available after a `.catalogueUnavailable` end, for Photos and stage commits. *Depends on:* I6, I9, I12, I13, I20, I22. *Parallel with staging:* no. *Model:* opus, high (debugging and commit logic). *Tests:* the whole matrix on Linux and in CI, including a kill between save and write and a catalogue write that fails after the save (`FailingCatalogue`), each for a Photos and a stage commit; the Photos lookup CI only.
+**I15. Fault matrix: engine fixes, destination, stage-job and keeper cases, and the commit boundary.** *Goal:* every row of section 3's table green, and exit criterion 1 met. *Packages and files:* `PTPSimulator` integration tests (the harness's new cases), `ImportEngine` (fixes for I1's known issues; `resolvePendingCommits()`, `CommitLookup`, `PendingCommitReport`, and the call before every diff), `PhotosBridge` (`PhotoLibraryClient.findAsset(_:)` with `AssetQuery` and `AssetSearch`, implemented in `SystemPhotoLibrary` behind `#if canImport(Photos)`; `StagedCopyFinder`, pure Foundation), `AppUI` (the production `CommitLookup`, the launch call in `AppModel`, Browse reloading its badges after a pass that changed something, and the possible-duplicate line in the Import outcome), `docs/iteration-2-bench.md` (the commit-boundary check). The resolution follows section 3.1: at launch, and before every engine diff, which covers the catalogue coming back after a `.catalogueUnavailable` end, for Photos and stage commits, with section 3.1's fallback if the bench shows a lookup unreliable. *Depends on:* I6, I9, I12, I13, I20, I22. *Parallel with staging:* no. *Model:* opus, high (debugging and commit logic). *Tests:* the whole matrix on Linux and in CI, including a kill between save and write and a catalogue write that fails after the save (`FailingCatalogue`), each for a Photos and a stage commit, and the rest of section 3.1's list; the Photos lookup CI only; the bench check with full and Limited Access, the album on and off, and staging to iCloud Drive.
 
 **I16. App Intents.** *Goal:* the two intents of section 5. *Packages and files:* `AppUI`: `Intents/CameraEntity.swift`, `ImportNewPhotosIntent.swift`, `NewPhotoCountIntent.swift`, `AppShortcuts.swift` (behind `#if canImport(AppIntents)`), `NewPhotoCount.swift` (pure), `AppModel.swift` (an entry point to start *Select all new*); at most one file in the app's synchronised folder if the package's intents need registering there. *Depends on:* I8 (the app's wiring settled), I10, I21 (the count skips rejected files), D7. *Parallel with staging:* no. *Model:* opus, high (compiled only by CI). *Tests:* Linux: the count over listings, imported, staged and rejected states, and its wording with the listing's age; CI: the intents build and their parameter summaries.
 
