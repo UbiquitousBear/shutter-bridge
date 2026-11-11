@@ -124,12 +124,13 @@ enum PartialMark {
                                resumeOffset: offset, tempURL: stored, staged: existing?.staged)
     }
 
-    /// The row `resetPartial(_:ifTempURL:)` leaves: `existing` at offset 0 with no temporary file, still `.partial`,
-    /// location and staged copy kept; nil (nothing to write) unless `existing` is `.partial` with `tempURL` as its file,
-    /// compared by relative path (`stored(_:)`).
-    static func reset(_ existing: CatalogueRecord?, ifTempURL tempURL: URL) -> CatalogueRecord? {
-        guard var record = existing, record.state == .partial, let file = record.tempURL,
-              let expected = try? stored(tempURL), file.relativePath == expected.relativePath else { return nil }
+    /// The row `resetPartial(_:ifTempURL:offset:)` leaves: `existing` at offset 0 with no temporary file, still
+    /// `.partial`, location and staged copy kept; nil (nothing to write) unless `existing` is `.partial` with `tempURL`
+    /// as its file, compared by relative path (`stored(_:)`), and `offset` as its resume offset.
+    static func reset(_ existing: CatalogueRecord?, ifTempURL tempURL: URL, offset: UInt64) -> CatalogueRecord? {
+        guard var record = existing, record.state == .partial, record.resumeOffset == offset,
+              let file = record.tempURL, let expected = try? stored(tempURL),
+              file.relativePath == expected.relativePath else { return nil }
         record.resumeOffset = 0
         record.tempURL = nil
         return record

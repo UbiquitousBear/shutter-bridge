@@ -233,7 +233,7 @@ public protocol CatalogueStore: Actor {
 
     /// Every `.partial` row with a temporary file, one per identity (the row `record(for:)` reads), in no set order:
     /// what the engine's launch pass checks against the partial files on disk (`ImportEngine.reconcilePartials()`,
-    /// backlog section 2). A row sent back to offset 0 with no file (`resetPartial(_:ifTempURL:)`) isn't one.
+    /// backlog section 2). A row sent back to offset 0 with no file (`resetPartial(_:ifTempURL:offset:)`) isn't one.
     func partialRecords() throws -> [CatalogueRecord]
 
     // MARK: Staging (Shamil, 11 Nov)
@@ -356,14 +356,17 @@ extension CatalogueStore {
     }
 
     /// Sends the row for exactly this identity back to offset 0 with no temporary file, keeping it `.partial` (its
-    /// location and staged copy too), while it is `.partial` with `tempURL` as its file: the file is gone, so the next
-    /// job copies the file from its start. Read and written in one actor call, so a checkpoint written since the
-    /// caller read the row (another file, or a higher offset in the same one) is never undone, and a row that has
-    /// since been imported, staged or restarted is left alone. `markPartial` can't say "no file". `tempURL` is
-    /// compared by its relative path, in either form `markPartial` takes. Returns whether the row was reset.
+    /// location and staged copy too), while it is `.partial` with `tempURL` as its file at `offset`, the row the
+    /// caller read: the file is gone, so the next job copies the file from its start. Read and written in one actor
+    /// call, so a checkpoint written since the caller read the row (another file, or another offset in the same one)
+    /// is never undone, and a row that has since been imported, staged or restarted is left alone. `markPartial` can't
+    /// say "no file". `tempURL` is compared by its relative path, in either form `markPartial` takes. Returns whether
+    /// the row was reset.
     @discardableResult
-    public func resetPartial(_ identity: ObjectIdentity, ifTempURL tempURL: URL) throws -> Bool {
-        guard let reset = PartialMark.reset(try record(for: identity), ifTempURL: tempURL) else { return false }
+    public func resetPartial(_ identity: ObjectIdentity, ifTempURL tempURL: URL, offset: UInt64) throws -> Bool {
+        guard let reset = PartialMark.reset(try record(for: identity), ifTempURL: tempURL, offset: offset) else {
+            return false
+        }
         try upsert(reset)
         return true
     }

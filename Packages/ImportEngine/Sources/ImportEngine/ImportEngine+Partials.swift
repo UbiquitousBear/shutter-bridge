@@ -39,17 +39,18 @@ extension ImportEngine {
     }
 
     /// Sends every `.partial` row whose file is missing, or shorter than its resume offset, back to offset 0 with no
-    /// temporary file (`CatalogueStore.resetPartial(_:ifTempURL:)`, which keeps it `.partial`), and deletes what is
-    /// left of that file's folder; the next job copies the file from its start, reporting no failure. A row whose
-    /// file lies outside the work folder's `Partials` folder is reset too (no job would continue it) and its file
-    /// left alone. Returns how many rows were reset.
+    /// temporary file (`CatalogueStore.resetPartial(_:ifTempURL:offset:)`, which keeps it `.partial`), and deletes
+    /// what is left of that file's folder; the next job copies the file from its start, reporting no failure. A row
+    /// whose file lies outside the work folder's `Partials` folder is reset too (no job would continue it) and its
+    /// file left alone. Returns how many rows were reset.
     ///
     /// The launch pass (section 2): the app calls it once the catalogue is open and the engine made, which is after
     /// the engine's prune, so a partial pruned by age resets its row (one 7-day rule for both), and each job runs it
     /// before its diff, after the commits of ended jobs have settled. One pass at a time: a caller arriving during a
     /// pass awaits it. A partial the current job holds is never touched, and a row is reset only while it still points
-    /// to the file found missing, so a checkpoint written meanwhile stands. A catalogue that can't list its partial
-    /// rows (or refuses a reset) leaves them as they are: a job still checks a partial file before it continues one.
+    /// to the file found missing, at the offset checked, so a checkpoint written meanwhile stands. A catalogue that
+    /// can't list its partial rows (or refuses a reset) leaves them as they are: a job still checks a partial file
+    /// before it continues one.
     @discardableResult
     public func reconcilePartials() async -> Int {
         if let pass = partialPass { return await pass.value }
@@ -66,7 +67,8 @@ extension ImportEngine {
         var reset = 0
         for row in rows {
             guard let tempURL = row.tempURL, case let .reset(folder) = check(row) else { continue }
-            guard (try? await catalogue.resetPartial(row.identity, ifTempURL: tempURL)) == true else { continue }
+            let wasReset = try? await catalogue.resetPartial(row.identity, ifTempURL: tempURL, offset: row.resumeOffset)
+            guard wasReset == true else { continue }
             if let folder, !isHeld(folder) { try? FileManager.default.removeItem(at: folder) }
             reset += 1
             trace(.partialReset(row.identity.filename))

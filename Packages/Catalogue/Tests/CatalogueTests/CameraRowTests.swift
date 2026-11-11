@@ -518,7 +518,7 @@ struct CameraRowContractTests {
                                               CatalogueRecord(identity: third, format: .raw, state: .new)])
         try await s.store.markPartial(file, format: .raw, tempURL: F.partialFile("DSC00001"), offset: 16_777_216)
         try await s.store.markPartial(second, format: .raw, tempURL: F.partialFile("DSC00002"), offset: 4096)
-        #expect(try await s.store.resetPartial(second, ifTempURL: F.partialFile("DSC00002")))
+        #expect(try await s.store.resetPartial(second, ifTempURL: F.partialFile("DSC00002"), offset: 4096))
         let listed = try await s.store.partialRecords()
         #expect(listed == [CatalogueRecord(identity: file, format: .raw, state: .partial, resumeOffset: 16_777_216,
                                            tempURL: F.partialFile("DSC00001"))])
@@ -533,7 +533,7 @@ struct CameraRowContractTests {
         try await s.store.markPartial(file, format: .raw, tempURL: url, offset: 33_554_432)
         // Given in the other form `markPartial` takes: relative to a staging folder.
         let sameFile = URL(fileURLWithPath: url.relativePath, relativeTo: F.stagingAfter)
-        #expect(try await s.store.resetPartial(file, ifTempURL: sameFile))
+        #expect(try await s.store.resetPartial(file, ifTempURL: sameFile, offset: 33_554_432))
         let expected = CatalogueRecord(identity: file, format: .raw, state: .partial, resumeOffset: 0, tempURL: nil,
                                        staged: staged)
         #expect(try await s.store.record(for: file) == expected)
@@ -541,26 +541,32 @@ struct CameraRowContractTests {
         #expect(try await s.store.states(of: [file]) == [file: .partial])
         #expect(try await s.store.partialRecords().isEmpty)
         // Nothing left to reset.
-        #expect(try await !s.store.resetPartial(file, ifTempURL: url))
+        #expect(try await !s.store.resetPartial(file, ifTempURL: url, offset: 33_554_432))
     }
 
     @Test(arguments: StoreKind.available)
     func aRowThatMovedOnIsNotReset(_ kind: StoreKind) async throws {
         let s = try await kind.make()
         // No row.
-        #expect(try await !s.store.resetPartial(file, ifTempURL: F.partialFile("DSC00001")))
+        #expect(try await !s.store.resetPartial(file, ifTempURL: F.partialFile("DSC00001"), offset: 0))
         #expect(try await s.rows().isEmpty)
+        // A checkpoint at a higher offset in the same file since the row was read at 4096.
+        try await s.store.markPartial(file, format: .raw, tempURL: F.partialFile("DSC00001"), offset: 4096)
+        try await s.store.markPartial(file, format: .raw, tempURL: F.partialFile("DSC00001"), offset: 8_388_608)
+        #expect(try await !s.store.resetPartial(file, ifTempURL: F.partialFile("DSC00001"), offset: 4096))
+        #expect(try await s.store.record(for: file)?.tempURL == F.partialFile("DSC00001"))
+        #expect(try await s.store.record(for: file)?.resumeOffset == 8_388_608)
         // A checkpoint in another file since the row was read (the file restarted in a new folder).
         let newer = URL(string: "00000000-0000-4000-8000-0000000000C2/DSC00001.partial")!
         try await s.store.markPartial(file, format: .raw, tempURL: newer, offset: 16_777_216)
-        #expect(try await !s.store.resetPartial(file, ifTempURL: F.partialFile("DSC00001")))
+        #expect(try await !s.store.resetPartial(file, ifTempURL: F.partialFile("DSC00001"), offset: 8_388_608))
         #expect(try await s.store.record(for: file)?.tempURL == newer)
         #expect(try await s.store.record(for: file)?.resumeOffset == 16_777_216)
         // Imported since.
         let imported = CatalogueRecord(identity: file, format: .raw, state: .imported,
                                        location: .photosAsset(localIdentifier: "A/L0/001"))
         try await s.store.upsert(imported)
-        #expect(try await !s.store.resetPartial(file, ifTempURL: newer))
+        #expect(try await !s.store.resetPartial(file, ifTempURL: newer, offset: 16_777_216))
         #expect(try await s.rows() == [imported])
     }
 
