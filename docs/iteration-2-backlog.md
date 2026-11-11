@@ -38,7 +38,7 @@ Iteration 2 is weeks 7–9: 14–18 Dec 2026, then, after the holiday weeks (21 
 
 ## Status of each item
 
-Each section starts with a status table, one row per requirement, checked on 11 Nov against `main` at f7a4f9e. Nothing in Iteration 2's new scope has run against the camera, so anything that depends on the camera's or iOS's behaviour is *Bench*.
+Each section starts with a status table, one row per requirement, rechecked on 11 Nov against waves 1–3 of this iteration (wave 3 not yet merged), after being written against `main` at f7a4f9e. Nothing in Iteration 2's new scope has run against the camera, so anything that depends on the camera's or iOS's behaviour is *Bench*.
 
 | Status | Means |
 | --- | --- |
@@ -69,7 +69,7 @@ Where tests run: **Linux** means `swift test` on CI's `swift:6.4-noble` image an
 | Files without a capture date | **Open**, then I14 | Shamil (D10). The engine skips them (`noCaptureDate`) and Browse can't select them. |
 | MTP `PersistentUniqueObjectIdentifier` (0xDC41) | **Open** | Shamil (D9); recommended dropped. Only the code constant exists (`PTPCodes.swift`). |
 | Albums, Staging folders and continuing a job across MSC and MTP; two bodies with one name | **Open** | Shamil (D11). Grouping still uses the camera key, so one camera's MSC and MTP imports go to two albums and folders, and a job paused in one mode doesn't continue in the other. |
-| "Forget imports" per camera | **To do** | Store call in I7, History row in I10. |
+| "Forget imports" per camera | **Partial** | Store call built (I7, #122): `CatalogueStore.forgetImports(camera:)` deletes the camera's imported rows and its pending commits and returns staged ones to new (`forgettingACameraDeletesImportsAndReturnsStagedOnesToNew`, `forgettingACameraRemovesItsPendingCommitsOnly`; SwiftData side CI only). The History row is I10. |
 | A content-key index | **Later** | Only if a slow diff is measured; `states(of:)` fetches by size in chunks of 500. Reserved as V5 (section 8). |
 | "Verify against Photos" (deleted assets) | **Later** | No iteration in the proposal. A file deleted from Photos stays imported unless the person uses *Forget imports*. |
 
@@ -141,9 +141,9 @@ The proposal: "cable pulled at 10 %, 50 %, 99 % of a file; Wi-Fi drop then recon
 | *Did suspend* mid-file | yes | n/a | **Built** | `didSuspendPausesUntilTheAppReturns`. |
 | Short file | yes | yes | **Built** | `aShortFileIsCaughtBySizeAndFetchedAgain`; repeated in the harness (`shortFile`). |
 | App killed mid-job, relaunched | yes | yes | **Partial** | The download phase is built (I22): a relaunched engine continues a Wi-Fi file from the catalogue's partial row and copies a USB file from 0 (`FaultMatrixCutTests.killedAfterAWiFiDrop`, `killedMidDownloadOverUSB`, `killedMidDownloadOverWiFi`). I15 for the commit boundary (below). |
-| Killed between the Photos save and the catalogue write | yes | yes | **To do** | I15, with the pending-commit marker of section 3.1 (I9 writes it). The asset exists, the row doesn't, and the next import saves it again. The stage-job equivalent: killed between placing the file in Staging and the `markStaged` write. |
-| Catalogue write fails after the save, every retry used | yes | yes | **To do** | I15. `commitAndRecord` returns `rowWritten: false` and the job ends `.catalogueUnavailable` with the asset in Photos and no row, so the next import saves it again; the test Support folder's `FailingCatalogue` scripts it. The stage-job equivalent: the file placed in Staging, then the `markStaged` write lost. Resolved as section 3.1 designs. |
-| Stage-job cases: iCloud lost mid-job; on-iPhone fallback; storage full while staging | yes | yes | **To do** | I15, after staging lands (the staging branch tests its own route; the harness adds "no duplicates, no loss" across Staging). |
+| Killed between the Photos save and the catalogue write | yes | yes | **Partial** | The marker is built (I9, wave 3): the engine writes a `PendingCommit` through `beginCommit` before each commit and clears it in the same save as the rows (`PendingCommitTests.aSingleFileIsCommittedUnderAMarkerThatIsGoneAfterwards`, `aPairIsOneCommitUnderOneMarker`); the harness doesn't yet kill between the save and the write. Nothing reads a left-behind marker: I15 resolves it (section 3.1) and adds the case. The stage-job equivalent: killed between placing the file in Staging and the `markStaged` write. |
+| Catalogue write fails after the save, every retry used | yes | yes | **Partial** | I9 (wave 3) keeps the marker when the finishing write fails (`PendingCommitTests.aFinishThatFailsKeepsTheMarkerAndTheWrites`) and a marker that can't be written commits nothing (`aMarkerThatCannotBeWrittenCommitsNothing`); `commitAndRecord` still returns `rowWritten: false` and the job ends `.catalogueUnavailable`. Resolving the marker so the next import doesn't save the asset again, and the harness case, are I15, as section 3.1 designs; `FailingCatalogue` scripts the failure. The stage-job equivalent: the file placed in Staging, then the `markStaged` write lost. |
+| Stage-job cases: iCloud lost mid-job; on-iPhone fallback; storage full while staging | yes | yes | **Partial** | The harness already runs stage jobs through the cuts and storage full (`FaultMatrixCutTests.cablePulledMidFile`, `FaultMatrixCaseTests.storageFullDuringADownload`), and the engine's own tests cover the marker rewritten for On My iPhone when iCloud Drive is lost (`PendingCommitTests.losingICloudDriveRewritesTheMarkerForThisIPhone`). The harness cases for iCloud lost mid-job and the on-iPhone fallback, with "no duplicates, no loss" across Staging, are I15. |
 | Keeper cases: a staged file missing, changed or evicted before *Import keepers*; Photos denied during it | n/a | n/a | **To do** | I15, after I12. |
 
 Acceptance criteria:
@@ -319,17 +319,17 @@ public struct PendingCommitReport: Sendable, Hashable {
 
 | Requirement | Status | Note |
 | --- | --- | --- |
-| `ImportJob` model | **Built**, unused | V1 and V2: camera, jobID, startedAt, finishedAt, selection, bytesTotal, bytesDone, outcome, cascade from `Camera.jobs`. "Nothing writes these yet." |
-| Fields History needs: files imported / skipped / failed, purpose (import, stage, keepers), destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files) | **To do** | I7 (schema V4). The pending-commit marker isn't a job-record field: it is a model of its own (section 3.1). V1's `selection` is only the string "all-new", "range" or "picked", which leaves nothing to re-queue a range or picked job from. |
-| A store API for jobs (record, update, list per camera and overall) | **To do** | I7, in both stores. |
-| The engine writes a job record at start, at each pause and at the end | **To do** | I9. |
+| `ImportJob` model | **Built** | V1 and V2: camera, jobID, startedAt, finishedAt, selection, bytesTotal, bytesDone, outcome, cascade from `Camera.jobs`. Written since I7 (V4 columns) and I9 (wave 3); see the rows below. |
+| Fields History needs: files imported / skipped / failed, purpose (import, stage, keepers), destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files) | **Built** (SwiftData side CI only) | I7 (#122): `JobRecord` (`Purpose`, `Destination`, `Carrier`, `Selection`, `Outcome`, counts, `failedFiles`) and V4's `ImportJob` columns; `everyFieldRoundTrips`, `everySelectionAndOutcomeRoundTrips` in `CatalogueV4ContractTests`. The pending-commit marker isn't a job-record field: it is a model of its own (section 3.1). The record can't yet tell a keepers job from an import to Photos (`JobRecord.Purpose.keepers`): I12. |
+| A store API for jobs (record, update, list per camera and overall) | **Built** (SwiftData side CI only) | I7 (#122): `recordJob`, `job(_:)`, `jobs(camera:)` newest first, and `updateJob(_:_:)` in both stores (`jobsAreListedPerCameraAndOverallNewestFirst`, `updateJobChangesTheStoredJobInOneCall`, `concurrentUpdatesOfDifferentFieldsAreAllKept`). |
+| The engine writes a job record at start, at each pause and at the end | **Built** | I9 (wave 3): `ImportEngine.writeJobRecord(of:)` (`JobRecorder.swift`) writes at start, each pause, a reconnect and the end, and again when a commit in flight at the end resolves; `JobRecordTests.aCompletedJobsRecordMatchesItsLastProgress`, `aCancelledJobIsRecordedCancelled`, `aJobTheCatalogueStoppedIsRecordedSo`, `aJobTheAppLosesLeavesARecordWithNoEnd`, `aReconnectContinuesOneRecord`. |
 | History screen: past jobs with counts, bytes, duration and outcome; tap opens the album in Photos | **To do** | I10. |
 | *Resumable* row for a job that stopped early; tap reopens Import with the remaining files queued | **To do** | I10 (needs the camera connected; otherwise the row says to connect it). |
 | Re-run a failed job | **To do** | I10, from the failed files' content keys I7 keeps. |
 | *Forget imports* per camera | **To do** | Store call I7, UI I10. |
 | Stage jobs and keepers jobs in History | **Open** | Shamil (D6). |
 | Tab bar, the running import as its bottom accessory | **To do** | I10. `LiveRoot.swift` says it "waits for Iteration 2"; `RootView` is a navigation stack today. |
-| History numbers match the Import screen (files done and total, bytes, ETA) | **To do** | I9 records from the same `ImportProgress` the Import screen shows. |
+| History numbers match the Import screen (files done and total, bytes, ETA) | **Partial** | I9 (wave 3) records from the same `ImportProgress` the Import screen shows (`JobRecordTests.aCompletedJobsRecordMatchesItsLastProgress`; the record keeps no ETA). The History screen that shows them is I10. |
 
 Acceptance criteria:
 
@@ -376,7 +376,7 @@ Could change with: D7; App Store review of an intent that opens the app (none ex
 | Camera DeviceInfo and firmware version logged | **Partial** | Wi-Fi built in I4 (from `IPLink`'s DeviceInfo, through PTPKit's parser). USB MTP moves to I8 or later: `USBLink` reads no DeviceInfo today and no `ImageCaptureCore` API for the version is confirmed, so it waits for a GetDeviceInfo over the PTP pass-through or what the bench shows (`unverified`). MSC has none. The proposal's firmware risk row wants it. I8 adds none of that: the export's header carries the Wi-Fi firmware read this launch, only when exactly one camera is known (the read carries no camera key). |
 | Settings › *Export Diagnostics…*: an opt-in archive the person shares themselves | **Built** (row CI only) | Core I4; I8: `DiagnosticsExporter` (header, rolling file for earlier launches and the unified log for this one, redacted with the catalogue's private values, one file in a folder of its own under Caches), `SettingsModel`'s export flow, the row in `SettingsScreen`, the share sheet through `SharePresenter`; the folder is removed when the sheet closes, when Settings closes and at launch. `RollingLogFile` is the second log destination (`AppLogging` in `LiveRoot`). |
 | What the archive holds, how far back, MetricKit | **Open** | Shamil (D8). |
-| A redaction test over the export | **To do** | I4. |
+| A redaction test over the export | **Built** | I4 (#120) `DiagnosticsRedactor` (`DiagnosticsRedactorTests.everyKindOfPrivateValueIsRemoved`) and I8 (#125) over the whole export: `DiagnosticsExportFlowTests.anExportHasTheHeaderTheLogAndNoPrivateValue`. Linux. |
 
 Acceptance criteria:
 
@@ -399,8 +399,8 @@ Could change with: D8; Apple's `OSLogStore` scopes on iOS 27 (`unverified`: whet
 | --- | --- | --- |
 | Staging: the destination, `FolderPlacer`, V3's *staged* fact, stage jobs, the Import menu, badges and Settings | **Built** | The staging PR (11 Nov): PhotosBridge staging and `FolderPlacer`, Catalogue V3's *staged* fact, stage jobs in the engine, and the Import menu, *Staged* badge and Settings' staging section in AppUI. Staging writes to On My iPhone until the iCloud entitlement follow-up lands. |
 | iCloud container and App ID capability (Phase 0 of the staging plan) | **Open** | Shamil, before any build signs with the iCloud keys. |
-| RAW+JPEG pairing in the engine | **To do** | I6. `RawPairingRule` (same folder, same stem, within 1 s; no pair without a date) is built and tested (#80); the engine's `commitUnit(for:)` returns `.single`. |
-| `stagedRecords(camera:)` (and across cameras), grouped by capture day | **To do** | I7. |
+| RAW+JPEG pairing in the engine | **Built** (Photos asset CI only) | I6 (#123): `ImportEngine.commitUnit(for:)` returns `.pair(raw:processed:)` for the halves `RawPairingRule` paired, so Photos saves one asset and staging puts both in the RAW's day folder; downloads and commits paired for both links (`PairTests.aPairIsOnePhotosAsset`, `partnersAreQueuedTogether`, `aSkippedHalfLeavesTheOtherAlone`, `EnginePairsAgainstSimulatorTests`). The Photos destination's creation of the asset is CI only. |
+| `stagedRecords(camera:)` (and across cameras), grouped by capture day | **Built** (SwiftData side CI only) | I7 (#122): `CatalogueStore.stagedRecords(camera:)` (nil for all cameras) in capture order (`stagedRecordsListOnlyStagedRowsInCaptureOrder`); the grouping by camera and day is the cull model's (I11, wave 3: `CullModelTests.listsStagedFilesByCameraAndDayNewestFirstWithCountsFromTheMarks`). |
 
 Acceptance criteria for pairing (I6):
 
@@ -414,7 +414,7 @@ Acceptance criteria for pairing (I6):
 
 | Requirement | Status | Note |
 | --- | --- | --- |
-| A `CameraLink` over staged files | **To do** | I2. |
+| A `CameraLink` over staged files | **Built** (iOS file coordination CI only) | I2 (#118): `StagingFolderLink` over `StagedEntry` and `StagedFileReading` (`StagingFolderLinkTests.listsEntriesWithTheirOriginalIdentity`, `aNameFromTwoCardFoldersIsTwoFilesAndOneIdentityTwiceIsOne`); the engine imports from it with each file's original identity (`StagingFolderLinkImportTests.importsIntoTheFakeLibraryUnderTheJobsCameraKeyWithEachFilesOriginalIdentity`). The `NSFileCoordinator` reader is behind `#if os(iOS)`. |
 
 Acceptance criteria:
 
@@ -429,12 +429,12 @@ Acceptance criteria:
 
 | Requirement | Status | Note |
 | --- | --- | --- |
-| Cull session model: units by capture day, pairs as one unit, marks, navigation, undo | **To do** | I3 (pure), wired in I11. |
-| Preview source: a pair's JPG, else the ARW's embedded preview, else a `CIRAWFilter` render | **To do** | I3. `CoreImageJPEGMaker` already renders an ARW with `CIRAWFilter` and falls back to the largest embedded preview. |
-| Fetch ahead while the person looks | **To do** | I3. |
-| Full-screen loupe: swipe, zoom, Keep / Reject, stars, EXIF line | **To do** | I11. |
+| Cull session model: units by capture day, pairs as one unit, marks, navigation, undo | **Built** | I3 (#119): `CullUnit` (days newest first, a pair as one unit; `CullUnitTests.daysComeNewestFirstPerCameraAndUnitsInShootingOrder`, `countsAreInUnitsAndAPairIsOne`) and `CullSession` (`keepAndRejectSaveAtOnceUnderEveryKeyOfThePair`, `undoRevertsTheLastMarkShowsItsUnitAndSavesTheEarlierMark`); wired over the catalogue by `CullModel` in I11 (wave 3: `CullModelTests.marksSaveAtOnceUnderBothHalvesOfAPairAndTheCountsFollow`). |
+| Preview source: a pair's JPG, else the ARW's embedded preview, else a `CIRAWFilter` render | **Built** (decoder CI only) | I3 (#119): `PreviewSource` picks the file (`CullUnitTests.aRawAndItsJPGAreOneUnitShownByTheJPG`, `aLoneRawIsShownByItsEmbeddedPreviewThenARender`; Linux); the ImageIO and Core Image loader behind it is CI only, and whether iOS decodes the α7C II's ARW is `unverified` (the loupe keeps the embedded preview and says so). |
+| Fetch ahead while the person looks | **Built** | I3 (#119): `PreviewPrefetcher` (decodes the next three and the previous one, downloads ten ahead, two at a time, holds at most five images and a byte budget; `decodesTheNextThreeAndThePreviousOneClippedToTheList`, `downloadsRunTwoAtATimeTenUnitsAheadAndDecodeOnlyTheWindow`, `aFastSwipeLoadsOnlyTheUnitItStopsOn`). |
+| Full-screen loupe: swipe, zoom, Keep / Reject, stars, EXIF line | **Built** (view CI only) | I11 (wave 3): `LoupeView` and `CullScreen` (CI only), opened from a Staging button on Cameras; the rules are tested on Linux: `LoupeGestureTests` (swipes, zoom), `CullModelTests.theEXIFLineIsTheUnitOnScreens`, `zoomedInPastThePreviewTheRegionOnScreenIsDecodedFromTheOriginal`, `aRejectIsRememberedAfterTheLoupeClosesAfterReloadAndAfterItsCopyLeavesStaging`. The tab bar that gives Staging a tab of its own is I10. |
 | Where culling lives and whether it also works from the card | **Open** | Shamil (D5). |
-| Measure the next-preview time on the real files | **Bench** | I5. Nothing measured: the only card-side preview read was a 320×214 embedded JPEG at about 0.43 s over USB MTP; a staged file read locally is expected to be fast but is unmeasured, and so is downloading an evicted one. |
+| Measure the next-preview time on the real files | **Bench** | I5. The code part is built (I3's `PreviewPrefetcher`, I11's loupe, whose 100 % zoom the bench sheet also checks); nothing measured: the only card-side preview read was a 320×214 embedded JPEG at about 0.43 s over USB MTP; a staged file read locally is expected to be fast but is unmeasured, and so is downloading an evicted one. |
 
 Acceptance criteria:
 
@@ -449,8 +449,8 @@ Acceptance criteria:
 
 | Requirement | Status | Note |
 | --- | --- | --- |
-| Keep / Reject and an optional 0–5 rating per unit, kept by a planned migration | **To do** | I7 (schema V4). |
-| Keyed by content key so a mark follows the file between the card and Staging | **To do** | I7. |
+| Keep / Reject and an optional 0–5 rating per unit, kept by a planned migration | **Built** (SwiftData side CI only) | I7 (#122): `CullMark` / `MarkRecord`, `setMark(_:rating:for:)`, `marks(of:)`, `clearMarks(of:)` in both stores and V4's model (`aPairIsMarkedTogetherAndAMarkIsReplacedWhole`, `aRatingOutsideZeroToFiveIsRefusedAndWritesNothing`, `marksNeverTouchFileRows`); used by the cull screen (I11, wave 3). |
+| Keyed by content key so a mark follows the file between the card and Staging | **Built** (SwiftData side CI only) | I7 (#122): marks are stored per `ObjectIdentity.ContentKey`, not per camera row (`aMarkRoundTripsAndIsMatchedByContent`, `clearingRemovesTheMarks`); a Reject is kept after the staged copy leaves Staging (`CullModelTests.aRejectIsRememberedAfterTheLoupeClosesAfterReloadAndAfterItsCopyLeavesStaging`), whatever D3 settles. |
 | Whether a Reject outlives its staged copy | **Open** | Shamil (D3). |
 
 Acceptance criteria:
@@ -463,7 +463,7 @@ Acceptance criteria:
 
 | Requirement | Status | Note |
 | --- | --- | --- |
-| Keepers go to Photos through the engine with the normal Photos route | **To do** | I12, with I2 and I6. |
+| Keepers go to Photos through the engine with the normal Photos route | **Partial** | The pieces are built: `StagingFolderLink` imports to a Photos route (I2, #118; `StagingFolderLinkImportTests`) and `CullSession.keepers` lists the keepers' files in order (`keepersAreEveryFileOfEveryKeeperInListOrderWithTheRawFirst`). Not built: the *Import keepers* action, one job per staged camera key, the Photos-denied stop and the keepers purpose in the record: I12. |
 
 Acceptance criteria:
 
@@ -506,7 +506,7 @@ See section 8: V3 is staging's; cull marks and job records go in V4.
 | V1 (1.0.0) | Camera, CameraObject, ImportJob | **Built**, frozen | #83; builds 17.1 and 18.1. `theShippedSchemaIsUnchanged` pins it. |
 | V2 (2.0.0) | V1 + `Camera.bluetoothPeripheralID` | **Built** | W4 #92; lightweight V1 → V2. |
 | V3 | The *staged* fact (`StagedLocation`: relative path, root, staged-at) on `CameraObject` | **Staging** | The staging branch; lightweight V2 → V3, pinned names. |
-| V4 | `CullMark` (content key, mark, rating, marked-at); `ImportJob` gains files imported / skipped / failed, purpose, destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files, as a related model or an encoded list, I7's choice within the CloudKit rules); `PendingCommitFile`, the pending-commit marker (section 3.1) | **To do** | I7, after V3 is on `main`; I20 chose the marker's model (section 3.1), so it doesn't need a stage of its own. |
+| V4 | `CullMark` (content key, mark, rating, marked-at); `ImportJob` gains files imported / skipped / failed, purpose, destination, carrier, album identifier, the selection's parameters (date-range bounds; the content keys of picked and of failed files, as a related model or an encoded list, I7's choice within the CloudKit rules); `PendingCommitFile`, the pending-commit marker (section 3.1) | **Built** (SwiftData side CI only) | I7 (#122): `CatalogueSchemaV4` (five models, `CatalogueCurrentSchema`), the lightweight V3 → V4 stage and pinned names in `SwiftDataCatalogueTests`, `CatalogueV4ColumnTests` and the shared `CatalogueV4ContractTests` on Linux; I9 (wave 3) writes the marker. The migration tests run in CI's Simulator only. |
 | V5 (reserved) | An indexed content-key column filled in the stage's `didMigrate` | **Later** | Only if a slow diff is measured. |
 
 Why one V4 for marks and job records: both are Iteration 2's, both are additive, and every stage is compiled and tested only by CI's SwiftData run; one stage instead of two halves the migrations shipped between the staging build and the internal TestFlight. If the job-record fields aren't settled when the marks are ready (D6), the marks ship as V4 and the job records become V5, and the order stays V3 → V4 → V5. The pending-commit marker was designed first (I20, wave 1) for the same reason: it is a model of its own (`PendingCommitFile`, section 3.1) and goes into the same V4 rather than a stage of its own. If the job records move to V5 (D6), the marker stays in V4 with the marks.
