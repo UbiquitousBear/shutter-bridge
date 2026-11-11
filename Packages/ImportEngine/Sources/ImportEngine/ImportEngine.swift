@@ -567,9 +567,17 @@ public actor ImportEngine {
                 entry.phase = .queued
             }
             // A half kept for its partner isn't committed by a job that ends before the pair is complete: it stays
-            // on the card, and the next import offers the pair again. Its file goes with the job's folder (or, on a
-            // link that resumes, as any partial copy does, below).
-            if entry.held != nil { entry.phase = .queued }
+            // on the card, and the next import offers the pair again. Its file is deleted now, as an abandoned
+            // download's is, not left for the job's folder, which the driver removes only once its lanes have
+            // returned (after the job reads as finished); on a link that resumes it is kept or deleted as any
+            // partial copy is, below.
+            if let held = entry.held {
+                entry.phase = .queued
+                if !held.download.attempt.keepsFiles {
+                    try? FileManager.default.removeItem(at: held.url)
+                    try? FileManager.default.removeItem(at: held.download.attempt.directory)
+                }
+            }
             // A resumable partial stays only where the catalogue points to it. A committing file's folder holds
             // the staged file; `commitAndRecord` removes it once the commit is done.
             if case .committing = entry.phase { continue }

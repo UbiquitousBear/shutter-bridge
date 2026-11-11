@@ -31,8 +31,11 @@ final class Harness {
     private var links: [FakeCameraLink] = []
     private var resumingLinks: [ResumingLink] = []
 
+    /// - Parameter onTrace: Also given every trace event, on the engine's actor as the event happens (to look at
+    ///   the disk at that very step).
     init(catalogue: any CatalogueStore = InMemoryCatalogue(), downloadsInFlight: Int = 1,
-         policy: ImportPolicy = .standard, root existing: URL? = nil) {
+         policy: ImportPolicy = .standard, root existing: URL? = nil,
+         onTrace: (@Sendable (EngineTrace) -> Void)? = nil) {
         root = existing ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("ImportEngineTests-\(UUID().uuidString)", isDirectory: true)
         staging = root.appendingPathComponent("staging", isDirectory: true)
@@ -47,7 +50,10 @@ final class Harness {
         engine = ImportEngine(
             catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),
             stagingDirectory: staging, clock: clock, timeZone: zone, policy: policy,
-            trace: { recorder.record($0) }
+            trace: { event in
+                onTrace?(event)
+                recorder.record(event)
+            }
         )
     }
 

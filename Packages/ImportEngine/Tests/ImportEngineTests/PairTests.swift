@@ -3,6 +3,7 @@ import Catalogue
 import Foundation
 @testable import ImportEngine
 import PhotosBridge
+import Synchronization
 import Testing
 
 /// RAW+JPEG pairs through the engine (section 7.1 of docs/iteration-2-backlog.md, I6): a RAW and its JPEG (same folder,
@@ -294,6 +295,48 @@ struct PairTests {
         await h.cleanup()
     }
 
+    /// A job that ends with a half waiting for its partner (stopped by the other file in flight, or cancelled) leaves
+    /// none of its downloads on disk once it reports the end: the held half's file goes as an abandoned download's
+    /// does, not later with the job's folder, which the driver removes only once its lanes have returned.
+    @Test(arguments: [false, true])
+    func aJobThatEndsMidPairLeavesNoDownloadBehind(_ cancelled: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ImportEngineTests-\(UUID().uuidString)", isDirectory: true)
+        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        let atEnd = FilesAtEnd()
+        let h = Harness(downloadsInFlight: 2, root: root) { event in
+            if case .finished = event { atEnd.count(under: staging) }
+        }
+        let (raw, jpeg) = Self.frame(h, "DSC00002", at: Harness.t0.addingTimeInterval(2))
+        let victim = h.item("DSC00001.JPG", size: 2100, date: Harness.t0.addingTimeInterval(1))
+        let link = h.link([victim, raw, jpeg])
+        await link.script(raw.name, .hold)
+        await link.script(victim.name, cancelled ? .hold : .fail(.phoneStorageFull))
+        try await h.start(.allNew, from: link)
+        var late = [await link.nextHeldCall(raw.name)]
+        await h.trace.next(.waitingForPartner(jpeg.name))
+        // The JPG's lane takes the next file, which finds the phone full and stops the job, or is cancelled.
+        if cancelled {
+            late.append(await link.nextHeldCall(victim.name))
+            await h.engine.cancel()
+            #expect(await h.waitFinished() == .cancelled)
+        } else {
+            #expect(await h.waitFinished() == .stopped(.phoneStorageFull))
+        }
+        #expect(atEnd.files == [], "downloads on disk when the job ended")
+
+        // The calls walked away from end later: their late files are discarded too.
+        for call in late {
+            let mark = h.trace.count
+            call.release()
+            await h.trace.wait(from: mark) { $0 == .discardedLateFile }
+        }
+        #expect(h.stagedFiles == 0)
+        #expect(await h.photos.attempts == 0)
+        #expect(await h.records().isEmpty)
+        await h.cleanup()
+    }
+
     /// A stall on the second half pauses the job and retries it; the first half waits on disk, and the pair is
     /// committed as one once the retry delivers.
     @Test func aStallOnOneHalf() async throws {
@@ -474,4 +517,23 @@ private actor PairLibrary: PhotoLibraryClient {
         saves.append(asset)
         return "library-\(saves.count)"
     }
+}
+
+/// The regular files under a folder, read from inside the engine's trace hook at the moment a job ends.
+final class FilesAtEnd: Sendable {
+    private let names = Mutex<[String]?>(nil)
+
+    func count(under folder: URL) {
+        var found: [String] = []
+        if let walker = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in walker
+            where (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+                found.append(url.lastPathComponent)
+            }
+        }
+        names.withLock { $0 = found }
+    }
+
+    /// What `count(under:)` found, or nil if it never ran.
+    var files: [String]? { names.withLock { $0 } }
 }
