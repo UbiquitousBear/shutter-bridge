@@ -433,6 +433,7 @@ public actor IPLink: CameraLink, TransferAborting {
         var info: PTPDeviceInfo?
         var linkFailure: PTPIPConnectionFailure?
         var skipped: [SonySessionStep.Operation] = []
+        var tracedDeviceInfo = false
         defer {
             recorded.steps = runner.records
             recorded.skippedSteps = skipped
@@ -475,6 +476,12 @@ public actor IPLink: CameraLink, TransferAborting {
                     info = decoded
                     deviceInfo = decoded
                     capabilityState.set(Self.capabilities(for: decoded))
+                    // The plan asks for DeviceInfo more than once; the log gets the first of each open. Only the firmware
+                    // (PTPKit's own parser): never the serial, which `pin` has just held the link to.
+                    if !tracedDeviceInfo {
+                        tracedDeviceInfo = true
+                        trace(.deviceInfoRead(firmware: decoded.firmwareVersion))
+                    }
                 }
                 action = runner.next(outcome)
             case let .wait(duration):

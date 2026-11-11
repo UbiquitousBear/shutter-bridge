@@ -25,6 +25,9 @@ let package = Package(
         // The Cameras screen shows what discovery finds (`CameraDescriptor`, `USBMode`), which doesn't pass through
         // the engine.
         .package(path: "../CameraTransport"),
+        // The bench wording and the diagnostics header write PTPKit's own values (`PTPFirmwareVersion`), so the edge to
+        // PTPKit is declared rather than reached through CameraTransport.
+        .package(path: "../PTPKit"),
         // Browse reads the catalogue directly (the last-known card, the already-imported badge), and the Import and
         // Settings screens use PhotosBridge's destination rule and destinations.
         .package(path: "../Catalogue"),
@@ -39,6 +42,7 @@ let package = Package(
             dependencies: [
                 .product(name: "ImportEngine", package: "ImportEngine"),
                 .product(name: "CameraTransport", package: "CameraTransport"),
+                .product(name: "PTPKit", package: "PTPKit"),
                 .product(name: "Catalogue", package: "Catalogue"),
                 .product(name: "PhotosBridge", package: "PhotosBridge"),
             ]

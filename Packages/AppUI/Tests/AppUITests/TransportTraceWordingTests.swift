@@ -148,6 +148,25 @@ struct TransportTraceWordingTests {
         #expect(line(.linkClosed(IPLinkDiagnostics())) == "wifi link: closed without opening a session")
     }
 
+    @Test func theDeviceInfoLineHoldsTheFirmwareAndNothingElse() {
+        func firmware(_ text: String, _ source: PTPFirmwareVersion.Source = .deviceInfo(vendorExtensionID: 0x11)) -> String {
+            line(.deviceInfoRead(firmware: PTPFirmwareVersion(text, source: source)))
+        }
+        #expect(firmware("2.01") == "wifi link: camera DeviceInfo read: firmware 2.01 (vendor extension 0x00000011)")
+        #expect(firmware("2.0", .deviceInfo(vendorExtensionID: 0xFFFF_FFFF))
+            == "wifi link: camera DeviceInfo read: firmware 2.0 (vendor extension 0xffffffff)")
+        #expect(firmware("") == "wifi link: camera DeviceInfo read: firmware empty (vendor extension 0x00000011)")
+        #expect(firmware("2.01", .other("ble-CC0A"))
+            == "wifi link: camera DeviceInfo read: firmware 2.01 (not from DeviceInfo)")
+        // A string that isn't shaped like a version (a serial, an address, a name, too long) is never written, only its length.
+        for odd in ["1234567890:abcdef", "10.0.0.9\n192.168.1.20", "Home Wi-Fi, secret!", "2.01 2.01 2.01 2.01 2.01"] {
+            let text = firmware(odd)
+            #expect(text == "wifi link: camera DeviceInfo read: firmware of unexpected form (\(odd.count) characters) "
+                + "(vendor extension 0x00000011)")
+            #expect(!text.contains(odd))
+        }
+    }
+
     @Test func theHoldsLines() {
         #expect(line(.appWentToBackground(during: .handOff))
             == "wifi join: the app went to the background during the hand-off")
@@ -240,6 +259,10 @@ struct TransportTraceWordingTests {
             #expect(lines.contains { $0.hasPrefix(prefix) }, "no line starting \"\(prefix)\" in \(lines)")
         }
         #expect(lines.contains { $0.contains("GetDevicePropValue sent 0;") })
+        // The firmware is logged once, when the session opens (the plan asks for DeviceInfo three times, the keep-alives more), from the camera's DeviceInfo
+        // ("2.01" with Sony's 0x11 over PTP/IP: `ptpip/deviceinfo.bin`).
+        #expect(lines.filter { $0.hasPrefix("wifi link: camera DeviceInfo read:") }
+            == ["wifi link: camera DeviceInfo read: firmware 2.01 (vendor extension 0x00000011)"])
         // And nothing that identifies the network, the phone, the camera or an address.
         let secrets = [ssid, "DIRECT-", "Qx7k", passphrase, "8813", serial, peripheral.uuidString,
                        peripheral.uuidString.lowercased(), guid.uuidString, guid.uuidString.lowercased(), "ILCE"]
