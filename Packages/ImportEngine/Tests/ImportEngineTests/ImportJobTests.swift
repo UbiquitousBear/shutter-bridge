@@ -24,16 +24,20 @@ struct ImportJobTests {
 
         let chosen = kind == .photos ? h.photos : h.files
         let other = kind == .photos ? h.files : h.photos
+        // Each frame's ARW and JPG are one unit (section 7.1 of the Iteration 2 backlog): one Photos asset, or both
+        // files staged together.
         let commits = await chosen.commits
-        #expect(commits.count == 4)
+        #expect(commits.count == 2)
         #expect(await other.attempts == 0)
         for (i, unit) in commits.enumerated() {
-            guard case let .single(file) = unit else {
-                Issue.record("expected single units, got \(unit)")
+            guard case let .pair(raw, processed) = unit else {
+                Issue.record("expected pairs, got \(unit)")
                 continue
             }
-            #expect(file.filename == order[i])
-            #expect(file.captureDate == frames.first { $0.name == order[i] }?.captureDate)
+            #expect(raw.filename == order[2 * i])
+            #expect(processed.filename == order[2 * i + 1])
+            #expect(raw.captureDate == frames.first { $0.name == order[2 * i] }?.captureDate)
+            #expect(processed.captureDate == frames.first { $0.name == order[2 * i + 1] }?.captureDate)
         }
 
         #expect(await h.records().count == 4)
@@ -44,7 +48,7 @@ struct ImportJobTests {
             switch kind {
             case .photos:
                 #expect(row.state == .imported)
-                #expect(row.location == .photosAsset(localIdentifier: "asset-\(i + 1)"))
+                #expect(row.location == .photosAsset(localIdentifier: "asset-\(i / 2 + 1)")) // one per pair
                 #expect(row.staged == nil)
             case .staging:
                 // Staged, not imported (Shamil, 11 Nov): the row stays new, with its staged copy beside the state.

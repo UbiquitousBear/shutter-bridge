@@ -3,10 +3,12 @@ import PhotosBridge
 
 /// A Photos destination whose first commit waits until the test releases it. It notes whether the committing task
 /// had been cancelled by then, and can refuse the save if so, as a destination or store that checks for
-/// cancellation would.
+/// cancellation would; and whether the staged file was still there, and can fail the commit if not, as a real
+/// destination does (`stagedFileMissing`).
 actor HoldingDestination: ImportDestination {
     nonisolated let kind: DestinationKind = .photos
     private let failsIfCancelled: Bool
+    private let failsIfFileMissing: Bool
     /// Successful commits, by file name.
     private(set) var commits: [String] = []
     /// For the held commit: whether its task was cancelled when it was released.
@@ -17,7 +19,10 @@ actor HoldingDestination: ImportDestination {
     private var held: CheckedContinuation<Void, Never>?
     private var arrivedWaiter: CheckedContinuation<Void, Never>?
 
-    init(failsIfCancelled: Bool = false) { self.failsIfCancelled = failsIfCancelled }
+    init(failsIfCancelled: Bool = false, failsIfFileMissing: Bool = false) {
+        self.failsIfCancelled = failsIfCancelled
+        self.failsIfFileMissing = failsIfFileMissing
+    }
 
     func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult {
         let name = unit.files[0].filename
@@ -29,8 +34,10 @@ actor HoldingDestination: ImportDestination {
                 arrivedWaiter = nil
             }
             cancelledAtCommit.append(Task.isCancelled)
-            stagedFileAtCommit.append(FileManager.default.fileExists(atPath: unit.files[0].url.path))
+            let fileThere = FileManager.default.fileExists(atPath: unit.files[0].url.path)
+            stagedFileAtCommit.append(fileThere)
             if failsIfCancelled && Task.isCancelled { throw .rejected(detail: "cancelled mid-commit") }
+            if failsIfFileMissing && !fileThere { throw .stagedFileMissing }
         }
         commits.append(name)
         return .photosAsset(localIdentifier: "held-\(commits.count)")

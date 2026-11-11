@@ -263,7 +263,7 @@ public actor ImportEngine {
             throw .catalogueUnavailable
         }
         guard let facts, let current = self.job, current.id == id else { throw .noJob }
-        var added = 0
+        var wanted: [(item: CameraItem, identity: ObjectIdentity)] = []
         for c in candidates where current.entry(sameContentAs: c.identity) == nil {
             let staged = facts.staged.contains(c.identity)
             guard DoneRule.isWanted(state: facts.states[c.identity] ?? .new, staged: staged, purpose: facts.purpose,
@@ -271,12 +271,30 @@ public actor ImportEngine {
                 if staged && facts.purpose == .staging { trace(.alreadyStaged(c.item.name)) }
                 continue
             }
+            wanted.append(c)
+        }
+        // RAW+JPEG pairs among the added files, or between an added file and a lone one of the job still to download
+        // (section 7.1). The added files' partners among themselves go next to each other at the end of the queue.
+        let lone = current.sortedEntries.filter { $0.partner == nil && $0.isToDownload }
+        let pairs = Self.pairs(among: lone.map(\.item) + wanted.map(\.item))
+            .filter { $0.0 >= lone.count || $0.1 >= lone.count }
+        let newPairs = pairs.filter { $0.0 >= lone.count && $0.1 >= lone.count }
+            .map { ($0.0 - lone.count, $0.1 - lone.count) }
+        var created: [Int: FileEntry] = [:]
+        for i in Self.pairAwareOrder(count: wanted.count, pairs: newPairs) {
+            let c = wanted[i]
             let entry = FileEntry(identity: c.identity, index: current.nextIndex, item: c.item)
             entry.queuedUnderStagingRule = facts.purpose == .staging
             current.nextIndex += 1
             current.add(entry)
             current.queue.append(c.identity)
-            added += 1
+            created[i] = entry
+        }
+        let added = created.count
+        for (a, b) in pairs {
+            let first = a < lone.count ? lone[a] : created[a - lone.count]
+            let second = b < lone.count ? lone[b] : created[b - lone.count]
+            if let first, let second { current.pair(first, second) }
         }
         if added > 0 {
             current.signal.fire()
@@ -540,13 +558,26 @@ public actor ImportEngine {
     }
 
     /// Ends the job: abandons downloads (a committing file finishes in its own unstructured task, which cancelling the
-    /// driver doesn't reach, and records its row), wakes the driver so it drains and removes the staging folder.
+    /// driver doesn't reach, and records its row), wakes the driver so it drains and removes the job's folder (or
+    /// leaves it to the last commit still reading from it: `removeFolderIfUnused(of:)`).
     func end(_ job: Job, _ outcome: JobOutcome) {
         guard self.job === job else { return }
         for entry in job.entries.values {
             if let d = entry.download {
                 d.attempt.abandon()
                 entry.phase = .queued
+            }
+            // A half kept for its partner isn't committed by a job that ends before the pair is complete: it stays
+            // on the card, and the next import offers the pair again. Its file is deleted now, as an abandoned
+            // download's is, not left for the job's folder, which the driver removes only once its lanes have
+            // returned (after the job reads as finished); on a link that resumes it is kept or deleted as any
+            // partial copy is, below.
+            if let held = entry.held {
+                entry.phase = .queued
+                if !held.download.attempt.keepsFiles {
+                    try? FileManager.default.removeItem(at: held.url)
+                    try? FileManager.default.removeItem(at: held.download.attempt.directory)
+                }
             }
             // A resumable partial stays only where the catalogue points to it. A committing file's folder holds
             // the staged file; `commitAndRecord` removes it once the commit is done.
@@ -694,7 +725,7 @@ public actor ImportEngine {
                 case .skipped: skipped += 1
                 case .failed: failed += 1
                 }
-            case .committing:
+            case .held, .committing:
                 bytesDone += size
             case let .downloading(d):
                 // A high-water mark: a restarted download holds its place until the new attempt passes it, so
@@ -730,10 +761,25 @@ public actor ImportEngine {
         }
     }
 
+    /// Removes an ended job's staging folder once nothing reads from it any more: its driver has returned (so every
+    /// lane has, with the commits the lanes wait for) and none of its commits is in flight. Called by the driver as
+    /// it returns and by each commit no lane waits for once it is done, so whichever is last removes the folder, and
+    /// nobody waits for anybody: a destination that never answers keeps only that folder, which the next launch
+    /// empties with the rest of the staging folder. Each job has its own folder, so a job started meanwhile keeps
+    /// its own.
+    func removeFolderIfUnused(of job: Job) {
+        guard job.finished != nil, job.driverReturned,
+              !commitsInFlight.values.contains(where: { $0.job == job.id }) else { return }
+        try? FileManager.default.removeItem(at: job.jobDirectory)
+    }
+
     // MARK: - Test support
 
     /// The current job's zone.
     func jobTimeZone() -> TimeZone? { job?.timeZone }
+
+    /// The last finished job's driver, to wait until it has returned.
+    func lastJobDriver() -> Task<Void, Never>? { lastJob?.driver }
 
     /// The latest attempt at a resumable file of the current job: the one whose checkpoint crossings are written.
     func latestAttempt(of identity: ObjectIdentity) -> DownloadAttempt? {

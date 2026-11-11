@@ -53,10 +53,21 @@ final class Download {
     }
 }
 
+/// One half of a RAW+JPEG pair, downloaded and size-checked, kept on disk until its partner is downloaded too (or
+/// won't be), so the pair is committed as one unit (section 7.1 of docs/iteration-2-backlog.md).
+struct HeldHalf {
+    /// The downloaded file.
+    let url: URL
+    /// The call that wrote it: its folder is removed with the file, and its start is the rate's.
+    let download: Download
+}
+
 enum FilePhase {
     case queued
     case downloading(Download)
     case waitingToRetry
+    /// Downloaded, waiting for the other half of its pair (`FileEntry.partner`).
+    case held(HeldHalf)
     case committing
     case done(FileOutcome)
 }
@@ -89,6 +100,10 @@ final class FileEntry {
     var queuedUnderStagingRule = false
     /// Its checkpoint writes in flight (`markPartial`), which its commit waits for before it writes its row.
     let checkpointWrites = CheckpointWrites()
+    /// The other half of its RAW+JPEG pair in this job (`RawPairingRule`: same folder, same stem, within 1 s), by
+    /// identity; nil for a lone file. The two are committed as one unit, so Photos makes one asset of them; a file
+    /// whose partner is already done for the job's purpose, or not in the job, is a lone file.
+    var partner: ObjectIdentity?
 
     init(identity: ObjectIdentity, index: Int, item: CameraItem) {
         self.identity = identity
@@ -105,21 +120,38 @@ final class FileEntry {
     }
 
     /// Whether a checkpoint may still be written to the catalogue for it: not once its commit has begun
-    /// (`ImportEngine.commit`), because the commit's row (`markStaged` or `upsert`) must be the file's last write. A
-    /// late checkpoint can't undo an imported row (the catalogue keeps it), but a staged one stays `.new`, and a
-    /// `.partial` written over it would bring back the resume the staging commit cleared.
+    /// (`ImportEngine.startCommit`), because the commit's row (`markStaged` or `upsert`) must be the file's last
+    /// write. A late checkpoint can't undo an imported row (the catalogue keeps it), but a staged one stays `.new`,
+    /// and a `.partial` written over it would bring back the resume the staging commit cleared. Not while it is held
+    /// for its partner either: its download has ended, so the bytes are final, and the pair's commit may begin from
+    /// the partner's lane at any moment. A write already in flight when it was held is counted in
+    /// `checkpointWrites`, which the pair's commit waits for.
     var takesCheckpoints: Bool {
         switch phase {
         case .queued, .downloading, .waitingToRetry: true
-        case .committing, .done: false
+        case .held, .committing, .done: false
         }
     }
 
-    /// Downloading, waiting to retry or committing: owned by a running file task.
+    /// The downloaded file of a half waiting for its partner.
+    var held: HeldHalf? {
+        if case let .held(h) = phase { h } else { nil }
+    }
+
+    /// Downloading, waiting to retry or committing (owned by a running file task or commit), or held for its
+    /// partner: the job isn't done while one is.
     var isActive: Bool {
         switch phase {
-        case .downloading, .waitingToRetry, .committing: true
+        case .downloading, .waitingToRetry, .held, .committing: true
         case .queued, .done: false
+        }
+    }
+
+    /// Still to be downloaded: queued, downloading or waiting to retry.
+    var isToDownload: Bool {
+        switch phase {
+        case .queued, .downloading, .waitingToRetry: true
+        case .held, .committing, .done: false
         }
     }
 }
@@ -199,6 +231,8 @@ final class Job {
     var rate: RateEstimator
     var finished: JobOutcome?
     var driver: Task<Void, Never>?
+    /// The driver has returned, and with it every lane and the commits they wait for; set once the job has ended.
+    var driverReturned = false
 
     init(camera: CameraKey, timeZone: TimeZone, selection: ImportSelection, limit: Int, staging: URL,
          link: any CameraLink, route: ImportRoute, rateSamples: Int) {
@@ -223,10 +257,12 @@ final class Job {
         byContent[identity.contentKey].flatMap { entries[$0] }
     }
 
-    /// Adds a file, replacing any with the same content (and taking it out of the queue).
+    /// Adds a file, replacing any with the same content (and taking it out of the queue; a partner it had becomes a
+    /// lone file, unless paired again).
     func add(_ entry: FileEntry) {
         if let existing = byContent[entry.identity.contentKey] {
             queue.removeAll { $0 == existing }
+            if let old = entries[existing], let partner = partner(of: old) { partner.partner = nil }
             entries[existing] = nil
         }
         entries[entry.identity] = entry
@@ -234,6 +270,18 @@ final class Job {
     }
 
     var hasActiveFiles: Bool { entries.values.contains { $0.isActive } }
+
+    /// The other half of `entry`'s pair, if it has one in this job.
+    func partner(of entry: FileEntry) -> FileEntry? { entry.partner.flatMap { entries[$0] } }
+
+    /// Makes `a` and `b` the two halves of one pair.
+    func pair(_ a: FileEntry, _ b: FileEntry) {
+        a.partner = b.identity
+        b.partner = a.identity
+    }
+
+    /// Nothing is queued, downloading or waiting to retry: what is left only needs committing.
+    var nothingLeftToDownload: Bool { queue.isEmpty && !entries.values.contains { $0.isToDownload } }
 
     /// Puts a file back in the queue in its original place (which is at the front of what's left, because files are
     /// claimed in index order).

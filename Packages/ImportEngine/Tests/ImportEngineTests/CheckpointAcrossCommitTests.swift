@@ -9,7 +9,9 @@ import Testing
 /// written, and one already on its way to the catalogue lands before the row. Otherwise a staged file's row, which
 /// stays `.new`, would read `.partial` again with the resume the commit cleared (CI's iOS Simulator run of
 /// `aLaterJobContinuesFromTheCatalogue`). An imported row is kept by the catalogue either way. On a link that resumes,
-/// a catalogue that holds calls before they run (`HoldingCatalogue`), the manual clock, and waits on the trace.
+/// a catalogue that holds calls before they run (`HoldingCatalogue`), the manual clock, and waits on the trace. A
+/// RAW+JPEG pair's commit does the same for both halves: the half held for its partner, and the partner whose download
+/// began the commit.
 @Suite("Checkpoint writes across a commit", .timeLimit(.minutes(1)))
 struct CheckpointAcrossCommitTests {
     /// How a checkpoint write comes after the download has finished.
@@ -17,6 +19,16 @@ struct CheckpointAcrossCommitTests {
         /// The crossing's hand-over task runs only once the commit has begun.
         case crossing
         /// `flushCheckpoints()` while the file is committing.
+        case flush
+    }
+
+    /// How a checkpoint write comes during a pair's commit.
+    enum LateInPair: Sendable, CaseIterable {
+        /// A crossing of the half that was held for its partner (the RAW, downloaded first).
+        case heldHalfCrossing
+        /// A crossing of the partner, whose download began the commit (the JPG).
+        case partnerCrossing
+        /// `flushCheckpoints()`, for both.
         case flush
     }
 
@@ -163,6 +175,140 @@ struct CheckpointAcrossCommitTests {
         await expectCommittedRow(h, a, .staging)
 
         executor.runHeld() // the stuck write, so nothing is left waiting
+        await h.cleanup()
+    }
+
+    // MARK: - Pairs
+
+    /// The RAW and JPG of one frame, each 3,000 B, on a link that resumes. Each holds at 2,400 B, after its 1,200 and
+    /// 2,100 B crossings are written, until the test releases it.
+    private func pair(_ h: Harness) async -> (raw: CameraItem, jpeg: CameraItem, link: ResumingLink) {
+        let raw = h.item("A.ARW", size: 3000)
+        let jpeg = h.item("A.JPG", size: 3000)
+        let link = h.resumingLink([raw, jpeg])
+        await link.script(raw.name, .holdAfter(2400))
+        await link.script(jpeg.name, .holdAfter(2400))
+        return (raw, jpeg, link)
+    }
+
+    /// The RAW is downloaded and held for its partner; the JPG's download finishes and the destination has the pair.
+    /// A crossing of either half (latest checkpoint 2,700 B) or a flush then asks to write. It is refused, so both
+    /// rows the commit writes stay the files' last: each staged row new with its resume cleared.
+    @Test(arguments: [DestinationKind.staging, .photos], LateInPair.allCases)
+    func aCheckpointOfEitherHalfAfterAPairsCommitBeganIsNotWritten(_ kind: DestinationKind,
+                                                                  _ late: LateInPair) async throws {
+        let (h, executor) = harness()
+        let (raw, jpeg, link) = await pair(h)
+        let gate = GatedDestination(kind == .photos ? h.photos : h.files)
+        let job = try await h.start(.allNew, from: link, to: route(kind, through: gate, h))
+        await h.trace.next(where: Self.isCheckpoint(raw.name, 2100))
+        await link.waitUntilHeld(raw.name)
+        await link.release(raw.name)
+        await h.trace.next(.waitingForPartner(raw.name))
+        await h.trace.next(where: Self.isCheckpoint(jpeg.name, 2100))
+        await link.waitUntilHeld(jpeg.name)
+        await link.release(jpeg.name)
+        await gate.waitArrived()
+
+        executor.hold()
+        let identity = h.identity(of: late == .heldHalfCrossing ? raw : jpeg)
+        let attempt = try #require(await h.engine.latestAttempt(of: identity))
+        let seed = try #require(attempt.latestCheckpoint)
+        #expect(seed.offset == 2700)
+        let engine = h.engine
+        let lateWrite = Task {
+            switch late {
+            case .heldHalfCrossing, .partnerCrossing:
+                await engine.checkpointCrossed(seed, by: attempt, of: identity, in: job.rawValue)
+            case .flush:
+                await engine.flushCheckpoints()
+            }
+            executor.note("returned")
+        }
+        await executor.waitUntil { $0.held > 0 || $0.notes.contains("returned") }
+        executor.stopHolding()
+        await gate.release()
+        #expect(await h.waitFinished() == .completed)
+        executor.runHeld() // a write that got through lands after the rows
+        await lateWrite.value
+
+        await expectCommittedRow(h, raw, kind)
+        await expectCommittedRow(h, jpeg, kind)
+        if kind == .photos {
+            #expect(await h.record(for: raw)?.location == h.record(for: jpeg)?.location) // one asset
+        }
+        #expect(executor.seen.markPartials == 4) // 1,200 and 2,100 of each, during the downloads
+        #expect(h.trace.count { $0 == .checkpointSaved(raw.name, offset: 2700) } == 0)
+        #expect(h.trace.count { $0 == .checkpointSaved(jpeg.name, offset: 2700) } == 0)
+        #expect(h.stagedFiles == 0)
+        await h.cleanup()
+    }
+
+    /// A flush while the RAW is held for its partner writes nothing for it: its download has ended, and the pair's
+    /// commit may begin at any moment from the partner's lane. The pair's rows are then the RAW's last writes.
+    @Test func aFlushWhileAHalfIsHeldWritesNothingForIt() async throws {
+        let (h, executor) = harness()
+        let (raw, jpeg, link) = await pair(h)
+        try await h.start(.allNew, from: link, to: h.stageRoute)
+        await h.trace.next(where: Self.isCheckpoint(raw.name, 2100))
+        await link.waitUntilHeld(raw.name)
+        await link.release(raw.name)
+        await h.trace.next(.waitingForPartner(raw.name))
+        await h.trace.next(where: Self.isCheckpoint(jpeg.name, 2100))
+        await link.waitUntilHeld(jpeg.name)
+
+        await h.engine.flushCheckpoints()
+        #expect(h.trace.count { $0 == .checkpointSaved(raw.name, offset: 2700) } == 0)
+        await link.release(jpeg.name)
+        #expect(await h.waitFinished() == .completed)
+
+        await expectCommittedRow(h, raw, .staging)
+        await expectCommittedRow(h, jpeg, .staging)
+        #expect(h.trace.count { $0 == .checkpointSaved(raw.name, offset: 2700) } == 0)
+        #expect(h.trace.count { $0 == .checkpointWritesUnsettled(raw.name) } == 0)
+        #expect(executor.seen.held == 0)
+        #expect(h.stagedFiles == 0)
+        await h.cleanup()
+    }
+
+    /// The RAW's 1,200 B crossing is on its way to the catalogue (held there) when the RAW's download finishes and it
+    /// is held for its partner; its 2,100 B crossing, queued behind, is refused. When the JPG's download finishes and
+    /// the pair's commit begins, the commit waits for the RAW's write before it writes either row.
+    @Test(arguments: [DestinationKind.staging, .photos])
+    func aHeldHalfsCheckpointInFlightLandsBeforeThePairsRows(_ kind: DestinationKind) async throws {
+        let (h, executor) = harness()
+        let raw = h.item("A.ARW", size: 3000)
+        let jpeg = h.item("A.JPG", size: 3000)
+        let link = h.resumingLink([raw, jpeg])
+        await link.script(raw.name, .holdAfterEach([900, 1500]))
+        try await h.start(.allNew, from: link, to: route(kind, through: kind == .photos ? h.photos : h.files, h))
+        await link.waitUntilHeld(raw.name)
+        executor.hold()
+        await link.release(raw.name)
+        await link.waitUntilHeld(raw.name)
+        await executor.waitUntil { $0.held == 1 } // the RAW's 1,200 B write
+        executor.stopHolding()
+
+        let trace = h.trace
+        let mark = trace.count
+        Task {
+            await trace.wait(from: mark) { $0 == .waitingForCheckpointWrites(raw.name) }
+            executor.note("commit waits")
+        }
+        await link.release(raw.name)
+        await h.trace.wait(from: mark) { $0 == .waitingForPartner(raw.name) }
+        // The JPG downloads; the pair's commit waits for the RAW's write, or has written its rows past it.
+        await executor.waitUntil { $0.rows > 0 || $0.notes.contains("commit waits") }
+        #expect(executor.seen.rows == 0)
+        executor.runHeld()
+        #expect(await h.waitFinished() == .completed)
+
+        await expectCommittedRow(h, raw, kind)
+        await expectCommittedRow(h, jpeg, kind)
+        #expect(h.trace.count(where: Self.isCheckpoint(raw.name, 1200)) == 1)
+        #expect(h.trace.count { $0 == .checkpointSaved(raw.name, offset: 2100) } == 0)
+        #expect(h.trace.count { $0 == .checkpointWritesUnsettled(raw.name) } == 0)
+        #expect(h.stagedFiles == 0)
         await h.cleanup()
     }
 }
