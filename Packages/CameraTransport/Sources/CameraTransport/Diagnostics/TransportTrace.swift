@@ -7,6 +7,7 @@
 // only times, counts, sizes, CC09 statuses and failure kinds. Recording an event never changes what the route does or when.
 
 import Foundation
+import PTPKit
 
 /// Where trace events go: a closure the app supplies, or nothing (`.none`).
 public struct TransportTrace: Sendable {
@@ -180,6 +181,11 @@ public enum TransportTraceEvent: Sendable, Equatable {
     /// The session opened. `wholeCard`: Sony's whole-card session, which polls until the card lists; `polls` and
     /// `listedAfter` (from the first poll) are that poll's; `pollTimedOut`: it reached its limit first.
     case linkOpened(after: Duration, reopening: Bool, wholeCard: Bool, polls: Int, listedAfter: Duration?, pollTimedOut: Bool)
+    /// The camera's DeviceInfo was read as the session opened (the first of each open, though the plan asks again; never at a
+    /// keep-alive): its firmware
+    /// version as PTPKit parses it, with the vendor extension that tells the camera's modes apart (`PTPFirmwareVersion`). Nothing
+    /// else of DeviceInfo is carried: not the serial, and not the model, which the app already knows.
+    case deviceInfoRead(firmware: PTPFirmwareVersion)
     /// A keep-alive (GetDeviceInfo) went out: `number` this session, answered OK or not; `idle` since the last command ended;
     /// `sincePrevious` since this session's previous keep-alive went out (nil for the first).
     case keepAlive(number: Int, answered: Bool, idle: Duration, sincePrevious: Duration?)

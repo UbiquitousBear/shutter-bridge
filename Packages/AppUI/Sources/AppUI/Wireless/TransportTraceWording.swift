@@ -1,5 +1,6 @@
 import CameraTransport
 import Foundation
+import PTPKit
 
 // The bench log's lines for the Wi-Fi route (W20): each `TransportTraceEvent` CameraTransport records becomes one line in the
 // unified log through `BenchLog` (`OSLogBenchLog` in the app: subsystem net.shamil.shutter-bridge, category browse). Plain
@@ -124,6 +125,8 @@ public enum TransportTraceWording {
             let limit = pollTimedOut ? ", the poll reached its limit" : ""
             return "wifi link: card ready \(seconds(after)) after the open began, \(count(polls, "poll", "polls"))"
                 + "\(listed)\(limit) (\(kind))"
+        case let .deviceInfoRead(firmware):
+            return "wifi link: camera DeviceInfo read: firmware \(firmwareWord(firmware))"
         case let .keepAlive(number, answered, idle, sincePrevious):
             let previous = sincePrevious.map { "\(seconds($0)) after the previous keep-alive" } ?? "the first this session"
             return "wifi link: keep-alive \(number) \(answered ? "answered" : "not answered"), \(seconds(idle)) after the "
@@ -171,6 +174,30 @@ public enum TransportTraceWording {
         case 3?: "3 (stopping)"
         case .some: "an unknown value"
         case nil: "unreadable"
+        }
+    }
+
+    /// A firmware version for its line: the string as the camera sent it when it has the shape of a version ("2.01": at most
+    /// 16 letters, digits, dots, hyphens, underscores or spaces), else only its length, so a camera that put anything else
+    /// there (or a hostile one) can't write into the log. The source is a PTP DeviceInfo's vendor extension ID, in hex,
+    /// which tells the camera's modes apart (PTPKit's `PTPFirmwareVersion`).
+    static func firmwareWord(_ firmware: PTPFirmwareVersion) -> String {
+        let text = firmware.string
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._- ")
+        let version: String
+        if text.isEmpty {
+            version = "empty"
+        } else if text.count <= 16, text.allSatisfy({ allowed.contains($0) }) {
+            version = text
+        } else {
+            version = "of unexpected form (\(text.count) characters)"
+        }
+        switch firmware.source {
+        case let .deviceInfo(id):
+            let hex = String(id, radix: 16, uppercase: false)
+            return "\(version) (vendor extension 0x\(String(repeating: "0", count: max(0, 8 - hex.count)))\(hex))"
+        case .other:
+            return "\(version) (not from DeviceInfo)"
         }
     }
 
