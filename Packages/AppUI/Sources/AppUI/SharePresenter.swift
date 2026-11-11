@@ -1,10 +1,10 @@
 #if canImport(UIKit) && os(iOS)
 import UIKit
 
-/// Presents the system share sheet for one file (*Share as JPEG…*). The sheet is presented from UIKit's top-most
-/// view controller rather than wrapped in a SwiftUI sheet, which leaves an empty sheet behind when an activity
-/// (Messages, Mail) presents its own screen. `onFinish` runs once the sheet and any activity it started have closed,
-/// whether something was shared or not; that is when the JPEG's temporary folder is removed. `onFailure` runs instead
+/// Presents the system share sheet for one file (*Share as JPEG…*, and Settings' *Export Diagnostics…*). The sheet is
+/// presented from UIKit's top-most view controller rather than wrapped in a SwiftUI sheet, which leaves an empty sheet
+/// behind when an activity (Messages, Mail) presents its own screen. `onFinish` runs once the sheet and any activity it started have closed,
+/// whether something was shared or not; that is when the file's temporary folder is removed. `onFailure` runs instead
 /// when the sheet can't be shown: no window, or UIKit refused the presentation. Exactly one of the two runs.
 @MainActor
 enum SharePresenter {

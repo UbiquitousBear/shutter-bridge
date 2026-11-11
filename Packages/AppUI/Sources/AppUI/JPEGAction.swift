@@ -67,15 +67,50 @@ public protocol JPEGClipboard {
     func copyJPEG(at url: URL) throws
 }
 
-/// Where the bench lines go: OSLog in the app (`OSLogBenchLog`), an array in tests. Lines never hold file contents.
+/// How serious a bench line is. Almost every line is a `notice`; a real failure is an `error`, so the unified log's
+/// error filter, and the count of error-level entries that the bench sheet's definition of done reads, show failures and
+/// nothing else (backlog section 6; I8). Pauses, stalls that recover and skips stay at `notice`.
+public enum BenchLogLevel: Sendable, Hashable {
+    case notice
+    case error
+}
+
+/// Where the bench lines go: OSLog in the app (`OSLogBenchLog`), the rolling file (`RollingLogFile`), an array in tests.
+/// Lines never hold file contents.
+///
+/// `note(_:)` is a notice. `note(_:level:)` says how serious the line is; a log that can't tell levels apart keeps its
+/// one level through the default, which forwards to `note(_:)`, so a log written before levels existed still works.
 public protocol BenchLog: Sendable {
     func note(_ line: String)
+    func note(_ line: String, level: BenchLogLevel)
+}
+
+extension BenchLog {
+    public func note(_ line: String, level: BenchLogLevel) { note(line) }
+}
+
+/// Sends every line to each of its logs, at the level it came with: the unified log and the rolling file in the app.
+public struct TeeBenchLog: BenchLog {
+    private let logs: [any BenchLog]
+
+    public init(_ logs: [any BenchLog]) {
+        self.logs = logs
+    }
+
+    public func note(_ line: String) {
+        for log in logs { log.note(line) }
+    }
+
+    public func note(_ line: String, level: BenchLogLevel) {
+        for log in logs { log.note(line, level: level) }
+    }
 }
 
 /// A log that drops everything.
 public struct SilentBenchLog: BenchLog {
     public init() {}
     public func note(_ line: String) {}
+    public func note(_ line: String, level: BenchLogLevel) {}
 }
 
 /// Why a *Copy as JPEG* or *Share as JPEG…* didn't finish.

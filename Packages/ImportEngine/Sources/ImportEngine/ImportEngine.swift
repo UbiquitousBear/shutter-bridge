@@ -67,16 +67,18 @@ public actor ImportEngine {
     ///   - timeZone: The zone a link's capture dates are read back to wall-clock time in, for identities; each job
     ///     keeps the zone it started with (an autoupdating zone is fixed at the start, so a change of zone mid-job
     ///     doesn't give Browse's items new identities).
+    ///   - trace: Where the engine's own decisions go (the app's log); `.none` records nothing.
     public init(
         catalogue: any CatalogueStore,
         settings: ImportSettings = ImportSettings(),
         stagingDirectory: URL = FileManager.default.temporaryDirectory
             .appendingPathComponent("Imports", isDirectory: true),
         clock: some Clock<Duration> = ContinuousClock(),
-        timeZone: TimeZone = .autoupdatingCurrent
+        timeZone: TimeZone = .autoupdatingCurrent,
+        trace: EngineTraceSink = .none
     ) {
         self.init(catalogue: catalogue, settings: settings, stagingDirectory: stagingDirectory, clock: clock,
-                  timeZone: timeZone, policy: .standard, trace: nil)
+                  timeZone: timeZone, policy: .standard, trace: trace.sink)
     }
 
     init(
@@ -495,6 +497,7 @@ public actor ImportEngine {
     /// Files being committed carry on. Idempotent; a lost session names a removal already recorded more exactly
     /// (the failure and the event race), never the other way round.
     func cameraLost(_ job: Job, _ reason: PauseReason) {
+        noteLost(job)
         guard job.phase != .waitingForCamera else {
             if reason == .cameraUnreachable {
                 job.pauses.remove(.cameraRemoved) // the session was lost: the camera wasn't removed
@@ -514,6 +517,7 @@ public actor ImportEngine {
     /// session still up, so nothing counts as failed (the spike's 82-files bug) and `.storeAdded` lists the card
     /// again. Idempotent.
     func cardLost(_ job: Job) {
+        noteLost(job)
         if job.phase != .waitingForCamera { stopDownloads(of: job) }
         addPause(.cardUnavailable, to: job)
         job.signal.fire()
@@ -663,6 +667,7 @@ public actor ImportEngine {
                     // Progress restarts the stall clock but not the stall count, which is per file (3 automatic
                     // retries) and reset only by the person continuing.
                     if reading.bytes > d.lastBytes { d.lastBytes = reading.bytes }
+                    noteFirstByte(of: entry, in: job, reading: reading)
                     let last = max(d.lastProgressAt, reading.grewAt ?? d.lastProgressAt)
                     if now - last >= policy.stallTimeout { stalled.append(entry) }
                 }

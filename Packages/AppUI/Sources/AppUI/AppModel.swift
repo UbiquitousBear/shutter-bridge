@@ -56,7 +56,8 @@ public final class AppModel {
         notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord(),
         background: any ImportBackgroundRun = NoImportBackgroundRun(),
         wifi: WiFiSupport? = nil,
-        wireless: WirelessRuntime? = nil
+        wireless: WirelessRuntime? = nil,
+        diagnostics: (any DiagnosticsExporting)? = nil
     ) {
         self.notifier = notifier
         self.wifi = wifi
@@ -108,7 +109,7 @@ public final class AppModel {
             wifiRecovery = nil
             wirelessSetup = nil
         }
-        settings = SettingsModel(photos: photos, staging: destinations)
+        settings = SettingsModel(photos: photos, staging: destinations, diagnostics: diagnostics)
         cameras.importModel = importer
         importer.cameraFinder = cameras
         // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).

@@ -74,7 +74,16 @@ public final class RollingLogFile: Sendable, BenchLog {
 
     /// `BenchLog`: a bench line at the notice level, in the bench's category.
     public func note(_ line: String) {
-        append(DiagnosticsLogEntry(date: now(), category: "browse", level: .notice, message: line))
+        note(line, level: .notice)
+    }
+
+    /// `BenchLog`: a bench line at `level` (an error for a real failure), in the bench's category, as the unified log has it.
+    public func note(_ line: String, level: BenchLogLevel) {
+        let entryLevel: DiagnosticsLogEntry.Level = switch level {
+        case .notice: .notice
+        case .error: .error
+        }
+        append(DiagnosticsLogEntry(date: now(), category: "browse", level: entryLevel, message: line))
     }
 
     /// Adds one entry to this launch's file, first making room within the budget.
