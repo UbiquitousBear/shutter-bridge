@@ -29,6 +29,8 @@ actor FailingCatalogue: CatalogueStore {
     var failAbandonCommit = false
     /// `recordJob` fails.
     var failRecordJob = false
+    /// `partialRecords()` fails.
+    var failPartialRecords = false
 
     func setFailUpserts(_ on: Bool) { failUpserts = on }
     func setFailStates(_ on: Bool) { failStates = on }
@@ -37,6 +39,7 @@ actor FailingCatalogue: CatalogueStore {
     func setFailFinishCommit(_ on: Bool) { failFinishCommit = on }
     func setFailAbandonCommit(_ on: Bool) { failAbandonCommit = on }
     func setFailRecordJob(_ on: Bool) { failRecordJob = on }
+    func setFailPartialRecords(_ on: Bool) { failPartialRecords = on }
 
     func record(for identity: ObjectIdentity) throws -> CatalogueRecord? { records[identity] }
 
@@ -61,6 +64,13 @@ actor FailingCatalogue: CatalogueStore {
         if failUpserts { throw Broken() }
         records[identity] = CatalogueRecord(identity: identity, format: format, state: .partial,
                                             resumeOffset: offset, tempURL: tempURL)
+    }
+
+    /// As `InMemoryCatalogue`: every `.partial` row with a temporary file. (`resetPartial` is the protocol's own, over
+    /// `record(for:)` and `upsert`, so it writes as `InMemoryCatalogue` does and fails with `failUpserts`.)
+    func partialRecords() throws -> [CatalogueRecord] {
+        if failPartialRecords { throw Broken() }
+        return records.values.filter { $0.state == .partial && $0.tempURL != nil }
     }
 
     func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {
