@@ -367,9 +367,10 @@ extension ImportEngine {
     /// a stuck write might still overwrite.
     func settle(_ writes: CheckpointWrites, of name: String) async {
         guard !writes.isEmpty else { return }
-        trace(.waitingForCheckpointWrites(name))
+        // The deadline is read before the trace, so a clock advanced by whoever sees the trace counts against it.
         let clock = self.clock
         let deadline = clock.now + policy.checkpointWriteWait
+        trace(.waitingForCheckpointWrites(name))
         let settled = await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 await writes.waitUntilNone()
