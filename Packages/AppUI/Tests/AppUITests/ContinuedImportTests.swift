@@ -314,7 +314,9 @@ struct ContinuedImportTests {
         await link.release(Self.victim)
         #expect(await b.finished())
         #expect(b.model.state == .finished(.completed))
-        #expect(handle.finishes == [true])
+        // The read that lets the link go finishes the run once the link is released, after `finished()` may have seen
+        // the outcome through another read.
+        #expect(await eventually { handle.finishes == [true] })
         #expect(b.run.begins.count == 1)
     }
 

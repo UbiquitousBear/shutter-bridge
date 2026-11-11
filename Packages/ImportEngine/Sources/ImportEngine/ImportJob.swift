@@ -218,6 +218,9 @@ final class Job {
     /// `EngineTrace.firstByteAfterReconnect`.
     var resumedAt: Duration?
     var route: ImportRoute
+    /// What the job was started for (`ImportRoute.purpose` then), for its record: an import job staged instead part-way
+    /// is still an import job.
+    let startPurpose: DestinationKind
     var phase: JobPhase = .listing
     var pauses: Set<PauseReason> = []
     var stallResumeAt: Duration?
@@ -235,6 +238,9 @@ final class Job {
     var nextIndex = 0
     var rate: RateEstimator
     var finished: JobOutcome?
+    /// When the job started and ended, by the wall clock, for its record (`JobRecord`).
+    let startedAt = Date()
+    var finishedAt: Date?
     var driver: Task<Void, Never>?
     /// The driver has returned, and with it every lane and the commits they wait for; set once the job has ended.
     var driverReturned = false
@@ -248,6 +254,7 @@ final class Job {
         self.jobDirectory = staging.appendingPathComponent(id.uuidString, isDirectory: true)
         self.link = link
         self.route = route
+        self.startPurpose = route.purpose
         self.rate = RateEstimator(capacity: rateSamples)
     }
 

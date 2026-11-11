@@ -81,6 +81,7 @@ struct NoDestination: ImportDestination {
     func commit(_ unit: CommitUnit) throws(ImportDestinationFailure) -> ImportResult {
         throw .rejected(detail: "test")
     }
+    func commitTarget(for unit: CommitUnit) -> CommitTarget { .photosLibrary }
 }
 
 @Suite("The engine's surface", .timeLimit(.minutes(1)))

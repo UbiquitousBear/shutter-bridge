@@ -49,6 +49,12 @@ public enum EngineTrace: Sendable, Hashable {
     case waitingForCheckpointWrites(String)
     /// That wait ran out (`ImportPolicy.checkpointWriteWait`): the row is written without it.
     case checkpointWritesUnsettled(String)
+    /// The catalogue refused a commit's pending-commit marker (`beginCommit`, backlog section 3.1) after every try, so
+    /// nothing was committed: the file (a pair's RAW) goes back to the queue and the job ends `.catalogueUnavailable`.
+    case commitMarkerNotWritten(String)
+    /// The catalogue refused the job's record for History (`recordJob`); the next write of it (a pause, the end) tries
+    /// again. The import itself carries on.
+    case jobRecordNotWritten
     /// The camera's file under this item's ID has another name or size than the partial file was begun from: the
     /// partial was dropped and the card is listed again.
     case identityChanged(String)

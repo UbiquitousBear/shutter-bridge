@@ -62,6 +62,9 @@ public actor PhotosLibraryDestination: ImportDestination {
         return .photosAsset(localIdentifier: identifier)
     }
 
+    /// The library, whichever albums the plan names.
+    public nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget { .photosLibrary }
+
     /// The identifiers of the plan's albums that accept photos: found by the stored identifier, or created (once)
     /// and stored when there is none or the stored one is gone. An album that refuses new content is skipped and
     /// noted, not recreated (it is still the person's album).

@@ -64,12 +64,25 @@ public actor StagingFolderDestination: ImportDestination {
     public nonisolated var cameraFolderPath: String { Self.folderName + "/" + cameraFolderName }
 
     public func commit(_ unit: CommitUnit) throws(ImportDestinationFailure) -> ImportResult {
-        let day = Self.dayFolderName(for: unit.files.first?.captureDate, in: timeZone)
+        let day = dayFolder(of: unit)
         let folder = cameraFolderURL.appendingPathComponent(day, isDirectory: true)
         let placed = try FolderPlacer(folder: folder, mover: mover).place(unit.files)
-        let prefix = cameraFolderPath + "/" + day + "/"
+        let prefix = dayFolderPath(day) + "/"
         return .staged(place: place, placed.map { FileLocation(relativePath: prefix + $0.lastPathComponent) })
     }
+
+    /// The day folder `commit(_:)` places `unit` in, relative to the root ("Staging/`camera`/`YYYY-MM-DD`").
+    public nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        .stagingFolder(place: place, folderPath: dayFolderPath(dayFolder(of: unit)))
+    }
+
+    /// The unit's day folder's name: the RAW's (the first file's) capture day.
+    private nonisolated func dayFolder(of unit: CommitUnit) -> String {
+        Self.dayFolderName(for: unit.files.first?.captureDate, in: timeZone)
+    }
+
+    /// A day folder relative to the root.
+    private nonisolated func dayFolderPath(_ day: String) -> String { cameraFolderPath + "/" + day }
 
     /// "YYYY-MM-DD" for `date` read as wall-clock time in `timeZone`; "Undated" when there is no date or its year is
     /// outside 0001–9999.

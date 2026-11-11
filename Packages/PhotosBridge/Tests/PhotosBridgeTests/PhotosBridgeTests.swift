@@ -47,6 +47,10 @@ actor RecordingDestination: ImportDestination {
     }
 
     func setFailNext(_ f: ImportDestinationFailure) { failNext = f }
+
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        .stagingFolder(place: .iCloudDrive, folderPath: "Staging")
+    }
 }
 
 @Suite("Import destinations")

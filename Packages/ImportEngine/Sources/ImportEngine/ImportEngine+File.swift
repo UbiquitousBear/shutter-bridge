@@ -317,7 +317,7 @@ extension ImportEngine {
         let id = job.id
         let route = job.route
         let token = UUID()
-        let task = Task { await self.commitAndRecord(files, of: id, route: route) }
+        let task = Task { await self.commitAndRecord(files, token: token, of: id, route: route) }
         commitsInFlight[token] = (id, task)
         return (token, task)
     }
@@ -327,6 +327,9 @@ extension ImportEngine {
         switch result {
         case let .failed(failure):
             return await commitFailed(failure, halves: halves, lane: lane, of: id)
+        case .markerNotWritten:
+            requeueUncommitted(halves, of: id)
+            return false
         case let .committed(outcomes, kind, written):
             // A commit that finishes after its job ended (cancelled, stopped) still resolves its files on the ended
             // job, so the finished Import screen's rows and counts show them as imported or staged.
@@ -338,6 +341,7 @@ extension ImportEngine {
             }
             guard current(id) != nil else {
                 refreshState()
+                writeJobRecord(of: job)
                 return false
             }
             if let lane, let entry = job.entries[lane], !entry.interrupted,
@@ -375,10 +379,13 @@ extension ImportEngine {
 
     /// How a commit ended: committed, with what became of each file in the order given (imported or staged and
     /// where, or `.skipped(.alreadyStaged)` for one left out because it was to be staged and is staged already), into
-    /// which destination, and whether every row was written; or failed, for every file of the unit.
+    /// which destination, and whether every row was written; failed, for every file of the unit; or not begun,
+    /// because its pending-commit marker couldn't be written (`markerNotWritten`: nothing reached the destination, or,
+    /// after Photos refused the save, nothing reached the staging folder).
     enum CommitResult: Sendable {
         case committed([FileOutcome], DestinationKind, rowWritten: Bool)
         case failed(ImportDestinationFailure)
+        case markerNotWritten
     }
 
     /// The commit itself, its rows and the cleanup of the staged files. Runs whether or not the job is still current:
@@ -394,7 +401,14 @@ extension ImportEngine {
     /// (`settle(_:of:)`), a pair's two halves alike: one sent before the commit began (by the lane's half, or by a
     /// held half before it was held) must land before the rows, not after them, or a staged row would read as
     /// partial again, with its resume offset and temporary file back.
-    func commitAndRecord(_ files: [CommitFile], of id: UUID, route: ImportRoute) async -> CommitResult {
+    ///
+    /// The commit is bracketed by its pending-commit marker (backlog section 3.1), under `token`: written before the
+    /// destination is called (`beginMarker`), and again, under the same token, before a switch to another destination
+    /// (Photos refused the save, or iCloud Drive went); removed when the commit fails (`abandonCommit`); and cleared in
+    /// the same store save as the rows when it succeeds (`finishCommit`). A marker that can't be written means
+    /// nothing is committed (`markerNotWritten`). Rows that can't be written stay in `unrecordedCommits` under the
+    /// token, with the marker in the store, for the resolution to write later in this launch.
+    func commitAndRecord(_ files: [CommitFile], token: UUID, of id: UUID, route: ImportRoute) async -> CommitResult {
         var outcomes = [FileOutcome?](repeating: nil, count: files.count)
         var going = Array(files.indices)
         let alreadyStaged = CommitResult.committed(outcomes.map { _ in .skipped(.alreadyStaged) }, .staging,
@@ -404,6 +418,10 @@ extension ImportEngine {
             return alreadyStaged
         }
         var unit = Self.commitUnit(for: going.map { files[$0].staged })
+        // Nothing reaches the destination unless the commit can be found again if its rows are lost.
+        guard await beginMarker(token, of: id, unit: unit, files: files, to: used) else {
+            return await markerNotWritten(token, files, going: going, unit: unit)
+        }
         // Whether `used` is the staging folder in iCloud Drive, which can go away mid-job.
         var usedICloudDrive = route.purpose == .staging && route.stagesInICloudDrive
         var result: ImportResult?
@@ -429,8 +447,15 @@ extension ImportEngine {
             let staging = current(id)?.route ?? route
             used = staging.staging
             usedICloudDrive = staging.stagesInICloudDrive
-            if !(await leaveOutStaged(files, going: &going, outcomes: &outcomes)) { return alreadyStaged }
+            if !(await leaveOutStaged(files, going: &going, outcomes: &outcomes)) {
+                await abandonMarker(token)
+                return alreadyStaged
+            }
             unit = Self.commitUnit(for: going.map { files[$0].staged })
+            // Photos refused, so nothing was saved: the marker now names the staging folder, or nothing is staged.
+            guard await beginMarker(token, of: id, unit: unit, files: files, to: used) else {
+                return await markerNotWritten(token, files, going: going, unit: unit)
+            }
             failure = nil
             do throws(ImportDestinationFailure) {
                 result = try await used.commit(unit)
@@ -451,6 +476,9 @@ extension ImportEngine {
             let next = current(id)?.route ?? route.afterStagingLost()
             if !next.stagesInICloudDrive {
                 used = next.staging
+                guard await beginMarker(token, of: id, unit: unit, files: files, to: used) else {
+                    return await markerNotWritten(token, files, going: going, unit: unit)
+                }
                 failure = nil
                 do throws(ImportDestinationFailure) {
                     result = try await used.commit(unit)
@@ -460,23 +488,29 @@ extension ImportEngine {
             }
         }
 
-        if let failure { return .failed(failure) }
-        guard let result else { return .failed(.stagedFileMissing) } // unreachable: a commit returns or throws
+        if let failure {
+            await abandonMarker(token)
+            return .failed(failure)
+        }
+        guard let result else { // unreachable: a commit returns or throws
+            await abandonMarker(token)
+            return .failed(.stagedFileMissing)
+        }
 
         // A checkpoint write sent before the commit began must land before the rows: every file's, before any row.
         for i in going { await settle(files[i].checkpointWrites, of: files[i].item.name) }
 
-        // The rows, then the cleanup. Written even if the job was cancelled meanwhile: the files were committed. An
-        // import writes the imported row (`upsert`, which keeps any staged copy), one per file with the pair's one
-        // asset; staging records each file's staged copy beside the row's state (`markStaged`, which keeps an
-        // imported row imported and sends a partial row back to new with its resume cleared, since the partial file
-        // was what was staged).
+        // The rows and the marker's removal in one store save (`finishCommit`), then the cleanup. Written even if the
+        // job was cancelled meanwhile: the files were committed. An import writes the imported row (as `upsert`,
+        // which keeps any staged copy), one per file with the pair's one asset; staging records each file's staged
+        // copy beside the row's state (as `markStaged`, which keeps an imported row imported and sends a partial row
+        // back to new with its resume cleared, since the partial file was what was staged).
         //
         // The outcomes come in the unit's order (a pair's RAW first), matched back to the files by their downloads,
         // so each row gets its own file's location whatever order the files were given in.
         let committed = Self.outcomes(of: result, for: unit, at: Date())
         let inUnitOrder = unit.files.compactMap { staged in going.first { files[$0].url == staged.url } }
-        var written = true
+        var writes: [CommitWrite] = []
         for (k, i) in (inUnitOrder.count == going.count ? inUnitOrder : going).enumerated() {
             let file = files[i]
             let outcome = k < committed.count ? committed[k] : .imported(nil)
@@ -484,20 +518,18 @@ extension ImportEngine {
             switch outcome {
             case let .staged(location):
                 let staged = location ?? Self.unreportedStagedLocation(for: result)
-                let ok = await writeRow {
-                    try await self.catalogue.markStaged(file.identity, format: file.item.format, at: staged)
-                }
-                written = written && ok
+                writes.append(.staged(file.identity, format: file.item.format, at: staged))
             case let .imported(location):
-                let record = CatalogueRecord(identity: file.identity, format: file.item.format, state: .imported,
-                                             location: location)
-                let ok = await writeRow { try await self.catalogue.upsert(record) }
-                written = written && ok
+                writes.append(.imported(CatalogueRecord(identity: file.identity, format: file.item.format,
+                                                        state: .imported, location: location)))
             case .skipped, .failed:
                 break // unreachable: a commit's outcome is imported or staged
             }
-            Self.discard(file) // Photos copies; the staging folder moves the file, leaving only its folder
         }
+        let written = await writeRow { try await self.catalogue.finishCommit(token, writing: writes) }
+        if !written { unrecordedCommits[token] = writes }
+        // Photos copies; the staging folder moves the file, leaving only its folder.
+        for i in going { Self.discard(files[i]) }
         return .committed(outcomes.map { $0 ?? .skipped(.alreadyStaged) }, used.kind, rowWritten: written)
     }
 
@@ -557,7 +589,8 @@ extension ImportEngine {
         return staged.contains(identity)
     }
 
-    /// Writes a committed file's row, trying up to `policy.catalogueWriteAttempts` times; whether it was written.
+    /// Writes a commit's marker or its rows, trying up to `policy.catalogueWriteAttempts` times; whether it was
+    /// written.
     func writeRow(_ write: () async throws -> Void) async -> Bool {
         for _ in 0 ..< max(1, policy.catalogueWriteAttempts) {
             do {
@@ -614,6 +647,7 @@ extension ImportEngine {
                     if let entry = ended.entries[h.identity] { resolve(entry, .failed(.destination(failure))) }
                 }
                 refreshState()
+                writeJobRecord(of: ended)
             }
             return false
         }

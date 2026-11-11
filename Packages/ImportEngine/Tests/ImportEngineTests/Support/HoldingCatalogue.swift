@@ -197,6 +197,8 @@ actor GatedDestination: ImportDestination {
         return try await inner.commit(unit)
     }
 
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget { inner.commitTarget(for: unit) }
+
     /// Returns once the first commit is being held.
     func waitArrived() async {
         if held != nil { return }

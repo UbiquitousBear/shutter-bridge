@@ -102,6 +102,17 @@ public enum ImportDestinationFailure: Error, Sendable, Hashable {
     case rejected(detail: String)
 }
 
+/// Where a commit is about to send its files, said before the commit: what the engine's pending-commit marker records
+/// (backlog section 3.1), so a commit whose catalogue write is lost can be looked for there.
+public enum CommitTarget: Sendable, Hashable {
+    /// The Photos library (which album doesn't matter: the lookup is library-wide).
+    case photosLibrary
+    /// A day folder of the staging folder: `place` says which root, and `folderPath` is the folder relative to that
+    /// root, "Staging/<camera>/<YYYY-MM-DD>", the folder the commit's files are placed in (under their own names, or
+    /// numbered ones when the names are taken).
+    case stagingFolder(place: StagingPlace, folderPath: String)
+}
+
 /// Somewhere an import can go. The engine takes one per job, so the same pause, continue and retry rules apply to
 /// Photos and to staging (backlog section 3).
 public protocol ImportDestination: Sendable {
@@ -110,4 +121,9 @@ public protocol ImportDestination: Sendable {
     /// Moves or saves the unit's files and says where they went. The staged files are consumed: staging moves them
     /// into place, never copies (backlog section 3), and never overwrites a file of the same name.
     func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult
+
+    /// Where `commit(_:)` would send `unit` if it were called now: the engine writes it into the commit's marker before
+    /// it calls `commit(_:)` (backlog section 3.1). Synchronous and nonisolated, with no side effect; a folder
+    /// destination computes it with the same function its commit uses, so the two can't drift.
+    func commitTarget(for unit: CommitUnit) -> CommitTarget
 }

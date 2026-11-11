@@ -38,6 +38,14 @@ actor FakeDestination: ImportDestination {
 
     var committedNames: [String] { commits.flatMap { $0.files.map(\.filename) } }
 
+    /// The library, or the folder every file goes to ("Untitled", as its locations say), in `place`.
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        switch kind {
+        case .photos: .photosLibrary
+        case .staging: .stagingFolder(place: place, folderPath: "Untitled")
+        }
+    }
+
     func commit(_ unit: CommitUnit) throws(ImportDestinationFailure) -> ImportResult {
         attempts += 1
         if let d = deniesFrom, attempts >= d { throw .photosAccessDenied }
