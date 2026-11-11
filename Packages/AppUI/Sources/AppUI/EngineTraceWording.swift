@@ -16,7 +16,7 @@ import PhotosBridge
 // catalogue being unavailable); everything else is a notice, whatever the event: pauses, stalls that recover, retries, skips,
 // reconnects. The events that fire constantly or that the import's own lines already carry have no line: ticks, progress
 // publications, the download loop idling, a late file discarded, a file started the first time, a file imported or staged (the
-// import model logs those with their identity), and the engine's `idle`.
+// import model logs those with their identity), a pair's half waiting for its partner, and the engine's `idle`.
 
 extension EngineTraceSink {
     /// Writes each event that has a line to `log`, at the event's level.
@@ -40,7 +40,8 @@ public enum EngineTraceWording {
             case .completed, .cancelled: return .notice
             }
         case .listed, .started, .retrying, .stalled, .sizeMismatch, .imported, .staged, .alreadyStaged, .skipped,
-             .sameFileListedTwice, .destinationChanged, .routeRefused, .linkEvent, .paused, .resumed, .idle, .tick,
+             .sameFileListedTwice, .waitingForPartner, .committedWithoutPartner, .destinationChanged, .routeRefused,
+             .linkEvent, .paused, .resumed, .idle, .tick,
              .published, .discardedLateFile, .checkpointSaved, .waitingForCheckpointWrites, .checkpointWritesUnsettled,
              .identityChanged, .reconnected, .firstByteAfterReconnect:
             return .notice
@@ -72,6 +73,11 @@ public enum EngineTraceWording {
             return "engine: left out a second copy of \(file(name)) listed in another folder"
         case let .failed(name, reason):
             return "engine: failed \(file(name)): \(failureWord(reason))"
+        case .waitingForPartner:
+            // Every pair waits for its second half; the commit's own lines follow.
+            return nil
+        case let .committedWithoutPartner(name):
+            return "engine: committed \(file(name)) without the other half of its pair"
         case let .destinationChanged(decision):
             return "engine: the destination is now \(decisionWord(decision))"
         case let .routeRefused(decision):

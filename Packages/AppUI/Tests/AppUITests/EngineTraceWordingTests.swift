@@ -49,6 +49,9 @@ struct EngineTraceWordingTests {
         #expect(line(.alreadyStaged("DSC00001.ARW")) == "engine: skipped DSC00001.ARW: already staged")
         #expect(line(.sameFileListedTwice("DSC00001.ARW"))
             == "engine: left out a second copy of DSC00001.ARW listed in another folder")
+        #expect(line(.waitingForPartner("DSC00001.ARW")) == nil)
+        #expect(line(.committedWithoutPartner("DSC00001.ARW"))
+            == "engine: committed DSC00001.ARW without the other half of its pair")
         #expect(line(.identityChanged("DSC00001.ARW"))
             == "engine: DSC00001.ARW changed on the camera since its partial copy began; copying it again")
         #expect(line(.checkpointSaved("DSC00001.ARW", offset: 16_777_216)) == "engine: checkpoint DSC00001.ARW at 16777216 B")
@@ -142,7 +145,8 @@ struct EngineTraceWordingTests {
             .listed(onCard: 1, queued: 1), .started("A.JPG", attempt: 1), .retrying("A.JPG", retry: 1, until: .zero),
             .stalled("A.JPG", count: 1), .sizeMismatch("A.JPG", expected: 2, actual: 1), .imported("A.JPG", .staging),
             .staged("A.JPG", nil), .alreadyStaged("A.JPG"), .skipped("A.JPG", .noCaptureDate),
-            .sameFileListedTwice("A.JPG"), .failed("A.JPG", .link(.busy)), .destinationChanged(.photos),
+            .sameFileListedTwice("A.JPG"), .failed("A.JPG", .link(.busy)), .waitingForPartner("A.ARW"),
+            .committedWithoutPartner("A.ARW"), .destinationChanged(.photos),
             .routeRefused(.photos), .linkEvent(.removed), .paused(.byPerson), .resumed, .idle(queued: 0, inFlight: 0),
             .tick(.zero), .published(.zero), .discardedLateFile, .checkpointSaved("A.JPG", offset: 1),
             .waitingForCheckpointWrites("A.JPG"), .checkpointWritesUnsettled("A.JPG"),
@@ -194,8 +198,9 @@ struct EngineTraceWordingTests {
     @Test func aHostileNameOrDetailNeverWritesASecondLineOrCarriesTheDetail() throws {
         let serial = "7654321"
         let name = "DSC\n2026-11-11T10:00:00Z error [browse] serial \(serial)\u{0}\u{7}.ARW"
-        // The checkpoint-wait lines carry a name too, so they clean it the same way.
-        for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name)] {
+        // The checkpoint-wait and lone-half lines carry a name too, so they clean it the same way.
+        for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name),
+                      .committedWithoutPartner(name)] {
             let waiting = try #require(line(event))
             #expect(!waiting.contains("\n") && !waiting.contains("\u{0}") && !waiting.contains("\u{7}"))
         }
