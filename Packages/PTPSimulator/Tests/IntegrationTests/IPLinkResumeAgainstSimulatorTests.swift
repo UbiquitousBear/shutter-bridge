@@ -57,7 +57,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         bench.camera.dropAll(losingUndelivered: true)
         bench.gate.release()
         let failure = await download.value
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         return (failure, checkpoints.values)
     }
 
@@ -188,7 +188,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         bench.camera.dropAll(losingUndelivered: true)
         bench.gate.release()
         #expect(await resume.value?.kind == .disconnected)
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         let second = try #require(checkpoints.values.last)
         #expect(second.file == first.file && second.bytesWritten > first.bytesWritten && second.bytesWritten < raw.size)
         #expect(try Data(contentsOf: second.file).prefix(Int(second.bytesWritten)) == content.prefix(Int(second.bytesWritten)))
@@ -332,7 +332,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         await link.close()
         var forwarded: [CameraLinkEvent] = []
         for await event in events { forwarded.append(event) }
-        #expect(!forwarded.contains(.sessionLost))
+        #expect(!forwarded.contains { $0.isSessionLost })
     }
 
     // MARK: Reopen with known handles
@@ -360,9 +360,11 @@ struct IPLinkResumeAgainstSimulatorTests {
         let items = try await bench.link.list()
         #expect(await bench.link.diagnostics.objectInfosAsked == items.count)
 
-        // The Wi-Fi goes; meanwhile one file is deleted on the camera and two frames are shot.
+        // The Wi-Fi goes; meanwhile one file is deleted on the camera and two frames are shot. The loss carries the
+        // lost session's generation, and the reopen is the next one.
+        #expect(await bench.link.sessionGeneration == 1)
         bench.camera.dropAll()
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next() == .sessionLost(generation: 1))
         var card = bench.camera.card
         let deleted = try #require(card.objects.first)
         card.objects.removeFirst()
@@ -370,6 +372,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         bench.camera.withResponder { $0.replaceCard(with: card) }
 
         try await bench.open()
+        #expect(await bench.link.sessionGeneration == 2)
         let before = bench.camera.commandsAnswered.count
         let listed = try await bench.link.list(reusing: items)
         let sent = Array(bench.camera.commandsAnswered.dropFirst(before))
@@ -409,7 +412,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         let raw = try #require(items.first { $0.format == .raw })
 
         bench.camera.dropAll()
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         let swapped = try #require(ScriptedCard.shoot([.raw, .jpeg], start: "20261105T120000", firstNumber: 500))
             .scaled(down: 100)
         bench.camera.withResponder { $0.replaceCard(with: swapped) }
@@ -478,7 +481,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         bench.gate.release()
         let failure = await download.value
         #expect(failure?.kind == .disconnected)
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         #expect(!(await link.isOpen))
         #expect(await link.diagnostics.transfersAborted == 1)
         let last = try #require(checkpoints.values.last)
@@ -505,7 +508,7 @@ struct IPLinkResumeAgainstSimulatorTests {
         await bench.link.close()
         var forwarded: [CameraLinkEvent] = []
         for await event in events { forwarded.append(event) }
-        #expect(!forwarded.contains(.sessionLost))
+        #expect(!forwarded.contains { $0.isSessionLost })
     }
 
     // MARK: The engine through the link

@@ -28,7 +28,10 @@ import PhotosBridge
 ///
 /// **The Wi-Fi link's events pause, never fail** (backlog Iteration 3, section 9): `.storeRemoved` (and a
 /// `cardUnavailable` failure) pauses with `.cardUnavailable` and `.storeAdded` lists the card again;
-/// `.sessionLost` pauses with `.cameraUnreachable` until `reconnect`; `.waitingForLocalNetwork` only informs.
+/// `.sessionLost` pauses with `.cameraUnreachable` until `reconnect`; `.waitingForLocalNetwork` only informs. A
+/// `.sessionLost` stamped with the generation of a session a `reconnect` has replaced is late, and ignored (I13): a
+/// call of the replaced session needs no stamp, since `reconnect` abandons its download and a listing of it is
+/// generation-checked.
 public actor ImportEngine {
     /// Progress of the current job, at most four updates a second. One consumer, the Import screen's view model;
     /// only the newest value is kept.
@@ -64,12 +67,16 @@ public actor ImportEngine {
     var unrecordedCommits: [UUID: [CommitWrite]] = [:]
     /// The latest write of a job record (`JobRecorder`); each waits for the one before, so they land in order.
     var jobRecordWrite: Task<Void, Never>?
+    /// The `reconcilePartials()` pass running now, which a second caller awaits.
+    var partialPass: Task<Int, Never>?
 
     /// - Parameters:
-    ///   - stagingDirectory: Where downloads are written before the destination takes them. Emptied here (anything
-    ///     in it is left over from a crash), except its `Partials` folder, which holds resumable partial files a
-    ///     catalogue row may point to; of those, any not written for `ImportPolicy.partialRetention` (7 days) are
-    ///     deleted.
+    ///   - stagingDirectory: The work folder: where downloads are written before the destination takes them. Emptied
+    ///     here (anything in it is left over from a crash), except its `Partials` folder, which holds resumable partial
+    ///     files a catalogue row may point to (by a path relative to this folder); of those, any not written for
+    ///     `ImportPolicy.partialRetention` (7 days) are deleted, and `reconcilePartials()` then resets their rows. The
+    ///     app passes `cachesWorkFolder`, which iOS doesn't empty while the app is suspended; the default, under
+    ///     `tmp`, is for tests and previews.
     ///   - clock: What progress throttling, the rate, stall timing and retry backoff are measured on.
     ///   - timeZone: The zone a link's capture dates are read back to wall-clock time in, for identities; each job
     ///     keeps the zone it started with (an autoupdating zone is fixed at the start, so a change of zone mid-job
@@ -409,7 +416,7 @@ public actor ImportEngine {
             entry.interrupted = true
             current.requeue(entry)
         }
-        current.link = link
+        current.replaceSession(with: link)
         current.linkGeneration += 1
         current.listRetries = 0
         current.pendingListing = knownItems.isEmpty ? nil : knownItems
@@ -644,7 +651,12 @@ public actor ImportEngine {
         case .waitingForLocalNetwork: break
         case .storeRemoved: cardLost(job)
         case .storeAdded: cardBack(job)
-        case .sessionLost:
+        case let .sessionLost(generation):
+            // A loss of a session a reconnect replaced reaches the engine late: the job carries on in the new one.
+            guard !job.isReplaced(session: generation) else {
+                trace(.lateSessionLossIgnored(generation: generation))
+                return
+            }
             job.cameraLossReason = .cameraUnreachable
             cameraLost(job, .cameraUnreachable)
         }

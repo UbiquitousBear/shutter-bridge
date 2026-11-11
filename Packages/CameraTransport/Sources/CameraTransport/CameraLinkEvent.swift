@@ -39,5 +39,15 @@ public enum CameraLinkEvent: Sendable, Hashable {
     /// 53 on both channels after 4.8 s on 5 Nov), the camera dropped an idle session, or the access point went. Not
     /// `.removed`: the link is not finished, and reopening it (or a new link to the same camera) can carry on, so
     /// pending calls end as `disconnected` (retry on reconnect) and `events` stays open.
-    case sessionLost
+    ///
+    /// `generation` is the lost session's: the link's `sessionGeneration` while that session was open. A loss can
+    /// reach a reader after the link has opened the next session (the reader's stream lags behind, or a socket of the
+    /// old session reports itself late), so a reader that has carried on in a newer session ignores a loss stamped with
+    /// an older generation (backlog section 2; the engine does, I13). 0 means not stamped: the current session.
+    case sessionLost(generation: Int)
+
+    /// Whether this is `.sessionLost`, of whichever generation.
+    public var isSessionLost: Bool {
+        if case .sessionLost = self { true } else { false }
+    }
 }

@@ -199,13 +199,23 @@ struct CameraLinkContractTests {
     @Test func wifiEventsArriveInOrderAndAreDistinct() async {
         let link = ListLink(items: [])
         let events = link.events
-        let sent: [CameraLinkEvent] = [.waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost, .removed]
+        let sent: [CameraLinkEvent] = [.waitingForLocalNetwork, .storeRemoved, .storeAdded, .sessionLost(generation: 1),
+                                       .removed]
         for event in sent { await link.send(event) }
         await link.close()
         var seen: [CameraLinkEvent] = []
         for await e in events { seen.append(e) }
         #expect(seen == sent)
         #expect(Set(sent).count == sent.count)
+    }
+
+    @Test func aSessionLossCarriesItsSessionsGeneration() async {
+        #expect(CameraLinkEvent.sessionLost(generation: 1) != .sessionLost(generation: 2))
+        #expect(CameraLinkEvent.sessionLost(generation: 2).isSessionLost)
+        #expect(CameraLinkEvent.sessionLost(generation: 0).isSessionLost)
+        #expect(!CameraLinkEvent.removed.isSessionLost && !CameraLinkEvent.storeRemoved.isSessionLost)
+        // A link that never loses a session on its own has no generations.
+        #expect(await ListLink(items: []).sessionGeneration == 0)
     }
 
     @Test func eventsArriveInOrderAndFinishOnClose() async {

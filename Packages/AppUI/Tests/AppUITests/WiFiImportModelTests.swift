@@ -232,7 +232,7 @@ struct WiFiImportModelTests {
         let h = Harness(explained: true)
         h.send(.connecting(cam))
         h.send(.link(cam, .waitingForLocalNetwork))
-        h.send(.link(cam, .sessionLost))
+        h.send(.link(cam, .sessionLost(generation: 1)))
         #expect(!h.model.isWaitingForLocalNetwork)
         h.send(.link(cam, .waitingForLocalNetwork))
         h.send(.failed(cam, .noGateway))

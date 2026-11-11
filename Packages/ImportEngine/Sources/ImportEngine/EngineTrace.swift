@@ -59,6 +59,13 @@ public enum EngineTrace: Sendable, Hashable {
     /// partial was dropped and the card is listed again.
     case identityChanged(String)
     case finished(JobOutcome)
+    /// A `.sessionLost` stamped with a session a reconnect replaced reached the engine late: ignored, the job carries
+    /// on in the new session (I13). The generation is the link's count of sessions, not an identifier.
+    case lateSessionLossIgnored(generation: Int)
+    /// A `.partial` row's file is gone or shorter than its offset (iOS emptied Caches, the 7-day prune, a dropped
+    /// partial): the row was sent back to offset 0 with no temporary file, so the next job copies the file from its
+    /// start (`ImportEngine.reconcilePartials()`, I13).
+    case partialReset(String)
     /// The job carries on after the camera was lost and listed again (`reconnect`, or `.storeAdded` on the same
     /// session): `sinceLost` is the time from the loss (the first removal, lost session or lost card since the job last
     /// ran) to now, when the card has been listed again and the queue is released; `filesLeft` is the files still to

@@ -92,7 +92,7 @@ struct EngineTraceTests {
         await link.script("A.JPG", .holdAfter(1650))
         let job = try await h.start(.items(card), from: link, to: h.stageRoute)
         await link.waitUntilHeld("A.JPG")
-        link.send(.sessionLost)
+        link.send(.sessionLost(generation: 0))
         await h.trace.next(.paused(.cameraUnreachable))
         await h.advance(by: .seconds(2))
         try await h.engine.reconnect(job, to: link)

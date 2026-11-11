@@ -145,6 +145,24 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         }
     }
 
+    /// The identities with a `.partial` row, fetched by state, each read as `record(for:)` reads it, kept when that row is
+    /// `.partial` with a file.
+    public func partialRecords() throws -> [CatalogueRecord] {
+        let partial = ObjectState.partial.rawValue
+        let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
+            object.state == partial
+        })
+        let keys = Set(try modelContext.fetch(descriptor).map(\.identityKey))
+        var out: [CatalogueRecord] = []
+        for key in keys {
+            // Every row of the identity, so a duplicate further along (imported) wins, as in `record(for:)`.
+            guard let record = furthestAlong(try objects(withKey: key))?.row.record, record.state == .partial,
+                  record.tempURL != nil else { continue }
+            out.append(record)
+        }
+        return out
+    }
+
     /// Looks up the identity's row, applies `StagedMark`'s rule to it and writes the result, in one actor call.
     /// Duplicates for the identity are healed as by `upsert`.
     public func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {

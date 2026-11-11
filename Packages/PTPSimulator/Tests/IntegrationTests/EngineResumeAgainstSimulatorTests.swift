@@ -6,6 +6,7 @@ import PhotosBridge
 import PTPKit
 import PTPSimulator
 import SimulatedLink
+import Synchronization
 import Testing
 
 /// The engine's Wi-Fi rules (W7) end to end against `SimulatedCameraLink` playing the Wi-Fi link's contract
@@ -71,6 +72,42 @@ struct EngineResumeAgainstSimulatorTests {
         #expect(await link.bytesCalls.filter { $0 == victim.filename }.count == 2)
         #expect(bench.stagedFiles() == 0)
         for item in known { #expect(await bench.isStaged(item), "\(item.name)") }
+    }
+
+    /// I13: the session is replaced without the engine being told, so the old session's call ends as `disconnected`
+    /// and the job waits for the camera; the app carries the job on in the new session, and only then does the old
+    /// session's `.sessionLost` arrive, stamped with its generation. The engine ignores it: the job keeps running and
+    /// completes, every file byte for byte.
+    @Test func aLateLossFromAReplacedSessionDoesNotPauseTheNewOne() async throws {
+        let ignored = Mutex<[Int]>([])
+        let bench = Bench(trace: EngineTraceSink { event in
+            if case let .lateSessionLossIgnored(generation) = event { ignored.withLock { $0.append(generation) } }
+        })
+        let card = try shoot()
+        let link = wifiLink(card)
+        let victim = try #require(card.objects.first { $0.filename == "DSC00003.ARW" })
+        let later = try #require(card.objects.first { $0.filename == "DSC00001.ARW" })
+        await link.script(victim.filename, .holdAfter(victim.size / 2))
+        await link.script(later.filename, .holdAfter(later.size / 2))
+        try await bench.start(link)
+        let job = try await jobID(bench)
+        await link.waitUntilHeld(victim.filename)
+
+        await link.loseSessionAndReopen(announcing: .late)
+        try await bench.waitFor("the pause for the camera") { $0 == .paused(.cameraRemoved) }
+        let known = try await link.list()
+        try await bench.engine.reconnect(job, to: link, knownItems: known)
+        await link.waitUntilHeld(later.filename) // the new session is copying
+
+        #expect(await link.sendLateSessionLoss())
+        for _ in 0 ..< 2000 where ignored.withLock({ $0.isEmpty }) { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(ignored.withLock { $0 } == [1])
+        #expect(await bench.engine.state == .running)
+        #expect(await link.release(later.filename))
+        #expect(try await bench.waitFinished() == .completed)
+        bench.expectImported(card.objects.map(\.filename), from: card)
+        #expect(await bench.engine.currentProgress.filesFailed == 0)
+        await link.close()
     }
 
     /// A 40 MiB file: the catalogue gets the 16 MiB checkpoint while it downloads; on expiry the app flushes (the

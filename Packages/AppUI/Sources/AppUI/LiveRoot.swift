@@ -31,8 +31,10 @@ extension AppLauncher {
 extension AppModel {
     /// The app's models over the opened catalogue:
     ///
-    /// - one `ImportEngine` with it, staging under the temporary folder (`tmp/Imports`, the engine's default, which it
-    ///   empties at start-up);
+    /// - one `ImportEngine` with it, its work folder in Caches (`ImportEngine.cachesWorkFolder`, `Library/Caches/Imports`,
+    ///   which iOS doesn't empty while the app is suspended, as it may `tmp`; I13), emptied at start-up except the partial
+    ///   files a later job resumes; partials an earlier build left in `tmp/Imports` move in first, and the launch pass
+    ///   (`reconcilePartials()`) sends a row whose partial file is gone back to offset 0;
     /// - Photos through `SystemPhotoLibrary` (`PhotosLibraryDestination`, one album per camera by default), and the
     ///   staging folder, one folder per camera and capture day (`StagingFolderDestination`): in the app's iCloud Drive
     ///   folder when `UbiquityStagingLocator` finds it (iCloud Drive › Shutter Bridge › Staging, moved in with
@@ -58,7 +60,13 @@ extension AppModel {
         let logging = AppLogging.shared
         // The engine's own decisions (skips, failures, checkpoints, retries, reconnects, pauses) reach the log, one line each
         // (I8, `EngineTraceWording`); a real failure goes out at error level.
-        let engine = ImportEngine(catalogue: catalogue, trace: .bench(logging.log))
+        let workFolder = ImportEngine.cachesWorkFolder
+        ImportEngine.movePartials(from: FileManager.default.temporaryDirectory
+            .appendingPathComponent("Imports", isDirectory: true), to: workFolder)
+        let engine = ImportEngine(catalogue: catalogue, stagingDirectory: workFolder, trace: .bench(logging.log))
+        // The launch pass, after the engine's prune: rows whose partial file iOS emptied from Caches, or the prune
+        // deleted, go back to offset 0 (each job's diff runs it again first).
+        Task { await engine.reconcilePartials() }
         let destinations = StandardImportDestinations(
             library: library,
             albumStore: UserDefaultsAlbumIdentifierStore(),

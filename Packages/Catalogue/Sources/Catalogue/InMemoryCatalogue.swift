@@ -63,6 +63,10 @@ public actor InMemoryCatalogue: CatalogueStore {
         }
     }
 
+    public func partialRecords() -> [CatalogueRecord] {
+        records.values.filter { $0.state == .partial && $0.tempURL != nil }
+    }
+
     public func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) {
         write(StagedMark.record(for: identity, format: format, at: location, existing: records[identity]))
     }

@@ -331,7 +331,7 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         let identity = ObjectIdentifier(link)
         watchTasks[id]?.cancel()
         watchTasks[id] = Task { [weak self] in
-            for await event in events where event == .removed || event == .sessionLost { break }
+            for await event in events where event == .removed || event.isSessionLost { break }
             guard !Task.isCancelled, let self else { return }
             await self.linkEnded(identity, for: id)
         }

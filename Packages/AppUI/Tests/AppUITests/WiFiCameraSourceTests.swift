@@ -473,9 +473,9 @@ struct WiFiCameraSourceTests {
         let link = FakeWiFiLink()
         await h.source.observe(link, for: id)
         await link.send(.waitingForLocalNetwork)
-        await link.send(.sessionLost)
+        await link.send(.sessionLost(generation: 1))
         #expect(await waitUntil { h.events.all.count == 2 })
-        #expect(h.events.all == [.link(id, .waitingForLocalNetwork), .link(id, .sessionLost)])
+        #expect(h.events.all == [.link(id, .waitingForLocalNetwork), .link(id, .sessionLost(generation: 1))])
     }
 
     @Test func theSceneReachesEverySession() async throws {
@@ -546,7 +546,7 @@ struct PendingStoreTests {
 struct WiFiCameraConnectionTests {
     // MARK: A link that died is not handed out again
 
-    @Test(arguments: [CameraLinkEvent.removed, CameraLinkEvent.sessionLost])
+    @Test(arguments: [CameraLinkEvent.removed, CameraLinkEvent.sessionLost(generation: 1)])
     func aLinkThatReportedItsEndIsReplacedByAFreshOne(event: CameraLinkEvent) async throws {
         let h = Harness()
         let (id, session) = await h.pair()

@@ -197,7 +197,7 @@ struct IPLinkTraceAgainstSimulatorTests {
         let item = try #require(try await bench.link.list().first)
         bench.camera.withResponder { $0.silence(forNext: .getThumb) }
         await #expect(throws: CameraLinkFailure.self) { try await bench.link.thumbnail(of: item.id) }
-        #expect(await events.next() == .sessionLost)
+        #expect(await events.next()?.isSessionLost == true)
         #expect(!(await bench.link.isOpen))
         #expect(recorder.all.contains { if case .linkLost(.timedOut?, _) = $0 { true } else { false } })
         await bench.link.close()
