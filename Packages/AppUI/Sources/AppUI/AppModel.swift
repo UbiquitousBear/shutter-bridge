@@ -398,7 +398,8 @@ public final class AppLauncher {
             let store = try await openCatalogue()
             state = .ready(build(store))
         } catch {
-            log.note("launch: the catalogue didn't open: \(type(of: error))")
+            // A real failure, so an error: the definition of done counts error-level lines.
+            log.note("launch: the catalogue didn't open: \(type(of: error))", level: .error)
             state = .failed
         }
     }

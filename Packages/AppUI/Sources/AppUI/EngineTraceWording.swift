@@ -41,7 +41,8 @@ public enum EngineTraceWording {
             }
         case .listed, .started, .retrying, .stalled, .sizeMismatch, .imported, .staged, .alreadyStaged, .skipped,
              .sameFileListedTwice, .destinationChanged, .routeRefused, .linkEvent, .paused, .resumed, .idle, .tick,
-             .published, .discardedLateFile, .checkpointSaved, .identityChanged, .reconnected, .firstByteAfterReconnect:
+             .published, .discardedLateFile, .checkpointSaved, .waitingForCheckpointWrites, .checkpointWritesUnsettled,
+             .identityChanged, .reconnected, .firstByteAfterReconnect:
             return .notice
         }
     }
@@ -85,6 +86,10 @@ public enum EngineTraceWording {
             return nil
         case let .checkpointSaved(name, offset):
             return "engine: checkpoint \(file(name)) at \(offset) B"
+        case let .waitingForCheckpointWrites(name):
+            return "engine: \(file(name)) is waiting for a checkpoint write before its row"
+        case let .checkpointWritesUnsettled(name):
+            return "engine: \(file(name))'s row was written without the checkpoint write it waited for"
         case let .identityChanged(name):
             return "engine: \(file(name)) changed on the camera since its partial copy began; copying it again"
         case let .finished(outcome):

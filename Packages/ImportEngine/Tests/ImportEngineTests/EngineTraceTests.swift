@@ -52,6 +52,38 @@ struct EngineTraceTests {
         await h.cleanup()
     }
 
+    /// A file that starts and finishes between two progress ticks after the reconnect still owns the first-byte line, with
+    /// the time its bytes came; the next file does not get one with a longer time.
+    @Test func aFileThatFinishesBetweenTwoTicksStillOwnsTheFirstByte() async throws {
+        let h = Harness()
+        let card = h.singles(["A.JPG", "B.JPG", "C.JPG"])
+        let link1 = h.link(card, mode: .usb(.mtp))
+        await link1.script("B.JPG", .hold)
+        try await h.start(.items(card), from: link1)
+        let b = await link1.nextHeldCall("B.JPG")
+        link1.send(.removed)
+        await h.trace.next(.paused(.cameraRemoved))
+        b.release(.fail(.disconnected))
+
+        await h.advance(by: .seconds(3))
+        let link2 = h.link(h.singles(["A.JPG", "B.JPG", "C.JPG"], prefix: "s2"), mode: .usb(.mtp))
+        await link2.script("B.JPG", .hold)
+        try await h.engine.reconnect(link2)
+        await h.trace.next(.reconnected(.usb, sinceLost: .seconds(3), filesLeft: 2))
+
+        let held = await link2.nextHeldCall("B.JPG")
+        await h.advance(by: .seconds(1))
+        // The tick event is recorded as the tick begins; a call into the engine returns only once that tick is over, so
+        // the bytes and the end of the call below have no tick between them (the manual clock ticks only when advanced).
+        _ = await h.engine.state
+        held.progress(1000)
+        held.release()
+        await h.trace.next(.firstByteAfterReconnect("B.JPG", bytes: 1000, sinceResumed: .seconds(1)))
+        #expect(await h.waitFinished() == .completed)
+        #expect(h.trace.count(where: Self.isFirstByte) == 1)
+        await h.cleanup()
+    }
+
     /// A Wi-Fi job whose session is lost names its carrier, and the time runs from the loss, not from the reconnect.
     @Test func aLostWiFiSessionIsTimedFromTheLoss() async throws {
         let h = Harness()

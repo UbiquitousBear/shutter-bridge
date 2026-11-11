@@ -12,6 +12,9 @@ extension ImportEngine {
             let outcome = await attempt.outcome()
             guard let job = current(id), let entry = job.entries[identity], let download = entry.download,
                   download.attempt === attempt else { return } // whoever abandoned it requeued and cleaned up
+            // A file that starts and ends between two ticks is never seen by `tick()`: read its meter once more here, so
+            // the first byte after a reconnect is named for this file with its own time, not a later file's.
+            noteFirstByte(of: entry, in: job, reading: attempt.meter.reading)
             switch outcome {
             case .abandoned:
                 job.requeue(entry)

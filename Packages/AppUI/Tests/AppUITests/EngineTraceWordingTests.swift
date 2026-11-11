@@ -52,6 +52,10 @@ struct EngineTraceWordingTests {
         #expect(line(.identityChanged("DSC00001.ARW"))
             == "engine: DSC00001.ARW changed on the camera since its partial copy began; copying it again")
         #expect(line(.checkpointSaved("DSC00001.ARW", offset: 16_777_216)) == "engine: checkpoint DSC00001.ARW at 16777216 B")
+        #expect(line(.waitingForCheckpointWrites("DSC00001.ARW"))
+            == "engine: DSC00001.ARW is waiting for a checkpoint write before its row")
+        #expect(line(.checkpointWritesUnsettled("DSC00001.ARW"))
+            == "engine: DSC00001.ARW's row was written without the checkpoint write it waited for")
     }
 
     @Test func skipsSayWhy() {
@@ -141,6 +145,7 @@ struct EngineTraceWordingTests {
             .sameFileListedTwice("A.JPG"), .failed("A.JPG", .link(.busy)), .destinationChanged(.photos),
             .routeRefused(.photos), .linkEvent(.removed), .paused(.byPerson), .resumed, .idle(queued: 0, inFlight: 0),
             .tick(.zero), .published(.zero), .discardedLateFile, .checkpointSaved("A.JPG", offset: 1),
+            .waitingForCheckpointWrites("A.JPG"), .checkpointWritesUnsettled("A.JPG"),
             .identityChanged("A.JPG"), .finished(.completed), .finished(.cancelled), .finished(.stopped(.refused)),
             .finished(.catalogueUnavailable), .reconnected(.usb, sinceLost: .zero, filesLeft: 0),
             .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero),
@@ -189,6 +194,11 @@ struct EngineTraceWordingTests {
     @Test func aHostileNameOrDetailNeverWritesASecondLineOrCarriesTheDetail() throws {
         let serial = "7654321"
         let name = "DSC\n2026-11-11T10:00:00Z error [browse] serial \(serial)\u{0}\u{7}.ARW"
+        // The checkpoint-wait lines carry a name too, so they clean it the same way.
+        for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name)] {
+            let waiting = try #require(line(event))
+            #expect(!waiting.contains("\n") && !waiting.contains("\u{0}") && !waiting.contains("\u{7}"))
+        }
         let text = try #require(line(.failed(name, .destination(.rejected(detail: "serial \(serial) at 192.168.1.20 DIRECT-Qx7k")))))
         #expect(!text.contains("\n") && !text.contains("\u{0}") && !text.contains("\u{7}"))
         #expect(!text.contains("192.168.1.20") && !text.contains("DIRECT-Qx7k"))
