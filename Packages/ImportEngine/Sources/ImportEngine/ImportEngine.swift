@@ -263,7 +263,7 @@ public actor ImportEngine {
             throw .catalogueUnavailable
         }
         guard let facts, let current = self.job, current.id == id else { throw .noJob }
-        var added = 0
+        var wanted: [(item: CameraItem, identity: ObjectIdentity)] = []
         for c in candidates where current.entry(sameContentAs: c.identity) == nil {
             let staged = facts.staged.contains(c.identity)
             guard DoneRule.isWanted(state: facts.states[c.identity] ?? .new, staged: staged, purpose: facts.purpose,
@@ -271,12 +271,30 @@ public actor ImportEngine {
                 if staged && facts.purpose == .staging { trace(.alreadyStaged(c.item.name)) }
                 continue
             }
+            wanted.append(c)
+        }
+        // RAW+JPEG pairs among the added files, or between an added file and a lone one of the job still to download
+        // (section 7.1). The added files' partners among themselves go next to each other at the end of the queue.
+        let lone = current.sortedEntries.filter { $0.partner == nil && $0.isToDownload }
+        let pairs = Self.pairs(among: lone.map(\.item) + wanted.map(\.item))
+            .filter { $0.0 >= lone.count || $0.1 >= lone.count }
+        let newPairs = pairs.filter { $0.0 >= lone.count && $0.1 >= lone.count }
+            .map { ($0.0 - lone.count, $0.1 - lone.count) }
+        var created: [Int: FileEntry] = [:]
+        for i in Self.pairAwareOrder(count: wanted.count, pairs: newPairs) {
+            let c = wanted[i]
             let entry = FileEntry(identity: c.identity, index: current.nextIndex, item: c.item)
             entry.queuedUnderStagingRule = facts.purpose == .staging
             current.nextIndex += 1
             current.add(entry)
             current.queue.append(c.identity)
-            added += 1
+            created[i] = entry
+        }
+        let added = created.count
+        for (a, b) in pairs {
+            let first = a < lone.count ? lone[a] : created[a - lone.count]
+            let second = b < lone.count ? lone[b] : created[b - lone.count]
+            if let first, let second { current.pair(first, second) }
         }
         if added > 0 {
             current.signal.fire()
@@ -548,6 +566,10 @@ public actor ImportEngine {
                 d.attempt.abandon()
                 entry.phase = .queued
             }
+            // A half kept for its partner isn't committed by a job that ends before the pair is complete: it stays
+            // on the card, and the next import offers the pair again. Its file goes with the job's folder (or, on a
+            // link that resumes, as any partial copy does, below).
+            if entry.held != nil { entry.phase = .queued }
             // A resumable partial stays only where the catalogue points to it. A committing file's folder holds
             // the staged file; `commitAndRecord` removes it once the commit is done.
             if case .committing = entry.phase { continue }
@@ -694,7 +716,7 @@ public actor ImportEngine {
                 case .skipped: skipped += 1
                 case .failed: failed += 1
                 }
-            case .committing:
+            case .held, .committing:
                 bytesDone += size
             case let .downloading(d):
                 // A high-water mark: a restarted download holds its place until the new attempt passes it, so

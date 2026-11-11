@@ -26,8 +26,13 @@ extension ImportEngine {
     /// Completes the job when nothing is left: the check and the finish are one synchronous step, so an `append`
     /// can't land in between. Also while waiting for the camera once the card has been listed: a removal during the
     /// last commit leaves nothing to copy, and the job mustn't wait (screen on) for a camera it no longer needs.
+    ///
+    /// Held halves of pairs whose partner won't come are committed first (`commitLoneHalves(of:)`), so the job
+    /// finishes once those commits are done.
     func finishIfDrained(_ id: UUID) {
-        guard let job = current(id), job.queue.isEmpty, !job.hasActiveFiles else { return }
+        guard let job = current(id) else { return }
+        commitLoneHalves(of: job)
+        guard job.queue.isEmpty, !job.hasActiveFiles else { return }
         switch job.phase {
         case .downloading: break
         case .waitingForCamera: guard job.hasListed else { return }
@@ -154,13 +159,9 @@ extension ImportEngine {
         }
         guard let job = currentListing(id, generation) else { return }
 
-        // Listed files go before anything appended during the listing; a duplicate of an appended file takes the
-        // listing's place.
-        var index = -planned.count
-        var queued: [ObjectIdentity] = []
+        var kept: [(item: CameraItem, identity: ObjectIdentity, plan: Plan)] = []
         var seen = Set<ObjectIdentity.ContentKey>()
         for p in planned {
-            defer { index += 1 }
             let state = states[p.identity] ?? .new
             let staged = facts.staged.contains(p.identity)
             guard DoneRule.isWanted(state: state, staged: staged, purpose: facts.purpose,
@@ -173,7 +174,25 @@ extension ImportEngine {
                 trace(.sameFileListedTwice(p.item.name))
                 continue
             }
+            kept.append(p)
+        }
+
+        // A RAW and its JPEG or HEIF among the files to copy are one unit (section 7.1), committed together once both
+        // are downloaded; they are queued next to each other, so the pair's files download close together. A file
+        // whose partner is already done for the job's purpose, or isn't to be copied, is a lone file.
+        let toQueue = kept.indices.filter { if case .queue = kept[$0].plan { true } else { false } }
+        let pairs = Self.pairs(among: toQueue.map { kept[$0].item }).map { (toQueue[$0.0], toQueue[$0.1]) }
+
+        // Listed files go before anything appended during the listing; a duplicate of an appended file takes the
+        // listing's place.
+        var index = -kept.count
+        var queued: [ObjectIdentity] = []
+        var created: [Int: FileEntry] = [:]
+        for i in Self.pairAwareOrder(count: kept.count, pairs: pairs) {
+            defer { index += 1 }
+            let p = kept[i]
             let entry = FileEntry(identity: p.identity, index: index, item: p.item)
+            created[i] = entry
             entry.queuedUnderStagingRule = facts.purpose == .staging
             job.add(entry)   // replaces a file of the same content appended during the listing
             switch p.plan {
@@ -184,6 +203,9 @@ extension ImportEngine {
                 entry.phase = .done(.skipped(reason))
                 trace(.skipped(p.item.name, reason))
             }
+        }
+        for (a, b) in pairs {
+            if let first = created[a], let second = created[b] { job.pair(first, second) }
         }
         for item in unkeyed {
             job.unkeyed.append(item)
@@ -237,7 +259,46 @@ extension ImportEngine {
         }
         job.phase = .downloading
         trace(.listed(onCard: listed.count, queued: job.queue.count))
+        commitLoneHalves(of: job) // a half kept for a file that is no longer on the card goes alone
         refreshState()
+    }
+
+    // MARK: - Pairs
+
+    /// A file as the pairing rule sees it: the listing's folder, name and capture date.
+    private struct PairCandidate: PairableFile {
+        let index: Int
+        let item: CameraItem
+        var pairingFolder: String { item.folder }
+        var pairingFilename: String { item.name }
+        var pairingCaptureDate: Date? { item.captureDate }
+    }
+
+    /// The RAW+JPEG pairs among `items` by `RawPairingRule` (same folder, same stem, within 1 s; no pair without a
+    /// date), as index pairs, in the order of each pair's first file.
+    static func pairs(among items: [CameraItem]) -> [(Int, Int)] {
+        let candidates = items.enumerated().map { PairCandidate(index: $0.offset, item: $0.element) }
+        return RawPairingRule().units(candidates).compactMap { unit in
+            guard case let .pair(raw, processed) = unit else { return nil }
+            return (min(raw.index, processed.index), max(raw.index, processed.index))
+        }
+    }
+
+    /// The order to queue `count` files in: as given, except that each pair's second file follows its first at once.
+    static func pairAwareOrder(count: Int, pairs: [(Int, Int)]) -> [Int] {
+        var partner: [Int: Int] = [:]
+        for (a, b) in pairs {
+            partner[a] = b
+            partner[b] = a
+        }
+        var out: [Int] = []
+        out.reserveCapacity(count)
+        var placed = Set<Int>()
+        for i in 0 ..< count where placed.insert(i).inserted {
+            out.append(i)
+            if let j = partner[i], placed.insert(j).inserted { out.append(j) }
+        }
+        return out
     }
 
     /// An earlier job's partial file for `entry`, from its catalogue row: continued on a link that resumes (once the
@@ -293,7 +354,8 @@ extension ImportEngine {
                     if inFlight == 0 { break }
                 } else if job.queue.isEmpty && inFlight == 0 {
                     finishIfDrained(id)
-                    break
+                    // A held half or a commit no lane waits for still belongs to the job: wait for it to settle.
+                    guard current(id) != nil, job.hasActiveFiles else { break }
                 }
                 if inFlight < job.limit && job.phase == .downloading {
                     trace(.idle(queued: job.queue.count, inFlight: inFlight))

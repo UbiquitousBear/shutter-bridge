@@ -23,6 +23,12 @@ enum EngineTrace: Sendable, Hashable {
     /// folder; Shamil's rule of 8 Nov): left out, since it is the same file.
     case sameFileListedTwice(String)
     case failed(String, FailureReason)
+    /// One half of a RAW+JPEG pair is downloaded and kept until its partner is too (or won't be), so the pair is
+    /// committed as one unit (section 7.1).
+    case waitingForPartner(String)
+    /// One half of a pair is committed as a lone file: its partner was skipped, or failed after its retries
+    /// (section 7.1). The partner's own line says which.
+    case committedWithoutPartner(String)
     case destinationChanged(DestinationDecision)
     /// A continue or a reconnect offered a route the job may not take (`ImportRoute.mayChange(to:)`): it kept its own.
     case routeRefused(DestinationDecision)

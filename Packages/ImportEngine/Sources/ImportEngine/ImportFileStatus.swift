@@ -13,7 +13,8 @@ public struct ImportFileStatus: Sendable, Hashable, Identifiable {
     }
 
     public enum Phase: Sendable, Hashable {
-        /// Waiting for its turn (or to be copied again after a pause, a stall or a replug).
+        /// Waiting for its turn (or to be copied again after a pause, a stall or a replug); or, for one half of a
+        /// RAW+JPEG pair, copied (`bytesDone` is its size) and waiting for the other half, so the two are saved as one.
         case queued
         /// A `bytes` call is in flight.
         case downloading
@@ -115,6 +116,10 @@ extension ImportEngine {
                 bytes = max(bytes, min(d.attempt.meter.reading.bytes, size))
             case .waitingToRetry:
                 phase = ended ? .notImported : .waitingToRetry
+            case .held:
+                // Downloaded, waiting for the other half of its pair: still waiting, with its bytes all here.
+                phase = ended ? .notImported : .queued
+                bytes = size
             case .committing:
                 phase = .committing
                 bytes = size

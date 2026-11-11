@@ -40,7 +40,7 @@ extension ImportEngine {
                     guard await retry(identity, of: id,
                                       after: .sizeMismatch(expected: expected, actual: actual)) else { return }
                 } else {
-                    guard await commit(url, identity: identity, of: id, download: download) else { return }
+                    guard await commitOrHold(url, identity: identity, of: id, download: download) else { return }
                 }
             }
         }
@@ -77,6 +77,7 @@ extension ImportEngine {
             return false
         case .skipFile:
             resolve(entry, .skipped(.link(failure.kind)))
+            commitLoneHalves(of: job) // a partner kept for this file goes alone
             refreshState()
             return false
         case .stopJob:
@@ -188,53 +189,160 @@ extension ImportEngine {
         return true
     }
 
-    /// Commits the staged file, records its row and removes what is left of it. Returns true when the file has to be
-    /// downloaded again (the staged file vanished) and a new attempt has begun in this lane.
-    ///
-    /// The commit, the row and the cleanup run in an unstructured task, not in this lane, so ending the job (which
-    /// cancels the driver and its lanes) never cancels a Photos save or a move into the staging folder half-way: the
-    /// file always gets its row. The retry after a failed commit runs back in the lane, where ending the job cancels
-    /// its backoff.
-    func commit(_ url: URL, identity: ObjectIdentity, of id: UUID, download: Download) async -> Bool {
-        guard let job = current(id), let entry = job.entries[identity] else { return false }
-        entry.phase = .committing
-        refreshState()
-        let item = entry.item
-        let route = job.route
-        let directory = download.attempt.directory
-        let checkStaged = !entry.queuedUnderStagingRule
-        let checkpointWrites = entry.checkpointWrites
-        let token = UUID()
-        let task = Task {
-            await self.commitAndRecord(url, item: item, identity: identity, of: id, route: route,
-                                       attemptDirectory: directory, checkStaged: checkStaged,
-                                       checkpointWrites: checkpointWrites)
-        }
-        commitsInFlight[token] = (id, task)
-        let result = await task.value
-        commitsInFlight[token] = nil
+    // MARK: - Pairs
 
+    /// One downloaded file of a commit: its entry's identity, the file, and the call that wrote it.
+    struct Half {
+        let identity: ObjectIdentity
+        let url: URL
+        let download: Download
+    }
+
+    /// A file is downloaded and the right size: commit it, alone or with the other half of its RAW+JPEG pair
+    /// (section 7.1), or keep it until its partner is downloaded. Returns true when a new attempt has begun in this
+    /// lane.
+    ///
+    /// - The partner is held (downloaded already): the two are committed as one unit, in this lane.
+    /// - The partner is still to download (queued, downloading, waiting to retry, or put back by a pause, a stall or
+    ///   a removal): this half is held on disk and the lane is freed for the partner.
+    /// - The partner was skipped (missing after a replug, for one): this half is committed alone.
+    /// - The partner failed for a real error after its retries: this half is held until nothing else is left to
+    ///   download, then committed alone (`commitLoneHalves(of:)`).
+    func commitOrHold(_ url: URL, identity: ObjectIdentity, of id: UUID, download: Download) async -> Bool {
+        guard let job = current(id), let entry = job.entries[identity] else { return false }
+        let mine = Half(identity: identity, url: url, download: download)
+        guard let partner = job.partner(of: entry) else { return await commit([mine], lane: identity, of: id) }
+        switch partner.phase {
+        case let .held(held):
+            let theirs = Half(identity: partner.identity, url: held.url, download: held.download)
+            let rawFirst = RawPairingRule.role(ofFilename: entry.item.name) == .raw
+            return await commit(rawFirst ? [mine, theirs] : [theirs, mine], lane: identity, of: id)
+        case .queued, .downloading, .waitingToRetry, .done(.failed):
+            hold(entry, HeldHalf(url: url, download: download), in: job)
+            return false
+        case .committing, .done:
+            // Skipped (a committing partner can't be: it would be committing with this one).
+            trace(.committedWithoutPartner(entry.item.name))
+            return await commit([mine], lane: identity, of: id)
+        }
+    }
+
+    /// Keeps a downloaded half on disk until its partner is downloaded too. Its rate sample is taken now, when its
+    /// download ended, not when the pair is committed.
+    func hold(_ entry: FileEntry, _ held: HeldHalf, in job: Job) {
+        entry.phase = .held(held)
+        if !entry.interrupted {
+            job.rate.record(start: held.download.startedAt, end: clock.now, bytes: entry.item.size)
+        }
+        trace(.waitingForPartner(entry.item.name))
+        refreshState()
+    }
+
+    /// Commits each held half whose partner won't come, alone and outside the download lanes: at once when the
+    /// partner was skipped (or has left the job), and once nothing else is left to download when it failed for a
+    /// real error (section 7.1: the failure is listed and the half is committed when the job would otherwise end).
+    /// Commits aren't held back by a pause, as a download in flight across one is committed too (decision 4).
+    func commitLoneHalves(of job: Job) {
+        for entry in job.sortedEntries {
+            guard let held = entry.held else { continue }
+            let mine = Half(identity: entry.identity, url: held.url, download: held.download)
+            let partner = job.partner(of: entry)
+            switch partner?.phase {
+            case .queued?, .downloading?, .waitingToRetry?:
+                continue
+            case let .held(theirs)?:
+                // Both downloaded and neither committed (not a state the lanes leave): commit them together.
+                guard let partner else { continue }
+                let other = Half(identity: partner.identity, url: theirs.url, download: theirs.download)
+                let rawFirst = RawPairingRule.role(ofFilename: entry.item.name) == .raw
+                commitWithoutLane(rawFirst ? [mine, other] : [other, mine], of: job)
+                continue
+            case .done(.failed)?:
+                guard job.nothingLeftToDownload else { continue }
+            case .done?, .committing?, nil:
+                break
+            }
+            trace(.committedWithoutPartner(entry.item.name))
+            commitWithoutLane([mine], of: job)
+        }
+    }
+
+    /// A commit no download lane waits for (a held half committed alone): its result is settled in its own task,
+    /// which then wakes the driver and finishes the job if nothing is left.
+    func commitWithoutLane(_ halves: [Half], of job: Job) {
+        let id = job.id
+        guard let started = startCommit(halves, of: job) else { return }
+        Task {
+            let result = await started.task.value
+            self.commitsInFlight[started.token] = nil
+            _ = await self.settle(result, halves, lane: nil, of: id)
+            self.current(id)?.signal.fire()
+            self.finishIfDrained(id)
+        }
+    }
+
+    /// Commits the downloaded files as one unit (a lone file, or a pair, RAW first), records their rows and removes
+    /// what is left of them. Returns true when the lane's file has to be downloaded again (its staged file vanished)
+    /// and a new attempt has begun in this lane.
+    ///
+    /// The commit, the rows and the cleanup run in an unstructured task, not in this lane, so ending the job (which
+    /// cancels the driver and its lanes) never cancels a Photos save or a move into the staging folder half-way:
+    /// the files always get their rows. The retry after a failed commit runs back in the lane, where ending the job
+    /// cancels its backoff.
+    func commit(_ halves: [Half], lane: ObjectIdentity?, of id: UUID) async -> Bool {
+        guard let job = current(id), let started = startCommit(halves, of: job) else { return false }
+        let result = await started.task.value
+        commitsInFlight[started.token] = nil
+        return await settle(result, halves, lane: lane, of: id)
+    }
+
+    /// Marks the halves committing and starts their commit in its own task, registered in `commitsInFlight`. One
+    /// synchronous step, so a half can't be committed twice.
+    func startCommit(_ halves: [Half], of job: Job) -> (token: UUID, task: Task<CommitResult, Never>)? {
+        var files: [CommitFile] = []
+        for h in halves {
+            guard let entry = job.entries[h.identity] else { return nil }
+            files.append(CommitFile(url: h.url, item: entry.item, identity: h.identity,
+                                    attemptDirectory: h.download.attempt.directory,
+                                    checkStaged: !entry.queuedUnderStagingRule,
+                                    checkpointWrites: entry.checkpointWrites))
+        }
+        for h in halves { job.entries[h.identity]?.phase = .committing }
+        refreshState()
+        let id = job.id
+        let route = job.route
+        let token = UUID()
+        let task = Task { await self.commitAndRecord(files, of: id, route: route) }
+        commitsInFlight[token] = (id, task)
+        return (token, task)
+    }
+
+    /// Resolves the halves of a finished commit. Returns true when a new attempt has begun in the lane.
+    func settle(_ result: CommitResult, _ halves: [Half], lane: ObjectIdentity?, of id: UUID) async -> Bool {
         switch result {
         case let .failed(failure):
-            return await commitFailed(failure, identity: identity, of: id, download: download, name: item.name)
-        case .alreadyStaged:
-            // Staged instead part-way, and staged already: left out, as a stage job's diff would have.
-            guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
-            resolve(entry, .skipped(.alreadyStaged))
-            refreshState()
-            return false
-        case let .committed(outcome, kind, written):
-            // A commit that finishes after its job ended (cancelled, stopped) still resolves its file on the ended
-            // job, so the finished Import screen's row and counts show it as imported or staged.
-            guard let job = current(id) ?? endedJob(id), let entry = job.entries[identity] else { return false }
-            entry.resumable = nil // its folder went with the commit
-            resolve(entry, outcome, into: kind)
+            return await commitFailed(failure, halves: halves, lane: lane, of: id)
+        case let .committed(outcomes, kind, written):
+            // A commit that finishes after its job ended (cancelled, stopped) still resolves its files on the ended
+            // job, so the finished Import screen's rows and counts show them as imported or staged.
+            guard let job = current(id) ?? endedJob(id) else { return false }
+            for (h, outcome) in zip(halves, outcomes) {
+                guard let entry = job.entries[h.identity] else { continue }
+                entry.resumable = nil // its folder went with the commit
+                resolve(entry, outcome, into: kind)
+            }
             guard current(id) != nil else {
                 refreshState()
                 return false
             }
-            if !entry.interrupted {
-                job.rate.record(start: download.startedAt, end: clock.now, bytes: item.size)
+            if let lane, let entry = job.entries[lane], !entry.interrupted,
+               let h = halves.first(where: { $0.identity == lane }) {
+                switch entry.outcome {
+                case .imported?, .staged?:
+                    job.rate.record(start: h.download.startedAt, end: clock.now, bytes: entry.item.size)
+                case .skipped?, .failed?, nil:
+                    break
+                }
             }
             if written {
                 refreshState()
@@ -245,38 +353,52 @@ extension ImportEngine {
         }
     }
 
-    /// How a commit ended: committed (imported or staged, and where; into which destination; and whether its row was
-    /// written), left out because it was to be staged and is staged already, or failed.
+    /// One file of a commit, as the commit's task needs it.
+    struct CommitFile: Sendable {
+        let url: URL
+        let item: CameraItem
+        let identity: ObjectIdentity
+        let attemptDirectory: URL
+        /// Queued by an import job, whose done rule ignores staging (`FileEntry.queuedUnderStagingRule`).
+        let checkStaged: Bool
+        /// Its checkpoint writes in flight (`FileEntry.checkpointWrites`), waited for before its row is written
+        /// (`settle(_:of:)`). No new one starts once the commit has begun (`FileEntry.takesCheckpoints`).
+        let checkpointWrites: CheckpointWrites
+
+        var staged: StagedFile { StagedFile(url: url, filename: item.name, captureDate: item.captureDate) }
+    }
+
+    /// How a commit ended: committed, with what became of each file in the order given (imported or staged and
+    /// where, or `.skipped(.alreadyStaged)` for one left out because it was to be staged and is staged already), into
+    /// which destination, and whether every row was written; or failed, for every file of the unit.
     enum CommitResult: Sendable {
-        case committed(FileOutcome, DestinationKind, rowWritten: Bool)
-        case alreadyStaged
+        case committed([FileOutcome], DestinationKind, rowWritten: Bool)
         case failed(ImportDestinationFailure)
     }
 
-    /// The commit itself, its row and the cleanup of the staged file. Runs whether or not the job is still current:
-    /// once a destination has the file, its row is written.
+    /// The commit itself, its rows and the cleanup of the staged files. Runs whether or not the job is still current:
+    /// once a destination has the files, their rows are written. `files` are one unit: a lone file, or a pair with
+    /// the RAW first.
     ///
-    /// - Parameter checkStaged: The file was queued by an import job, whose done rule ignores staging
-    ///   (`FileEntry.queuedUnderStagingRule`). If the job has been staged instead (a refused save, here or by another
-    ///   file; or a continue), a file the catalogue already has a staged copy of is left out (`.alreadyStaged`) rather
-    ///   than staged a second time, which would leave the first copy in the staging folder with no row.
-    /// - Parameter checkpointWrites: The file's checkpoint writes in flight, waited for before the row is written
-    ///   (`settle(_:of:)`). No new one starts once the commit has begun (`FileEntry.takesCheckpoints`).
-    func commitAndRecord(_ url: URL, item: CameraItem, identity: ObjectIdentity, of id: UUID, route: ImportRoute,
-                         attemptDirectory: URL, checkStaged: Bool,
-                         checkpointWrites: CheckpointWrites) async -> CommitResult {
-        let unit = commitUnit(for: StagedFile(url: url, filename: item.name, captureDate: item.captureDate))
-        let fm = FileManager.default
-        /// Drops the downloaded file of one that is left out.
-        func discard() {
-            if fm.fileExists(atPath: url.path(percentEncoded: false)) { try? fm.removeItem(at: url) }
-            try? fm.removeItem(at: attemptDirectory)
-        }
+    /// A file queued by an import job (`CommitFile.checkStaged`) whose job has been staged instead (a refused save,
+    /// here or by another file; or a continue) is left out when the catalogue already has a staged copy of it, rather
+    /// than staged a second time, which would leave the first copy in the staging folder with no row. The other half
+    /// of a pair is then committed alone.
+    ///
+    /// Before any row is written, the commit waits for every committed file's checkpoint writes in flight
+    /// (`settle(_:of:)`), a pair's two halves alike: one sent before the commit began (by the lane's half, or by a
+    /// held half before it was held) must land before the rows, not after them, or a staged row would read as
+    /// partial again, with its resume offset and temporary file back.
+    func commitAndRecord(_ files: [CommitFile], of id: UUID, route: ImportRoute) async -> CommitResult {
+        var outcomes = [FileOutcome?](repeating: nil, count: files.count)
+        var going = Array(files.indices)
+        let alreadyStaged = CommitResult.committed(outcomes.map { _ in .skipped(.alreadyStaged) }, .staging,
+                                                   rowWritten: true)
         var used = route.destination
-        if checkStaged, used.kind == .staging, await isStaged(identity) {
-            discard()
-            return .alreadyStaged
+        if used.kind == .staging, !(await leaveOutStaged(files, going: &going, outcomes: &outcomes)) {
+            return alreadyStaged
         }
+        var unit = Self.commitUnit(for: going.map { files[$0].staged })
         // Whether `used` is the staging folder in iCloud Drive, which can go away mid-job.
         var usedICloudDrive = route.purpose == .staging && route.stagesInICloudDrive
         var result: ImportResult?
@@ -287,7 +409,7 @@ extension ImportEngine {
             failure = error
         }
 
-        // Photos refused the save (3311): not a failed file. This file and the rest are staged, and the Import screen
+        // Photos refused the save (3311): not a failed file. This unit and the rest are staged, and the Import screen
         // says why (backlog section 5): a denial links to Settings, a restriction doesn't, so access is read again now
         // (`DestinationDecision.afterDeniedSave(authorisation:staging:)`). Switched once, however many files are in
         // flight: another file's refusal may switch it while this one reads access, so it's checked again.
@@ -302,10 +424,8 @@ extension ImportEngine {
             let staging = current(id)?.route ?? route
             used = staging.staging
             usedICloudDrive = staging.stagesInICloudDrive
-            if checkStaged, await isStaged(identity) {
-                discard()
-                return .alreadyStaged
-            }
+            if !(await leaveOutStaged(files, going: &going, outcomes: &outcomes)) { return alreadyStaged }
+            unit = Self.commitUnit(for: going.map { files[$0].staged })
             failure = nil
             do throws(ImportDestinationFailure) {
                 result = try await used.commit(unit)
@@ -315,7 +435,7 @@ extension ImportEngine {
         }
 
         // iCloud Drive went away while staging there (signed out, or iCloud Drive turned off, mid-job): not a failed
-        // file. This file and the rest are staged on this iPhone, and the Import screen says so
+        // file. This unit and the rest are staged on this iPhone, and the Import screen says so
         // (`StagingFallbackReason.lostDuringImport`; Shamil, 11 Nov). Switched once, however many files are in
         // flight; a file whose commit began on the iCloud route while another switched it goes to this iPhone too.
         if failure == .stagingUnavailable, usedICloudDrive {
@@ -338,27 +458,61 @@ extension ImportEngine {
         if let failure { return .failed(failure) }
         guard let result else { return .failed(.stagedFileMissing) } // unreachable: a commit returns or throws
 
-        // A checkpoint write sent before the commit began must land before the row, not after it.
-        await settle(checkpointWrites, of: item.name)
+        // A checkpoint write sent before the commit began must land before the rows: every file's, before any row.
+        for i in going { await settle(files[i].checkpointWrites, of: files[i].item.name) }
 
-        // The row, then the cleanup. Written even if the job was cancelled meanwhile: the file was committed. An
-        // import writes the imported row (`upsert`, which keeps any staged copy); staging records the staged copy
-        // beside the row's state (`markStaged`, which keeps an imported row imported and sends a partial row back
-        // to new with its resume cleared, since the partial file was what was staged).
-        let outcome = Self.outcomes(of: result, for: unit, at: Date()).first ?? .imported(nil)
-        let written: Bool
-        switch outcome {
-        case let .staged(location):
-            let staged = location ?? Self.unreportedStagedLocation(for: result)
-            written = await writeRow { try await self.catalogue.markStaged(identity, format: item.format, at: staged) }
-        case let .imported(location):
-            let record = CatalogueRecord(identity: identity, format: item.format, state: .imported, location: location)
-            written = await writeRow { try await self.catalogue.upsert(record) }
-        case .skipped, .failed:
-            written = true // unreachable: a commit's outcome is imported or staged
+        // The rows, then the cleanup. Written even if the job was cancelled meanwhile: the files were committed. An
+        // import writes the imported row (`upsert`, which keeps any staged copy), one per file with the pair's one
+        // asset; staging records each file's staged copy beside the row's state (`markStaged`, which keeps an
+        // imported row imported and sends a partial row back to new with its resume cleared, since the partial file
+        // was what was staged).
+        let committed = Self.outcomes(of: result, for: unit, at: Date())
+        var written = true
+        for (k, i) in going.enumerated() {
+            let file = files[i]
+            let outcome = k < committed.count ? committed[k] : .imported(nil)
+            outcomes[i] = outcome
+            switch outcome {
+            case let .staged(location):
+                let staged = location ?? Self.unreportedStagedLocation(for: result)
+                let ok = await writeRow {
+                    try await self.catalogue.markStaged(file.identity, format: file.item.format, at: staged)
+                }
+                written = written && ok
+            case let .imported(location):
+                let record = CatalogueRecord(identity: file.identity, format: file.item.format, state: .imported,
+                                             location: location)
+                let ok = await writeRow { try await self.catalogue.upsert(record) }
+                written = written && ok
+            case .skipped, .failed:
+                break // unreachable: a commit's outcome is imported or staged
+            }
+            Self.discard(file) // Photos copies; the staging folder moves the file, leaving only its folder
         }
-        discard() // Photos copies; the staging folder moves the file, leaving only its folder
-        return .committed(outcome, used.kind, rowWritten: written)
+        return .committed(outcomes.map { $0 ?? .skipped(.alreadyStaged) }, used.kind, rowWritten: written)
+    }
+
+    /// Leaves out the files still `going` that are to be checked and have a staged copy in the catalogue: their
+    /// downloads are dropped and their outcome is `.skipped(.alreadyStaged)`. False when none is left to commit.
+    func leaveOutStaged(_ files: [CommitFile], going: inout [Int], outcomes: inout [FileOutcome?]) async -> Bool {
+        var kept: [Int] = []
+        for i in going {
+            if files[i].checkStaged, await isStaged(files[i].identity) {
+                Self.discard(files[i])
+                outcomes[i] = .skipped(.alreadyStaged)
+            } else {
+                kept.append(i)
+            }
+        }
+        going = kept
+        return !going.isEmpty
+    }
+
+    /// Drops a file's download once it is committed or left out.
+    static func discard(_ file: CommitFile) {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: file.url.path(percentEncoded: false)) { try? fm.removeItem(at: file.url) }
+        try? fm.removeItem(at: file.attemptDirectory)
     }
 
     /// Waits until none of a committing file's checkpoint writes is in flight, so its row is the last write; for at
@@ -407,43 +561,85 @@ extension ImportEngine {
         return false
     }
 
-    func commitFailed(_ failure: ImportDestinationFailure, identity: ObjectIdentity, of id: UUID,
-                      download: Download, name: String) async -> Bool {
-        try? FileManager.default.removeItem(at: download.attempt.directory)
-        // The staged file was the whole copy: nothing is left to continue from.
-        (current(id) ?? endedJob(id))?.entries[identity]?.resumable = nil
-        if current(id) == nil, let ended = endedJob(id), let entry = ended.entries[identity] {
-            // The job ended while this file was being committed: no retry and no stop, but its row says it failed
-            // rather than staying at "committing".
-            resolve(entry, .failed(.destination(failure)))
+    /// A commit failed, for every file of its unit. A staged file that vanished is downloaded again (the lane's in
+    /// this lane, after its backoff; a held partner's from the queue), while a half whose file is still there waits
+    /// for its partner again; every other failure fails the unit's files, and a full phone stops the job.
+    func commitFailed(_ failure: ImportDestinationFailure, halves: [Half], lane: ObjectIdentity?,
+                      of id: UUID) async -> Bool {
+        let fm = FileManager.default
+        if failure == .stagedFileMissing, let job = current(id) {
+            // A half whose file is still there keeps it, unless none is missing (then the destination can't read
+            // them, and every half is downloaded again, as a lone file is), so this never loops.
+            let present = halves.map { fm.fileExists(atPath: $0.url.path(percentEncoded: false)) }
+            let keepPresent = present.contains(false)
+            var again = false
+            for (h, isThere) in zip(halves, present) {
+                guard let entry = job.entries[h.identity] else { continue }
+                if keepPresent, isThere {
+                    entry.phase = .held(HeldHalf(url: h.url, download: h.download))
+                    continue
+                }
+                // The staged file was the whole copy: nothing is left to continue from.
+                try? fm.removeItem(at: h.download.attempt.directory)
+                entry.resumable = nil
+                if h.identity == lane {
+                    again = true
+                } else {
+                    downloadAgain(entry, of: job, after: .destination(failure))
+                }
+            }
             refreshState()
+            guard again, let lane else { return false }
+            return await retry(lane, of: id, after: .destination(failure))
+        }
+        for h in halves {
+            try? fm.removeItem(at: h.download.attempt.directory)
+            // The staged file was the whole copy: nothing is left to continue from.
+            (current(id) ?? endedJob(id))?.entries[h.identity]?.resumable = nil
+        }
+        guard let job = current(id) else {
+            // The job ended while these files were being committed: no retry and no stop, but their rows say they
+            // failed rather than staying at "committing".
+            if let ended = endedJob(id) {
+                for h in halves {
+                    if let entry = ended.entries[h.identity] { resolve(entry, .failed(.destination(failure))) }
+                }
+                refreshState()
+            }
             return false
         }
-        guard let job = current(id), let entry = job.entries[identity] else { return false }
+        let reason: FailureReason
         switch failure {
-        case .notEnoughSpace:
-            resolve(entry, .failed(.destination(failure)))
-            end(job, .stopped(.phoneStorageFull))
-            return false
-        case .stagedFileMissing:
-            return await retry(identity, of: id, after: .destination(failure))
-        case .rejected:
-            // The same bytes would get the same answer: no retry.
-            resolve(entry, .failed(.destination(failure)))
-            refreshState()
-            return false
         case .photosAccessDenied:
             // From the staging folder, which has no Photos access to lose: treated as a rejection.
-            resolve(entry, .failed(.destination(.rejected(detail: "access denied by the staging folder"))))
-            refreshState()
-            return false
-        case .stagingUnavailable:
-            // The staging folder on this iPhone said it was unavailable too, after the switch from iCloud Drive (or
-            // the job had ended): nowhere else to go, so the file fails without a retry, like a rejection.
-            resolve(entry, .failed(.destination(failure)))
-            refreshState()
-            return false
+            reason = .destination(.rejected(detail: "access denied by the staging folder"))
+        case .notEnoughSpace, .stagedFileMissing, .rejected, .stagingUnavailable:
+            // A rejection: the same bytes would get the same answer, so no retry. Staging unavailable: the staging
+            // folder on this iPhone said so too, after the switch from iCloud Drive, so there is nowhere else to go.
+            reason = .destination(failure)
         }
+        for h in halves {
+            if let entry = job.entries[h.identity] { resolve(entry, .failed(reason)) }
+        }
+        if failure == .notEnoughSpace {
+            end(job, .stopped(.phoneStorageFull))
+        } else {
+            refreshState()
+        }
+        return false
+    }
+
+    /// Puts a held half whose file vanished back in the queue to be downloaded again, counting a retry, or fails it
+    /// once the retries are used up.
+    func downloadAgain(_ entry: FileEntry, of job: Job, after reason: FailureReason) {
+        guard entry.retries < policy.retryDelays.count else {
+            resolve(entry, .failed(reason))
+            return
+        }
+        entry.retries += 1
+        trace(.retrying(entry.item.name, retry: entry.retries, until: clock.now))
+        job.requeue(entry)
+        job.signal.fire()
     }
 
     func resolve(_ entry: FileEntry, _ outcome: FileOutcome, into kind: DestinationKind? = nil) {
@@ -462,9 +658,17 @@ extension ImportEngine {
         }
     }
 
-    /// What one downloaded file is committed as. Every file is its own unit for now; section 5's pairing rule
-    /// replaces this for Photos (a RAW and its JPEG come out of the diff next to each other).
-    func commitUnit(for file: StagedFile) -> CommitUnit { .single(file) }
+    /// What downloaded files are committed as: one file is a lone unit; two, the halves of a pair the pairing rule
+    /// made (`RawPairingRule`, when the job was listed or the files appended), are one pair, the RAW as the RAW
+    /// whichever order they come in, so Photos saves one asset (section 7.1) and staging puts both in the RAW's day
+    /// folder under their own names.
+    static func commitUnit(for files: [StagedFile]) -> CommitUnit {
+        guard files.count == 2 else { return .single(files[0]) }
+        if RawPairingRule.role(ofFilename: files[1].filename) == .raw {
+            return .pair(raw: files[1], processed: files[0])
+        }
+        return .pair(raw: files[0], processed: files[1])
+    }
 
     /// What became of each file of the unit, in the unit's order: imported as one Photos asset shared by every file,
     /// or staged with one location per file under the staging root the result names, staged at `date` (nil for any
