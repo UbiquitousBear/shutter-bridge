@@ -317,17 +317,51 @@ final class MatrixBench {
         }
     }
 
-    /// Waits (bounded) for the downloads the engine walked away from to end. A USB link ignores cancellation, so a
-    /// call abandoned when a job stops or is cancelled can still be writing its file after the job has ended; the
-    /// engine deletes that file when the call returns (`DownloadAttempt` discards a late file), not before, so the
-    /// work folder is checked once no link has a `bytes` call writing (one held at a scripted cut writes nothing
-    /// until released) and that deletion has run. A file still there when the wait runs out is reported by the check.
-    func settleAbandonedCalls() async {
+    /// What `settleAbandonedCalls()` found: the files abandoned calls wrote, and those of them still on disk.
+    struct AbandonedCalls {
+        /// Where each late call (one whose task was cancelled, on a link whose attempts don't keep their files)
+        /// wrote, symlinks resolved.
+        var late: Set<String> = []
+        /// Late files the engine had not discarded when the wait ran out.
+        var undiscarded: [String] = []
+    }
+
+    /// Waits (bounded) for the downloads the engine walked away from to end, and for the engine to discard what they
+    /// wrote. A USB link ignores cancellation, so a call abandoned when a job stops or is cancelled can still be
+    /// writing its file after the job has ended; the engine deletes that file when the call returns (`DownloadAttempt`
+    /// discards a late file), not before. So this waits until no link has a `bytes` call writing (one parked at a
+    /// scripted cut, a throughput wait or a suspension writes nothing until the test lets it), and then only until
+    /// each file such a late call wrote is gone (on a link whose attempts keep their files the engine keeps it, and
+    /// the partials check judges it). It doesn't wait for any other file: one the engine deletes only some time after
+    /// the job ends is a leak, which the work-folder check must still see. Calls still writing when the wait runs out
+    /// are recorded as an issue.
+    func settleAbandonedCalls(sourceLocation: SourceLocation = #_sourceLocation) async -> AbandonedCalls {
         let deadline = ContinuousClock.now.advanced(by: Self.patience)
-        while ContinuousClock.now < deadline {
-            var running = false
-            for link in links where await link.downloadsWriting > 0 { running = true }
-            if !running && workFiles().others.isEmpty { return }
+        while true {
+            var writing: [String] = []
+            for link in links {
+                let n = await link.downloadsWriting
+                if n > 0 { writing.append("\(n) on \(link.descriptor.mode)") }
+            }
+            if writing.isEmpty { break }
+            guard ContinuousClock.now < deadline else {
+                Issue.record("downloads still writing after \(Self.patience): \(writing.joined(separator: ", "))",
+                             sourceLocation: sourceLocation)
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        var late: [URL] = []
+        for link in links where !link.capabilities.resumesPartialFiles { late += await link.lateFiles }
+        var found = AbandonedCalls(late: Set(late.map { $0.resolvingSymlinksInPath().path }))
+        let fm = FileManager.default
+        while true {
+            let left = late.filter { fm.fileExists(atPath: $0.path(percentEncoded: false)) }
+            if left.isEmpty { return found }
+            guard ContinuousClock.now < deadline else {
+                found.undiscarded = left.map(\.lastPathComponent)
+                return found
+            }
             try? await Task.sleep(for: .milliseconds(2))
         }
     }
@@ -603,10 +637,16 @@ final class MatrixBench {
             }
         }
 
-        // 4: the work folder, once the calls the engine walked away from have ended.
-        await settleAbandonedCalls()
-        let (kept, others) = workFiles()
-        #expect(others.isEmpty, "work folder holds \(others.map(\.lastPathComponent))", sourceLocation: sourceLocation)
+        // 4: the work folder: as it is now, but for files of calls the engine walked away from, and again once
+        // those calls have ended and the engine has discarded their files. The first look is taken before any wait,
+        // so a file the engine deletes only some time after the job has ended is still seen.
+        let before = workFiles().others
+        let abandoned = await settleAbandonedCalls(sourceLocation: sourceLocation)
+        let (kept, after) = workFiles()
+        var others = before.filter { !abandoned.late.contains($0.resolvingSymlinksInPath().path) }.map(\.lastPathComponent)
+        for url in after where !others.contains(url.lastPathComponent) { others.append(url.lastPathComponent) }
+        let late = abandoned.undiscarded.isEmpty ? "" : " (late, not discarded: \(abandoned.undiscarded))"
+        #expect(others.isEmpty, "work folder holds \(others)\(late)", sourceLocation: sourceLocation)
         if knownGaps?.keptPartials == true {
             withKnownIssue(Comment(rawValue: knownGaps?.reason ?? ""), sourceLocation: sourceLocation) {
                 #expect(kept.count == partials.count + orphans, "partials kept: \(kept.map(\.lastPathComponent))",
