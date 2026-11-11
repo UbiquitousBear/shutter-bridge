@@ -4,7 +4,7 @@ import PhotosBridge
 /// A Photos destination whose first commit waits until the test releases it. It notes whether the committing task
 /// had been cancelled by then, and can refuse the save if so, as a destination or store that checks for
 /// cancellation would; and whether the staged file was still there, and can fail the commit if not, as a real
-/// destination does (`stagedFileMissing`).
+/// destination does (`stagedFileMissing`). A test can also release the held commit with a failure of its choosing.
 actor HoldingDestination: ImportDestination {
     nonisolated let kind: DestinationKind = .photos
     private let failsIfCancelled: Bool
@@ -16,6 +16,7 @@ actor HoldingDestination: ImportDestination {
     /// For the held commit: whether the staged file was still there when it was released.
     private(set) var stagedFileAtCommit: [Bool] = []
     private var holdFirst = true
+    private var releaseFailure: ImportDestinationFailure?
     private var held: CheckedContinuation<Void, Never>?
     private var arrivedWaiter: CheckedContinuation<Void, Never>?
 
@@ -36,6 +37,7 @@ actor HoldingDestination: ImportDestination {
             cancelledAtCommit.append(Task.isCancelled)
             let fileThere = FileManager.default.fileExists(atPath: unit.files[0].url.path)
             stagedFileAtCommit.append(fileThere)
+            if let releaseFailure { throw releaseFailure }
             if failsIfCancelled && Task.isCancelled { throw .rejected(detail: "cancelled mid-commit") }
             if failsIfFileMissing && !fileThere { throw .stagedFileMissing }
         }
@@ -51,7 +53,9 @@ actor HoldingDestination: ImportDestination {
         await withCheckedContinuation { arrivedWaiter = $0 }
     }
 
-    func release() {
+    /// Lets the held commit go on: to save the file, or, given `failure`, to throw it.
+    func release(throwing failure: ImportDestinationFailure? = nil) {
+        releaseFailure = failure
         held?.resume()
         held = nil
     }

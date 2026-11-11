@@ -206,6 +206,30 @@ struct PendingCommitTests {
         await h.cleanup()
     }
 
+    /// Photos refuses the save, and by then another job has staged the file: nothing is left to stage, so the marker
+    /// (written for Photos, which saved nothing) is removed and the file is left out as already staged.
+    @Test func aRefusalWithNothingLeftToStageRemovesTheMarker() async throws {
+        let catalogue = FailingCatalogue()
+        let h = Harness(catalogue: catalogue)
+        let card = h.singles(["A.JPG"])
+        let dest = HoldingDestination()
+        try await h.start(.items(card), from: h.link(card), to: h.photosRoute(to: dest))
+        await dest.waitArrived()
+        #expect(try await catalogue.pendingCommits().count == 1)
+        // Another job stages the same file while Photos has it.
+        try await catalogue.markStaged(h.identity(of: card[0]), format: card[0].format,
+                                       at: StagedLocation(root: .onThisIPhone, relativePath: "Untitled/A.JPG"))
+        await dest.release(throwing: .photosAccessDenied)
+        #expect(await h.waitFinished() == .completed)
+
+        #expect(await h.outcome(of: card[0]) == .skipped(.alreadyStaged))
+        #expect(await catalogue.markerLog.map(\.destination) == [.photos], "no rewrite: nothing was staged")
+        #expect(await catalogue.abandonCommitCalls == 1)
+        #expect(try await catalogue.pendingCommits().isEmpty)
+        #expect(await h.files.attempts == 0)
+        await h.cleanup()
+    }
+
     /// iCloud Drive goes away mid-commit: the marker is rewritten for the staging folder on this iPhone.
     @Test func losingICloudDriveRewritesTheMarkerForThisIPhone() async throws {
         let catalogue = FailingCatalogue()

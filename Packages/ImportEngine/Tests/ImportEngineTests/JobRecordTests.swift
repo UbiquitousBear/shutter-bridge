@@ -170,7 +170,14 @@ struct JobRecordTests {
         #expect(paused.finishedAt == nil && paused.filesImported == 1)
 
         let link2 = h.link(h.singles(["A.JPG", "B.JPG"], prefix: "s2"), mode: .wifi(.cameraNetwork))
+        await link2.script("B.JPG", .hold)
         try await h.engine.reconnect(link2)
+        // Written at the reconnect itself: the job still running, over the new link.
+        let b2 = await link2.nextHeldCall("B.JPG")
+        let carriedOn = try await onlyRecord(h)
+        #expect(carriedOn.id == paused.id && carriedOn.finishedAt == nil && carriedOn.outcome == nil)
+        #expect(carriedOn.carrier == .wifi, "the link it carries on over")
+        b2.release()
         #expect(await h.waitFinished() == .completed)
         let record = try await onlyRecord(h)
         #expect(record.id == paused.id && record.startedAt == paused.startedAt)
@@ -196,6 +203,54 @@ struct JobRecordTests {
         await h.trace.next(.imported("A.JPG", .photos)) // resolved on the ended job
         let record = try await onlyRecord(h)
         #expect(record.outcome == .cancelled && record.filesImported == 1)
+        expectMatches(record, await h.engine.currentProgress)
+        await h.cleanup()
+    }
+
+    /// A commit still in flight when the job was cancelled fails on the ended job: the record is written again, with
+    /// the file failed.
+    @Test func aCommitThatFailsAfterTheEndUpdatesTheRecord() async throws {
+        let h = Harness()
+        let card = h.singles(["A.JPG"])
+        let dest = HoldingDestination()
+        try await h.start(.items(card), from: h.link(card), to: h.photosRoute(to: dest))
+        await dest.waitArrived()
+        await h.engine.cancel()
+        let atEnd = try await onlyRecord(h)
+        #expect(atEnd.outcome == .cancelled && atEnd.filesFailed == 0)
+
+        await dest.release(throwing: .rejected(detail: "test"))
+        await h.trace.next { if case .failed("A.JPG", _) = $0 { true } else { false } }
+        let record = try await onlyRecord(h)
+        #expect(record.outcome == .cancelled && record.filesFailed == 1)
+        #expect(record.failedFiles == [h.identity(of: card[0]).contentKey])
+        expectMatches(record, await h.engine.currentProgress)
+        await h.cleanup()
+    }
+
+    /// A commit still in flight when the job was cancelled, whose marker can't be rewritten after Photos refused the
+    /// save, sends its file back to the queue on the ended job: the record is written again, so it still matches the
+    /// last progress.
+    @Test func aCommitThatCannotBeginAfterTheEndUpdatesTheRecord() async throws {
+        let catalogue = FailingCatalogue()
+        await catalogue.setFailBeginCommit(from: 2)
+        let h = Harness(catalogue: catalogue)
+        let card = h.singles(["A.JPG"])
+        let dest = HoldingDestination()
+        try await h.start(.items(card), from: h.link(card), to: h.photosRoute(to: dest))
+        await dest.waitArrived()
+        await h.engine.cancel()
+        let atEnd = try await onlyRecord(h)
+        #expect(atEnd.outcome == .cancelled && atEnd.bytesDone == card[0].size)
+
+        await dest.release(throwing: .photosAccessDenied)
+        await h.trace.next(.commitMarkerNotWritten("A.JPG"))
+        await h.engine.lastJobDriver()?.value // the lane that waited for the commit has settled it
+        #expect(await catalogue.beginCommitCalls == 1 + ImportPolicy.standard.catalogueWriteAttempts,
+                "the Photos marker, then every try at the rewrite")
+        #expect(await h.outcome(of: card[0]) == nil, "back in the queue, not failed")
+        let record = try await onlyRecord(h)
+        #expect(record.outcome == .cancelled)
         expectMatches(record, await h.engine.currentProgress)
         await h.cleanup()
     }

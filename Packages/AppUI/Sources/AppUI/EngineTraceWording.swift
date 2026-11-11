@@ -12,11 +12,13 @@ import PhotosBridge
 // characters), sizes, counts, times, and the kinds of pause, skip and failure. Never a serial, an identifier, a network name or
 // address, nor the text of an error: a destination's `rejected(detail:)` is said as "rejected" only.
 //
-// Levels: a real failure is an error (a file that failed after its retries, a destination error, a job the engine stopped, the
-// catalogue being unavailable, a commit the catalogue couldn't mark as pending); everything else is a notice, whatever the
-// event: pauses, stalls that recover, retries, skips, reconnects, a job record History will have to wait for. The events that fire constantly or that the import's own lines already carry have no line: ticks, progress
-// publications, the download loop idling, a late file discarded, a file started the first time, a file imported or staged (the
-// import model logs those with their identity), a pair's half waiting for its partner, and the engine's `idle`.
+// Levels: a real failure is an error (a file that failed after its retries, a destination error, a job the engine
+// stopped, the catalogue being unavailable, a commit the catalogue couldn't mark as pending); everything else is a
+// notice, whatever the event: pauses, stalls that recover, retries, skips, reconnects, a job record History will have
+// to wait for. The events that fire constantly or that the import's own lines already carry have no line: ticks,
+// progress publications, the download loop idling, a late file discarded, a file started the first time, a file
+// imported or staged (the import model logs those with their identity), a pair's half waiting for its partner, and the
+// engine's `idle`.
 
 extension EngineTraceSink {
     /// Writes each event that has a line to `log`, at the event's level.
