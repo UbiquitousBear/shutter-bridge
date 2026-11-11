@@ -466,9 +466,13 @@ extension ImportEngine {
         // asset; staging records each file's staged copy beside the row's state (`markStaged`, which keeps an
         // imported row imported and sends a partial row back to new with its resume cleared, since the partial file
         // was what was staged).
+        //
+        // The outcomes come in the unit's order (a pair's RAW first), matched back to the files by their downloads,
+        // so each row gets its own file's location whatever order the files were given in.
         let committed = Self.outcomes(of: result, for: unit, at: Date())
+        let inUnitOrder = unit.files.compactMap { staged in going.first { files[$0].url == staged.url } }
         var written = true
-        for (k, i) in going.enumerated() {
+        for (k, i) in (inUnitOrder.count == going.count ? inUnitOrder : going).enumerated() {
             let file = files[i]
             let outcome = k < committed.count ? committed[k] : .imported(nil)
             outcomes[i] = outcome

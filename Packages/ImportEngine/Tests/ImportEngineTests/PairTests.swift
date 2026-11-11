@@ -378,6 +378,39 @@ struct PairTests {
         await h.cleanup()
     }
 
+    /// A pair given to the commit JPG first is still committed RAW first, and each file's row gets its own staged
+    /// location, not its partner's: the outcomes, which come in the unit's order, are matched back to the files.
+    @Test func aPairGivenJPEGFirstRecordsEachFilesOwnLocation() async throws {
+        let h = Harness()
+        let (raw, jpeg) = Self.frame(h, "DSC00001", at: Harness.t0)
+        let fm = FileManager.default
+        var files: [ImportEngine.CommitFile] = []
+        for item in [jpeg, raw] {
+            let directory = h.staging.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(item.name)
+            try Data(count: Int(item.size)).write(to: url)
+            files.append(ImportEngine.CommitFile(url: url, item: item, identity: h.identity(of: item),
+                                                 attemptDirectory: directory, checkStaged: false,
+                                                 checkpointWrites: CheckpointWrites()))
+        }
+        let result = await h.engine.commitAndRecord(files, of: UUID(), route: h.stageRoute)
+        guard case let .committed(outcomes, kind, written) = result else {
+            Issue.record("not committed: \(result)")
+            return
+        }
+        #expect(kind == .staging && written)
+        #expect(Self.pairs(await h.files.commits) == [[raw.name, jpeg.name]])
+        let paths = outcomes.map { outcome -> String? in
+            if case let .staged(location) = outcome { location?.relativePath } else { nil }
+        }
+        #expect(paths == ["Untitled/" + jpeg.name, "Untitled/" + raw.name]) // in the order given
+        #expect(await h.record(for: raw)?.staged?.relativePath == "Untitled/" + raw.name)
+        #expect(await h.record(for: jpeg)?.staged?.relativePath == "Untitled/" + jpeg.name)
+        #expect(h.stagedFiles == 0)
+        await h.cleanup()
+    }
+
     /// Through the real Photos destination over a fake library: one save, the JPG as the photo and the ARW as the
     /// alternate, the RAW as the original, and both rows naming the one asset.
     @Test func thePhotosDestinationSavesOneAssetForAPair() async throws {
