@@ -234,8 +234,15 @@ struct PartialsAndSessionsTests {
                 "the checkpoint row still points to the deleted file")
 
         await catalogue.setFailBeginCommit(from: nil)
+        // Held before its first checkpoint, so the row read there is the one reconciliation left.
+        await link.script("A.ARW", .holdAfter(500))
         let mark = h.trace.count
         try await h.start(.allNew, from: link, to: h.photosRoute)
+        await link.waitUntilHeld("A.ARW")
+        let cleared = await h.record(for: a)
+        #expect(cleared?.state == .partial && cleared?.resumeOffset == 0 && cleared?.tempURL == nil,
+                "the catalogue row itself is reset, not only reported")
+        await link.release("A.ARW")
         #expect(await h.waitFinished(after: mark) == .completed)
         let log = Array(h.trace.log[mark...])
         let reset = try #require(log.firstIndex(of: .partialReset("A.ARW")))
