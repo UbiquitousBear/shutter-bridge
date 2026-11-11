@@ -397,7 +397,7 @@ Could change with: D8; Apple's `OSLogStore` scopes on iOS 27 (`unverified`: whet
 
 | Requirement | Status | Note |
 | --- | --- | --- |
-| Staging: the destination, `FolderPlacer`, V3's *staged* fact, stage jobs, the Import menu, badges and Settings | **Staging** | Branch `staging-destination`, in progress on 11 Nov: its first commit (PhotosBridge staging, `FolderPlacer`, Catalogue V3) is on the branch; stage jobs and AppUI follow. |
+| Staging: the destination, `FolderPlacer`, V3's *staged* fact, stage jobs, the Import menu, badges and Settings | **Built** | The staging PR (11 Nov): PhotosBridge staging and `FolderPlacer`, Catalogue V3's *staged* fact, stage jobs in the engine, and the Import menu, *Staged* badge and Settings' staging section in AppUI. Staging writes to On My iPhone until the iCloud entitlement follow-up lands. |
 | iCloud container and App ID capability (Phase 0 of the staging plan) | **Open** | Shamil, before any build signs with the iCloud keys. |
 | RAW+JPEG pairing in the engine | **To do** | I6. `RawPairingRule` (same folder, same stem, within 1 s; no pair without a date) is built and tested (#80); the engine's `commitUnit(for:)` returns `.single`. |
 | `stagedRecords(camera:)` (and across cameras), grouped by capture day | **To do** | I7. |
