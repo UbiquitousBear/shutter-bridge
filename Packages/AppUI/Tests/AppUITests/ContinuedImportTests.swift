@@ -234,7 +234,7 @@ struct ContinuedImportTests {
             : ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
         let destinations = FakeDestinations()
         let model = ImportModel(engine: engine,
-                                settings: InMemoryDestinationSettingStore(DestinationSetting(preferred: .filesFolder)),
+                                settings: InMemoryDestinationSettingStore(DestinationSetting(preferred: .staging)),
                                 photos: FakePhotosAccess(), destinations: destinations, background: run,
                                 notifier: notifier, notificationAsks: asks, abortTransfer: abort)
         let finder = FakeFinder()

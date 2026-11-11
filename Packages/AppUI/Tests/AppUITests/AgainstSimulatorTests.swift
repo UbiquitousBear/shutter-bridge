@@ -451,23 +451,24 @@ struct DestinationAgainstSimulatorTests {
     @Test func settingFilesSendsTheFilesToTheCamerasFolderAndNeverAsksForPhotos() async throws {
         let photos = FakePhotosAccess(.notDetermined)
         let bench = try await SimulatorBench.make(setting: .photos, photos: photos)
-        bench.app.settings.destination = .filesFolder   // the Settings screen's picker
-        #expect(bench.settingsStore.load() == DestinationSetting(preferred: .filesFolder))
+        bench.app.settings.destination = .staging   // the Settings screen's picker
+        #expect(bench.settingsStore.load() == DestinationSetting(preferred: .staging))
         let browse = bench.browse()
         try await bench.until("the card to be listed") { browse.phase == .listed }
         #expect(try await importFromBrowse(bench, browse) == .started(5))
         try await bench.untilImport(.finished(.completed))
         #expect(photos.askCount == 0)
-        #expect(bench.importer.progress.destination == .files(.chosen))
-        #expect(bench.importer.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › ILCE-7CM2.")
+        #expect(bench.importer.progress.destination == .stagedHere(.chosen))
+        #expect(bench.importer.destinationLine
+            == "Imported to Files: On My iPhone › Shutter Bridge › Staging › ILCE-7CM2.")
         #expect(bench.importer.filesReasonLine == "You chose Files in Settings.")
         #expect(!bench.importer.offersPhotosSettingsLink)
         await bench.expectInFiles(importableStills)
         #expect(await bench.destinations.photos.names.isEmpty)
         // Dated by the camera's capture date, so Files sorts them by it.
         let jpg = try #require(await bench.link.item(named: "DSC00003.JPG"))
-        let modified = try FileManager.default
-            .attributesOfItem(atPath: bench.filesFolder.appendingPathComponent("DSC00003.JPG").path)[.modificationDate]
+        let staged = try #require(bench.stagedFile(named: "DSC00003.JPG"))
+        let modified = try FileManager.default.attributesOfItem(atPath: staged.path)[.modificationDate]
         #expect(modified as? Date == jpg.captureDate)
         await bench.finish()
     }
@@ -480,10 +481,11 @@ struct DestinationAgainstSimulatorTests {
         #expect(try await importFromBrowse(bench, browse) == .started(5))
         try await bench.untilImport(.finished(.completed))
         #expect(photos.askCount == 0)   // denied isn't asked again; iOS wouldn't show the prompt
-        #expect(bench.importer.progress.destination == .files(.photosDenied))
+        #expect(bench.importer.progress.destination == .stagedHere(.photosDenied))
         #expect(bench.importer.filesReasonLine == ImportWording.filesReason(.photosDenied))
         #expect(bench.importer.offersPhotosSettingsLink)
-        #expect(bench.importer.destinationLine == "Imported to Files: On My iPhone › Shutter Bridge › ILCE-7CM2.")
+        #expect(bench.importer.destinationLine
+            == "Imported to Files: On My iPhone › Shutter Bridge › Staging › ILCE-7CM2.")
         await bench.expectInFiles(importableStills)
         #expect(await bench.destinations.photos.names.isEmpty)
         await bench.finish()

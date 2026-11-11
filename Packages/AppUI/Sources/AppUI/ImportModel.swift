@@ -311,14 +311,14 @@ public final class ImportModel: BrowseImporting {
 
     /// Why Files, when it is Files.
     public var filesReasonLine: String? {
-        guard camera != nil, let reason = progress.destination?.filesReason else { return nil }
+        guard camera != nil, let reason = progress.destination?.stagingReason else { return nil }
         return ImportWording.filesReason(reason)
     }
 
     /// The button to the app's page in Settings: only when Photos access is off (restricted can't be changed there,
     /// and a chosen Files needs nothing).
     public var offersPhotosSettingsLink: Bool {
-        camera != nil && progress.destination?.filesReason?.offersSettingsLink == true
+        camera != nil && progress.destination?.stagingReason?.offersSettingsLink == true
     }
 
     public var bytesLine: String? {
@@ -434,16 +434,18 @@ public final class ImportModel: BrowseImporting {
     }
 
     /// The destination for a new job: the setting and the authorisation, asking for access once if the setting
-    /// says Photos and nobody has asked yet (as `PhotosAccessGate.decision(for:)` does).
+    /// says Photos and nobody has asked yet (as `PhotosAccessGate.decision(for:staging:)` does).
     private func decide(_ setting: DestinationSetting) async -> DestinationDecision {
-        let first = DestinationDecision.resolve(setting: setting, authorisation: await photos.authorisation())
+        let staging = ImportRoute.defaultStagingPlace
+        let first = DestinationDecision.resolve(choice: setting.preferred, authorisation: await photos.authorisation(),
+                                                staging: staging)
         guard first == .askForPhotosAccess else { return first }
         isAskingForPhotosAccess = true
         defer { isAskingForPhotosAccess = false }
         let answered = await photos.requestReadWriteAuthorisation()
-        let second = DestinationDecision.resolve(setting: setting, authorisation: answered)
-        // Still not determined (the prompt couldn't be shown): Files for this import, rather than loop.
-        return second == .askForPhotosAccess ? .files(.photosDenied) : second
+        let second = DestinationDecision.resolve(choice: setting.preferred, authorisation: answered, staging: staging)
+        // Still not determined (the prompt couldn't be shown): staged for this import, rather than loop.
+        return second == .askForPhotosAccess ? .staging(.photosDenied, staging) : second
     }
 
     /// A route for the files not yet committed, after reading Photos access again (backlog section 5: before a paused
@@ -451,9 +453,11 @@ public final class ImportModel: BrowseImporting {
     /// access was turned off or restricted meanwhile, but never moves a Files job to Photos: granting access mid-job
     /// applies from the next import, which follows the setting (decision 9; the Photos-denied line says "next time").
     func continuingRoute() async -> ImportRoute? {
-        guard let made = jobDestinations, progress.destination?.kind != .filesFolder else { return nil }
-        let decision = DestinationDecision.resolve(setting: jobSetting, authorisation: await photos.authorisation())
-        guard decision.kind == .filesFolder, decision != progress.destination else { return nil }
+        guard let made = jobDestinations, progress.destination?.kind != .staging else { return nil }
+        let decision = DestinationDecision.resolve(choice: jobSetting.preferred,
+                                                   authorisation: await photos.authorisation(),
+                                                   staging: ImportRoute.defaultStagingPlace)
+        guard decision.kind == .staging, decision != progress.destination else { return nil }
         let photos = self.photos
         return try? ImportRoute(decision, photos: made.photos, filesFolder: made.filesFolder,
                                 authorisation: { await photos.authorisation() })

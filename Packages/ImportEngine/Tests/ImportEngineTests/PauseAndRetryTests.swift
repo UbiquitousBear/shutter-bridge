@@ -218,7 +218,7 @@ struct PauseTests {
         await h.trace.next(.paused(.cameraRemoved))
         b.release(.fail(.disconnected))
         let link2 = h.link(h.singles(["A.JPG", "B.JPG"], prefix: "s2"))
-        let denied = DestinationDecision.files(.photosDenied)
+        let denied = DestinationDecision.stagedHere(.photosDenied)
         try await h.engine.reconnect(link2, to: .filesFolder(h.files, reason: .photosDenied))
         #expect(await h.waitFinished() == .completed)
         #expect(await h.photos.committedNames == ["A.JPG"])

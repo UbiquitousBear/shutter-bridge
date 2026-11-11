@@ -1,11 +1,13 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// Where imported files end up (section 5 of docs/iteration-1-backlog.md, decision 9): the import destination
-// protocol, the RAW+JPEG pairing rule, the destination setting and the rule that picks Photos or Files, the Files
-// folder destination (pure Foundation) and the Photos destination's logic over a `PhotoLibraryClient` protocol. The
-// real Photos library (`SystemPhotoLibrary`, `PHAssetCreationRequest`) and ImageIO's metadata reader sit behind
-// `#if canImport(...)`, so everything else builds and tests on Linux.
+// Where imported files end up (section 5 of docs/iteration-1-backlog.md, decision 9; staging, Shamil, 11 Nov): the
+// import destination protocol, the RAW+JPEG pairing rule, the remembered choice and the rule that picks Photos or
+// staging, the staging folder destination and its placement core (pure Foundation), and the Photos destination's
+// logic over a `PhotoLibraryClient` protocol. The real Photos library (`SystemPhotoLibrary`,
+// `PHAssetCreationRequest`), ImageIO's metadata reader and the iCloud Drive side of staging
+// (`UbiquityStagingLocator`, `UbiquitousFileMover`) sit behind `#if canImport(...)` or `#if os(iOS)`, so everything
+// else builds and tests on Linux.
 let package = Package(
     name: "PhotosBridge",
     platforms: [

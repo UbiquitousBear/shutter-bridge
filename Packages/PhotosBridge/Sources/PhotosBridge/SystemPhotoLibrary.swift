@@ -62,7 +62,7 @@ public struct SystemPhotoLibrary: PhotoLibraryClient {
                         }
                     }
                     // Photos copies the file; the destination deletes the staged file after a successful save, so a
-                    // refused save leaves it for the Files fallback. Moving (`shouldMoveFile`) is untested.
+                    // refused save leaves it for the staging fallback. Moving (`shouldMoveFile`) is untested.
                     options.shouldMoveFile = false
                     request.addResource(with: Self.map(resource.role), fileURL: resource.fileURL, options: options)
                 }
@@ -110,7 +110,7 @@ public struct SystemPhotoLibrary: PhotoLibraryClient {
         case .denied: .denied
         case .authorized: .authorised
         case .limited: .limited
-        // A status this build doesn't know: Files is the side that can't lose a photo.
+        // A status this build doesn't know: staging is the side that can't lose a photo.
         @unknown default: .denied
         }
     }

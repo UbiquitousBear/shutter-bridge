@@ -309,7 +309,7 @@ struct SettingsPhotosAccessTests {
         let photos = FakePhotosAccess(.denied)
         let model = SettingsModel(store: InMemoryDestinationSettingStore(), photos: photos)
         await model.refreshPhotosAccess()
-        model.destination = .filesFolder
+        model.destination = .staging
         #expect(model.forcedFilesLine == nil)
         #expect(!model.offersPhotosSettingsLink)
         model.destination = .photos

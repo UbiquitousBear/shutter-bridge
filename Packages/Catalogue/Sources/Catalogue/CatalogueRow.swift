@@ -58,9 +58,17 @@ struct CatalogueRow: Sendable, Hashable {
     /// The `.partial` file of a resumable download (`CatalogueRecord.tempURL`); nil on every other row.
     var tempURL: URL? = nil
     var assetLocalID: String?
-    /// Where an import to Files put the file, relative to the app's Documents folder (PhotosBridge's `FileLocation`).
+    /// Where an import to Files put the file, relative to the app's Documents folder (builds before 11 Nov).
     var fileRelativePath: String?
     var pairStem: String
+    /// New in `CatalogueSchemaV3`: the staged copy's path under its root (`StagedLocation.relativePath`); nil when the
+    /// file isn't staged.
+    var stagedRelativePath: String? = nil
+    /// New in `CatalogueSchemaV3`: `StagingRoot`'s raw value, so a root a later version adds reads as not staged
+    /// rather than failing.
+    var stagedRoot: String? = nil
+    /// New in `CatalogueSchemaV3`: when the file was staged.
+    var stagedAt: Date? = nil
 }
 
 extension CatalogueRow {
@@ -77,7 +85,9 @@ extension CatalogueRow {
                   captureDate: id.captureDate.rawValue, size: Int64(bitPattern: id.size),
                   format: record.format.rawValue, state: record.state.rawValue,
                   resumeOffset: Int64(bitPattern: record.resumeOffset), tempURL: record.tempURL,
-                  assetLocalID: assetLocalID, fileRelativePath: fileRelativePath, pairStem: id.pairStem)
+                  assetLocalID: assetLocalID, fileRelativePath: fileRelativePath, pairStem: id.pairStem,
+                  stagedRelativePath: record.staged?.relativePath, stagedRoot: record.staged?.root.rawValue,
+                  stagedAt: record.staged?.stagedAt)
     }
 
     /// The record this row holds; nil when its capture date isn't one (a row no version of this code writes).
@@ -94,10 +104,16 @@ extension CatalogueRow {
         }
         return CatalogueRecord(identity: identity, format: PTPMediaKind(rawValue: format) ?? .other,
                                state: objectState, location: location,
-                               resumeOffset: UInt64(bitPattern: resumeOffset), tempURL: tempURL)
+                               resumeOffset: UInt64(bitPattern: resumeOffset), tempURL: tempURL, staged: staged)
     }
 
     var objectState: ObjectState { ObjectState(rawValue: state) ?? .new }
+
+    /// The staged copy; nil when there is no path, or the root is one this build doesn't know.
+    var staged: StagedLocation? {
+        guard let stagedRelativePath, let stagedRoot, let root = StagingRoot(rawValue: stagedRoot) else { return nil }
+        return StagedLocation(root: root, relativePath: stagedRelativePath, stagedAt: stagedAt)
+    }
 
     /// What "already imported" matches this row on (`ObjectIdentity.ContentKey`), from the columns every row has had
     /// since build 17.1, so rows written before the rule match with nothing recomputed. Nil when the stored date
@@ -127,6 +143,17 @@ enum ContentMatch {
             out[identity] = known[identity.contentKey] ?? .new
         }
         return out
+    }
+
+    /// The identities among `identities` that some row of `rows` with the same content has a staged copy for
+    /// (`CatalogueStore.stagedStates(of:)`). `rows` must include every row that could match (more is fine).
+    static func staged(of identities: [ObjectIdentity], among rows: some Sequence<CatalogueRow>)
+        -> Set<ObjectIdentity> {
+        var stagedKeys: Set<ObjectIdentity.ContentKey> = []
+        for row in rows where row.staged != nil {
+            if let key = row.contentKey { stagedKeys.insert(key) }
+        }
+        return Set(identities.filter { stagedKeys.contains($0.contentKey) })
     }
 }
 

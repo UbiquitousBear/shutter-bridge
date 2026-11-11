@@ -34,8 +34,8 @@ extension AppModel {
     /// - one `ImportEngine` with it, staging under the temporary folder (`tmp/Imports`, the engine's default, which it
     ///   empties at start-up);
     /// - Photos through `SystemPhotoLibrary` (`PhotosLibraryDestination`, one album per camera by default), and the
-    ///   Files folder under Documents, one folder per camera (`FilesFolderDestination`), which the Info.plist shows in
-    ///   Files as On My iPhone › Shutter Bridge;
+    ///   staging folder under Documents, one folder per camera and capture day (`StagingFolderDestination`), which
+    ///   the Info.plist shows in Files as On My iPhone › Shutter Bridge › Staging;
     /// - the destination setting and the album identifiers in `UserDefaults`;
     /// - discovery through `USBCameraBrowser`, and the camera key from the USB link's key material
     ///   (`CameraKeys.keying(material:)`: hashed device UUID in MTP, mode and volume name in MSC; unverified, backlog

@@ -9,10 +9,10 @@ import SimulatedLink
 import Testing
 
 /// The engine end to end against the simulated link, through its public surface only: a real `ImportEngine` on the
-/// continuous clock, the in-memory catalogue and the real Files destination in a temporary Documents folder. The
-/// engine's own tests cover its rules with fakes on a manual clock; these check that the rules hold against a link
-/// that behaves like ImageCaptureCore (backlog sections 3 and 7). Photos isn't reachable on Linux or in a package
-/// test, so every job goes to Files.
+/// continuous clock, the in-memory catalogue and the real staging destination (which replaced the Files folder) in a
+/// temporary Documents folder. The engine's own tests cover its rules with fakes on a manual clock; these check that
+/// the rules hold against a link that behaves like ImageCaptureCore (backlog sections 3 and 7). Photos isn't reachable
+/// on Linux or in a package test, so every job is staged.
 final class Bench {
     static let zone = TimeZone(identifier: "UTC")!
     let root: URL
@@ -21,7 +21,7 @@ final class Bench {
     let catalogue = InMemoryCatalogue()
     let camera = CameraKey(rawValue: "simulated-a7c2")
     let engine: ImportEngine
-    let files: FilesFolderDestination
+    let files: StagingFolderDestination
 
     init(downloadsInFlight: Int = 1) {
         root = FileManager.default.temporaryDirectory
@@ -31,7 +31,8 @@ final class Bench {
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         engine = ImportEngine(catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),
                               stagingDirectory: staging, timeZone: Bench.zone)
-        files = FilesFolderDestination(documentsDirectory: documents, cameraName: "ILCE-7CM2")
+        files = StagingFolderDestination(root: documents, place: ImportRoute.defaultStagingPlace,
+                                         cameraName: "ILCE-7CM2", timeZone: Bench.zone)
     }
 
     deinit { try? FileManager.default.removeItem(at: root) }
@@ -67,12 +68,15 @@ final class Bench {
         return nil
     }
 
-    /// The files in the camera's Files folder, by name.
+    /// The files in the camera's staging folder, by name, from every capture-day folder.
     func importedFiles() -> [String: Data] {
-        let folder = files.folderURL
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        let days = (try? FileManager.default.contentsOfDirectory(atPath: files.cameraFolderURL.path)) ?? []
         var out: [String: Data] = [:]
-        for name in names { out[name] = try? Data(contentsOf: folder.appendingPathComponent(name)) }
+        for day in days {
+            let folder = files.cameraFolderURL.appendingPathComponent(day)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for name in names { out[name] = try? Data(contentsOf: folder.appendingPathComponent(name)) }
+        }
         return out
     }
 
@@ -122,7 +126,7 @@ struct EngineAgainstSimulatorTests {
         #expect(bench.stagedFiles() == 0)
         for item in try await link.list() { #expect(await bench.state(of: item) == .imported, "\(item.name)") }
         // Files are dated by their capture date.
-        let first = bench.files.folderURL.appendingPathComponent("DSC00001.ARW")
+        let first = bench.files.cameraFolderURL.appendingPathComponent("2026-11-01/DSC00001.ARW")
         let modified = try FileManager.default.attributesOfItem(atPath: first.path)[.modificationDate] as? Date
         #expect(modified == PTPDateTime.parse("20261101T090000", defaultTimeZone: Bench.zone))
 

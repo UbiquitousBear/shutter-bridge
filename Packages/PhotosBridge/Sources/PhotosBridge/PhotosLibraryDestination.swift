@@ -5,8 +5,8 @@ import Foundation
 /// each found by its stored `localIdentifier` and created once. Returns the asset's `localIdentifier`.
 ///
 /// A save refused as a denial (`PHPhotosErrorDomain` 3311, or 3310) throws `.photosAccessDenied`: not a failed file;
-/// the engine sends this unit and the rest to Files. On a successful save the staged files are deleted (they are
-/// consumed, as the protocol says); on a failure they stay, so the Files fallback can move them.
+/// the engine stages this unit and the rest instead. On a successful save the staged files are deleted (they are
+/// consumed, as the protocol says); on a failure they stay, so the staging fallback can move them.
 ///
 /// Read the authorisation with `PhotosAccessGate` before the import starts and before it continues; this type
 /// doesn't ask for access.
@@ -143,8 +143,8 @@ public actor PhotosLibraryDestination: ImportDestination {
 
 /// Reads the Photos authorisation and decides the destination: before an import starts and again before a paused
 /// or interrupted import continues (access can change in Settings while the app is away). Asks for `.readWrite` only
-/// while it is not determined and the setting says Photos, so the prompt comes once, at the first import; Limited
-/// Access with nothing selected is enough (decision 9).
+/// while it is not determined and the choice is *Import to Photos*, so the prompt comes once, at the first import to
+/// Photos, and never for *Stage*; Limited Access with nothing selected is enough (decision 9).
 public struct PhotosAccessGate: Sendable {
     private let library: any PhotoLibraryClient
 
@@ -153,18 +153,24 @@ public struct PhotosAccessGate: Sendable {
     }
 
     /// Before an import, or before a continue: never returns `.askForPhotosAccess`.
-    public func decision(for setting: DestinationSetting) async -> DestinationDecision {
-        let first = DestinationDecision.resolve(setting: setting, authorisation: await library.authorisation())
+    ///
+    /// - Parameters:
+    ///   - choice: *Import to Photos* or *Stage*.
+    ///   - staging: where staging goes now, for a staged decision.
+    public func decision(for choice: DestinationKind, staging: StagingPlace) async -> DestinationDecision {
+        if choice == .staging { return .staging(.chosen, staging) } // never reads or asks for Photos access
+        let first = DestinationDecision.resolve(choice: choice, authorisation: await library.authorisation(),
+                                                staging: staging)
         guard first == .askForPhotosAccess else { return first }
         let answered = await library.requestReadWriteAuthorisation()
-        let second = DestinationDecision.resolve(setting: setting, authorisation: answered)
+        let second = DestinationDecision.resolve(choice: choice, authorisation: answered, staging: staging)
         // Still not determined (the prompt couldn't be shown): treat as a denial for this import rather than loop.
-        return second == .askForPhotosAccess ? .files(.photosDenied) : second
+        return second == .askForPhotosAccess ? .staging(.photosDenied, staging) : second
     }
 
-    /// After a save failed as a denial: Files for the rest of the import, whatever the setting, with the reason read
-    /// from the authorisation now.
-    public func decisionAfterDeniedSave() async -> DestinationDecision {
-        DestinationDecision.afterDeniedSave(authorisation: await library.authorisation())
+    /// After a save failed as a denial: staging for the rest of the import, with the reason read from the
+    /// authorisation now.
+    public func decisionAfterDeniedSave(staging: StagingPlace) async -> DestinationDecision {
+        DestinationDecision.afterDeniedSave(authorisation: await library.authorisation(), staging: staging)
     }
 }

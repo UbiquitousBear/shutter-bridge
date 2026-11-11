@@ -83,7 +83,7 @@ struct ImportModelTests {
         final class Seen: @unchecked Sendable {
             var revisions: [Int] = []
         }
-        let h = await harness(setting: .filesFolder)
+        let h = await harness(setting: .staging)
         let seen = Seen()
         let updates = h.model.importedUpdates()
         let reader = Task { @MainActor in
@@ -107,7 +107,7 @@ struct ImportModelTests {
 
     @Test func eachImportedFileIsLoggedWithItsIdentityAndNoKey() async {
         let log = RecordingLog()
-        let h = await harness(setting: .filesFolder, log: log)
+        let h = await harness(setting: .staging, log: log)
         #expect(await h.importAll(card) == .started(3))
         #expect(await h.finished())
         let tag = CameraKeyTags.shared.tag(for: h.camera.key)
@@ -182,20 +182,20 @@ struct ImportModelTests {
 
     @Test func choosingFilesNeverAsksAndSaysItWasChosen() async {
         let photos = FakePhotosAccess(.notDetermined)
-        let h = await harness(setting: .filesFolder, photos: photos)
+        let h = await harness(setting: .staging, photos: photos)
         _ = await h.importAll(card)
         #expect(await h.finished())
         #expect(photos.askCount == 0)
-        #expect(h.model.progress.destination == .files(.chosen))
+        #expect(h.model.progress.destination == .stagedHere(.chosen))
         #expect(h.model.filesReasonLine == "You chose Files in Settings.")
         #expect(!h.model.offersPhotosSettingsLink)
     }
 
     @Test func theNextImportFollowsTheSetting() async {
-        let h = await harness(setting: .filesFolder)
+        let h = await harness(setting: .staging)
         _ = await h.importAll([card[0]])
         #expect(await h.finished())
-        #expect(h.model.progress.destination == .files(.chosen))
+        #expect(h.model.progress.destination == .stagedHere(.chosen))
         h.settings.save(DestinationSetting(preferred: .photos))
         _ = await h.model.importItems([card[2]], from: h.camera, link: await freshLink())
         #expect(await h.state(.finished(.completed)))
@@ -209,7 +209,7 @@ struct ImportModelTests {
         photos.change(afterNextReadTo: .denied)   // read as allowed at the start, denied after the refused save
         _ = await h.importAll(card)
         #expect(await h.finished())
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         #expect(await h.destinations.files.names.count == 3)
         #expect(h.model.progress.filesFailed == 0)
@@ -280,7 +280,7 @@ struct ImportModelTests {
         await h.model.pause()
         photos.set(.denied)   // turned off in Settings while the app was away
         await h.model.resume()
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         await h.model.cancel()
     }
@@ -293,15 +293,15 @@ struct ImportModelTests {
         _ = await h.importAll(card)
         #expect(await eventually { await h.link.bytesStarted == 1 })
         await h.model.refresh()
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         await h.model.pause()
         photos.set(.authorised)   // allowed in Settings while the app was away
         await h.model.resume()
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.offersPhotosSettingsLink)
         await h.model.scenePhaseChanged(.background)
         await h.model.scenePhaseChanged(.active)
-        #expect(h.model.progress.destination == .files(.photosDenied))
+        #expect(h.model.progress.destination == .stagedHere(.photosDenied))
         #expect(h.model.filesReasonLine == ImportWording.filesReason(.photosDenied))
         await h.model.cancel()
     }

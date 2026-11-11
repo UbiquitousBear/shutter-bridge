@@ -4,23 +4,23 @@ import Testing
 
 @Suite("Photos access decides the destination")
 struct PhotosAccessTests {
-    @Test func deniedGoesToFilesAndLimitedToPhotos() {
+    @Test func deniedIsStagedAndLimitedGoesToPhotos() {
         #expect(PhotosAuthorisation.notDetermined.destination == nil)
-        #expect(PhotosAuthorisation.denied.destination == .filesFolder)
-        #expect(PhotosAuthorisation.restricted.destination == .filesFolder)
+        #expect(PhotosAuthorisation.denied.destination == .staging)
+        #expect(PhotosAuthorisation.restricted.destination == .staging)
         #expect(PhotosAuthorisation.limited.destination == .photos)
         #expect(PhotosAuthorisation.authorised.destination == .photos)
     }
 
-    /// The rule with the setting agrees with the access-only rule: on Files it never offers the Settings link
-    /// whatever the access; on Photos it gives the same destination wherever the access alone has an answer.
-    @Test func destinationFollowsTheSettingAndAccess() {
+    /// The rule with the choice agrees with the access-only rule: on Stage it never offers the Settings link
+    /// whatever the access; on Import to Photos it gives the same destination wherever the access alone has an answer.
+    @Test func destinationFollowsTheChoiceAndAccess() {
         for access in PhotosAuthorisation.allCases {
-            let files = DestinationDecision.resolve(setting: DestinationSetting(preferred: .filesFolder),
-                                                    authorisation: access)
-            #expect(files == .files(.chosen))
-            #expect(files.filesReason?.offersSettingsLink == false)
-            #expect(DestinationDecision.resolve(setting: .default, authorisation: access).kind == access.destination)
+            let staged = DestinationDecision.resolve(choice: .staging, authorisation: access, staging: .iCloudDrive)
+            #expect(staged == .staging(.chosen, .iCloudDrive))
+            #expect(staged.stagingReason?.offersSettingsLink == false)
+            #expect(DestinationDecision.resolve(choice: .photos, authorisation: access, staging: .iCloudDrive).kind
+                == access.destination)
         }
     }
 
@@ -33,7 +33,7 @@ struct PhotosAccessTests {
 
 /// A destination that records what it was given, to show the protocol can be met without Photos.
 actor RecordingDestination: ImportDestination {
-    nonisolated let kind: DestinationKind = .filesFolder
+    nonisolated let kind: DestinationKind = .staging
     private(set) var committed: [CommitUnit] = []
     var failNext: ImportDestinationFailure?
 
@@ -43,7 +43,7 @@ actor RecordingDestination: ImportDestination {
             throw failure
         }
         committed.append(unit)
-        return .files(unit.files.map { FileLocation(relativePath: "Imports/" + $0.filename) })
+        return .staged(place: .iCloudDrive, unit.files.map { FileLocation(relativePath: "Staging/" + $0.filename) })
     }
 
     func setFailNext(_ f: ImportDestinationFailure) { failNext = f }
@@ -59,13 +59,13 @@ struct ImportDestinationTests {
         #expect(CommitUnit.single(jpg).files == [jpg])
     }
 
-    @Test func filesKeepBothFilesOfAPair() async throws {
+    @Test func stagingKeepsBothFilesOfAPair() async throws {
         let d = RecordingDestination()
         let dest: any ImportDestination = d
         let result = try await dest.commit(.pair(raw: raw, processed: jpg))
-        #expect(result == .files([FileLocation(relativePath: "Imports/DSC00001.ARW"),
-                                  FileLocation(relativePath: "Imports/DSC00001.JPG")]))
-        #expect(dest.kind == .filesFolder)
+        #expect(result == .staged(place: .iCloudDrive, [FileLocation(relativePath: "Staging/DSC00001.ARW"),
+                                                        FileLocation(relativePath: "Staging/DSC00001.JPG")]))
+        #expect(dest.kind == .staging)
     }
 
     @Test func failuresAreTyped() async {

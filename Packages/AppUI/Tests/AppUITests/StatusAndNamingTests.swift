@@ -55,7 +55,7 @@ struct CameraDisplayNameTests {
                                               documentsDirectory: URL(fileURLWithPath: "/nonexistent/Documents"))
         let start = Date(timeIntervalSince1970: 1_762_700_000)
         let inMSC = made.destinations(for: msc, startedAt: start)
-        #expect(inMSC.filesFolderName == "Camera")
+        #expect(inMSC.filesFolderName == "Staging › Camera")
         let photos = try #require(inMSC.photos as? PhotosLibraryDestination)
         let albums = photos.albumPlan.albums
         // The per-camera album is still found by the camera's key; only a new album's title changes.
@@ -65,7 +65,7 @@ struct CameraDisplayNameTests {
         #expect(albums.allSatisfy { !$0.title.contains("Untitled") })
 
         let inMTP = made.destinations(for: mtp, startedAt: start)
-        #expect(inMTP.filesFolderName == "ILCE-7CM2")
+        #expect(inMTP.filesFolderName == "Staging › ILCE-7CM2")
         let mtpPhotos = try #require(inMTP.photos as? PhotosLibraryDestination)
         #expect(mtpPhotos.albumPlan.albums.first?.title == "ILCE-7CM2")
     }

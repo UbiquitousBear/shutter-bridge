@@ -1,4 +1,5 @@
 import Foundation
+@testable import ImportEngine
 import PhotosBridge
 import Synchronization
 
@@ -46,7 +47,7 @@ actor FakeDestination: ImportDestination {
         switch kind {
         case .photos:
             return .photosAsset(localIdentifier: "asset-\(commits.count)")
-        case .filesFolder:
+        case .staging:
             var locations: [FileLocation] = []
             for file in unit.files {
                 var name = file.filename
@@ -64,7 +65,7 @@ actor FakeDestination: ImportDestination {
                 }
                 locations.append(FileLocation(relativePath: "Untitled/" + name))
             }
-            return .files(locations)
+            return .staged(place: ImportRoute.defaultStagingPlace, locations)
         }
     }
 }
@@ -114,5 +115,13 @@ actor HeldPhotosAccess {
             }
         }
         return answers[min(i, answers.count - 1)]
+    }
+}
+
+extension DestinationDecision {
+    /// Staged on this iPhone for `reason`: the decision a staging route built without a place carries
+    /// (`ImportRoute.defaultStagingPlace`). Was `.files(reason)` before staging replaced the Files folder.
+    static func stagedHere(_ reason: StagingReason) -> DestinationDecision {
+        .staging(reason, ImportRoute.defaultStagingPlace)
     }
 }

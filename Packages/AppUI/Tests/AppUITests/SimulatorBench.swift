@@ -61,8 +61,8 @@ actor SimulatedDiscovery: CameraDiscovery {
     }
 }
 
-/// Photos as a recording fake (Photos isn't reachable on Linux or in a package test), and the real Files folder
-/// (`FilesFolderDestination`) in the bench's temporary Documents folder.
+/// Photos as a recording fake (Photos isn't reachable on Linux or in a package test), and the real staging folder
+/// (`StagingFolderDestination`, which replaced the Files folder) in the bench's temporary Documents folder.
 final class SimulatorDestinations: ImportDestinationMaking, @unchecked Sendable {
     let documents: URL
     let photos = RecordingDestination(kind: .photos)
@@ -70,8 +70,11 @@ final class SimulatorDestinations: ImportDestinationMaking, @unchecked Sendable 
     init(documents: URL) { self.documents = documents }
 
     func destinations(for camera: ImportCamera, startedAt: Date) -> ImportDestinations {
-        let files = FilesFolderDestination(documentsDirectory: documents, cameraName: camera.name)
-        return ImportDestinations(photos: photos, filesFolder: files, filesFolderName: files.folderName)
+        let staging = StagingFolderDestination(root: documents, place: ImportRoute.defaultStagingPlace,
+                                               cameraName: camera.name, timeZone: .current)
+        return ImportDestinations(photos: photos, filesFolder: staging,
+                                  filesFolderName: StagingFolderDestination.folderName + " › "
+                                      + staging.cameraFolderName)
     }
 }
 
@@ -141,7 +144,7 @@ final class SimulatorBench {
     ///   - keyMaterial: Keys cameras as the app does (`LiveRoot`): an MTP link by this material, any other mode by
     ///     its mode and name. Nil keys every camera by its descriptor.
     static func make(card: ScriptedCard = standInCard(), link: SimulatedCameraLink? = nil,
-                     setting: DestinationKind = .filesFolder, photos: FakePhotosAccess = FakePhotosAccess(),
+                     setting: DestinationKind = .staging, photos: FakePhotosAccess = FakePhotosAccess(),
                      keyMaterial: String? = nil) async throws -> SimulatorBench {
         let bench = SimulatorBench(link: link ?? SimulatedCameraLink(card: card, chunkSize: 4096), setting: setting,
                                    photos: photos, keyMaterial: keyMaterial)
@@ -269,17 +272,29 @@ final class SimulatorBench {
 
     // MARK: - Reading the results
 
-    /// The camera's folder in Files, named with the app's display name ("Camera" in MSC).
+    /// The camera's staging folder, Documents/Staging/camera, named with the app's display name ("Camera" in MSC).
     var filesFolder: URL {
         let name = CamerasWording.displayName(for: camera)
-        return documents.appendingPathComponent(FilesFolderNaming.folderName(forCamera: name))
+        return documents.appendingPathComponent(StagingFolderDestination.folderName)
+            .appendingPathComponent(FilesFolderNaming.folderName(forCamera: name))
     }
 
-    /// The files in the camera's Files folder, by name.
+    /// Where a file staged in the camera's staging folder is, whichever capture-day folder it is in.
+    func stagedFile(named name: String) -> URL? {
+        let days = (try? FileManager.default.contentsOfDirectory(atPath: filesFolder.path)) ?? []
+        return days.map { filesFolder.appendingPathComponent($0).appendingPathComponent(name) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// The files in the camera's staging folder, by name, from every capture-day folder.
     func importedFiles() -> [String: Data] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: filesFolder.path)) ?? []
+        let days = (try? FileManager.default.contentsOfDirectory(atPath: filesFolder.path)) ?? []
         var out: [String: Data] = [:]
-        for name in names { out[name] = try? Data(contentsOf: filesFolder.appendingPathComponent(name)) }
+        for day in days {
+            let folder = filesFolder.appendingPathComponent(day)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for name in names { out[name] = try? Data(contentsOf: folder.appendingPathComponent(name)) }
+        }
         return out
     }
 

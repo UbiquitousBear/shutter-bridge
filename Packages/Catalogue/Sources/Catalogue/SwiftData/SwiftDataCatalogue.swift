@@ -22,9 +22,12 @@ import SwiftData
 /// **The Camera row and partial files** (Iteration 3, schema version 2): `camera(_:)`, `cameras()` and
 /// `upsertCamera(_:)` read and write the `Camera` row's fields through `CameraRecord` (never a password: there is no
 /// column for one), and `markPartial` writes a download checkpoint (`resumeOffset` and `tempURL`). A store written
-/// by an earlier build opens through `CatalogueMigrationPlan`'s lightweight V1 → V2 stage. Camera rows are unique by
-/// key by the same rule; should a key ever have two, every read picks the same one (`CameraOrder.preferred(_:)`) and
+/// by an earlier build opens through `CatalogueMigrationPlan`'s lightweight stages. Camera rows are unique by key by
+/// the same rule; should a key ever have two, every read picks the same one (`CameraOrder.preferred(_:)`) and
 /// `upsertCamera(_:)` writes the same fields to all of them.
+///
+/// **Staging** (Shamil, 11 Nov; schema version 3): `markStaged` and `clearStaged` write the file row's staged copy,
+/// which `upsert` and `markPartial` keep, and `stagedStates(of:)` matches it by content as `states(of:)` does.
 ///
 /// Each write is saved before the call returns. If any step of a write throws (a fetch, the save), every change it
 /// made is rolled back and the error thrown, so a failed write leaves nothing pending for later reads or writes.
@@ -91,31 +94,19 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
     /// by any earlier build have these columns, so they match as they are; the schema is unchanged.
     public func states(of identities: [ObjectIdentity]) throws -> [ObjectIdentity: ObjectState] {
         guard !identities.isEmpty else { return [:] }
-        let sizes = Set(identities.map { Int64(bitPattern: $0.size) }).sorted()
-        var candidates: [CatalogueRow] = []
-        var start = sizes.startIndex
-        while start < sizes.endIndex {
-            let end = min(start + Self.sizesPerFetch, sizes.endIndex)
-            let chunk = Array(sizes[start ..< end])
-            start = end
-            let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
-                chunk.contains(object.size)
-            })
-            for object in try modelContext.fetch(descriptor) {
-                candidates.append(object.row)
-            }
-        }
-        return ContentMatch.states(of: identities, among: candidates)
+        return ContentMatch.states(of: identities, among: try candidates(for: identities))
     }
 
-    /// Sizes per fetch in `states(of:)`, so one predicate never carries an unbounded list (SQLite limits the
-    /// variables in one statement).
+    /// Sizes per fetch in `states(of:)` and `stagedStates(of:)`, so one predicate never carries an unbounded list
+    /// (SQLite limits the variables in one statement).
     static let sizesPerFetch = 500
 
+    /// Keeps the stored row's staged copy (`StagedMark.upserting`).
     public func upsert(_ record: CatalogueRecord) throws {
+        let existing = try objects(withKey: record.identity.storageKey)
+        let kept = StagedMark.upserting(record, over: furthestAlong(existing)?.row.record)
         try write { context in
-            try upsertObject(CatalogueRow(record), existing: try objects(withKey: record.identity.storageKey),
-                             in: context)
+            try upsertObject(CatalogueRow(kept), existing: existing, in: context)
         }
     }
 
@@ -146,6 +137,36 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         try write { context in
             try upsertObject(CatalogueRow(record), existing: existing, in: context)
         }
+    }
+
+    /// Looks up the identity's row, applies `StagedMark`'s rule to it and writes the result, in one actor call.
+    /// Duplicates for the identity are healed as by `upsert`.
+    public func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {
+        let existing = try objects(withKey: identity.storageKey)
+        let record = StagedMark.record(for: identity, format: format, at: location,
+                                       existing: furthestAlong(existing)?.row.record)
+        try write { context in
+            try upsertObject(CatalogueRow(record), existing: existing, in: context)
+        }
+    }
+
+    /// Clears the staged copy on every row of the identity (one, by the store's rule), leaving the rest as it is.
+    public func clearStaged(_ identity: ObjectIdentity) throws {
+        let existing = try objects(withKey: identity.storageKey)
+        guard existing.contains(where: { $0.stagedRelativePath != nil || $0.stagedRoot != nil }) else { return }
+        try write { _ in
+            for object in existing {
+                object.stagedRelativePath = nil
+                object.stagedRoot = nil
+                object.stagedAt = nil
+            }
+        }
+    }
+
+    /// By content, as `states(of:)`: the rows of every camera and folder whose size is one of the request's.
+    public func stagedStates(of identities: [ObjectIdentity]) throws -> Set<ObjectIdentity> {
+        guard !identities.isEmpty else { return [] }
+        return ContentMatch.staged(of: identities, among: try candidates(for: identities))
     }
 
     public func camera(_ key: CameraKey) throws -> CameraRecord? {
@@ -223,6 +244,26 @@ public actor SwiftDataCatalogue: ModelActor, CatalogueStore {
         if object.camera?.serial != row.cameraKey {
             object.camera = try cameraRow(serial: row.cameraKey, creating: true)
         }
+    }
+
+    /// Every row, of any camera and folder, whose size is one of `identities`', fetched a chunk of sizes at a time:
+    /// the candidates `ContentMatch` matches on name, capture time and size.
+    private func candidates(for identities: [ObjectIdentity]) throws -> [CatalogueRow] {
+        let sizes = Set(identities.map { Int64(bitPattern: $0.size) }).sorted()
+        var candidates: [CatalogueRow] = []
+        var start = sizes.startIndex
+        while start < sizes.endIndex {
+            let end = min(start + Self.sizesPerFetch, sizes.endIndex)
+            let chunk = Array(sizes[start ..< end])
+            start = end
+            let descriptor = FetchDescriptor<CameraObject>(predicate: #Predicate<CameraObject> { object in
+                chunk.contains(object.size)
+            })
+            for object in try modelContext.fetch(descriptor) {
+                candidates.append(object.row)
+            }
+        }
+        return candidates
     }
 
     private func objects(withKey key: String) throws -> [CameraObject] {

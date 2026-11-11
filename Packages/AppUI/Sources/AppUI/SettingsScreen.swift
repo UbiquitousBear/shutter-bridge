@@ -75,7 +75,7 @@ struct SettingsScreen: View {
     private static func symbol(for kind: DestinationKind) -> String {
         switch kind {
         case .photos: "photo.on.rectangle"
-        case .filesFolder: "folder"
+        case .staging: "folder"
         }
     }
 }

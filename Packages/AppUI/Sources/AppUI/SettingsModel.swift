@@ -1,4 +1,5 @@
 import Foundation
+import ImportEngine
 import Observation
 import PhotosBridge
 
@@ -10,8 +11,8 @@ import PhotosBridge
 /// what the app will actually do when Photos access overrides the setting (`forcedFilesLine`, with Open Settings when
 /// `offersPhotosSettingsLink`), reading the access in `refreshPhotosAccess()` when it appears and when the app comes
 /// back to the foreground (the person may have changed it in Settings). The rule itself is the import's
-/// (`DestinationDecision.resolve(setting:authorisation:)`); nothing here changes it. It is reached from the Cameras
-/// screen's toolbar.
+/// (`DestinationDecision.resolve(choice:authorisation:staging:)`); nothing here changes it. It is reached from the
+/// Cameras screen's toolbar.
 @MainActor
 @Observable
 public final class SettingsModel {
@@ -45,10 +46,10 @@ public final class SettingsModel {
 
     /// Why the next import goes to Files although the setting says Photos: access denied or restricted; nil when the
     /// setting is followed (or says Files, or access isn't read yet).
-    public var forcedFilesReason: FilesReason? {
+    public var forcedFilesReason: StagingReason? {
         guard let photosAccess else { return nil }
-        let reason = DestinationDecision.resolve(setting: DestinationSetting(preferred: destination),
-                                                 authorisation: photosAccess).filesReason
+        let reason = DestinationDecision.resolve(choice: destination, authorisation: photosAccess,
+                                                 staging: ImportRoute.defaultStagingPlace).stagingReason
         return reason?.isForced == true ? reason : nil
     }
 
@@ -59,7 +60,7 @@ public final class SettingsModel {
     public var offersPhotosSettingsLink: Bool { forcedFilesReason?.offersSettingsLink == true }
 
     /// The choices, in the order the picker shows them.
-    public static let choices: [DestinationKind] = [.photos, .filesFolder]
+    public static let choices: [DestinationKind] = [.photos, .staging]
 
     /// The picker's label for a choice.
     public static func label(for kind: DestinationKind) -> String {

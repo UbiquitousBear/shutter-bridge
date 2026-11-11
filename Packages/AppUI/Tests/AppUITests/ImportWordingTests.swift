@@ -15,18 +15,18 @@ struct ImportWordingTests {
             ImportWording.couldNotAdd, BrowseWording.lastKnownLine("8 Nov 2026 at 14:05"),
             BrowseWording.noMatchesDetail, AppWording.catalogueFailedDetail, BrowseWording.importStripHint,
         ]
-        lines += FilesReason.allCases.compactMap(SettingsWording.forcedFiles)
+        lines += StagingReason.allCases.compactMap(SettingsWording.forcedFiles)
         lines += PauseReason.allCases.map { ImportWording.paused($0) }
         lines.append(ImportWording.paused(.stalled, stallWaitsForPerson: true))
         lines += [JobOutcome.completed, .cancelled, .catalogueUnavailable].map(ImportWording.finished)
         lines += CameraLinkFailure.Kind.allCases.map { ImportWording.finished(.stopped($0)) }
-        lines += FilesReason.allCases.map(ImportWording.filesReason)
+        lines += StagingReason.allCases.map(ImportWording.filesReason)
         lines += [ImportRequestOutcome.started(2), .appended(1), .nothingNew, .busyWithAnotherCamera, .stillStarting]
             .compactMap(BrowseWording.importRequested)
         lines += [BrowseModel.SelectionBlock.video, .notAPhoto, .imported, .noCaptureDate, .cardNotRead]
             .map(BrowseWording.notSelectable)
         lines += [ImportWording.destination(.photos, folder: nil, finished: false, imported: 0)!,
-                  ImportWording.destination(.files(.chosen), folder: "Untitled", finished: true, imported: 1)!]
+                  ImportWording.destination(.stagedHere(.chosen), folder: "Untitled", finished: true, imported: 1)!]
         lines += USBMode.allCases.map { ImportWording.paused(.cameraRemoved, mode: $0) }
         return lines
     }
@@ -61,12 +61,12 @@ struct ImportWordingTests {
     }
 
     @Test func destinationNamesTheFolder() {
-        #expect(ImportWording.destination(.files(.photosDenied), folder: "ILCE-7CM2", finished: false, imported: 0)
+        #expect(ImportWording.destination(.stagedHere(.photosDenied), folder: "ILCE-7CM2", finished: false, imported: 0)
             == "Importing to Files: On My iPhone › Shutter Bridge › ILCE-7CM2.")
         #expect(ImportWording.destination(.photos, folder: "x", finished: true, imported: 2) == "Imported to Photos.")
         // A finished job that imported nothing (cancelled at once, stopped, all skipped) doesn't claim it did.
         #expect(ImportWording.destination(.photos, folder: "x", finished: true, imported: 0) == nil)
-        #expect(ImportWording.destination(.files(.chosen), folder: "x", finished: true, imported: 0) == nil)
+        #expect(ImportWording.destination(.stagedHere(.chosen), folder: "x", finished: true, imported: 0) == nil)
         #expect(ImportWording.destination(nil, folder: nil, finished: false, imported: 0) == nil)
         #expect(ImportWording.destination(.askForPhotosAccess, folder: nil, finished: false, imported: 0) == nil)
     }
@@ -75,7 +75,7 @@ struct ImportWordingTests {
         let raw = item("DSC00001.ARW", size: 45_600_000)
         let video = item("C0001.MP4")
         #expect(ImportWording.row(.committing, item: raw, going: .photos) == "Saving to Photos")
-        #expect(ImportWording.row(.committing, item: raw, going: .filesFolder) == "Saving to Files")
+        #expect(ImportWording.row(.committing, item: raw, going: .staging) == "Saving to Files")
         #expect(ImportWording.row(.skipped(.notAStill), item: video, going: .photos)
             == "Skipped: videos can't be imported yet")
         #expect(ImportWording.row(.skipped(.link(.itemNotFound)), item: raw, going: nil)

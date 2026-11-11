@@ -280,7 +280,7 @@ struct WiFiRecoveryTests {
         let notifier = FakeNotifier()
         let run = FakeBackgroundRun()
         let model = ImportModel(engine: engine,
-                                settings: InMemoryDestinationSettingStore(DestinationSetting(preferred: .filesFolder)),
+                                settings: InMemoryDestinationSettingStore(DestinationSetting(preferred: .staging)),
                                 photos: FakePhotosAccess(), destinations: destinations, background: run,
                                 notifier: notifier)
         let finder = FakeFinder()

@@ -168,18 +168,18 @@ struct ImportEngineSurfaceTests {
     @Test func routeFollowsTheDecision() throws {
         let folder = URL(fileURLWithPath: "/nonexistent")
         let photos = FakeDestination(kind: .photos, folder: folder)
-        let files = FakeDestination(kind: .filesFolder, folder: folder)
+        let files = FakeDestination(kind: .staging, folder: folder)
         let access: @Sendable () async -> PhotosAuthorisation = { .authorised }
-        let forced = try ImportRoute(.files(.photosRestricted), photos: photos, filesFolder: files,
+        let forced = try ImportRoute(.stagedHere(.photosRestricted), photos: photos, filesFolder: files,
                                      authorisation: access)
-        #expect(forced.decision == .files(.photosRestricted))
-        #expect(forced.destination.kind == .filesFolder)
+        #expect(forced.decision == .stagedHere(.photosRestricted))
+        #expect(forced.destination.kind == .staging)
         let chosen = try ImportRoute(.photos, photos: photos, filesFolder: files, authorisation: access)
         #expect(chosen.decision == .photos)
         #expect(chosen.destination.kind == .photos)
-        #expect(chosen.filesFolder.kind == .filesFolder)
+        #expect(chosen.filesFolder.kind == .staging)
         #expect(ImportRoute.photos(photos, filesFolder: files, authorisation: access).decision == chosen.decision)
-        #expect(ImportRoute.filesFolder(files, reason: .photosDenied).decision == .files(.photosDenied))
+        #expect(ImportRoute.filesFolder(files, reason: .photosDenied).decision == .stagedHere(.photosDenied))
     }
 
     /// The app asks for Photos access before a job starts; a route can't be built from "ask first", and saying so is
@@ -188,7 +188,7 @@ struct ImportEngineSurfaceTests {
         let folder = URL(fileURLWithPath: "/nonexistent")
         #expect(throws: ImportEngineError.photosAccessNotAsked) {
             try ImportRoute(.askForPhotosAccess, photos: FakeDestination(kind: .photos, folder: folder),
-                            filesFolder: FakeDestination(kind: .filesFolder, folder: folder),
+                            filesFolder: FakeDestination(kind: .staging, folder: folder),
                             authorisation: { .notDetermined })
         }
     }
@@ -197,15 +197,15 @@ struct ImportEngineSurfaceTests {
     @Test func afterADeniedSaveTheReasonFollowsTheAccess() {
         let folder = URL(fileURLWithPath: "/nonexistent")
         let route = ImportRoute.photos(FakeDestination(kind: .photos, folder: folder),
-                                       filesFolder: FakeDestination(kind: .filesFolder, folder: folder),
+                                       filesFolder: FakeDestination(kind: .staging, folder: folder),
                                        authorisation: { .denied })
         for access in PhotosAuthorisation.allCases {
             let after = route.afterDeniedSave(access)
-            #expect(after.decision == .afterDeniedSave(authorisation: access))
-            #expect(after.destination.kind == .filesFolder)
+            #expect(after.decision == .afterDeniedSave(authorisation: access, staging: ImportRoute.defaultStagingPlace))
+            #expect(after.destination.kind == .staging)
         }
-        #expect(route.afterDeniedSave(.restricted).decision == .files(.photosRestricted))
-        #expect(route.afterDeniedSave(.denied).decision == .files(.photosDenied))
+        #expect(route.afterDeniedSave(.restricted).decision == .stagedHere(.photosRestricted))
+        #expect(route.afterDeniedSave(.denied).decision == .stagedHere(.photosDenied))
     }
 
     /// A copy of `.autoupdatingCurrent` keeps following the system zone; the job's zone is fixed at the start, so a
@@ -218,7 +218,7 @@ struct ImportEngineSurfaceTests {
         let item = CameraItem(id: .init(rawValue: "a"), folder: "DCIM", name: "A.JPG", size: 10, captureDate: Harness.t0)
         let link = FakeCameraLink(card: [item])
         await link.setDefaultStep(.hold)
-        let files = FakeDestination(kind: .filesFolder, folder: root)
+        let files = FakeDestination(kind: .staging, folder: root)
         try await engine.start(.items([item]), from: link, camera: camera, to: .filesFolder(files, reason: .chosen))
         let zone = try #require(await engine.jobTimeZone())
         #expect(zone != TimeZone.autoupdatingCurrent) // an autoupdating zone equals only another autoupdating one

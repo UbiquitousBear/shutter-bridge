@@ -246,7 +246,7 @@ extension ImportEngine {
             failure = error
         }
 
-        // Photos refused the save (3311): not a failed file. This file and the rest go to the Files folder, and the
+        // Photos refused the save (3311): not a failed file. This file and the rest are staged, and the
         // Import screen says why (backlog section 5): a denial links to Settings, a restriction doesn't, so access is
         // read again now (`DestinationDecision.afterDeniedSave(authorisation:)`). Switched once, however many files
         // are in flight: another file's refusal may switch it while this one reads access, so it's checked again.
@@ -315,8 +315,14 @@ extension ImportEngine {
             refreshState()
             return false
         case .photosAccessDenied:
-            // From the Files folder, which has no Photos access to lose: treated as a rejection.
+            // From the staging folder, which has no Photos access to lose: treated as a rejection.
             resolve(entry, .failed(.destination(.rejected(detail: "access denied by the Files folder"))))
+            refreshState()
+            return false
+        case .stagingUnavailable:
+            // iCloud Drive went away mid-job. Until the engine switches to the staging folder on this iPhone (the
+            // staging route), the file fails without a retry, like a rejection.
+            resolve(entry, .failed(.destination(failure)))
             refreshState()
             return false
         }
@@ -341,13 +347,14 @@ extension ImportEngine {
     func commitUnit(for file: StagedFile) -> CommitUnit { .single(file) }
 
     /// Where each file of the unit went, in the unit's order: one Photos asset shared by every file, or one location
-    /// per file in the Files folder (nil for any the destination didn't report).
+    /// per file in the staging folder (nil for any the destination didn't report). Until the engine records staged
+    /// copies apart (`CatalogueStore.markStaged`), a staged file is recorded as the Files folder's was.
     static func locations(of result: ImportResult, for unit: CommitUnit) -> [ImportedLocation?] {
         let count = unit.files.count
         switch result {
         case let .photosAsset(localIdentifier):
             return Array(repeating: .photosAsset(localIdentifier: localIdentifier), count: count)
-        case let .files(locations):
+        case let .staged(_, locations):
             return (0 ..< count).map { i in
                 i < locations.count ? .file(relativePath: locations[i].relativePath) : nil
             }

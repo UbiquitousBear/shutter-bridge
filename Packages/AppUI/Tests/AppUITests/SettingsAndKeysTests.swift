@@ -19,11 +19,11 @@ struct SettingsTests {
         let suite = TemporaryDefaults()
         defer { suite.drop() }
         let model = SettingsModel(store: UserDefaultsDestinationSettingStore(defaults: suite.defaults))
-        model.destination = .filesFolder
+        model.destination = .staging
         // A later launch reads it back.
-        #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load().preferred == .filesFolder)
+        #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load().preferred == .staging)
         #expect(SettingsModel(store: UserDefaultsDestinationSettingStore(defaults: suite.defaults)).destination
-            == .filesFolder)
+            == .staging)
         model.destination = .photos
         #expect(UserDefaultsDestinationSettingStore(defaults: suite.defaults).load().preferred == .photos)
     }
@@ -39,9 +39,9 @@ struct SettingsTests {
     }
 
     @Test func choicesAndCopy() {
-        #expect(SettingsModel.choices == [.photos, .filesFolder])
+        #expect(SettingsModel.choices == [.photos, .staging])
         #expect(SettingsModel.label(for: .photos) == "Photos")
-        #expect(SettingsModel.label(for: .filesFolder) == "Files")
+        #expect(SettingsModel.label(for: .staging) == "Files")
         let footer = SettingsWording.destinationFooter
         #expect(footer.contains("On My iPhone › Shutter Bridge"))
         #expect(footer.contains("a folder for each camera"))

@@ -445,7 +445,7 @@ public enum SettingsWording {
     public static func destinationLabel(_ kind: DestinationKind) -> String {
         switch kind {
         case .photos: "Photos"
-        case .filesFolder: "Files"
+        case .staging: "Files"
         }
     }
 
@@ -456,7 +456,7 @@ public enum SettingsWording {
 
     /// What the app will do when Photos access overrides the setting (HIG Settings: show what will happen); nil when
     /// it doesn't. A denial comes with Open Settings; a restriction can't be changed there.
-    public static func forcedFiles(_ reason: FilesReason) -> String? {
+    public static func forcedFiles(_ reason: StagingReason) -> String? {
         switch reason {
         case .chosen: nil
         case .photosDenied: "Photos access is off, so imports go to Files."
@@ -590,7 +590,7 @@ public enum ImportWording {
         switch kind {
         case .photos:
             return "\(verb) Photos."
-        case .filesFolder:
+        case .staging:
             let path = ["On My iPhone", "Shutter Bridge", folder].compactMap { $0 }.joined(separator: " › ")
             return "\(verb) Files: \(path)."
         }
@@ -598,7 +598,7 @@ public enum ImportWording {
 
     /// Why the files go to Files. Forced: Photos access is off (with the Settings button) or restricted (no button,
     /// the person can't change it there). Chosen: it says so, with no button.
-    public static func filesReason(_ reason: FilesReason) -> String {
+    public static func filesReason(_ reason: StagingReason) -> String {
         switch reason {
         case .chosen:
             "You chose Files in Settings."
@@ -618,7 +618,7 @@ public enum ImportWording {
         case .downloading: "Copying from the camera"
         case .waitingToRetry: "Trying again"
         // One word per idea (HIG Writing): "Saving to", then "Imported to", as the summary says.
-        case .committing: kind == .filesFolder ? "Saving to Files" : "Saving to Photos"
+        case .committing: kind == .staging ? "Saving to Files" : "Saving to Photos"
         case let .imported(location):
             switch location {
             case .photosAsset?: "Imported to Photos"
@@ -665,6 +665,7 @@ public enum ImportWording {
             case .notEnoughSpace: "this iPhone is out of space"
             case .stagedFileMissing: "the copy went missing before it was saved"
             case .photosAccessDenied: "Photos access is off"
+            case .stagingUnavailable: "iCloud Drive isn't available"
             case .rejected: "it couldn't be saved"
             }
         }

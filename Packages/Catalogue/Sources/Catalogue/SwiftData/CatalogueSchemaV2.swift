@@ -2,9 +2,9 @@
 import Foundation
 import SwiftData
 
-// Version 2 of the catalogue's schema (Iteration 3; wireless plan W4; backlog section 0, "Catalogue fields"). The
-// current version: `SwiftDataCatalogue` uses these models through the `Camera`, `CameraObject` and `ImportJob`
-// typealiases in `CatalogueSchema.swift`.
+// Version 2 of the catalogue's schema (Iteration 3; wireless plan W4; backlog section 0, "Catalogue fields"). Frozen
+// since version 3 (`CatalogueSchemaV3.swift`, staging) became the current one: what every build from Catalogue V2 to
+// before staging shipped. Change nothing stored here; add a version instead.
 //
 // What changed from version 1, and nothing else: `Camera` gains `bluetoothPeripheralID`, optional, so the stage from
 // version 1 is lightweight (`CatalogueMigrationPlan.v1ToV2`). The other models are version 1's, copied unchanged,

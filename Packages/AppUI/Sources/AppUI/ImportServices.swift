@@ -65,8 +65,8 @@ public protocol ImportDestinationMaking: Sendable {
 }
 
 /// The app's destinations (backlog section 5): Photos through PhotosBridge's `PhotosLibraryDestination`, with the
-/// person's album and original choices (defaults: one album per camera, RAW as the original), and the Files folder
-/// in Documents, one folder per camera, named for the camera (`ImportCamera.name`, `FilesFolderDestination`). Pure
+/// person's album and original choices (defaults: one album per camera, RAW as the original), and the staging folder
+/// in Documents, one folder per camera and capture day (`ImportCamera.name`, `StagingFolderDestination`). Pure
 /// Foundation; the app passes the real library (`SystemPhotoLibrary`), `ImageIOMetadataReader` and its Documents
 /// folder.
 public struct StandardImportDestinations: ImportDestinationMaking {
@@ -91,8 +91,13 @@ public struct StandardImportDestinations: ImportDestinationMaking {
                              importID: UUID().uuidString, importDate: startedAt)
         let photos = PhotosLibraryDestination(library: library, albumStore: albumStore, metadata: metadata,
                                               options: options, albumPlan: plan)
-        let files = FilesFolderDestination(documentsDirectory: documentsDirectory, cameraName: camera.name)
-        return ImportDestinations(photos: photos, filesFolder: files, filesFolderName: files.folderName)
+        // Until the app reads where staging goes (its staging locator), staging is in the app's folder on this iPhone,
+        // where the Files folder was: On My iPhone › Shutter Bridge › Staging › camera › day.
+        let staging = StagingFolderDestination(root: documentsDirectory, place: ImportRoute.defaultStagingPlace,
+                                               cameraName: camera.name, timeZone: .current)
+        return ImportDestinations(photos: photos, filesFolder: staging,
+                                  filesFolderName: StagingFolderDestination.folderName + " › "
+                                      + staging.cameraFolderName)
     }
 }
 

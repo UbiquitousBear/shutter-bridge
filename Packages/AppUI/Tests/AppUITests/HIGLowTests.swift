@@ -191,10 +191,10 @@ struct DiscoveryFailureTests {
 struct WordingPolishTests {
     @Test func oneWordPerIdea() {
         let raw = item("DSC00001.ARW")
-        #expect(ImportWording.row(.committing, item: raw, going: .filesFolder) == "Saving to Files")
-        #expect(ImportWording.row(.imported(.file(relativePath: "Camera/DSC00001.ARW")), item: raw, going: .filesFolder)
+        #expect(ImportWording.row(.committing, item: raw, going: .staging) == "Saving to Files")
+        #expect(ImportWording.row(.imported(.file(relativePath: "Camera/DSC00001.ARW")), item: raw, going: .staging)
             == "Imported to Files")
-        #expect(ImportWording.destination(.files(.chosen), folder: "Camera", finished: true, imported: 1)?
+        #expect(ImportWording.destination(.stagedHere(.chosen), folder: "Camera", finished: true, imported: 1)?
             .hasPrefix("Imported to Files") == true)
         #expect(ImportWording.paused(.byPerson) == "Paused. Tap Continue to resume.")
         #expect(ImportWording.cancelConfirmDetail == "Files already imported are kept. The rest stay on the card.")

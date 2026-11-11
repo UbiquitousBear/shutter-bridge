@@ -128,7 +128,7 @@ struct ImportScreen: View {
 
     @ViewBuilder private var destination: some View {
         if let line = model.destinationLine {
-            Label(line, systemImage: model.progress.destination?.kind == .filesFolder ? "folder" : "photo.on.rectangle")
+            Label(line, systemImage: model.progress.destination?.kind == .staging ? "folder" : "photo.on.rectangle")
         }
         if let reason = model.filesReasonLine {
             Text(reason)

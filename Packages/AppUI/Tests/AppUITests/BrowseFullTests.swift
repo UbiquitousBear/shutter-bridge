@@ -473,6 +473,11 @@ actor StatesFailAfterCatalogue: CatalogueStore {
     func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws {
         throw Unreadable()
     }
+    func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {
+        throw Unreadable()
+    }
+    func clearStaged(_ identity: ObjectIdentity) throws { throw Unreadable() }
+    func stagedStates(of identities: [ObjectIdentity]) throws -> Set<ObjectIdentity> { throw Unreadable() }
     func camera(_ key: CameraKey) throws -> CameraRecord? { throw Unreadable() }
     func cameras() throws -> [CameraRecord] { throw Unreadable() }
     func upsertCamera(_ record: CameraRecord) throws { throw Unreadable() }

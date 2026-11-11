@@ -34,7 +34,7 @@ final class Harness {
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         self.catalogue = catalogue
         photos = FakeDestination(kind: .photos, folder: root.appendingPathComponent("photos", isDirectory: true))
-        files = FakeDestination(kind: .filesFolder, folder: filesDirectory)
+        files = FakeDestination(kind: .staging, folder: filesDirectory)
         let recorder = trace
         engine = ImportEngine(
             catalogue: catalogue, settings: ImportSettings(downloadsInFlight: downloadsInFlight),

@@ -301,15 +301,25 @@ actor RecordingDestination: ImportDestination {
         for file in files { try? FileManager.default.removeItem(at: file.url) }
         switch kind {
         case .photos: return .photosAsset(localIdentifier: "asset-\(names.count)")
-        case .filesFolder: return .files(files.map { FileLocation(relativePath: "Untitled/\($0.filename)") })
+        case .staging:
+            return .staged(place: ImportRoute.defaultStagingPlace,
+                           files.map { FileLocation(relativePath: "Untitled/\($0.filename)") })
         }
+    }
+}
+
+extension DestinationDecision {
+    /// Staged on this iPhone for `reason`: what the app decides until it reads where staging goes
+    /// (`ImportRoute.defaultStagingPlace`). Was `.files(reason)` before staging replaced the Files folder.
+    static func stagedHere(_ reason: StagingReason) -> DestinationDecision {
+        .staging(reason, ImportRoute.defaultStagingPlace)
     }
 }
 
 /// One Photos and one Files destination for every job, so a test can look at what each got.
 final class FakeDestinations: ImportDestinationMaking, @unchecked Sendable {
     let photos = RecordingDestination(kind: .photos)
-    let files = RecordingDestination(kind: .filesFolder)
+    let files = RecordingDestination(kind: .staging)
     private let lock = NSLock()
     private var made: [ImportCamera] = []
 
@@ -340,6 +350,11 @@ actor BrokenCatalogue: CatalogueStore {
     func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws {
         throw Broken()
     }
+    func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {
+        throw Broken()
+    }
+    func clearStaged(_ identity: ObjectIdentity) throws { throw Broken() }
+    func stagedStates(of identities: [ObjectIdentity]) throws -> Set<ObjectIdentity> { throw Broken() }
     func camera(_ key: CameraKey) throws -> CameraRecord? { throw Broken() }
     func cameras() throws -> [CameraRecord] { throw Broken() }
     func upsertCamera(_ record: CameraRecord) throws { throw Broken() }

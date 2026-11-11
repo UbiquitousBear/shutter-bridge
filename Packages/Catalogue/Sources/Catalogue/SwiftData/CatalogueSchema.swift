@@ -10,7 +10,8 @@ import SwiftData
 // inferred one. Version 1 (this file) is what every build before Catalogue V2 (17.1 and 18.1) shipped, and is frozen:
 // its models' stored properties must never change, or a store written by those builds stops opening ("Shutter Bridge
 // couldn't start"). Version 2 (`CatalogueSchemaV2.swift`, Iteration 3) adds the Camera row's Bluetooth peripheral
-// identifier through a lightweight stage. Iteration 2's cull marks and the like arrive as a further version and stage.
+// identifier through a lightweight stage, and version 3 (`CatalogueSchemaV3.swift`, staging, 11 Nov) the file row's
+// staged copy through another. Iteration 2's cull marks and the like arrive as a further version and stage.
 //
 // Kept CloudKit-compatible for a later opt-in (proposal): no `@Attribute(.unique)` (the store enforces identity, see
 // `SwiftDataCatalogue`), every attribute optional or defaulted, every relationship optional with an inverse.
@@ -31,19 +32,29 @@ public enum CatalogueSchemaV1: VersionedSchema, Sendable {
 ///
 /// - V1 → V2 (Iteration 3): lightweight. V2 adds one optional attribute, `Camera.bluetoothPeripheralID`, which reads
 ///   nil on every migrated row; nothing else changes, so every V1 row, listing and camera field is carried as it is.
+/// - V2 → V3 (staging, 11 Nov): lightweight. V3 adds three optional attributes to `CameraObject`
+///   (`stagedRelativePath`, `stagedRoot`, `stagedAt`), which read nil (not staged) on every migrated row; nothing else
+///   changes.
 public enum CatalogueMigrationPlan: SchemaMigrationPlan, Sendable {
-    public static var schemas: [any VersionedSchema.Type] { [CatalogueSchemaV1.self, CatalogueSchemaV2.self] }
+    public static var schemas: [any VersionedSchema.Type] {
+        [CatalogueSchemaV1.self, CatalogueSchemaV2.self, CatalogueSchemaV3.self]
+    }
 
-    public static var stages: [MigrationStage] { [v1ToV2] }
+    public static var stages: [MigrationStage] { [v1ToV2, v2ToV3] }
 
     /// V1 → V2: the peripheral identifier, optional, so no row needs a value and no custom stage is needed.
     static var v1ToV2: MigrationStage {
         MigrationStage.lightweight(fromVersion: CatalogueSchemaV1.self, toVersion: CatalogueSchemaV2.self)
     }
+
+    /// V2 → V3: the staged copy's three attributes, optional, so no row needs a value and no custom stage is needed.
+    static var v2ToV3: MigrationStage {
+        MigrationStage.lightweight(fromVersion: CatalogueSchemaV2.self, toVersion: CatalogueSchemaV3.self)
+    }
 }
 
 // The current version's models, so the store's code names no version.
-typealias CatalogueCurrentSchema = CatalogueSchemaV2
+typealias CatalogueCurrentSchema = CatalogueSchemaV3
 typealias Camera = CatalogueCurrentSchema.Camera
 typealias CameraObject = CatalogueCurrentSchema.CameraObject
 typealias ImportJob = CatalogueCurrentSchema.ImportJob
