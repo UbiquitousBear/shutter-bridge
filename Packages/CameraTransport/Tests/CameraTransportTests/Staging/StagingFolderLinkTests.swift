@@ -431,3 +431,24 @@ struct StagingFolderLinkCancellationTests {
         #expect(try await link.list().isEmpty)
     }
 }
+
+@Suite("StagedFileCopy: iCloud download progress", .timeLimit(.minutes(1)))
+struct StagedDownloadProgressTests {
+    @Test func theDownloadTakesTheFirstHalfOfTheFileAndGrowsWithThePercent() {
+        let size: UInt64 = 50_000_000
+        let steps = [0, 1, 10, 50, 99, 100].map { StagedFileCopy.downloadProgress(percent: Double($0), expectedSize: size) }
+        #expect(steps == steps.sorted())
+        #expect(steps.first == 0)
+        #expect(steps.last == size / 2)
+        #expect(steps.allSatisfy { $0 < size })
+    }
+
+    @Test func oddPercentsAreClamped() {
+        let size: UInt64 = 1000
+        #expect(StagedFileCopy.downloadProgress(percent: -5, expectedSize: size) == 0)
+        #expect(StagedFileCopy.downloadProgress(percent: .nan, expectedSize: size) == 0)
+        #expect(StagedFileCopy.downloadProgress(percent: .infinity, expectedSize: size) == 0)
+        #expect(StagedFileCopy.downloadProgress(percent: 250, expectedSize: size) == 500)
+        #expect(StagedFileCopy.downloadProgress(percent: 50, expectedSize: 0) == 0)
+    }
+}

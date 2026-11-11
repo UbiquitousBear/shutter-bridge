@@ -97,6 +97,16 @@ enum StagedFileCopy {
         return size == expectedSize ? .present : .sizeChanged
     }
 
+    /// The bytes to report while an evicted iCloud file downloads, `percent` (0 to 100) of the way. The engine's meter
+    /// only counts a number that grows, and the local copy that follows reports from zero again, so the download
+    /// takes the first half of the file's size: the copy then passes it within moments (it reads from the phone's
+    /// own storage) and the stall clock never waits on the handover. NaN, negative and over-100 values are clamped.
+    static func downloadProgress(percent: Double, expectedSize: UInt64) -> UInt64 {
+        guard percent.isFinite, percent > 0 else { return 0 }
+        let fraction = min(percent, 100) / 100
+        return UInt64(fraction * Double(expectedSize / 2))
+    }
+
     private static func gone(_ presence: StagedPresence, detail: String) -> CameraLinkFailure? {
         switch presence {
         case .present: nil
@@ -201,12 +211,17 @@ final class CancelFlag: Sendable {
 /// The reader for Staging on the phone. Compiled only by CI's Xcode 27 job and checked on the bench with an evicted
 /// file (I5): nothing here runs on Linux.
 ///
-/// - An iCloud file that isn't on the phone (`ubiquitousItemDownloadingStatus` not `.current`, or only the legacy
-///   `.name.icloud` placeholder beside it) is asked for with `startDownloadingUbiquitousItem(at:)` and waited for,
-///   polling its status every 250 ms; the wait ends when the file is current, the call is cancelled, or
+/// - An iCloud file that isn't on the phone (`ubiquitousItemDownloadingStatus` is `.notDownloaded`, or only the legacy
+///   `.name.icloud` placeholder is beside it) is asked for with `startDownloadingUbiquitousItem(at:)` and waited for,
+///   polling its status every 250 ms; the wait ends when the file is on the phone, the call is cancelled, or
 ///   `downloadTimeout` passes (`noAnswer`, which the engine retries a few times and then fails the file; the
-///   keeper stays in Staging either way). iOS gives a URL no byte count for an iCloud download, so progress stays at
-///   0 until the local copy starts.
+///   keeper stays in Staging either way). A file that is on the phone but not the newest version
+///   (`.downloaded`) is read as it is.
+/// - The wait reports progress, because the engine counts 30 s without it as a stall (`ImportPolicy.stallTimeout`)
+///   and a download can take longer: an `NSMetadataQuery` on the file's folder gives
+///   `NSMetadataUbiquitousItemPercentDownloadedKey`, which `StagedFileCopy.downloadProgress` maps to the first half
+///   of the file's size. `unverified` on the bench (I5): whether the query finds a file in the app's Staging folder,
+///   and whether the percent moves during a real download. If it never reports, a download over 30 s stalls the job.
 /// - The copy itself runs inside `NSFileCoordinator`'s read coordination, so it never reads a file another process
 ///   (the Files app, the iCloud daemon) is writing.
 public struct CoordinatedStagedFileReader: StagedFileReading {
@@ -226,7 +241,7 @@ public struct CoordinatedStagedFileReader: StagedFileReading {
         _ source: URL, expectedSize: UInt64, to destination: URL,
         progress: @escaping @Sendable (UInt64) -> Void
     ) async throws(CameraLinkFailure) {
-        try await downloadIfEvicted(source)
+        try await downloadIfEvicted(source, expectedSize: expectedSize, progress: progress)
         let outcome = await StagedFileCopy.offThePool { isCancelled in
             var coordinationError: NSError?
             var result: Result<Void, CameraLinkFailure> = .failure(
@@ -244,17 +259,20 @@ public struct CoordinatedStagedFileReader: StagedFileReading {
                 }
             }
             if let coordinationError {
-                let kind: CameraLinkFailure.Kind =
-                    coordinationError.code == NSFileReadNoSuchFileError ? .itemNotFound : .unreadableItem
+                let isMissing = coordinationError.domain == NSCocoaErrorDomain
+                    && coordinationError.code == NSFileReadNoSuchFileError
                 return .failure(CameraLinkFailure(
-                    kind, detail: "staging copy: coordination failed (\(coordinationError.domain) \(coordinationError.code))"))
+                    isMissing ? .itemNotFound : .unreadableItem,
+                    detail: "staging copy: coordination failed (\(coordinationError.domain) \(coordinationError.code))"))
             }
             return result
         }
         if case let .failure(failure) = outcome { throw failure }
     }
 
-    private func downloadIfEvicted(_ source: URL) async throws(CameraLinkFailure) {
+    private func downloadIfEvicted(
+        _ source: URL, expectedSize: UInt64, progress: @escaping @Sendable (UInt64) -> Void
+    ) async throws(CameraLinkFailure) {
         guard Self.isEvicted(source) else { return }
         do {
             try FileManager.default.startDownloadingUbiquitousItem(at: source)
@@ -262,27 +280,59 @@ public struct CoordinatedStagedFileReader: StagedFileReading {
             let ns = error as NSError
             throw CameraLinkFailure(.unreadableItem, detail: "staging copy: iCloud download didn't start (\(ns.domain) \(ns.code))")
         }
+        let watcher = await DownloadWatcher(watching: source)
+        defer { Task { await watcher.stop() } }
         let deadline = ContinuousClock.now.advanced(by: downloadTimeout)
         while Self.isEvicted(source) {
             if Task.isCancelled { throw StagedFileCopy.cancelled() }
             if ContinuousClock.now >= deadline {
                 throw CameraLinkFailure(.noAnswer, detail: "staging copy: the iCloud download didn't finish in time")
             }
+            if let percent = await watcher.percentDownloaded() {
+                progress(StagedFileCopy.downloadProgress(percent: percent, expectedSize: expectedSize))
+            }
             try? await Task.sleep(for: .milliseconds(250))
         }
     }
 
-    /// True for an iCloud file whose content isn't on the phone.
+    /// True for an iCloud file whose content isn't on the phone: a dataless file, or only the legacy placeholder.
     static func isEvicted(_ url: URL) -> Bool {
         let placeholder = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).icloud")
         if !FileManager.default.fileExists(atPath: url.path) {
             return FileManager.default.fileExists(atPath: placeholder.path)
         }
-        guard let values = try? url.resourceValues(
+        // A URL caches the resource values it has read, and this is polled from threads with no run loop to clear the
+        // cache, so each read is on a URL of its own.
+        var fresh = URL(fileURLWithPath: url.path)
+        fresh.removeAllCachedResourceValues()
+        guard let values = try? fresh.resourceValues(
             forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey]),
             values.isUbiquitousItem == true,
             let status = values.ubiquitousItemDownloadingStatus else { return false }
-        return status != .current
+        return status == .notDownloaded
     }
+}
+
+/// An `NSMetadataQuery` for one file, whose results the reader reads while an iCloud download runs. The query needs
+/// the main run loop, so this lives on the main actor (which also makes it `Sendable`).
+@MainActor
+private final class DownloadWatcher {
+    private let query = NSMetadataQuery()
+
+    init(watching url: URL) {
+        query.searchScopes = [url.deletingLastPathComponent()]
+        query.predicate = NSPredicate(format: "%K == %@", NSMetadataItemPathKey, url.path)
+        query.start()
+    }
+
+    /// 0 to 100, or nil while the query has gathered nothing or the file isn't in it.
+    func percentDownloaded() -> Double? {
+        query.disableUpdates()
+        defer { query.enableUpdates() }
+        guard let item = query.results.first as? NSMetadataItem else { return nil }
+        return item.value(forAttribute: NSMetadataUbiquitousItemPercentDownloadedKey) as? Double
+    }
+
+    func stop() { query.stop() }
 }
 #endif
