@@ -89,6 +89,9 @@ public final class PreviewPrefetcher<Image: Sendable> {
     /// 360-file bench (I5) reads against the memory budget.
     public private(set) var peakHeldCount = 0
     public private(set) var peakHeldBytes = 0
+    /// Told when an evicted unit's download has finished and its file is on the phone (the loupe reads its EXIF line
+    /// then).
+    @ObservationIgnored public var onFileLocal: (@MainActor (CullUnit.ID) -> Void)?
 
     @ObservationIgnored private let loader: any PreviewLoading<Image>
     @ObservationIgnored private let files: any StagedFileAvailability
@@ -125,6 +128,8 @@ public final class PreviewPrefetcher<Image: Sendable> {
     public func preview(for unit: CullUnit) -> LoadedPreview<Image>? { previews[unit.id] }
     public func downloadProgress(for unit: CullUnit) -> DownloadProgress? { downloads[unit.id] }
     public func hasFailed(_ unit: CullUnit) -> Bool { failed.contains(unit.id) }
+    /// True when the unit's file can be read now without waiting for iCloud (or it has no file).
+    public func isFileLocal(_ unit: CullUnit) -> Bool { isLocal(unit) }
 
     /// How many decoded images are held, and the bytes they take.
     public var heldCount: Int { previews.count }
@@ -267,6 +272,7 @@ public final class PreviewPrefetcher<Image: Sendable> {
             failed.insert(id)
         }
         pump()
+        if error == nil { onFileLocal?(id) }
     }
 
     private func pumpDecodes() {
