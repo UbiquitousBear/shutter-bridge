@@ -105,11 +105,20 @@ extension ImportEngine {
     /// Writes `seed` as the file's `.partial` row (`markPartial`) with its offset and its path relative to the
     /// staging folder, if it is newer than the last one written and still the file's partial copy. A catalogue
     /// that refuses it is left as it was: the resume point in memory holds, and the next checkpoint tries again.
+    ///
+    /// Never once the file's commit has begun (`FileEntry.takesCheckpoints`): a crossing handed over late (its task
+    /// ran after the download finished) or a flush would otherwise write `.partial` after the commit's row, and a
+    /// staged row would read as partial again. The check and the count of writes in flight
+    /// (`FileEntry.checkpointWrites`) happen together on the actor, before any await, so a write either starts
+    /// before the commit begins (and the commit waits for it) or not at all.
     func saveCheckpoint(_ seed: PartialSeed, of identity: ObjectIdentity, in id: UUID) async {
-        guard let entry = current(id)?.entries[identity], entry.outcome == nil, let resumable = entry.resumable,
+        guard let entry = current(id)?.entries[identity], entry.takesCheckpoints, let resumable = entry.resumable,
               seed.offset > resumable.persistedOffset, seed.offset <= entry.identity.size,
               let relative = relativeToStaging(seed.download.file, in: resumable.folder) else { return }
         resumable.persistedOffset = seed.offset
+        let writes = entry.checkpointWrites
+        writes.begin()
+        defer { writes.end() }
         do {
             try await catalogue.markPartial(identity, format: entry.item.format, tempURL: relative,
                                             offset: seed.offset)
@@ -194,10 +203,12 @@ extension ImportEngine {
         let route = job.route
         let directory = download.attempt.directory
         let checkStaged = !entry.queuedUnderStagingRule
+        let checkpointWrites = entry.checkpointWrites
         let token = UUID()
         let task = Task {
             await self.commitAndRecord(url, item: item, identity: identity, of: id, route: route,
-                                       attemptDirectory: directory, checkStaged: checkStaged)
+                                       attemptDirectory: directory, checkStaged: checkStaged,
+                                       checkpointWrites: checkpointWrites)
         }
         commitsInFlight[token] = (id, task)
         let result = await task.value
@@ -249,8 +260,11 @@ extension ImportEngine {
     ///   (`FileEntry.queuedUnderStagingRule`). If the job has been staged instead (a refused save, here or by another
     ///   file; or a continue), a file the catalogue already has a staged copy of is left out (`.alreadyStaged`) rather
     ///   than staged a second time, which would leave the first copy in the staging folder with no row.
+    /// - Parameter checkpointWrites: The file's checkpoint writes in flight, waited for before the row is written
+    ///   (`settle(_:of:)`). No new one starts once the commit has begun (`FileEntry.takesCheckpoints`).
     func commitAndRecord(_ url: URL, item: CameraItem, identity: ObjectIdentity, of id: UUID, route: ImportRoute,
-                         attemptDirectory: URL, checkStaged: Bool) async -> CommitResult {
+                         attemptDirectory: URL, checkStaged: Bool,
+                         checkpointWrites: CheckpointWrites) async -> CommitResult {
         let unit = commitUnit(for: StagedFile(url: url, filename: item.name, captureDate: item.captureDate))
         let fm = FileManager.default
         /// Drops the downloaded file of one that is left out.
@@ -324,6 +338,9 @@ extension ImportEngine {
         if let failure { return .failed(failure) }
         guard let result else { return .failed(.stagedFileMissing) } // unreachable: a commit returns or throws
 
+        // A checkpoint write sent before the commit began must land before the row, not after it.
+        await settle(checkpointWrites, of: item.name)
+
         // The row, then the cleanup. Written even if the job was cancelled meanwhile: the file was committed. An
         // import writes the imported row (`upsert`, which keeps any staged copy); staging records the staged copy
         // beside the row's state (`markStaged`, which keeps an imported row imported and sends a partial row back
@@ -342,6 +359,31 @@ extension ImportEngine {
         }
         discard() // Photos copies; the staging folder moves the file, leaving only its folder
         return .committed(outcome, used.kind, rowWritten: written)
+    }
+
+    /// Waits until none of a committing file's checkpoint writes is in flight, so its row is the last write; for at
+    /// most `policy.checkpointWriteWait`, so a catalogue that never answers can't hold the commit (and its job) for
+    /// ever. The row is then written anyway: the commit has the file, and a row that never comes is worse than one
+    /// a stuck write might still overwrite.
+    func settle(_ writes: CheckpointWrites, of name: String) async {
+        guard !writes.isEmpty else { return }
+        trace(.waitingForCheckpointWrites(name))
+        let clock = self.clock
+        let deadline = clock.now + policy.checkpointWriteWait
+        let settled = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await writes.waitUntilNone()
+                return true
+            }
+            group.addTask {
+                try? await clock.sleep(until: deadline)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        if !settled { trace(.checkpointWritesUnsettled(name)) }
     }
 
     /// Whether the catalogue has a staged copy of the file (by content). A catalogue that can't answer counts as

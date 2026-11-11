@@ -36,6 +36,10 @@ enum EngineTrace: Sendable, Hashable {
     case discardedLateFile
     /// A resumable download's checkpoint was written to the catalogue (`markPartial`) at this offset.
     case checkpointSaved(String, offset: UInt64)
+    /// A file's commit is waiting for a checkpoint write that was in flight when it began, before it writes its row.
+    case waitingForCheckpointWrites(String)
+    /// That wait ran out (`ImportPolicy.checkpointWriteWait`): the row is written without it.
+    case checkpointWritesUnsettled(String)
     /// The camera's file under this item's ID has another name or size than the partial file was begun from: the
     /// partial was dropped and the card is listed again.
     case identityChanged(String)

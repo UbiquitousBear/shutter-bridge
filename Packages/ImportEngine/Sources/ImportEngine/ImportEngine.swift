@@ -735,6 +735,11 @@ public actor ImportEngine {
     /// The current job's zone.
     func jobTimeZone() -> TimeZone? { job?.timeZone }
 
+    /// The latest attempt at a resumable file of the current job: the one whose checkpoint crossings are written.
+    func latestAttempt(of identity: ObjectIdentity) -> DownloadAttempt? {
+        job?.entries[identity]?.resumable?.previous
+    }
+
     /// The outcome of every resolved file of the current or last job.
     func outcomes() -> [ObjectIdentity: FileOutcome] {
         guard let j = job ?? lastJob else { return [:] }

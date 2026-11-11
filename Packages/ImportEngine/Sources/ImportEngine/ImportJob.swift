@@ -87,6 +87,8 @@ final class FileEntry {
     /// an import job, which ignores staging: if that job is staged instead, the file is checked for a staged copy
     /// before it is committed (`ImportEngine.commitAndRecord`), so it is never staged twice.
     var queuedUnderStagingRule = false
+    /// Its checkpoint writes in flight (`markPartial`), which its commit waits for before it writes its row.
+    let checkpointWrites = CheckpointWrites()
 
     init(identity: ObjectIdentity, index: Int, item: CameraItem) {
         self.identity = identity
@@ -100,6 +102,17 @@ final class FileEntry {
 
     var outcome: FileOutcome? {
         if case let .done(o) = phase { o } else { nil }
+    }
+
+    /// Whether a checkpoint may still be written to the catalogue for it: not once its commit has begun
+    /// (`ImportEngine.commit`), because the commit's row (`markStaged` or `upsert`) must be the file's last write. A
+    /// late checkpoint can't undo an imported row (the catalogue keeps it), but a staged one stays `.new`, and a
+    /// `.partial` written over it would bring back the resume the staging commit cleared.
+    var takesCheckpoints: Bool {
+        switch phase {
+        case .queued, .downloading, .waitingToRetry: true
+        case .committing, .done: false
+        }
     }
 
     /// Downloading, waiting to retry or committing: owned by a running file task.
