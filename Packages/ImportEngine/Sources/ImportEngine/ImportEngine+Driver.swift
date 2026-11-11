@@ -124,7 +124,7 @@ extension ImportEngine {
                 }
                 planned.append((item, identity, .queue))
             }
-        case let .items(picked), let .newItems(picked):
+        case let .items(picked), let .newItems(picked), let .requeued(picked):
             // A pick: in the order picked, matched by content against this listing for current handles.
             keepSkippedRows = true
             let onCard = Self.byContent(listed, camera: camera, timeZone: zone)
@@ -151,7 +151,8 @@ extension ImportEngine {
         guard currentListing(id, generation) != nil else { return }
         let facts: DoneFacts
         do {
-            guard let read = try await doneFacts(of: planned.map(\.identity), job: id) else { return }
+            guard let read = try await doneFacts(of: planned.map(\.identity), job: id,
+                                                 readingRejects: job.selection.leavesOutRejects) else { return }
             facts = read
         } catch {
             if let job = currentListing(id, generation) { end(job, .catalogueUnavailable) }
@@ -181,6 +182,12 @@ extension ImportEngine {
             // Picked twice (one file in two folders): one file, imported once.
             guard seen.insert(p.identity.contentKey).inserted else {
                 trace(.sameFileListedTwice(p.item.name))
+                continue
+            }
+            // A reject stays rejected (D3): left out unless picked explicitly, and counted for the outcome.
+            guard !facts.rejected.contains(p.identity.contentKey) else {
+                job.rejectsLeftOut += 1
+                trace(.rejectedLeftOut(p.item.name))
                 continue
             }
             kept.append(p)
@@ -235,19 +242,26 @@ extension ImportEngine {
         var staged: Set<ObjectIdentity>
         /// The job's purpose the answers were read for.
         var purpose: DestinationKind
+        /// The files with a Reject mark (D3), by content key; read only when asked for (empty otherwise).
+        var rejected: Set<ObjectIdentity.ContentKey> = []
     }
 
     /// The states of `identities` and, for a stage job, which are staged, both by content. Read again when the job's
     /// purpose changed meanwhile (a continue that stages an import job), so the answers match the purpose they are
     /// used with; a purpose only ever changes from import to stage, so that happens at most once. Nil once the job
-    /// has gone.
-    func doneFacts(of identities: [ObjectIdentity], job id: UUID) async throws -> DoneFacts? {
+    /// has gone. With `readingRejects`, also which have a Reject mark (`marks(of:)`, D3), whatever the purpose.
+    func doneFacts(of identities: [ObjectIdentity], job id: UUID, readingRejects: Bool = false) async throws
+        -> DoneFacts? {
         guard var purpose = current(id)?.route.purpose else { return nil }
+        let rejected = readingRejects && !identities.isEmpty
+            ? RejectRule.rejected(in: try await catalogue.marks(of: identities.map(\.contentKey))) : []
         while true {
             let states = try await catalogue.states(of: identities)
             let staged = purpose == .staging ? try await catalogue.stagedStates(of: identities) : []
             guard let job = current(id) else { return nil }
-            if job.route.purpose == purpose { return DoneFacts(states: states, staged: staged, purpose: purpose) }
+            if job.route.purpose == purpose {
+                return DoneFacts(states: states, staged: staged, purpose: purpose, rejected: rejected)
+            }
             purpose = job.route.purpose
         }
     }

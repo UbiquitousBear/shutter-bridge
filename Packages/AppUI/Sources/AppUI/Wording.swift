@@ -326,6 +326,16 @@ extension BrowseWording {
     /// A photo with a staged copy (Shamil, 11 Nov). Imported takes its place on the cell when both apply.
     public static let stagedBadge = "Staged"
     public static let new = "New"
+    /// A photo rejected in Staging (D3, Shamil, 11 Nov): *Select All New* and New Only leave it out, even once its
+    /// staged copy has gone. Imported takes its place on the cell when both apply; it takes Staged's.
+    public static let rejectedBadge = "Rejected"
+    /// The Rejected badge's action (a tap on it, the press-and-hold menu, VoiceOver's actions): clears the mark, so
+    /// the photo is new again.
+    public static let liftReject = "Lift Reject"
+    /// What lifting does, for the badge's VoiceOver hint.
+    public static let liftRejectHint = "Makes this photo new again, so Select All New picks it."
+    /// When the catalogue couldn't clear the mark.
+    public static let liftRejectFailed = "The reject couldn't be lifted. Try again."
 
     // The Import button (Shamil, 11 Nov): its primary action is the remembered choice, and its menu offers both.
     /// The primary action when the remembered choice is *Stage*.
@@ -425,10 +435,11 @@ extension BrowseWording {
     public static let importStripHint = "Opens the import."
 
     /// The grid cell's VoiceOver label: name, date, type and, for a still, Imported, Staged, both ("Imported,
-    /// staged": the cell shows only Imported) or New. Selection is the `.isSelected` trait, not words, so it isn't
-    /// said twice. `date` is formatted by the screen for the locale; nil for a file without one.
+    /// staged": the cell shows only Imported) or New; a rejected still that isn't imported says Rejected (and staged,
+    /// when it is) in place of New (D3). Selection is the `.isSelected` trait, not words, so it isn't said twice.
+    /// `date` is formatted by the screen for the locale; nil for a file without one.
     public static func cellAccessibility(name: String, date: String?, kind: CardCellKind, isImported: Bool,
-                                         isStaged: Bool = false) -> String {
+                                         isStaged: Bool = false, isRejected: Bool = false) -> String {
         var parts = [name]
         parts.append(date ?? undatedHeader)
         switch kind {
@@ -436,7 +447,9 @@ extension BrowseWording {
         case .video: parts.append(typeLabel(.video))
         case .other: parts.append(otherLabel)
         }
-        if kind.offersJPEGActions {
+        if kind.offersJPEGActions, isRejected, !isImported {
+            parts.append(isStaged ? rejectedBadge + ", " + stagedBadge.lowercased() : rejectedBadge)
+        } else if kind.offersJPEGActions {
             switch (isImported, isStaged) {
             case (true, true): parts.append(importedBadge + ", " + stagedBadge.lowercased())
             case (true, false): parts.append(importedBadge)
@@ -622,6 +635,15 @@ public enum ImportWording {
     /// Files imported or staged so far: done, less skipped and failed.
     public static func importedCount(_ progress: ImportProgress) -> Int {
         max(0, progress.filesDone - progress.filesSkipped - progress.filesFailed)
+    }
+
+    /// How many rejected files the job left out (D3: `ImportProgress.rejectsLeftOut`), for the outcome: "3 rejected
+    /// files left out. Pick them in Browse to import them anyway."; nil when none were.
+    public static func rejectsLeftOut(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        let files = count == 1 ? "1 rejected file" : "\(count) rejected files"
+        return files + " left out. Pick " + (count == 1 ? "it" : "them") + " in Browse to import "
+            + (count == 1 ? "it" : "them") + " anyway."
     }
 
     /// "38 files imported.", "38 files imported, 2 skipped, 1 failed.", "38 files staged." or, when Photos refused

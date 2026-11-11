@@ -60,6 +60,14 @@ Existing lines come from `OSLogBenchLog` (category `browse` for the import and B
 | Level of each line: failures at *error*, everything else at *notice* | So the error count in check 3 can be nonzero. Filter Console on *Errors*; the export shows each line's level. | 3 |
 | Settings › *Export Diagnostics…*: a plain-text file with a header and the app's log entries | Built by I8 (the row compiles only in CI's Xcode job): the unified log for this launch, the app's rolling file for the last two earlier ones. | 3, 17 |
 
+**Built by I21** (rejects stay rejected, D3; category `browse`, notice level). A file name is the camera's; counts only otherwise.
+
+| Line | What it records | Checks |
+| --- | --- | --- |
+| `engine: skipped <file>: rejected` | A file the catalogue holds a Reject mark for, left out of *all new*, a date range, a *Select all new* pick or a job queued again from History (an explicit pick still imports it). The Import screen's outcome counts them ("3 rejected files left out."). | 13 |
+| `browse: badges refreshed …: … imported, … staged, <n> rejected, key …` | Browse's *Rejected* badges: the rejected count is written only when the card shown has rejected files, so the line reads as before otherwise. After check 13's removal from Staging, the rejects should still count here. | 13 |
+| `browse: lifted a reject (<n> files)`, `browse: the reject wasn't lifted: catalogue error (<type>)`, `browse: rejected badges not refreshed: catalogue error (<type>)` | A tap on the *Rejected* badge clearing the mark (2 files for a RAW+JPEG pair), and the catalogue refusing it or the read. | 13 |
+
 **Not written yet (until each lands, record by stopwatch and screen and mark the line column *no line yet*).** The wording is the intent; the work item's final wording replaces it, and this sheet is updated to match when it merges.
 
 | Line (intended) | What it records | Checks |

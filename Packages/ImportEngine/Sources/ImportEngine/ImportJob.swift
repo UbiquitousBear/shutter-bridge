@@ -239,6 +239,8 @@ final class Job {
     private var byContent: [ObjectIdentity.ContentKey: ObjectIdentity] = [:]
     /// Picked files without an identity (no capture date), skipped and counted.
     var unkeyed: [CameraItem] = []
+    /// Files left out for their Reject mark (D3): not in the job, counted for the outcome (`ImportProgress`).
+    var rejectsLeftOut = 0
     /// Pending files, kept sorted by `FileEntry.index`.
     var queue: [ObjectIdentity] = []
     var nextIndex = 0

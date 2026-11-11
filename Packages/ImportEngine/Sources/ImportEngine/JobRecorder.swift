@@ -60,7 +60,7 @@ extension ImportEngine {
         return switch selection {
         case .allNew: .allNew
         case let .dateRange(range): .dateRange(range)
-        case let .items(items): .picked(keys(items))
+        case let .items(items), let .requeued(items): .picked(keys(items))
         case let .newItems(items): .pickedNew(keys(items))
         }
     }

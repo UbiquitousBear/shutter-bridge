@@ -21,6 +21,9 @@ public enum EngineTrace: Sendable, Hashable {
     case staged(String, StagedLocation?)
     /// A stage job left this file out: the catalogue has a staged copy of it (by content).
     case alreadyStaged(String)
+    /// A job that asked only for new files (or a re-queued one) left this file out: the catalogue has a Reject mark
+    /// for its content (D3). Counted in `ImportProgress.rejectsLeftOut`.
+    case rejectedLeftOut(String)
     case skipped(String, ImportSkipReason)
     /// A second copy of a file already in the listing or the pick (same name, capture second and size, another
     /// folder; Shamil's rule of 8 Nov): left out, since it is the same file.

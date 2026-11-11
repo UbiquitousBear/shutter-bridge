@@ -46,7 +46,7 @@ public enum EngineTraceWording {
              .linkEvent, .paused, .resumed, .idle, .tick,
              .published, .discardedLateFile, .checkpointSaved, .waitingForCheckpointWrites, .checkpointWritesUnsettled,
              .identityChanged, .reconnected, .firstByteAfterReconnect, .jobRecordNotWritten, .lateSessionLossIgnored,
-             .partialReset:
+             .partialReset, .rejectedLeftOut:
             return .notice
         }
     }
@@ -70,6 +70,8 @@ public enum EngineTraceWording {
             return nil
         case let .alreadyStaged(name):
             return "engine: skipped \(file(name)): already staged"
+        case let .rejectedLeftOut(name):
+            return "engine: skipped \(file(name)): rejected"
         case let .skipped(name, reason):
             return "engine: skipped \(file(name)): \(skipWord(reason))"
         case let .sameFileListedTwice(name):
