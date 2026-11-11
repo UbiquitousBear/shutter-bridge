@@ -114,6 +114,14 @@ actor RecordingDestination: ImportDestination {
 
     var files: [File] { units.flatMap { $0 } }
 
+    /// The library, or the one folder every staged file goes to.
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        switch kind {
+        case .photos: .photosLibrary
+        case .staging: .stagingFolder(place: place, folderPath: "Staging/Matrix")
+        }
+    }
+
     func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult {
         attempts += 1
         if let d = deniesFrom, attempts >= d { throw .photosAccessDenied }

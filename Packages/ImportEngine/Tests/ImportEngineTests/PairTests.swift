@@ -478,7 +478,7 @@ struct PairTests {
                                                  attemptDirectory: directory, checkStaged: false,
                                                  checkpointWrites: CheckpointWrites()))
         }
-        let result = await h.engine.commitAndRecord(files, of: UUID(), route: h.stageRoute)
+        let result = await h.engine.commitAndRecord(files, token: UUID(), of: UUID(), route: h.stageRoute)
         guard case let .committed(outcomes, kind, written) = result else {
             Issue.record("not committed: \(result)")
             return

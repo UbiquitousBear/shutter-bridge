@@ -318,6 +318,14 @@ actor RecordingDestination: ImportDestination {
     }
 
     func setDenies(_ on: Bool) { denies = on }
+
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        switch kind {
+        case .photos: .photosLibrary
+        case .staging: .stagingFolder(place: place, folderPath: "Staging/Untitled")
+        }
+    }
+
     /// Staging here fails as iCloud Drive having gone (`ImportDestinationFailure.stagingUnavailable`).
     func setUnavailable(_ on: Bool) { unavailable = on }
 

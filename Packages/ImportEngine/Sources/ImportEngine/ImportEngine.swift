@@ -10,9 +10,10 @@ import PhotosBridge
 ///
 /// A job lists the card, leaves out what the catalogue already has as done for the job's purpose (by content: an
 /// import job what is imported, a stage job what is staged), and for each file copies the bytes into a temporary
-/// file in the engine's own folder, hands it to the destination (Photos, or the staging folder, which moves it),
-/// records in the catalogue where it went (`upsert` for Photos, `markStaged` for staging), and removes the temporary
-/// file. It pauses
+/// file in the engine's own folder, hands it to the destination (Photos, or the staging folder, which moves it) under
+/// a pending-commit marker, records in the catalogue where it went (`finishCommit`: the imported row for Photos, the
+/// staged copy for staging, and the marker's removal, in one save), and removes the temporary file. Each job leaves a
+/// record for History (`JobRecorder`). It pauses
 /// on *did suspend* and on removal without failing the file in flight (decision 4), continues when the app says so
 /// or the camera is back (decision 7), and retries real errors a limited number of times. Every catalogue write goes
 /// through the `CatalogueStore` actor; nothing here runs on the main actor, and nothing touches UIKit.
@@ -57,6 +58,12 @@ public actor ImportEngine {
     /// and tagged with their job. A new job's diff and `append` wait for those of ended jobs, so a file still being
     /// committed when its job ended has its row before it can be queued again.
     var commitsInFlight: [UUID: (job: UUID, task: Task<CommitResult, Never>)] = [:]
+    /// The rows of commits that reached their destination but whose `finishCommit` failed every try, by commit token
+    /// (the marker's id, still in the store): the resolution writes exactly these later in this launch, with no lookup
+    /// (backlog section 3.1).
+    var unrecordedCommits: [UUID: [CommitWrite]] = [:]
+    /// The latest write of a job record (`JobRecorder`); each waits for the one before, so they land in order.
+    var jobRecordWrite: Task<Void, Never>?
 
     /// - Parameters:
     ///   - stagingDirectory: Where downloads are written before the destination takes them. Emptied here (anything
@@ -185,6 +192,7 @@ public actor ImportEngine {
         ensureTicker()
         refreshState()
         let id = job.id
+        writeJobRecord(of: job)
         job.driver = Task { await self.runJob(id) }
         return ImportJobID(id)
     }
@@ -410,6 +418,7 @@ public actor ImportEngine {
         liftPauses(PauseReason.liftedByReconnect.subtracting(keepingExpiry ? [.taskExpired] : []), of: current)
         current.signal.fire()
         scheduleCheckpointFlush()
+        writeJobRecord(of: current) // the same record carries on, over the new link
     }
 
     /// Writes every resumable file's latest checkpoint to the catalogue (`markPartial`) where it is newer than the
@@ -475,7 +484,10 @@ public actor ImportEngine {
                 d.pausedDuring = true
             }
         }
-        if job.pauses.insert(reason).inserted { trace(.paused(reason)) }
+        if job.pauses.insert(reason).inserted {
+            trace(.paused(reason))
+            writeJobRecord(of: job)
+        }
         refreshState()
     }
 
@@ -592,6 +604,7 @@ public actor ImportEngine {
             }
         }
         job.finished = outcome
+        job.finishedAt = Date()
         job.signal.finish()
         job.driver?.cancel()
         lastJob = job
@@ -599,6 +612,7 @@ public actor ImportEngine {
         state = .finished(outcome)
         trace(.finished(outcome))
         refreshState()
+        writeJobRecord(of: job)
     }
 
     // MARK: - Events

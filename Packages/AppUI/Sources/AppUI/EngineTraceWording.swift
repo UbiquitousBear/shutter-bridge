@@ -13,8 +13,8 @@ import PhotosBridge
 // address, nor the text of an error: a destination's `rejected(detail:)` is said as "rejected" only.
 //
 // Levels: a real failure is an error (a file that failed after its retries, a destination error, a job the engine stopped, the
-// catalogue being unavailable); everything else is a notice, whatever the event: pauses, stalls that recover, retries, skips,
-// reconnects. The events that fire constantly or that the import's own lines already carry have no line: ticks, progress
+// catalogue being unavailable, a commit the catalogue couldn't mark as pending); everything else is a notice, whatever the
+// event: pauses, stalls that recover, retries, skips, reconnects, a job record History will have to wait for. The events that fire constantly or that the import's own lines already carry have no line: ticks, progress
 // publications, the download loop idling, a late file discarded, a file started the first time, a file imported or staged (the
 // import model logs those with their identity), a pair's half waiting for its partner, and the engine's `idle`.
 
@@ -32,7 +32,7 @@ public enum EngineTraceWording {
     /// How serious the event is: `.error` for the failures that count against the definition of done, `.notice` for the rest.
     public static func level(for event: EngineTrace) -> BenchLogLevel {
         switch event {
-        case .failed:
+        case .failed, .commitMarkerNotWritten:
             return .error
         case let .finished(outcome):
             switch outcome {
@@ -43,7 +43,7 @@ public enum EngineTraceWording {
              .sameFileListedTwice, .waitingForPartner, .committedWithoutPartner, .destinationChanged, .routeRefused,
              .linkEvent, .paused, .resumed, .idle, .tick,
              .published, .discardedLateFile, .checkpointSaved, .waitingForCheckpointWrites, .checkpointWritesUnsettled,
-             .identityChanged, .reconnected, .firstByteAfterReconnect:
+             .identityChanged, .reconnected, .firstByteAfterReconnect, .jobRecordNotWritten:
             return .notice
         }
     }
@@ -98,6 +98,10 @@ public enum EngineTraceWording {
             return "engine: \(file(name))'s row was written without the checkpoint write it waited for"
         case let .identityChanged(name):
             return "engine: \(file(name)) changed on the camera since its partial copy began; copying it again"
+        case let .commitMarkerNotWritten(name):
+            return "engine: catalogue unavailable: \(file(name)) wasn't committed and goes back in the queue"
+        case .jobRecordNotWritten:
+            return "engine: the job's History record couldn't be written; trying again at its next change"
         case let .finished(outcome):
             switch outcome {
             case .completed: return "engine: job finished: completed"

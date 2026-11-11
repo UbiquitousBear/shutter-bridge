@@ -118,6 +118,17 @@ struct PhotosLibraryDestinationTests {
         #expect(!FileManager.default.fileExists(atPath: jpg.url.path))
     }
 
+    @Test("The commit target is the library, whatever the albums")
+    func commitTargetIsTheLibrary() throws {
+        let s = try Scratch()
+        let d = PhotosLibraryDestination(library: FakePhotoLibrary(), albumStore: InMemoryAlbumIdentifierStore(),
+                                         albumPlan: plan(.perImport))
+        #expect(d.commitTarget(for: .single(try s.stage("A.JPG", date: date))) == .photosLibrary)
+        let e = PhotosLibraryDestination(library: FakePhotoLibrary(), albumStore: InMemoryAlbumIdentifierStore(),
+                                         albumPlan: plan())
+        #expect(e.commitTarget(for: .pair(raw: try s.stage("A.ARW"), processed: try s.stage("A.JPG"))) == .photosLibrary)
+    }
+
     @Test("The person's original choice is passed through; a lone file has none")
     func originalChoice() async throws {
         let s = try Scratch()

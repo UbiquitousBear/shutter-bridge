@@ -59,6 +59,10 @@ struct EngineTraceWordingTests {
             == "engine: DSC00001.ARW is waiting for a checkpoint write before its row")
         #expect(line(.checkpointWritesUnsettled("DSC00001.ARW"))
             == "engine: DSC00001.ARW's row was written without the checkpoint write it waited for")
+        #expect(line(.commitMarkerNotWritten("DSC00001.ARW"))
+            == "engine: catalogue unavailable: DSC00001.ARW wasn't committed and goes back in the queue")
+        #expect(line(.jobRecordNotWritten)
+            == "engine: the job's History record couldn't be written; trying again at its next change")
     }
 
     @Test func skipsSayWhy() {
@@ -152,12 +156,14 @@ struct EngineTraceWordingTests {
             .waitingForCheckpointWrites("A.JPG"), .checkpointWritesUnsettled("A.JPG"),
             .identityChanged("A.JPG"), .finished(.completed), .finished(.cancelled), .finished(.stopped(.refused)),
             .finished(.catalogueUnavailable), .reconnected(.usb, sinceLost: .zero, filesLeft: 0),
-            .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero),
+            .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero), .commitMarkerNotWritten("A.ARW"),
+            .jobRecordNotWritten,
         ]
     }
 
     @Test func everyFailureIsAnErrorAndEverythingElseIsANotice() {
-        let errors: Set<String> = ["failed", "finished(stopped)", "finished(catalogueUnavailable)"]
+        let errors: Set<String> = ["failed", "finished(stopped)", "finished(catalogueUnavailable)",
+                                   "commitMarkerNotWritten"]
         for event in everyCase {
             let name = Self.name(of: event)
             #expect(EngineTraceWording.level(for: event) == (errors.contains(name) ? .error : .notice), "\(name)")
@@ -189,6 +195,7 @@ struct EngineTraceWordingTests {
         case .failed: "failed"
         case .finished(.stopped): "finished(stopped)"
         case .finished(.catalogueUnavailable): "finished(catalogueUnavailable)"
+        case .commitMarkerNotWritten: "commitMarkerNotWritten"
         default: "other"
         }
     }
@@ -200,7 +207,7 @@ struct EngineTraceWordingTests {
         let name = "DSC\n2026-11-11T10:00:00Z error [browse] serial \(serial)\u{0}\u{7}.ARW"
         // The checkpoint-wait and lone-half lines carry a name too, so they clean it the same way.
         for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name),
-                      .committedWithoutPartner(name)] {
+                      .committedWithoutPartner(name), .commitMarkerNotWritten(name)] {
             let waiting = try #require(line(event))
             #expect(!waiting.contains("\n") && !waiting.contains("\u{0}") && !waiting.contains("\u{7}"))
         }
@@ -290,6 +297,10 @@ struct EngineTraceWholeImportTests {
 struct RefusingDestination: ImportDestination {
     let detail: String
     var kind: DestinationKind { .staging }
+
+    func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        .stagingFolder(place: testStagingPlace, folderPath: "Staging/Untitled")
+    }
 
     func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult {
         throw .rejected(detail: detail)

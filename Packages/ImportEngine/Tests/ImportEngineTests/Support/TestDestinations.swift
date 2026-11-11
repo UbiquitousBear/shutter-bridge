@@ -43,6 +43,8 @@ actor HoldingDestination: ImportDestination {
         return .photosAsset(localIdentifier: "held-\(commits.count)")
     }
 
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget { .photosLibrary }
+
     /// Returns once the first commit is being held.
     func waitArrived() async {
         if held != nil { return }
@@ -64,6 +66,8 @@ actor DenyAllTogether: ImportDestination {
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
     init(n: Int) { self.n = n }
+
+    nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget { .photosLibrary }
 
     func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult {
         attempts += 1

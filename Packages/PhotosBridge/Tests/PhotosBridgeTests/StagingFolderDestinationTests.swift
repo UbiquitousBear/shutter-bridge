@@ -103,6 +103,26 @@ struct StagingFolderDestinationTests {
         #expect(names == ["DSC01779.ARW", "DSC01779.JPG"])
     }
 
+    @Test("The commit target is the day folder the commit then places the files in, a pair's in the RAW's day")
+    func commitTargetMatchesTheCommit() async throws {
+        let s = try Scratch()
+        let paris = TimeZone(identifier: "Europe/Paris")!
+        let d = destination(s, place: .onThisIPhone(.iCloudDriveOff), zone: paris)
+        let raw = try s.stage("DSC01779.ARW", date: date), jpg = try s.stage("DSC01779.JPG", date: date)
+        let unit = CommitUnit.pair(raw: raw, processed: jpg)
+        let target = d.commitTarget(for: unit)
+        #expect(target == .stagingFolder(place: .onThisIPhone(.iCloudDriveOff),
+                                         folderPath: "Staging/ILCE-7CM2/2026-10-28"))
+        guard case let .staged(_, locations) = try await d.commit(unit),
+              case let .stagingFolder(_, folderPath) = target else {
+            Issue.record("not staged")
+            return
+        }
+        #expect(locations.map { ($0.relativePath as NSString).deletingLastPathComponent } == [folderPath, folderPath])
+        let undated = d.commitTarget(for: .single(try s.stage("A.JPG")))
+        #expect(undated == .stagingFolder(place: .onThisIPhone(.iCloudDriveOff), folderPath: "Staging/ILCE-7CM2/Undated"))
+    }
+
     @Test("One folder per camera, and per day within it")
     func folderPerCameraAndDay() async throws {
         let s = try Scratch()
