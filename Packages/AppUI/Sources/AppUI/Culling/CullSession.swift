@@ -70,6 +70,8 @@ public final class CullSession {
     public private(set) var writeFailure: CullWriteFailure?
     /// When true, a Keep or Reject on the current unit moves on to the next one (not past the last).
     public var advancesAfterDecision = false
+    /// Told of each save that fails, as it fails (`writeFailure` keeps only the last, until dismissed): for the log.
+    @ObservationIgnored public var onWriteFailure: (@MainActor (CullWriteFailure) -> Void)?
 
     private struct UndoEntry {
         var unit: CullUnit.ID
@@ -219,7 +221,9 @@ public final class CullSession {
                     self.marks[id] = self.saved[id]
                     self.undoStack.removeAll { $0.unit == id && $0.after == mark }
                 }
-                self.writeFailure = CullWriteFailure(unit: id, detail: String(describing: type(of: error)))
+                let failure = CullWriteFailure(unit: id, detail: String(describing: type(of: error)))
+                self.writeFailure = failure
+                self.onWriteFailure?(failure)
             }
         }
     }

@@ -226,7 +226,8 @@ private struct DelayedSpinner: View {
 
 /// The app once the catalogue is open: Cameras in a navigation stack with Browse pushed onto it, and the Import and
 /// Settings screens as sheets over the whole stack, so the Import screen outlives Browse when the cable is pulled.
-/// (A tab bar with History, carrying the running import as its bottom accessory, waits for Iteration 2.)
+/// Staging (the cull screen, D5) is a sheet opened from Cameras too, until the tab bar (I10) gives it a tab beside
+/// Cameras and History, with the running import as the bar's bottom accessory.
 ///
 /// - The scene's phase goes to the app model in order (discovery starts when active; a USB import pauses when the
 ///   app leaves the foreground and carries on when it is back, decision 1), with background time held while a change to
@@ -242,6 +243,9 @@ struct LiveApp: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsSettings = false
     @State private var showsImport = false
+    /// The Staging screen's sheet (D5), and its model, made afresh each time it opens.
+    @State private var showsStaging = false
+    @State private var staging: CullModel<DecodedPreviewImage>?
     /// The last scene-phase change handed to the model, so a quick background-then-active is applied in order.
     @State private var phaseTask: Task<Void, Never>?
 
@@ -250,7 +254,11 @@ struct LiveApp: View {
         NavigationStack(path: $cameras.path) {
             CamerasScreen(model: cameras, importer: model.importer,
                           showSettings: { showsSettings = true },
-                          showImport: { showsImport = true })
+                          showImport: { showsImport = true },
+                          showStaging: {
+                              staging = makeStagingModel()
+                              showsStaging = true
+                          })
                 .navigationDestination(for: CameraDescriptor.self) { camera in
                     BrowseScreen(model: model.browseModel(for: camera), importer: model.importer,
                                  isImportShown: showsImport, showImport: { showsImport = true })
@@ -259,6 +267,12 @@ struct LiveApp: View {
         // However Settings closes, a diagnostics file that is ready (or being made) is removed.
         .sheet(isPresented: $showsSettings, onDismiss: { model.settings.settingsClosed() }) {
             SettingsScreen(model: model.settings)
+        }
+        // Staging (the cull screen) in a sheet with its own stack until I10's tab bar gives it a tab (D5).
+        .sheet(isPresented: $showsStaging, onDismiss: { staging = nil }) {
+            if let staging {
+                StagingScreen(model: staging)
+            }
         }
         // The close button and swiping down do the same (HIG Sheets): a finished job is cleared once it has been
         // seen, however the sheet closed; a running one stays.
@@ -304,11 +318,21 @@ struct LiveApp: View {
         }
     }
 
-    /// Opens the reminder's camera in Browse, if it is listed, and closes the sheets that would hide it: Settings, and
-    /// Import unless its job is that camera's.
+    /// The Staging screen's model: the staged copies under the app's Documents folder (On My iPhone) or the iCloud
+    /// container's, previews decoded with ImageIO and Core Image, evicted iCloud files downloaded ahead, and the EXIF line
+    /// read with ImageIO off the main actor.
+    private func makeStagingModel() -> CullModel<DecodedPreviewImage> {
+        model.stagingModel(documents: URL.documentsDirectory, loader: ImageIOPreviewLoader(),
+                           files: UbiquitousFileAvailability(), reader: StagedFileReaders.platform,
+                           exif: { url in await Task.detached(priority: .utility) { EXIFSummary.read(from: url) }.value })
+    }
+
+    /// Opens the reminder's camera in Browse, if it is listed, and closes the sheets that would hide it: Settings, Staging,
+    /// and Import unless its job is that camera's.
     private func openCameraFromReminder() async {
         guard await model.openCameraFromReminder() else { return }
         showsSettings = false
+        showsStaging = false
         if model.importer.camera?.descriptor.id != model.cameras.path.last?.id { showsImport = false }
     }
 }
