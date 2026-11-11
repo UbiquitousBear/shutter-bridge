@@ -198,15 +198,63 @@ struct PartialsAndSessionsTests {
         await h.cleanup()
     }
 
-    /// A catalogue that can't list its partial rows (a test double without the call) leaves everything as it is, and
-    /// the job runs as before.
+    /// A catalogue that can't list its partial rows leaves everything as it is, and the job runs as before.
     @Test func aCatalogueThatCantListPartialRowsLeavesThem() async throws {
         let failing = FailingCatalogue()
+        await failing.setFailPartialRecords(true)
         let h = Harness(catalogue: failing)
         #expect(await h.engine.reconcilePartials() == 0)
         let a = h.item("A.JPG", size: 3000)
         try await h.start(.items([a]), from: h.link([a]))
         #expect(await h.waitFinished() == .completed)
+        await h.cleanup()
+    }
+
+    /// I9 deletes a resumable file's Partials folder when its marker can't be written, but the checkpoint row stays
+    /// `.partial` at its offset. Once the catalogue takes writes again, the next job's reconciliation resets that row
+    /// (its file is gone), so the file is copied from 0, with no resume offered, and committed once, with no failure.
+    @Test func aRowLeftByAFailedMarkerIsResetAndTheFileCopiedFromZero() async throws {
+        let catalogue = FailingCatalogue()
+        await catalogue.setFailBeginCommit(from: 1)
+        var policy = ImportPolicy.standard
+        policy.checkpointInterval = 1000
+        let h = Harness(catalogue: catalogue, policy: policy)
+        let a = h.item("A.ARW", size: 3000)
+        let link = h.resumingLink([a])
+        await link.script("A.ARW", .holdAfter(2400))
+        try await h.start(.allNew, from: link, to: h.photosRoute)
+        await h.trace.next { $0 == .checkpointSaved("A.ARW", offset: 2100) }
+        await link.waitUntilHeld("A.ARW")
+        await link.release("A.ARW")
+        #expect(await h.waitFinished() == .catalogueUnavailable)
+        await h.engine.lastJobDriver()?.value
+        #expect(h.stagedFiles == 0, "the partial's folder is deleted with the download")
+        let left = try #require(await h.record(for: a))
+        #expect(left.state == .partial && left.resumeOffset == 2100 && left.tempURL != nil,
+                "the checkpoint row still points to the deleted file")
+
+        await catalogue.setFailBeginCommit(from: nil)
+        // Held before its first checkpoint, so the row read there is the one reconciliation left.
+        await link.script("A.ARW", .holdAfter(500))
+        let mark = h.trace.count
+        try await h.start(.allNew, from: link, to: h.photosRoute)
+        await link.waitUntilHeld("A.ARW")
+        let cleared = await h.record(for: a)
+        #expect(cleared?.state == .partial && cleared?.resumeOffset == 0 && cleared?.tempURL == nil,
+                "the catalogue row itself is reset, not only reported")
+        await link.release("A.ARW")
+        #expect(await h.waitFinished(after: mark) == .completed)
+        let log = Array(h.trace.log[mark...])
+        let reset = try #require(log.firstIndex(of: .partialReset("A.ARW")))
+        let listed = try #require(log.firstIndex { if case .listed = $0 { true } else { false } })
+        #expect(reset < listed, "the row is reset before the diff")
+        #expect(await link.resumes.isEmpty)
+        #expect(await link.bytesCalls == ["A.ARW", "A.ARW"])
+        #expect(await h.photos.committedNames == ["A.ARW"])
+        #expect(await h.engine.currentProgress.filesFailed == 0)
+        let row = await h.record(for: a)
+        #expect(row?.state == .imported && row?.resumeOffset == 0 && row?.tempURL == nil)
+        #expect(try await catalogue.pendingCommits().isEmpty)
         await h.cleanup()
     }
 
