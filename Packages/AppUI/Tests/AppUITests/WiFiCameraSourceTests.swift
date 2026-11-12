@@ -613,8 +613,8 @@ struct WiFiCameraConnectionTests {
     }
 
     /// "Import new photos" asks this before opening a set-up camera's Browse (Shamil, 12 Nov): true only while asking for
-    /// the link would join nothing new.
-    @Test func aCameraIsConnectedOnlyWhileOpeningItWouldJoinNothingNew() async throws {
+    /// the link would start nothing that can join.
+    @Test func aCameraIsConnectedOnlyWhileOpeningItCouldStartNoJoin() async throws {
         let h = Harness()
         let (id, session) = await h.pair()
         let first = FakeWiFiLink()
@@ -627,11 +627,9 @@ struct WiFiCameraConnectionTests {
         session.releasePrepare()
         _ = await bounded(opening)
         #expect(await source.isConnected(id))   // open, its session ready
-        // The stay: still on the camera's network, so a reopen needs no join.
-        session.set(phase: .staying)
-        #expect(await source.isConnected(id))
-        // Leaving, left, or paused: opening it would join again.
-        for phase in [WirelessPhase.leaving, .idle, .paused(.needsJoin), .paused(.bluetoothOff)] {
+        // The stay: the reopen falls back to Bluetooth and the join if the camera has gone; leaving, left, or paused:
+        // opening it would join again.
+        for phase in [WirelessPhase.staying, .leaving, .idle, .paused(.needsJoin), .paused(.bluetoothOff)] {
             session.set(phase: phase)
             #expect(await !source.isConnected(id))
         }

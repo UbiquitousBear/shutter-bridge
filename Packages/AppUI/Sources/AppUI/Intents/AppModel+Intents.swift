@@ -254,10 +254,10 @@ extension AppModel {
     /// A camera that isn't listed (W6-absent) gets an offline Browse at once, with its last-known card and a line saying
     /// it isn't connected, and is answered as not connected; the request waits as above, and starts once the camera is
     /// listed (over USB the live Browse replaces the offline one by itself; over Wi-Fi only the person's Connect does,
-    /// since reaching it is a join) and its card read. A set-up Wi-Fi camera is always listed, so one that opening would
-    /// join (no link open, no connection under way, not staying on its network, and not being reconnected by the Wi-Fi
-    /// recovery: `opensWithoutJoining(_:)`) gets the same offline Browse, with Connect offered at once (Shamil, 12 Nov):
-    /// the intent never starts a join. A USB listing of the same camera within the camera wait still turns it live.
+    /// since reaching it is a join) and its card read. A set-up Wi-Fi camera is always listed, so one that opening could
+    /// join (no link open, no connection under way, and not being reconnected by the Wi-Fi recovery:
+    /// `opensWithoutJoining(_:)`; the stay after an import included) gets the same offline Browse, with Connect offered at
+    /// once (Shamil, 12 Nov): the intent never starts a join. A USB listing of the same camera within the camera wait still turns it live.
     ///
     /// Every wait ends by `deadline` when there is one (the intent passes `NewPhotosTiming.answer` from its call,
     /// `IntentHost.importNewPhotos`), so the answer comes in time whatever the camera does; without one, each wait is
