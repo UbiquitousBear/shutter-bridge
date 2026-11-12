@@ -113,11 +113,12 @@ private final class Rig {
 
     init(_ staged: (URL) -> [StagedFile], extra: [CatalogueRecord] = [],
          photos: FakePhotosAccess = FakePhotosAccess(), files: any StagedFileAvailability = AlwaysLocalFiles(),
-         reader: any StagedFileReading = PlainStagedFileReader(), leases: LinkLeases = LinkLeases()) {
+         reader: any StagedFileReading = PlainStagedFileReader(), leases: LinkLeases = LinkLeases(),
+         engineZone: TimeZone = .autoupdatingCurrent, keepersZone: TimeZone? = nil) {
         try? FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
         catalogue = InMemoryCatalogue(records: staged(documents).map(\.record) + extra)
         self.photos = photos
-        engine = ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
+        engine = ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging(), timeZone: engineZone)
         importer = ImportModel(engine: engine, settings: InMemoryDestinationSettingStore(), photos: photos,
                                destinations: destinations, leases: leases, log: log)
         importer.cameraFinder = finder
@@ -125,9 +126,15 @@ private final class Rig {
         let locator = FakeStagingLocator(.unavailable(.containerUnavailable))
         cull = CullModel(catalogue: catalogue, onThisIPhone: documents, locator: locator,
                          reader: PlainStagedFileReader(), loader: loader)
-        keepers = KeepersImport(catalogue: catalogue, importer: importer, onThisIPhone: documents, locator: locator,
-                                reader: reader, files: files, plain: PlainStagedFileRemover(),
-                                coordinated: PlainStagedFileRemover(), log: log)
+        if let keepersZone {
+            keepers = KeepersImport(catalogue: catalogue, importer: importer, onThisIPhone: documents,
+                                    locator: locator, reader: reader, files: files, plain: PlainStagedFileRemover(),
+                                    coordinated: PlainStagedFileRemover(), timeZone: keepersZone, log: log)
+        } else {
+            keepers = KeepersImport(catalogue: catalogue, importer: importer, onThisIPhone: documents,
+                                    locator: locator, reader: reader, files: files, plain: PlainStagedFileRemover(),
+                                    coordinated: PlainStagedFileRemover(), log: log)
+        }
     }
 
     func mark(_ decision: MarkRecord.Decision, _ files: StagedFile...) async throws {
@@ -179,14 +186,16 @@ struct KeepersImportTests {
     private func twoCameras(photos: FakePhotosAccess = FakePhotosAccess(),
                             reader: any StagedFileReading = PlainStagedFileReader(),
                             files: any StagedFileAvailability = AlwaysLocalFiles(),
-                            leases: LinkLeases = LinkLeases()) async throws
+                            leases: LinkLeases = LinkLeases(), engineZone: TimeZone = .autoupdatingCurrent,
+                            keepersZone: TimeZone? = nil) async throws
         -> (Rig, TwoCameras) {
         var made: TwoCameras?
         let rig = Rig({ documents in
             let two = TwoCameras(in: documents)
             made = two
             return two.all
-        }, photos: photos, files: files, reader: reader, leases: leases)
+        }, photos: photos, files: files, reader: reader, leases: leases, engineZone: engineZone,
+           keepersZone: keepersZone)
         let two = try #require(made)
         try await rig.mark(.keep, two.a1, two.b1raw, two.b1jpg)
         try await rig.mark(.reject, two.a2)
@@ -327,6 +336,28 @@ struct KeepersImportTests {
         #expect(summary.removal?.removed == 0 && summary.removal?.failed == 1)
         #expect(FileManager.default.fileExists(atPath: documents.appendingPathComponent(reject.relativePath).path))
         #expect(await catalogue.record(for: reject.identity)?.staged != nil)
+    }
+
+    /// The zone the flow planned the jobs in isn't the zone the engine reads capture times in when a job starts (the
+    /// Staging screen was opened in London, the phone has since landed in Tokyo): each keeper's row is still its staged
+    /// row, so it reads as imported, its copy can go, and nothing is written under a capture time 9 hours away (which
+    /// would leave the staged file new, to be imported again).
+    @Test func theKeepersRowsAreTheStagedRowsWhateverZoneTheJobsWerePlannedIn() async throws {
+        let (rig, two) = try await twoCameras(engineZone: TimeZone(identifier: "Asia/Tokyo")!,
+                                              keepersZone: TimeZone(identifier: "Europe/London")!)
+        defer { rig.cleanup() }
+        let before = await rig.catalogue.stagedRecords(camera: nil).count
+        await rig.keepers.start(.all, in: rig.cull.rows)
+        let plan = try #require(rig.keepers.confirmation)
+        for file in [two.a1, two.b1raw, two.b1jpg] { #expect(await rig.row(file)?.state == .imported) }
+        #expect(plan.keepersInPhotos == 2 && plan.keepersHeld == 0)
+        // No row of its own for any keeper: every row is a staged one.
+        let all = await rig.catalogue.states(of: two.all.map(\.identity))
+        #expect(all.values.filter { $0 == .imported }.count == 3)
+        #expect(await rig.catalogue.stagedRecords(camera: nil).count == before)
+        #expect(await rig.catalogue.record(for: ObjectIdentity(
+            camera: two.a1.identity.camera, folder: two.a1.identity.folder, filename: two.a1.identity.filename,
+            captureDate: CaptureDate(rawValue: "20261105T230001")!, size: two.a1.identity.size)) == nil)
     }
 
     @Test func aDayScopeImportsOnlyThatDaysKeepers() async throws {

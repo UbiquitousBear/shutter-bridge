@@ -929,11 +929,28 @@ public struct KeepersJob: Sendable, Hashable {
     public var cameraName: String
     /// The kept files' staged copies, a pair's RAW first.
     public var entries: [StagedEntry]
+    /// The zone the entries' capture times were given in. They are given again in the engine's zone as the job starts
+    /// (`ImportEngine.identityTimeZone`), so a change of zone between planning and the job can't give a keeper an
+    /// identity other than its staged row's.
+    public var timeZone: TimeZone
 
-    public init(camera: CameraKey, cameraName: String, entries: [StagedEntry]) {
+    public init(camera: CameraKey, cameraName: String, entries: [StagedEntry], timeZone: TimeZone) {
         self.camera = camera
         self.cameraName = cameraName
         self.entries = entries
+        self.timeZone = timeZone
+    }
+
+    /// The entries with their capture times given in `zone`: the same wall-clock second, so the engine reading them in
+    /// `zone` gets each staged row's identity.
+    func entries(in zone: TimeZone) -> [StagedEntry] {
+        entries.map { entry in
+            var given = entry
+            if let date = entry.captureDate, let wallClock = CaptureDate(date, in: timeZone) {
+                given.captureDate = wallClock.date(in: zone) ?? date
+            }
+            return given
+        }
     }
 }
 
@@ -1024,7 +1041,9 @@ extension ImportModel {
             }
             let descriptor = StagingFolderLink.descriptor(named: job.cameraName)
             let camera = ImportCamera(descriptor: descriptor, key: job.camera)
-            let link = StagingFolderLink(descriptor: descriptor, entries: job.entries, reader: reader)
+            // The capture times in the zone the engine reads them in now, as the job is about to start.
+            let entries = job.entries(in: engine.identityTimeZone)
+            let link = StagingFolderLink(descriptor: descriptor, entries: entries, reader: reader)
             let listed = (try? await link.list()) ?? []
             let made = destinations.destinations(for: camera, startedAt: now(), staging: availability)
             let photos = self.photos

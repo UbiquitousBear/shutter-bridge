@@ -191,7 +191,7 @@ public actor ImportEngine {
         guard job == nil else { throw .jobInProgress }
         guard !selection.isEmpty else { throw .emptySelection }
         // A copy of `.autoupdatingCurrent` keeps following the system zone; the job's must not change.
-        let zone = TimeZone(identifier: timeZone.identifier) ?? timeZone
+        let zone = identityTimeZone
         let job = Job(camera: camera, timeZone: zone, selection: selection, limit: settings.downloadsInFlight,
                       staging: stagingDirectory, link: link, route: route, rateSamples: policy.rateSampleFiles)
         self.job = job
@@ -220,7 +220,7 @@ public actor ImportEngine {
         case let .items(items), let .newItems(items): picked = items
         case .allNew, .dateRange: return []
         }
-        let zone = TimeZone(identifier: timeZone.identifier) ?? timeZone
+        let zone = identityTimeZone
         let identities = picked.map { $0.identity(camera: camera, timeZone: zone) }
         let keyed = identities.compactMap(\.self)
         let purpose = route.purpose
@@ -450,6 +450,11 @@ public actor ImportEngine {
     }
 
     // MARK: - State
+
+    /// The zone a job started now reads its files' capture times in, for their identities: the engine's zone as it is
+    /// at this moment, fixed (an autoupdating zone is read once). *Import keepers* gives Staging's link its files'
+    /// capture times in it just before each job starts, so each staged file's identity is its row's.
+    public nonisolated var identityTimeZone: TimeZone { TimeZone(identifier: timeZone.identifier) ?? timeZone }
 
     func current(_ id: UUID) -> Job? {
         guard let job, job.id == id else { return nil }

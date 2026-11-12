@@ -110,14 +110,14 @@ public final class KeepersImport {
     ///   - files: Whether a staged file is on the phone, and downloads an evicted one (`UbiquitousFileAvailability`).
     ///   - plain: Removes copies on this iPhone.
     ///   - coordinated: Removes copies in iCloud Drive (`StagedFileRemovers.iCloudDrive`).
-    ///   - timeZone: The engine's zone, which the files' capture times are given in (the app's engine reads the
-    ///     current zone).
+    ///   - timeZone: The zone the jobs' capture times are planned in; each job gives them again in the engine's zone as
+    ///     it starts (`KeepersJob.entries(in:)`). UTC by default, where every wall-clock second exists.
     public init(catalogue: any CatalogueStore, importer: ImportModel, onThisIPhone: URL, locator: any StagingLocator,
                 reader: any StagedFileReading = StagedFileReaders.platform,
                 files: any StagedFileAvailability = AlwaysLocalFiles(),
                 plain: any StagedFileRemoving = PlainStagedFileRemover(),
                 coordinated: any StagedFileRemoving = StagedFileRemovers.iCloudDrive,
-                timeZone: TimeZone = .current, log: any BenchLog = SilentBenchLog()) {
+                timeZone: TimeZone = KeepersImport.utc, log: any BenchLog = SilentBenchLog()) {
         self.catalogue = catalogue
         self.importer = importer
         self.onThisIPhone = onThisIPhone
@@ -129,6 +129,9 @@ public final class KeepersImport {
         self.timeZone = timeZone
         self.log = log
     }
+
+    /// The default planning zone: no daylight saving, so every staged file's wall-clock second has a date in it.
+    public nonisolated static let utc = TimeZone(secondsFromGMT: 0) ?? .gmt
 
     /// Something is under way (the Staging screen's buttons wait).
     public var isBusy: Bool {
@@ -347,7 +350,8 @@ public final class KeepersImport {
                 let key = unit.camera
                 if byKey[key] == nil {
                     order.append(key)
-                    byKey[key] = PlannedJob(job: KeepersJob(camera: key, cameraName: day.cameraName, entries: []),
+                    byKey[key] = PlannedJob(job: KeepersJob(camera: key, cameraName: day.cameraName, entries: [],
+                                                            timeZone: timeZone),
                                             files: [])
                 }
                 for file in unit.files {
@@ -359,8 +363,9 @@ public final class KeepersImport {
         return order.compactMap { byKey[$0] }
     }
 
-    /// The file as Staging's link lists it: its folder, name and size from the card, and its capture time read in the
-    /// engine's zone, so the engine's identity of it is the staged row's.
+    /// The file as Staging's link lists it: its folder, name and size from the card, and its capture time in
+    /// `timeZone` (given again in the engine's zone as its job starts, so the engine's identity of it is the staged
+    /// row's).
     static func entry(for file: CullFile, timeZone: TimeZone) -> StagedEntry {
         StagedEntry(folder: file.identity.folder, name: file.identity.filename,
                     captureDate: file.identity.captureDate.date(in: timeZone), size: file.identity.size, url: file.url)
