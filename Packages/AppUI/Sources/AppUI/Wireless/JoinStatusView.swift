@@ -40,14 +40,17 @@ struct JoinStatusView: View {
 
     private var content: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Group {
-                if status.showsActivity {
-                    ProgressView()
-                } else {
-                    Image(systemName: "wifi")
+            // The symbol sits on the first line's baseline, as text does; the spinner, which has no baseline, takes its
+            // place over it, so it is centred on the first line rather than hanging below it (bench 22.1).
+            Image(systemName: "wifi")
+                .opacity(status.showsActivity ? 0 : 1)
+                .overlay {
+                    if status.showsActivity {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                 }
-            }
-            .accessibilityHidden(true)
+                .accessibilityHidden(true)
             lines
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)

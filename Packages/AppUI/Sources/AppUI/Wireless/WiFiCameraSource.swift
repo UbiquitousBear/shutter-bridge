@@ -1,6 +1,7 @@
 import CameraTransport
 import Catalogue
 import Foundation
+import Synchronization
 
 /// What the onboarding hands a paired camera to (`WiFiCameraSource` is the app's).
 public protocol PairedCameraRegistering: Sendable {
@@ -24,7 +25,11 @@ public protocol PairedCameraRegistering: Sendable {
 /// asked to prepare again). A link is live until its events say it is gone (`.removed`, `.sessionLost`, or the end of
 /// the stream), its session is no longer `.ready`, or it is let go; a link that died is never handed out again, so
 /// Continue after a pause opens a fresh one. Callers that ask while a connection is being made wait for that one
-/// connection and get its link: a camera is never opened twice at once. Then:
+/// connection and get its link: a camera is never opened twice at once. **A connection nobody waits for is stopped**
+/// (bench 22.1): when the last caller waiting for it is cancelled (the person leaves Browse while it joins), the
+/// connection's task is cancelled and the camera's session told to leave, which stops the preparation where it is and
+/// lets go of the Bluetooth link and the network; a caller that asks while that stop is under way waits for it, then
+/// connects afresh. Then:
 /// - **The key.** The link's serial (`CameraIdentifying`) gives the camera's catalogue key (`CameraKeys`). A camera
 ///   connecting for the first time is saved to the catalogue under it and leaves the pending list; the key is then
 ///   `knownKey(for:)`, so the camera's last-known card shows while the next join is under way. A link with no serial
@@ -78,11 +83,18 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// last holder letting go is still the end of that camera's import, and the session must be told.
     private var handedOut: [CameraDescriptor.ID: any CameraLink] = [:]
     private var inFlight: [CameraDescriptor.ID: Task<Result<any CameraLink, CameraLinkFailure>, Never>] = [:]
+    /// The callers waiting for each camera's connection under way, by token: when the last one gives up, it is stopped.
+    private var waiting: [CameraDescriptor.ID: Set<Int>] = [:]
+    private var nextWaiter = 0
+    /// Cameras whose connection under way is being stopped because nothing waits for it any more.
+    private var stopping: Set<CameraDescriptor.ID> = []
     private var failures: [CameraDescriptor.ID: WirelessFailure] = [:]
     private var declined: Set<CameraDescriptor.ID> = []
     private var inBackground = false
     /// How many callers waited for a connection another caller had begun (for tests).
     private(set) var joinedConnections = 0
+    /// How many connections were stopped because their last caller gave up (for tests).
+    private(set) var stoppedConnections = 0
 
     /// - Parameters:
     ///   - catalogue: Where connected cameras are kept (their rows are the `.wifi` ones).
@@ -127,20 +139,62 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             // Not usable any more (its session moved on, or it was replaced while this waited): connect again.
             if let now = live[id], Self.same(now, cached) { live[id] = nil }
         }
+        // A connection being stopped because its callers left is let end; this caller then connects afresh.
+        while stopping.contains(id), let dying = inFlight[id] { _ = await dying.value }
         // No suspension between this check and the task being stored, so two callers never both start a connection.
         if let running = inFlight[id] {
             joinedConnections += 1
-            return try await running.value.get()
+            return try await wait(for: running, of: id)
         }
         let task = Task { await self.connect(entry) }
         inFlight[id] = task
-        return try await task.value.get()
+        return try await wait(for: task, of: id)
+    }
+
+    /// Waits for the camera's connection as one of its callers. A caller that is cancelled stops waiting at once (its
+    /// screen has gone, so it isn't held until the join is over) and gets `disconnected`; if it was the last one, the
+    /// connection is stopped (`callerGaveUp`). The others still get its link.
+    private func wait(for task: Task<Result<any CameraLink, CameraLinkFailure>, Never>, of id: CameraDescriptor.ID)
+        async throws(CameraLinkFailure) -> any CameraLink {
+        let token = nextWaiter
+        nextWaiter += 1
+        waiting[id, default: []].insert(token)
+        defer { waiting[id]?.remove(token) }
+        let answer = OneAnswer<Result<any CameraLink, CameraLinkFailure>>()
+        let result = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                answer.wait(continuation)
+                Task { answer.give(await task.value) }
+            }
+        } onCancel: {
+            answer.give(.failure(CameraLinkFailure(.disconnected, detail: "wifi: the caller left")))
+            Task { await self.callerGaveUp(token, on: id, connection: task) }
+        }
+        return try result.get()
+    }
+
+    /// A caller waiting for `connection` was cancelled. When no caller waits for it any more and it is still under way, it
+    /// is stopped: its task is cancelled (which ends the Local Network explanation's wait or a typed-address open) and
+    /// the camera's session leaves (`WirelessSession.leave()`: the preparation stops where it is, and what it held is let
+    /// go). Nothing is left half-joined behind a screen the person has left.
+    private func callerGaveUp(_ token: Int, on id: CameraDescriptor.ID,
+                              connection: Task<Result<any CameraLink, CameraLinkFailure>, Never>) async {
+        waiting[id]?.remove(token)
+        guard inFlight[id] == connection, waiting[id]?.isEmpty ?? true, !stopping.contains(id) else { return }
+        stopping.insert(id)
+        stoppedConnections += 1
+        log.note("wifi: stopping the connection: nothing waits for it any more")
+        connection.cancel()
+        await sessions[id]?.leave()
     }
 
     /// The one connection for a camera: the explanation if one is due, the open, the identity check, the saving.
     private func connect(_ entry: WiFiCameraEntry) async -> Result<any CameraLink, CameraLinkFailure> {
         let id = entry.id
-        defer { inFlight[id] = nil }
+        defer {
+            inFlight[id] = nil
+            stopping.remove(id)
+        }
         failures[id] = nil
         declined.remove(id)
         if let gate = beforeFirstConnection, await gate() == false {
@@ -155,8 +209,14 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         } catch {
             failures[id] = error
             eventSink.yield(.failed(id, error))
-            log.note("wifi: couldn't connect: \(error)")
+            log.note(error == .cancelled ? "wifi: the connection was stopped" : "wifi: couldn't connect: \(error)")
             return .failure(Self.linkFailure(for: error))
+        }
+        if Task.isCancelled {
+            // Stopped just as it opened: nobody waits for the link, and the session has been told to leave.
+            await link.close()
+            log.note("wifi: the connection was stopped as it opened")
+            return .failure(CameraLinkFailure(.disconnected, detail: "wifi: stopped"))
         }
         let serial = await (link as? any CameraIdentifying)?.cameraKeyMaterial()
         if let known = entry.key, let serial, CameraKeys.key(for: entry.descriptor, material: serial) != known {
@@ -498,5 +558,43 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         case .cameraNotFound, .bluetooth, .handoff, .rewriteFailed, .noGateway, .cameraWiFiLapsed:
             return CameraLinkFailure(.noAnswer, detail: detail)
         }
+    }
+}
+
+/// The first of several answers to one waiter: whichever comes first (the connection's result, or the waiter's cancellation)
+/// resumes it, and later ones are dropped. Either may come before the waiter starts waiting.
+final class OneAnswer<Value: Sendable>: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Value, Never>?
+        var value: Value?
+        var answered = false
+    }
+
+    private let state = Mutex(State())
+
+    func wait(_ continuation: CheckedContinuation<Value, Never>) {
+        let ready: Value? = state.withLock { state in
+            if let value = state.value {
+                state.value = nil
+                return value
+            }
+            state.continuation = continuation
+            return nil
+        }
+        if let ready { continuation.resume(returning: ready) }
+    }
+
+    func give(_ value: Value) {
+        let waiting: CheckedContinuation<Value, Never>? = state.withLock { state in
+            guard !state.answered else { return nil }
+            state.answered = true
+            guard let continuation = state.continuation else {
+                state.value = value
+                return nil
+            }
+            state.continuation = nil
+            return continuation
+        }
+        waiting?.resume(returning: value)
     }
 }

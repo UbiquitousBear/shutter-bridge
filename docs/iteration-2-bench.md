@@ -196,4 +196,4 @@ To fill after the run: what failed, what was inconclusive, which decisions (D1 t
 
 | Item | What was seen | Next step |
 | --- | --- | --- |
-| _to fill_ | | |
+| A Wi-Fi camera that was off, opened from Cameras (build 22.1, 12 Nov) | Browse began the connection (Bluetooth, then the join), iOS couldn't join, and the person went back to Cameras: the join carried on behind it, and its line ("Joining the camera's Wi-Fi. Tap Join if iOS asks.") stayed at the top of Cameras until the session's own limit. The line's strip was also wider than the camera row under it and sat against it, and its spinner hung below the text, on Cameras and on Browse. | Fixed for the next build: closing Browse stops a connection that nothing else waits for (`WiFiCameraSource` cancels it and the session leaves), the strips and the Cameras list share one side margin with a gap under the last strip, and the spinner sits on the first line. Recheck on the next build: open the switched-off camera, go back while it connects, and see the line go within a few seconds and no join prompt come afterwards. |

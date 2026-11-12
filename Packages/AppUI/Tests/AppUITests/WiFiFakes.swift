@@ -121,6 +121,9 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     /// and then leaves, either way closing the link it holds).
     private var closesLinkWhenFinished = false
     private var lastLink: (any CameraLink)?
+    /// `leave()` came while a preparation was held: it ends as cancelled, as the real session's does.
+    private var stoppedWhileHeld = false
+    private var started = 0
     let phases: AsyncStream<WirelessPhase>
     private let phaseSink: AsyncStream<WirelessPhase>.Continuation
 
@@ -129,6 +132,8 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     }
 
     var calls: [String] { lock.withLock { recorded } }
+    /// How many preparations have begun, held ones included (`calls` records a preparation once its hold is over).
+    var preparesStarted: Int { lock.withLock { started } }
     func count(_ call: String) -> Int { calls.filter { $0 == call }.count }
 
     /// The results `prepareImport` gives in turn; the last one repeats.
@@ -154,11 +159,20 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     var peripheral: PeripheralID? { get async { lock.withLock { peripheralValue } } }
 
     func prepareImport() async throws(WirelessFailure) -> any CameraLink {
-        let held: AsyncStream<Void>? = lock.withLock { gate }
+        let held: AsyncStream<Void>? = lock.withLock {
+            started += 1
+            return gate
+        }
         if let held {
             var iterator = held.makeAsyncIterator()
             _ = await iterator.next()
         }
+        let stopped: Bool = lock.withLock {
+            defer { stoppedWhileHeld = false }
+            if stoppedWhileHeld { recorded.append("prepare stopped") }
+            return stoppedWhileHeld
+        }
+        if stopped { throw .cancelled }
         let next: Result<any CameraLink, WirelessFailure>? = lock.withLock {
             recorded.append("prepare")
             return results.count > 1 ? results.removeFirst() : results.first
@@ -178,7 +192,16 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     }
     func appMovedToBackground() async { lock.withLock { recorded.append("background") } }
     func appBecameActive() async { lock.withLock { recorded.append("active") } }
-    func leave() async { lock.withLock { recorded.append("leave") } }
+    /// Records the leave; a preparation held meanwhile ends as cancelled, as `WirelessSession.leave()` stops one.
+    func leave() async {
+        let held: AsyncStream<Void>.Continuation? = lock.withLock {
+            recorded.append("leave")
+            guard gate != nil, let release else { return nil }
+            stoppedWhileHeld = true
+            return release
+        }
+        held?.finish()
+    }
 }
 
 /// The app's connector, faked: one `FakeSession` per camera, and a scripted typed-address open.
