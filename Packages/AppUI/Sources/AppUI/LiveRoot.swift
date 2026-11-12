@@ -72,8 +72,8 @@ extension AppModel {
             albumStore: UserDefaultsAlbumIdentifierStore(),
             metadata: ImageIOMetadataReader(),
             documentsDirectory: URL.documentsDirectory,
-            // Until the App ID has iCloud and the app is signed with its entitlements (docs/ci.md), the locator finds
-            // no container and staging goes to the app's folder on this iPhone.
+            // The app is signed with iCloud Documents and declares its container (docs/ci.md); when iCloud Drive
+            // isn't available the locator says why and staging goes to the app's folder on this iPhone.
             stagingLocator: UbiquityStagingLocator(),
             iCloudDriveMover: UbiquitousFileMover()
         )

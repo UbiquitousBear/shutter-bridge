@@ -63,16 +63,16 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
 - **Export compliance:** `ITSAppUsesNonExemptEncryption = false` in `App/Info.plist`.
 - **Versions:** `MARKETING_VERSION` 0.1 and `CURRENT_PROJECT_VERSION` 1 in the project; `Info.plist` reads both from
   build settings, so CI sets the build number.
-- **Entitlements (from Iteration 3, W12):** `App/ShutterBridge.entitlements` holds only Hotspot Configuration (joining
-  the camera's network). Like `Info.plist` it sits outside the synchronised `ShutterBridge/` folder, and the target
+- **Entitlements (from Iteration 3, W12; iCloud from 12 Nov):** `App/ShutterBridge.entitlements` holds Hotspot
+  Configuration (joining the camera's network) and iCloud Documents for the container `iCloud.net.shamil.shutter-bridge`
+  (staging in iCloud Drive), both ticked on the App ID. Like `Info.plist` it sits outside the synchronised `ShutterBridge/` folder, and the target
   points at it with `CODE_SIGN_ENTITLEMENTS = ShutterBridge.entitlements` in Debug and Release: the build setting, not a
   generator's entitlements key (the lesson of the spike's XcodeGen rewrite above). Two checks keep it there:
-  `app.yml` fails a PR whose app target lacks the setting in either configuration or whose file holds anything but
-  that one key (its unsigned builds can't see entitlements), and `testflight.yml` fails a production archive that
-  isn't signed with it, before anything is uploaded. Multicast Networking stays out until Apple grants it and it is
-  ticked on the App ID; adding it means ticking it first, then adding the key and updating `app.yml`'s list. iCloud
-  (staging in iCloud Drive, Shamil, 11 Nov) stays out too until the App ID has it: the change is prepared under *To do
-  once the App ID has iCloud* below, not applied.
+  `app.yml` fails a PR whose app target lacks the setting in either configuration, whose file holds anything but
+  those keys, or whose Info.plist doesn't declare the same container (its unsigned builds can't see entitlements), and
+  `testflight.yml` fails a production archive that isn't signed with them, before anything is uploaded. Multicast
+  Networking stays out until Apple grants it and it is ticked on the App ID; adding it means ticking it first, then
+  adding the key and updating `app.yml`'s list. *iCloud for staging* below records how iCloud was added.
 - **Local Network:** `NSLocalNetworkUsageDescription` in `App/Info.plist`, asked at the first connection to the
   camera over Wi-Fi. No `NSBonjourServices` (the camera advertises no `_ptp._tcp`) and no ATS exception (the SSDP
   description fetch stays off).
@@ -251,7 +251,11 @@ browser:
 3. **Internal testers.** The app → TestFlight → Internal Testing → + a group (e.g. "Bench"), add yourself, and turn
    on automatic distribution.
 
-### To do once the App ID has iCloud (staging in iCloud Drive; prepared 11 Nov, not applied)
+### iCloud for staging (prepared 11 Nov; the App ID got iCloud and the change was applied on 12 Nov)
+
+*Applied:* Shamil created the container and ticked iCloud on the App ID with it assigned (12 Nov), and the change in
+step 2 below landed as written. What follows is kept as the record of the steps and the reasons; step 3 is still to
+run.
 
 *Stage* (Shamil, 11 Nov) copies the camera's originals into the app's iCloud Drive folder (iCloud Drive › Shutter
 Bridge › Staging › camera › capture day) when iCloud Drive is available, and into On My iPhone › Shutter Bridge ›

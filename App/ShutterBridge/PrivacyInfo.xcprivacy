@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Privacy manifest for Shutter Bridge. No tracking and nothing collected: photos go from the camera to this iPhone
-  and nowhere else. The "required reason" APIs the app calls, checked against the code on 9 Nov (W19's sweep):
+  Privacy manifest for Shutter Bridge. No tracking and nothing collected: photos go from the camera to this iPhone,
+  and staged copies to the person's own iCloud Drive through Apple's service when they choose Stage; nothing reaches
+  the developer. The "required reason" APIs the app calls, checked against the code on 9 Nov (W19's sweep):
   - UserDefaults (import settings, such as downloads in flight; the destination setting; the proximity reminder's settings,
     holds and snooze; the Wi-Fi cameras' pending list and the Local Network explanation's record): CA92.1, read and
     written only by the app itself.
