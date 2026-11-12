@@ -272,3 +272,42 @@ struct ImportRowView: View {
     }
 }
 #endif
+
+#if canImport(SwiftUI) && canImport(UIKit) && os(iOS)
+/// The running import as the tab bar's bottom accessory (backlog section 4, I10): the job's status line and a bar by bytes,
+/// shown while a job exists (running, paused or finished and not yet dismissed); a tap opens the Import screen. VoiceOver
+/// reads it as one button with the status, the counts and a hint.
+struct ImportAccessory: View {
+    let model: ImportModel
+    let open: @MainActor () -> Void
+
+    var body: some View {
+        Button {
+            open()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: model.progress.destination?.kind == .staging ? "tray.full" : "square.and.arrow.down")
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.statusLine ?? ImportWording.title)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                    if model.progress.bytesTotal > 0, model.isActive {
+                        ProgressView(value: model.progress.fractionCompleted)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([model.statusLine ?? ImportWording.title, model.countsLine].compactMap(\.self)
+            .joined(separator: " "))
+        .accessibilityHint(HistoryWording.accessoryHint)
+        .accessibilityAddTraits(.isButton)
+    }
+}
+#endif

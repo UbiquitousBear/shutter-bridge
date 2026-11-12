@@ -101,7 +101,7 @@ extension JobRecord.Carrier {
 extension JobRecord.Outcome {
     /// The reason a keepers job stopped for Photos access is recorded under (`JobOutcome.photosAccessNeeded`): not a
     /// `CameraLinkFailure.Kind`, so it can't be taken for one.
-    static let photosAccessReason = "photosAccess"
+    public static let photosAccessReason = "photosAccess"
 
     /// The engine's outcome; a stop keeps its kind's name, for wording.
     init(_ outcome: JobOutcome) {

@@ -1,9 +1,11 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// The app's first screen: the catalogue opening, then Cameras with Browse pushed from it and the Import and Settings
-/// screens over it (backlog section 6). The live screens need ImageCaptureCore, UIKit, Photos and SwiftData, so they
-/// exist on iOS only; elsewhere (a Mac running `swift build`) this shows a line saying so.
+/// The app's first screen: the catalogue opening, then the tab bar (Iteration 2, I10): Cameras with Browse pushed from
+/// it, Staging and History, the running import as the bar's bottom accessory, and the Import and Settings screens over
+/// it all (`LiveApp`; backlog section 6 of Iteration 1, section 4 of Iteration 2). The live screens need
+/// ImageCaptureCore, UIKit, Photos and SwiftData, so they exist on iOS only; elsewhere (a Mac running `swift build`) this
+/// shows a line saying so.
 public struct RootView: View {
     public init() {}
 

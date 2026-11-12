@@ -217,7 +217,7 @@ public final class AppModel {
     /// A keepers job (I12) reads Staging under the staged files' key, which a connected camera may share: it holds no
     /// camera's link.
     private var activeImportKey: CameraKey? {
-        importer.isActive && importer.camera?.descriptor.carrier != .staging ? importer.camera?.key : nil
+        importer.camera?.descriptor.carrier != .staging ? importer.activeJobKey : nil
     }
 
     /// A model for the Staging screen (backlog section 7.3; D5), over the app's catalogue and staging locator, made each
@@ -240,6 +240,21 @@ public final class AppModel {
                               reader: any StagedFileReading = StagedFileReaders.platform) -> KeepersImport {
         KeepersImport(catalogue: catalogue, importer: importer, onThisIPhone: documents, locator: stagingLocator,
                       reader: reader, files: files, log: log)
+    }
+
+    /// A model for the History screen (backlog section 4; D6), over the app's catalogue, the import and the staging
+    /// locator. *Resume* and *Re-run* reach a camera through `HistoryCameraFinder`, which never starts a Wi-Fi join; the
+    /// running job is the import's, a keepers job included (its record has no end yet, and isn't *Stopped early*; its
+    /// camera's imports aren't forgotten while it runs). The app passes its Documents
+    /// folder, On My iPhone's staging root, for a stage job's folder.
+    public func historyModel(documents: URL) -> HistoryModel {
+        let discovery = self.discovery
+        let cameras = self.cameras
+        let finder = HistoryCameraFinder(leases: leases, cameras: { cameras.cameras },
+                                         link: { id in try? await discovery.cameraLink(for: id) }, key: cameraKeying)
+        return HistoryModel(catalogue: catalogue, importer: importer, finder: finder, leases: leases,
+                            onThisIPhone: documents, locator: stagingLocator,
+                            activeCamera: { [weak self] in self?.importer.activeJobKey }, log: log)
     }
 
     /// The model for browsing `camera`, with the catalogue and the import.

@@ -102,7 +102,10 @@ struct CullScreen: View {
                     }
                 }
             }
-            .onChange(of: keepers?.confirmation) { _, plan in confirmsRemoval = plan != nil }
+            // Initially too: in the Staging tab (I10) the screen is made again on each visit while *Import keepers*
+            // lives on, so a confirmation offered while another tab was shown is put up when the person comes back,
+            // rather than leaving the flow busy with nothing on screen.
+            .onChange(of: keepers?.confirmation, initial: true) { _, plan in confirmsRemoval = plan != nil }
             .confirmationDialog(keepers?.confirmation.map(KeepersWording.confirmTitle) ?? "",
                                 isPresented: $confirmsRemoval, titleVisibility: .visible) {
                 Button(KeepersWording.remove, role: .destructive) {

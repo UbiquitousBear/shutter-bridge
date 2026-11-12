@@ -237,6 +237,11 @@ public final class ImportModel: BrowseImporting {
     /// A job is shown (running, paused or finished and not yet dismissed).
     public var hasJob: Bool { camera != nil }
     public var isActive: Bool { state.isActive }
+
+    /// The camera key of the job running or paused now, if one is, a keepers job (I12) included: History's running
+    /// job, which it never calls *Stopped early* and whose camera's imports it never forgets while its commits are in
+    /// flight.
+    public var activeJobKey: CameraKey? { isActive ? camera?.key : nil }
     public var isFinished: Bool {
         if case .finished = state { camera != nil } else { false }
     }

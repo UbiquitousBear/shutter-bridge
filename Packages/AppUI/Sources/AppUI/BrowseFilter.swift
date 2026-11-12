@@ -145,4 +145,7 @@ public final class LinkLeases {
 
     /// How many hold `link`.
     public func holders(of link: any CameraLink) -> Int { holders[ObjectIdentifier(link)]?.count ?? 0 }
+
+    /// Every link someone holds now (History finds a Wi-Fi camera's open link here, so it never starts a join).
+    public var heldLinks: [any CameraLink] { holders.values.map(\.link) }
 }
