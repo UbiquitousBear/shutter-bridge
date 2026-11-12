@@ -126,6 +126,11 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     private var started = 0
     /// Preparations waiting on the hold now.
     private var holding = 0
+    private var finishGate: AsyncStream<Void>?
+    private var finishRelease: AsyncStream<Void>.Continuation?
+    private var finishesStarted = 0
+    private var leaveGate: AsyncStream<Void>?
+    private var leaveRelease: AsyncStream<Void>.Continuation?
     let phases: AsyncStream<WirelessPhase>
     private let phaseSink: AsyncStream<WirelessPhase>.Continuation
 
@@ -136,6 +141,20 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     var calls: [String] { lock.withLock { recorded } }
     /// How many preparations have begun, held ones included (`calls` records a preparation once its hold is over).
     var preparesStarted: Int { lock.withLock { started } }
+    /// How many `importFinished` calls have begun, held ones included.
+    var finishStarted: Int { lock.withLock { finishesStarted } }
+    /// Makes `importFinished` wait until `releaseFinish()`: the session closing its link (a CloseSession round trip).
+    func holdFinish() {
+        let (stream, sink) = AsyncStream<Void>.makeStream()
+        lock.withLock { finishGate = stream; finishRelease = sink }
+    }
+    func releaseFinish() { lock.withLock { finishRelease }?.finish() }
+    /// Makes `leave` wait until `releaseLeave()` before it ends a held preparation: a slow leave.
+    func holdLeave() {
+        let (stream, sink) = AsyncStream<Void>.makeStream()
+        lock.withLock { leaveGate = stream; leaveRelease = sink }
+    }
+    func releaseLeave() { lock.withLock { leaveRelease }?.finish() }
     func count(_ call: String) -> Int { calls.filter { $0 == call }.count }
 
     /// The results `prepareImport` gives in turn; the last one repeats.
@@ -188,6 +207,11 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     }
 
     func importFinished() async {
+        let held: AsyncStream<Void>? = lock.withLock { finishesStarted += 1; return finishGate }
+        if let held {
+            var iterator = held.makeAsyncIterator()
+            _ = await iterator.next()
+        }
         let closing: (any CameraLink)? = lock.withLock {
             recorded.append("importFinished")
             return closesLinkWhenFinished ? lastLink : nil
@@ -198,6 +222,11 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     func appBecameActive() async { lock.withLock { recorded.append("active") } }
     /// Records the leave; a preparation held meanwhile ends as cancelled, as `WirelessSession.leave()` stops one.
     func leave() async {
+        let slow: AsyncStream<Void>? = lock.withLock { leaveGate }
+        if let slow {
+            var iterator = slow.makeAsyncIterator()
+            _ = await iterator.next()
+        }
         let held: AsyncStream<Void>.Continuation? = lock.withLock {
             recorded.append("leave")
             guard holding > 0, let release else { return nil }
@@ -463,4 +492,40 @@ func eventuallyLong(_ condition: @MainActor () async -> Bool) async -> Bool {
         try? await Task.sleep(for: .milliseconds(2))
     }
     return await condition()
+}
+
+/// A Wi-Fi link whose model name waits for `release`: a connection held just after its link went live, while it saves
+/// the camera.
+actor GatedModelLink: CameraIdentifying {
+    nonisolated let descriptor = CameraDescriptor(id: .init(rawValue: "gated"), name: "Camera", mode: .wifi(.cameraNetwork))
+    nonisolated let capabilities: CameraLinkCapabilities = .wifi
+    nonisolated var events: AsyncStream<CameraLinkEvent> { fanOut.stream() }
+    private let fanOut = TestFanOut<CameraLinkEvent>()
+    private(set) var closed = false
+    private(set) var modelAsked = false
+    private let gate: AsyncStream<Void>
+    nonisolated let release: AsyncStream<Void>.Continuation
+
+    init() { (gate, release) = AsyncStream.makeStream() }
+
+    func cameraKeyMaterial() -> String? { fakeSerial }
+    func cameraModelName() async -> String? {
+        modelAsked = true
+        var iterator = gate.makeAsyncIterator()
+        _ = await iterator.next()
+        return "ILCE-7CM2"
+    }
+    func open() throws(CameraLinkFailure) {}
+    func list() throws(CameraLinkFailure) -> [CameraItem] { [] }
+    func info(of item: CameraItem.ID) throws(CameraLinkFailure) -> CameraItem { throw CameraLinkFailure(.itemNotFound) }
+    func thumbnail(of item: CameraItem.ID) throws(CameraLinkFailure) -> Data { Data() }
+    func bytes(of item: CameraItem.ID, into directory: URL, resuming: PartialDownload?,
+               checkpoint: @escaping @Sendable (PartialDownload) -> Void,
+               progress: @escaping @Sendable (UInt64) -> Void) throws(CameraLinkFailure) -> URL {
+        throw CameraLinkFailure(.itemNotFound)
+    }
+    func close() {
+        closed = true
+        fanOut.finish()
+    }
 }

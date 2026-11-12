@@ -101,6 +101,9 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     private var unwanted: Set<CameraDescriptor.ID> = []
     /// Cameras whose connection under way has asked the session to prepare (`open(_:)`).
     private var atSession: Set<CameraDescriptor.ID> = []
+    /// Cameras whose unwanted connection is being let go (the session closing it): a caller that asks now waits for that,
+    /// then connects afresh.
+    private var lettingGo: Set<CameraDescriptor.ID> = []
     /// How many Wi-Fi recovery reopens are under way for each camera (`recoveryReopening(_:_:)`).
     private var recoveryReopens: [CameraDescriptor.ID: Int] = [:]
     private var failures: [CameraDescriptor.ID: WirelessFailure] = [:]
@@ -150,12 +153,16 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         await loadIfNeeded()
         guard let entry = entries[id] else { throw CameraLinkFailure(.disconnected, detail: "wifi: no such camera") }
         if let cached = live[id] {
-            if await isReusable(id), let still = live[id], Self.same(still, cached) { return still }
+            if await isReusable(id), let still = live[id], Self.same(still, cached) {
+                // Wanted again: a link opened for nobody that is still being saved is this caller's, not let go.
+                unwanted.remove(id)
+                return still
+            }
             // Not usable any more (its session moved on, or it was replaced while this waited): connect again.
             if let now = live[id], Self.same(now, cached) { live[id] = nil }
         }
-        // A connection being stopped because its callers left is let end; this caller then connects afresh.
-        while stopping.contains(id), let dying = inFlight[id] { _ = await dying.value }
+        // A connection being stopped, or let go, because its callers left is let end; this caller then connects afresh.
+        while stopping.contains(id) || lettingGo.contains(id), let dying = inFlight[id] { _ = await dying.value }
         // A caller that has gone already (its screen closed while it got here) starts and joins nothing.
         if Task.isCancelled { throw CameraLinkFailure(.disconnected, detail: "wifi: the caller left") }
         // No suspension between this check and the task being stored, so two callers never both start a connection.
@@ -243,6 +250,9 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     public func recoveryReopening(_ id: CameraDescriptor.ID, _ began: Bool) {
         let count = recoveryReopens[id, default: 0] + (began ? 1 : -1)
         recoveryReopens[id] = count > 0 ? count : nil
+        // Wanted again: a connection a Browse left, finishing for nobody, shares the recovery's preparation from here on,
+        // so it is neither let go nor stopped; its link becomes the one the recovery adopts.
+        if began { unwanted.remove(id) }
     }
 
     /// The one connection for a camera: the explanation if one is due, the open, the identity check, the saving.
@@ -254,6 +264,7 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             opened.remove(id)
             unwanted.remove(id)
             atSession.remove(id)
+            lettingGo.remove(id)
         }
         failures[id] = nil
         declined.remove(id)
@@ -309,6 +320,7 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             // Nobody waits for it (the person left while it opened on the camera's network): let it go as a Browse that
             // took it and closed would: the session closes it and starts the stay again (or leaves, in the background).
             log.note("wifi: nobody waits for the connection; letting it go")
+            lettingGo.insert(id)
             _ = await finish(id)
             if entry.typed != nil { await link.close() }
             return .failure(CameraLinkFailure(.disconnected, detail: "wifi: nobody waits for it"))
@@ -331,7 +343,7 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     }
 
     /// Whether `cameraLink(for:)` would start nothing that can join:
-    /// - a connection the source began is under way (the caller would wait for it);
+    /// - a connection the source began is under way (the caller would wait for it), unless it is being stopped or let go;
     /// - the camera's session is preparing by itself (handing off, joining, waiting for the front, opening its session):
     ///   the Wi-Fi recovery reopens through the session, past the source, and `WirelessSession.prepareImport` shares a
     ///   preparation under way;
@@ -343,6 +355,8 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// after `WiFiRecoveryTiming.waitBeforeBluetooth`, which only the person's tap may start (Shamil, 12 Nov). Their
     /// Connect reopens it with no join while the camera is still there.
     public func isConnected(_ id: CameraDescriptor.ID) async -> Bool {
+        // A connection being stopped or let go isn't one to wait for: asking now waits for it to end, then connects afresh.
+        if stopping.contains(id) || lettingGo.contains(id) { return false }
         if inFlight[id] != nil { return true }
         guard let session = sessions[id] else { return live[id] != nil }
         switch await session.phase {
@@ -589,7 +603,10 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         case .handingOff, .joining, .awaitingFront:
             // A connection nobody waits for that was finishing on the camera's network has fallen back to Bluetooth and
             // the join (a reopen in the stay that the camera didn't answer): stopped now.
-            if unwanted.contains(id), !opened.contains(id), let connection = inFlight[id] { stop(id, connection) }
+            if unwanted.contains(id), !opened.contains(id), recoveryReopens[id, default: 0] == 0,
+               let connection = inFlight[id] {
+                stop(id, connection)
+            }
         case .idle, .openingSession, .ready, .staying, .leaving, .paused:
             break
         }
