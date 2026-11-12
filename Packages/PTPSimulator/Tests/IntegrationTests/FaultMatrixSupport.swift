@@ -601,18 +601,6 @@ final class MatrixBench {
 
     // MARK: The five points
 
-    /// Checks a documented engine bug is known to break, and only those: every other check of `verify` stays live. Each
-    /// is wrapped in `withKnownIssue`, so when the bug is fixed the check passes, the wrapper fails, and the gap is
-    /// deleted from the case.
-    struct KnownGaps: Sendable {
-        /// Why the checks are expected to fail (the engine behaviour, with where it is).
-        var reason: String
-        /// Keys of files whose row is known to linger as `.partial` though no job will continue the file.
-        var staleRows: Set<String> = []
-        /// Whether the partial files kept are known not to be the ones the case leaves resumable.
-        var keptPartials = false
-    }
-
     /// After a case recovers (backlog section 3, *The harness*): nothing duplicated, nothing lost.
     ///
     /// 1. every file the job held is committed exactly once or is reported skipped or failed, none silently missing;
@@ -635,10 +623,9 @@ final class MatrixBench {
     ///   - otherCameras: Other keys a row may be under (`record(for:)` is exact: only "already imported" ignores the
     ///     camera), for a case with two cameras.
     ///   - job: Whether to check the last job's file statuses (point 1's reporting half).
-    ///   - knownGaps: The documented bugs that break a row check or the kept-partials check, if any.
     func verify(_ cards: [ScriptedCard], committed: Set<String>, skipped: Set<String> = [], partials: Set<String> = [],
                 orphans: Int = 0, purpose: MatrixPurpose? = nil, switched: Bool = false, job: Bool = true, camera: CameraKey = MatrixBench.camera,
-                otherCameras: [CameraKey] = [], knownGaps: KnownGaps? = nil,
+                otherCameras: [CameraKey] = [],
                 sourceLocation: SourceLocation = #_sourceLocation) async {
         await settle()
 
@@ -708,7 +695,6 @@ final class MatrixBench {
 
         // 3: the rows.
         var seenKeys: Set<String> = []
-        var staleRows: [(key: String, row: CatalogueRecord?)] = []
         for object in objects where seenKeys.insert(Self.key(object)).inserted {
             let key = Self.key(object)
             var row = await record(of: object, camera: camera)
@@ -728,21 +714,10 @@ final class MatrixBench {
             } else if partials.contains(key) {
                 #expect(row?.state == .partial && (row?.resumeOffset ?? 0) > 0, "\(key): a partial row",
                         sourceLocation: sourceLocation)
-            } else if knownGaps?.staleRows.contains(key) == true {
-                staleRows.append((key, row))
             } else {
                 #expect(row?.state != .imported && row?.state != .partial && row?.staged == nil,
                         "\(key): no row for a file not committed, got \(String(describing: row?.state))",
                         sourceLocation: sourceLocation)
-            }
-        }
-        if let knownGaps, !knownGaps.staleRows.isEmpty {
-            withKnownIssue(Comment(rawValue: knownGaps.reason), sourceLocation: sourceLocation) {
-                for (key, row) in staleRows {
-                    #expect(row?.state != .imported && row?.state != .partial && row?.staged == nil,
-                            "\(key): no row for a file not committed, got \(String(describing: row?.state))",
-                            sourceLocation: sourceLocation)
-                }
             }
         }
 
@@ -776,15 +751,8 @@ final class MatrixBench {
         for url in after where named.insert(url.lastPathComponent).inserted { others.append(url.lastPathComponent) }
         let late = abandoned.undiscarded.isEmpty ? "" : " (late, not discarded: \(abandoned.undiscarded))"
         #expect(others.isEmpty, "work folder holds \(others)\(late)", sourceLocation: sourceLocation)
-        if knownGaps?.keptPartials == true {
-            withKnownIssue(Comment(rawValue: knownGaps?.reason ?? ""), sourceLocation: sourceLocation) {
-                #expect(kept.count == partials.count + orphans, "partials kept: \(kept.map(\.lastPathComponent))",
-                        sourceLocation: sourceLocation)
-            }
-        } else {
-            #expect(kept.count == partials.count + orphans, "partials kept: \(kept.map(\.lastPathComponent))",
-                    sourceLocation: sourceLocation)
-        }
+        #expect(kept.count == partials.count + orphans, "partials kept: \(kept.map(\.lastPathComponent))",
+                sourceLocation: sourceLocation)
 
         // 5: progress.
         samples.append(await engine.currentProgress)

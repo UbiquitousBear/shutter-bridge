@@ -94,22 +94,16 @@ struct FaultMatrixCaseTests {
         try await bench.engine.reconnect(job, to: again, knownItems: known)
         #expect(try await bench.waitFinished() == .completed)
         let unchanged = card.objects.filter { o in !victim.contains(o) }
-        // Known engine bug (for I15): the old file is skipped as gone (itemNotFound), but its partial file stays in
-        // `Partials` and its row stays `.partial` at the old offset until the 7-day prune, though nothing on the card
-        // will ever continue it (the backlog: ".partial rows exist only for files the case leaves resumable").
-        // Nothing wrong is committed: no bytes of the new file reach the old file. When I15 resets the row and
-        // removes the file with the skip, the known-gap check fails: delete the `knownGaps`.
-        // Only those two checks are known to fail: the duplicate, loss and bytes checks stay live.
-        let gaps = MatrixBench.KnownGaps(
-            reason: "a skipped Wi-Fi file keeps its partial file and .partial row (ImportEngine+File linkFailed)",
-            staleRows: Self.keys([arw]), keptPartials: true)
+        // The old file is skipped as gone (itemNotFound) when the listing no longer holds it: its partial file goes
+        // with the skip and its row back to new (I15), so no `.partial` row is left for a file nothing will continue.
         await bench.verify([card, swapped], committed: Self.keys(unchanged), skipped: Self.keys(victim),
-                           purpose: purpose, knownGaps: gaps)
+                           purpose: purpose)
+        #expect(await bench.record(of: arw)?.state == .new)
         #expect(await again.resumes.isEmpty, "nothing continued a partial file with another file's bytes")
 
         try await bench.start(again, purpose)
         #expect(try await bench.waitFinished() == .completed)
-        await bench.verify([card, swapped], committed: Self.keys(unchanged + reused), purpose: purpose, knownGaps: gaps)
+        await bench.verify([card, swapped], committed: Self.keys(unchanged + reused), purpose: purpose)
         await bench.finish()
     }
 
@@ -209,25 +203,16 @@ struct FaultMatrixCaseTests {
         #expect(try await bench.waitFinished() == .stopped(.phoneStorageFull))
         let got = await bench.committedKeys([card])
         let rest = Self.keys(card.objects).subtracting(got)
-        // Known engine bug (for I15): the backlog says a full phone keeps the Wi-Fi partial, but the file whose read
-        // failed is resolved as failed, and resolving a failed file deletes its partial folder. The catalogue's row
-        // stays `.partial` at the old offset, pointing at nothing. Nothing is lost or duplicated: the next job copies
-        // the file from 0. When I15 keeps the partial (a `.stopJob` failure isn't the file's), this passes and
-        // the known-gap check fails: delete the `knownGaps`.
-        // Only the kept-partial-file check is known to fail: the duplicate, loss, bytes and row checks stay live.
-        let gaps = MatrixBench.KnownGaps(
-            reason: "a full phone deletes the Wi-Fi partial the backlog says is kept (ImportEngine+File resolve)",
-            keptPartials: true)
+        // A `.stopJob` failure isn't the file's: the file reads failed in this job, but its partial file and its
+        // `.partial` row at the cut are kept (I15), so nothing already copied is thrown away.
         await bench.verify([card], committed: got, skipped: rest, partials: [MatrixBench.key(victim)],
-                           purpose: purpose, knownGaps: gaps)
+                           purpose: purpose)
 
-        // Room again: the next job copies the file (continuing the partial, once the engine keeps it).
+        // Room again: the next job continues the partial from the cut and copies the rest.
         try await bench.start(link, purpose)
         #expect(try await bench.waitFinished() == .completed)
         await bench.verify([card], committed: Self.keys(card.objects), purpose: purpose)
-        await withKnownIssue("the next job can't continue a partial the stop deleted") {
-            #expect(await link.resumes.last == SimulatedCameraLink.Resume(filename: victim.filename, offset: cut))
-        }
+        #expect(await link.resumes.last == SimulatedCameraLink.Resume(filename: victim.filename, offset: cut))
         await bench.finish()
     }
 

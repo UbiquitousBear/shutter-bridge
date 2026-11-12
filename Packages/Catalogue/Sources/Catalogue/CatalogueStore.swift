@@ -371,6 +371,21 @@ extension CatalogueStore {
         return true
     }
 
+    /// Sends the row for exactly this identity back to `.new`, with no resume offset and no temporary file (its location
+    /// and staged copy kept), while it is `.partial` with `tempURL` as its file at `offset`, the row the caller read:
+    /// the engine skipped or failed the file and deleted its partial copy, so no job will continue it (the file left
+    /// the card, say), and a `.partial` row would claim a resumable copy that isn't there. The same conditions as
+    /// `resetPartial(_:ifTempURL:offset:)`, read and written in one actor call: a checkpoint written since, an import or
+    /// a staged copy is never undone. Returns whether the row was changed.
+    @discardableResult
+    public func forgetPartial(_ identity: ObjectIdentity, ifTempURL tempURL: URL, offset: UInt64) throws -> Bool {
+        guard let forgotten = PartialMark.forget(try record(for: identity), ifTempURL: tempURL, offset: offset) else {
+            return false
+        }
+        try upsert(forgotten)
+        return true
+    }
+
     /// Marks the files at the current time (`setMark(_:rating:for:at:)`).
     public func setMark(_ decision: MarkRecord.Decision?, rating: Int = 0, for keys: [ObjectIdentity.ContentKey])
         throws {
