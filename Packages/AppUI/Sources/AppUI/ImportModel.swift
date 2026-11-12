@@ -173,6 +173,12 @@ public final class ImportModel: BrowseImporting {
     /// Where the Wi-Fi recovery is, followed from the coordinator so the screen redraws when it changes (W16: the Import
     /// screen's Try Again, `wifiRecoveryControl`).
     public internal(set) var wifiRecoveryPhase: WiFiRecoveryPlan.Phase = .idle
+    /// *Import keepers* (I12): which of its jobs is shown, while the sequence runs and after it, until `dismiss()`.
+    public private(set) var keepers: KeepersSequence?
+    /// *Import keepers* is running its jobs (`importKeepers(_:reader:)`): Browse's picks don't join it.
+    @ObservationIgnored private(set) var runsKeepers = false
+    /// Waiting for the job shown to end (`waitForJobEnd()`), woken by each `refresh()`.
+    @ObservationIgnored private var jobEndWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(
         engine: ImportEngine,
@@ -337,7 +343,10 @@ public final class ImportModel: BrowseImporting {
     /// The button to the app's page in Settings: only when Photos access is off (restricted can't be changed there,
     /// and a chosen *Stage* needs nothing).
     public var offersPhotosSettingsLink: Bool {
-        camera != nil && progress.destination?.stagingReason?.offersSettingsLink == true
+        guard camera != nil else { return false }
+        // A keepers job Photos refused (3311): a denial is changed in Settings, a restriction isn't.
+        if case .finished(.photosAccessNeeded(.denied)) = state { return true }
+        return progress.destination?.stagingReason?.offersSettingsLink == true
     }
 
     public var bytesLine: String? {
@@ -392,6 +401,8 @@ public final class ImportModel: BrowseImporting {
         message = nil
         guard !items.isEmpty else { return .nothingNew(staging: choice == .staging) }
         guard !starting else { return .stillStarting }
+        // A keepers job's camera key is a camera's own, so a pick from that camera could otherwise join it.
+        guard !runsKeepers else { return remember(.busyWithKeepers) }
         if await engine.state.isActive {
             guard self.camera?.key == camera.key else { return remember(.busyWithAnotherCamera) }
             // One job at a time, of one kind: an import job forced to staging by Photos access still takes more
@@ -550,6 +561,8 @@ public final class ImportModel: BrowseImporting {
     ///   (`StagingFallbackReason.lostDuringImport`), never back, so one job's staged files never come back from this
     ///   iPhone to iCloud Drive half-way.
     func continuingRoute() async -> ImportRoute? {
+        // A keepers job keeps its route, with no fallback: Photos access turned off meanwhile stops it at its next save.
+        guard !runsKeepers else { return nil }
         guard let made = jobDestinations, let current = progress.destination else { return nil }
         let wasPlace = current.stagingPlace ?? jobStagingPlace
         var place = wasPlace
@@ -611,7 +624,10 @@ public final class ImportModel: BrowseImporting {
     private func continueAfterExpiry(route: ImportRoute?) async -> Bool {
         guard let camera, let job = await engine.currentJobID else { return false }
         var target = link
-        if let finder = cameraFinder, let found = await finder.link(forCameraWith: camera.key) { target = found }
+        // A keepers job carries on over its own Staging link, never a connected camera's that shares its key.
+        if !runsKeepers, let finder = cameraFinder, let found = await finder.link(forCameraWith: camera.key) {
+            target = found
+        }
         guard let target else { return false }
         // Over Wi-Fi the card is listed asking the camera only about handles it hasn't seen (W8, `ReusingListing`), given
         // the job's files; empty, or a listing that fails, lets the engine list the card itself.
@@ -640,14 +656,18 @@ public final class ImportModel: BrowseImporting {
         await refresh()
     }
 
-    /// Clears a finished job from the screen.
+    /// Clears a finished job from the screen. While *Import keepers* runs its jobs, a finished one stays shown until the
+    /// next replaces it: the sequence reads each job's end from it (`waitForJobEnd()`), and clearing it as the job ends
+    /// (the Import screen closed at that moment) would leave the sequence waiting for ever, every later import refused
+    /// as busy with keepers.
     public func dismiss() {
-        guard !state.isActive else { return }
+        guard !state.isActive, !runsKeepers else { return }
         camera = nil
         rows = []
         snapshot = .none
         stagingFolderName = nil
         message = nil
+        keepers = nil
     }
 
     // MARK: - Scene phase and the camera coming back
@@ -686,7 +706,15 @@ public final class ImportModel: BrowseImporting {
     /// *did suspend* stops it 30 s after leaving, even inside a continued task). Wi-Fi loses its session within about
     /// 5 s without a continued task and keeps going with one. By carrier, as the scene-phase rule always was; no
     /// capability says it.
-    private var pausesWhenTheAppLeaves: Bool { camera?.descriptor.carrier == .usb }
+    ///
+    /// A keepers job (`CameraCarrier.staging`) reads local files, so it doesn't pause either: it carries on in the
+    /// continued task as a Wi-Fi job does (`unverified` that iOS keeps a local copy and a Photos save running in one).
+    private var pausesWhenTheAppLeaves: Bool {
+        switch camera?.descriptor.carrier {
+        case .usb?: true
+        case .wifi?, .staging?, nil: false
+        }
+    }
 
     /// iOS ended the background run early (an expiry, or Stop in the system's UI; backlog Iteration 3, section 9,
     /// *Expiry is normal*). On Wi-Fi: flush the checkpoints, pause with `.taskExpired`, and post one pause
@@ -741,6 +769,8 @@ public final class ImportModel: BrowseImporting {
     /// camera is connected again, the job carries on through the new link (`ImportEngine.reconnect`), after reading
     /// Photos access again.
     public func cameraConnected() async {
+        // A keepers job never carries on over a camera's link, even one with the staged files' key.
+        guard !runsKeepers else { return }
         guard !reconnecting, await engine.state == .paused(.cameraRemoved), let camera, let finder = cameraFinder
         else { return }
         reconnecting = true
@@ -798,6 +828,7 @@ public final class ImportModel: BrowseImporting {
         }
         announceJob(s.progress.state)
         wifiRecovery?.jobChanged(s.progress.state)
+        wakeJobEndWaiters()
     }
 
     /// A job has started (`onJobStarted`): a job announced before whose end was never read ends first.
@@ -825,6 +856,7 @@ public final class ImportModel: BrowseImporting {
         snapshot = s
         let kind = s.progress.destination?.kind
         rows = s.files.map { ImportRow($0, going: kind) }
+        if isKeepersJob { rows = rows.map(Self.keepersRow) }
         // Staged files count too, so Browse reads the catalogue again when a stage job commits one.
         let imported = s.files.reduce(0) { n, f in
             switch f.phase {
@@ -880,6 +912,7 @@ public final class ImportModel: BrowseImporting {
         case .cancelled: "cancelled"
         case let .stopped(kind): "stopped (\(kind))"
         case .catalogueUnavailable: "catalogue unavailable"
+        case let .photosAccessNeeded(authorisation): "stopped (Photos access \(authorisation.rawValue))"
         }
     }
 
@@ -890,5 +923,243 @@ public final class ImportModel: BrowseImporting {
         let old = link
         link = newLink
         if let old { await leases.release(old) }
+    }
+}
+
+// MARK: - Import keepers
+
+/// One job of *Import keepers* (backlog section 7.5; I12): the kept files of one staged camera key, which the engine
+/// writes every row under, read from Staging over a `StagingFolderLink`.
+public struct KeepersJob: Sendable, Hashable {
+    /// The staged files' own camera key: the job's, its rows' and its album's (`AlbumPlan`'s `camera:<key>`). Never the
+    /// link's descriptor's.
+    public var camera: CameraKey
+    /// The camera's display name, as its folder under Staging is named (D11): the job's descriptor's name, so its
+    /// album and wording are the camera's.
+    public var cameraName: String
+    /// The kept files' staged copies, a pair's RAW first.
+    public var entries: [StagedEntry]
+    /// The zone the entries' capture times were given in. They are given again in the engine's zone as the job starts
+    /// (`ImportEngine.identityTimeZone`), so a change of zone between planning and the job can't give a keeper an
+    /// identity other than its staged row's.
+    public var timeZone: TimeZone
+
+    public init(camera: CameraKey, cameraName: String, entries: [StagedEntry], timeZone: TimeZone) {
+        self.camera = camera
+        self.cameraName = cameraName
+        self.entries = entries
+        self.timeZone = timeZone
+    }
+
+    /// The entries with their capture times given in `zone`: the same wall-clock second, so the engine reading them in
+    /// `zone` gets each staged row's identity.
+    func entries(in zone: TimeZone) -> [StagedEntry] {
+        entries.map { entry in
+            var given = entry
+            if let date = entry.captureDate, let wallClock = CaptureDate(date, in: timeZone) {
+                given.captureDate = wallClock.date(in: zone) ?? date
+            }
+            return given
+        }
+    }
+}
+
+/// Which job of *Import keepers* the Import screen shows: "Keepers, 2 of 3 cameras".
+public struct KeepersSequence: Sendable, Hashable {
+    /// 1-based.
+    public var index: Int
+    public var count: Int
+    public var cameraName: String
+}
+
+/// How *Import keepers* went, added up over its jobs (the Import screen shows one job at a time).
+public struct KeepersRun: Sendable, Hashable {
+    public enum End: Sendable, Hashable {
+        /// Every job ran to its end (some files may have failed or been skipped; the counts say).
+        case completed
+        /// Photos access is off or restricted: before a job started (nothing was asked of Photos), or a save was refused
+        /// mid-job (3311). Nothing is staged again and no later job starts.
+        case photosAccessNeeded(PhotosAuthorisation)
+        /// A job ended otherwise (cancelled, stopped, the catalogue unavailable): no later job starts.
+        case ended(JobOutcome)
+        /// The engine wouldn't start a job (one was running already, or another refusal); nothing was imported by it.
+        case notStarted
+    }
+
+    public var end: End = .completed
+    /// The jobs asked for: one per staged camera key with something to import.
+    public var jobCount = 0
+    /// The jobs that started.
+    public var jobsStarted = 0
+    public var filesImported = 0
+    public var filesSkipped = 0
+    public var filesFailed = 0
+    /// Keepers left out before their job because they are imported already (by content: imported separately before).
+    public var alreadyImported = 0
+    /// Keepers left out because they were marked Reject after the plan (D3): never imported, and their copies stay in
+    /// Staging unless the removal's own rules (read again at removal) take them as rejects.
+    public var rejectedSince = 0
+
+    public init(jobCount: Int = 0) { self.jobCount = jobCount }
+
+    /// Every job ran to its end.
+    public var completed: Bool { end == .completed }
+}
+
+extension ImportModel {
+    /// "Keepers, 2 of 3 cameras" while *Import keepers* shows one of several jobs; "Importing keepers from Staging" for
+    /// one. Only for a keepers job: a camera's import started later, with the last keepers job never dismissed, has
+    /// none.
+    public var keepersLine: String? {
+        guard isKeepersJob, let keepers else { return nil }
+        return KeepersWording.sequence(keepers)
+    }
+
+    /// The job shown reads Staging (`CameraCarrier.staging`).
+    var isKeepersJob: Bool { camera?.descriptor.carrier == .staging }
+
+    /// *Import keepers*: one engine job per staged camera key, in sequence, each over a `StagingFolderLink` listing only
+    /// that key's kept files, to Photos with that key's album and the person's original choice, on a route with no
+    /// fallback (`ImportRoute.keepers`). Photos access is read (asked for once, if nobody has) before each job; off or
+    /// restricted, no job starts. A job Photos refuses (3311) stops for Photos access and stages nothing; a job that
+    /// ends any way but completed starts no later one. Keepers imported already are left out before the job, and
+    /// counted. Each job shows on the Import screen as any job does, and leaves its own History record (purpose
+    /// `keepers`, carrier `staging`).
+    ///
+    /// Nothing here removes anything from Staging: that is the cull screen's, after its one confirmation (D2).
+    ///
+    /// - Parameter reader: How the link reads the staged copies (`StagedFileReaders.platform` in the app).
+    public func importKeepers(_ jobs: [KeepersJob], reader: any StagedFileReading = StagedFileReaders.platform) async
+        -> KeepersRun {
+        message = nil
+        let jobs = jobs.filter { !$0.entries.isEmpty }
+        var run = KeepersRun(jobCount: jobs.count)
+        guard !jobs.isEmpty else { return run }
+        guard !starting, !runsKeepers, await !engine.state.isActive else {
+            run.end = .notStarted
+            return run
+        }
+        runsKeepers = true
+        defer { runsKeepers = false }
+        for (i, job) in jobs.enumerated() {
+            keepers = KeepersSequence(index: i + 1, count: jobs.count, cameraName: job.cameraName)
+            let availability = await destinations.locate()
+            stagingPlace = availability.place
+            let decision = await decide(.photos, staging: availability.place)
+            guard decision == .photos else {
+                let access: PhotosAuthorisation = decision.stagingReason == .photosRestricted ? .restricted : .denied
+                log.note("import: keepers not started, Photos access \(access.rawValue)")
+                run.end = .photosAccessNeeded(access)
+                break
+            }
+            let descriptor = StagingFolderLink.descriptor(named: job.cameraName)
+            let camera = ImportCamera(descriptor: descriptor, key: job.camera)
+            // The capture times in the zone the engine reads them in now, as the job is about to start.
+            let entries = job.entries(in: engine.identityTimeZone)
+            let link = StagingFolderLink(descriptor: descriptor, entries: entries, reader: reader)
+            let listed = (try? await link.list()) ?? []
+            let made = destinations.destinations(for: camera, startedAt: now(), staging: availability)
+            let photos = self.photos
+            let route = ImportRoute.keepers(made.photos, authorisation: { await photos.authorisation() })
+            let picks = (try? await engine.picksToDo(.items(listed), camera: job.camera, for: route)) ?? listed
+            run.alreadyImported += listed.count - picks.count
+            // A keeper marked Reject since the plan (the loupe stays usable while the jobs run) is left out, as any job
+            // queued again leaves rejects out (D3, I21: `ImportSelection.requeued`); the job goes on without it.
+            let toDo = (try? await engine.picksToDo(.requeued(picks), camera: job.camera, for: route)) ?? picks
+            if toDo.count < picks.count {
+                run.rejectedSince += picks.count - toDo.count
+                log.note("import: keepers job \(i + 1) of \(jobs.count): \(picks.count - toDo.count) file(s) rejected "
+                    + "since, left out, key " + keyTags.tag(for: job.camera))
+            }
+            guard !toDo.isEmpty else {
+                log.note("import: keepers job \(i + 1) of \(jobs.count): nothing new, key "
+                    + keyTags.tag(for: job.camera))
+                continue
+            }
+            guard let outcome = await runKeepersJob(toDo, from: link, camera: camera, destinations: made,
+                                                    route: route) else {
+                run.end = .notStarted
+                break
+            }
+            run.jobsStarted += 1
+            run.filesImported += progress.filesImported
+            run.filesSkipped += progress.filesSkipped
+            run.filesFailed += progress.filesFailed
+            log.note("import: keepers job \(i + 1) of \(jobs.count) ended \(Self.describe(outcome)), key "
+                + keyTags.tag(for: job.camera))
+            switch outcome {
+            case .completed:
+                continue
+            case let .photosAccessNeeded(access):
+                run.end = .photosAccessNeeded(access)
+            case .cancelled, .stopped, .catalogueUnavailable:
+                run.end = .ended(outcome)
+            }
+            break
+        }
+        // Counts only: never a name or a key.
+        log.note("import: keepers done: \(run.jobsStarted) of \(run.jobCount) job(s), \(run.filesImported) imported, "
+            + "\(run.alreadyImported) already imported, \(run.filesSkipped) skipped, \(run.filesFailed) failed")
+        return run
+    }
+
+    /// Starts one keepers job as `importItems` starts a job, and waits for its end; nil when the engine refused it.
+    private func runKeepersJob(_ items: [CameraItem], from link: StagingFolderLink, camera: ImportCamera,
+                               destinations made: ImportDestinations, route: ImportRoute) async -> JobOutcome? {
+        starting = true
+        self.camera = camera
+        snapshot = .none
+        rows = []
+        stagingFolderName = nil
+        jobChoice = .photos
+        jobStagingPlace = made.stagingPlace
+        jobDestinations = made
+        importedSoFar = 0
+        loggedImports = []
+        loggedStaged = []
+        loggedEnd = false
+        pausedByPerson = false
+        do {
+            // Queued again rather than picked: a keeper rejected after the plan is left out by the engine too (D3).
+            try await engine.start(.requeued(items), from: link, camera: camera.key, to: route)
+        } catch {
+            starting = false
+            log.note("import: keepers job didn't start: \(error)", level: .error)
+            self.camera = nil
+            return nil
+        }
+        starting = false
+        await hold(link)
+        announceStart(camera)
+        background.begin(progress, staging: false)
+        await refresh()
+        return await waitForJobEnd()
+    }
+
+    /// Waits until the job shown has ended, reading its end from the snapshot `refresh()` applies (each refresh wakes
+    /// the wait, so it can't miss the end).
+    private func waitForJobEnd() async -> JobOutcome {
+        while true {
+            if case let .finished(outcome) = state { return outcome }
+            await withCheckedContinuation { jobEndWaiters.append($0) }
+        }
+    }
+
+    /// Wakes every `waitForJobEnd()`, to look at the snapshot again.
+    func wakeJobEndWaiters() {
+        guard !jobEndWaiters.isEmpty else { return }
+        let waiters = jobEndWaiters
+        jobEndWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// A keepers job's row: a file it didn't get to stays in Staging, not on the card.
+    static func keepersRow(_ row: ImportRow) -> ImportRow {
+        guard row.phase == .notImported else { return row }
+        var shown = row
+        shown.stateText = KeepersWording.notImported
+        shown.accessibilityLabel = ImportWording.rowAccessibility(name: row.name, state: shown.stateText,
+                                                                  size: row.sizeText, fraction: nil)
+        return shown
     }
 }

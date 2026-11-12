@@ -385,7 +385,12 @@ final class FakeDestinations: ImportDestinationMaking, @unchecked Sendable {
 @MainActor
 final class FakeFinder: CameraFinding {
     var links: [CameraKey: any CameraLink] = [:]
-    func link(forCameraWith key: CameraKey) async -> (any CameraLink)? { links[key] }
+    /// Every key a link was asked for, in order.
+    private(set) var asked: [CameraKey] = []
+    func link(forCameraWith key: CameraKey) async -> (any CameraLink)? {
+        asked.append(key)
+        return links[key]
+    }
 }
 
 /// A catalogue whose reads and writes all fail.

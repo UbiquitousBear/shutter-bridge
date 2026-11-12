@@ -40,7 +40,7 @@ public enum OutcomeFeedback: Sendable, Hashable {
             switch outcome {
             case .completed: return new.failedFiles > 0 ? .warning : .success
             case .cancelled: return nil
-            case .stopped, .catalogueUnavailable: return .error
+            case .stopped, .catalogueUnavailable, .photosAccessNeeded: return .error
             }
         }
     }

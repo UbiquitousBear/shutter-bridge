@@ -184,6 +184,8 @@ public enum ImportRequestOutcome: Sendable, Hashable {
     /// A job of the other kind is running from this camera: an import while these were to be staged, or staging while
     /// these were to be imported (`DestinationKind` is the running job's). One job at a time; try again once it ends.
     case busyWithAnotherMode(DestinationKind)
+    /// *Import keepers* is running (I12): one job at a time, and nothing from a camera joins a keepers job.
+    case busyWithKeepers
     /// A job is being started (Photos access may be being asked for); try again once it has.
     case stillStarting
     /// The engine refused, with a line for the person.

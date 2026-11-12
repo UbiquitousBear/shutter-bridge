@@ -1,5 +1,6 @@
 import CameraTransport
 import Foundation
+import PhotosBridge
 
 /// Why a job is paused. A pause is normal, not a failure (decision 4); the Import screen says which. A job can be
 /// paused for several reasons at once; `ImportJobState.paused` shows the one the person has to deal with first.
@@ -73,6 +74,10 @@ public enum JobOutcome: Sendable, Hashable {
     case stopped(CameraLinkFailure.Kind)
     /// The catalogue couldn't be read or written: going on would import files again later, so the job stopped.
     case catalogueUnavailable
+    /// Photos refused a save (3311) on a route with no fallback, a keepers job's (`ImportRoute.keepers`): its files are
+    /// in Staging already, so nothing is staged again and the job stops; the files not yet saved stay where they are.
+    /// The authorisation was read after the refusal: a denial is changed in Settings, a restriction can't be.
+    case photosAccessNeeded(PhotosAuthorisation)
 }
 
 /// The engine's single job, as the UI sees it.

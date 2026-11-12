@@ -7,15 +7,18 @@ import UIKit
 /// (`AppModel.stagingModel`), so it reads Staging as it is then.
 struct StagingScreen: View {
     @State private var model: CullModel<DecodedPreviewImage>
+    /// *Import keepers* (I12), made with the model; nil leaves the action out.
+    @State private var keepers: KeepersImport?
     @Environment(\.dismiss) private var dismiss
 
-    init(model: CullModel<DecodedPreviewImage>) {
+    init(model: CullModel<DecodedPreviewImage>, keepers: KeepersImport? = nil) {
         _model = State(initialValue: model)
+        _keepers = State(initialValue: keepers)
     }
 
     var body: some View {
         NavigationStack {
-            CullScreen(model: model)
+            CullScreen(model: model, keepers: keepers)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(role: .close) { dismiss() }
@@ -29,8 +32,13 @@ struct StagingScreen: View {
 /// its counts ("Today: 120 staged, 34 kept, 60 rejected"), from the catalogue with no camera connected. A day opens the
 /// loupe over its photos, full screen, at the first one with no mark. Staged files that can't be shown are counted
 /// under the list, with why. Pull to refresh reads Staging again; if that fails, the list stays and a strip says so.
+///
+/// *Import keepers* (I12; sections 7.5 and 7.6) is a toolbar button for all of Staging and a day row's context menu for
+/// that day or its camera; a strip follows it, and at its end one confirmation (D2) offers to remove the staged copies,
+/// with Remove as its default action. Staging is read again once it is done.
 struct CullScreen: View {
     let model: CullModel<DecodedPreviewImage>
+    var keepers: KeepersImport?
     @Environment(\.displayScale) private var displayScale
     /// The screen's size, for the previews' decode size.
     @State private var size: CGSize = .zero
@@ -38,8 +46,15 @@ struct CullScreen: View {
     @State private var showsLoupe = false
     /// The loupe the cover shows, so its dismissal closes that one and never one opened since.
     @State private var presented: CullLoupe<DecodedPreviewImage>?
+    /// The removal's one confirmation (D2), up while *Import keepers* offers it.
+    @State private var confirmsRemoval = false
 
     var body: some View {
+        keepersFlow(on: cullContent)
+    }
+
+    /// The Staging screen without *Import keepers*.
+    private var cullContent: some View {
         content
             .navigationTitle(CullWording.title)
             .onGeometryChange(for: CGSize.self) { proxy in proxy.size } action: { size = $0 }
@@ -61,6 +76,62 @@ struct CullScreen: View {
                     LoupeView(loupe: loupe) { showsLoupe = false }
                 }
             }
+    }
+
+    /// *Import keepers* on the screen (I12): its strip, its toolbar button and the removal's one confirmation (D2).
+    private func keepersFlow(on view: some View) -> some View {
+        view
+            .safeAreaInset(edge: .bottom) {
+                if let keepers, let notice = keepers.notice {
+                    NoticeStrip(notice: notice) { keepers.dismiss() }
+                        .padding(.horizontal)
+                }
+            }
+            .onChange(of: keepers?.notice) { _, notice in notice?.announcement.post() }
+            .toolbar {
+                if let keepers, !model.isEmpty {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button {
+                            importKeepers(.all, with: keepers)
+                        } label: {
+                            Label(KeepersWording.importKeepers, systemImage: "photo.badge.checkmark")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .disabled(keepers.isBusy)
+                        .accessibilityHint(KeepersWording.importKeepersHint)
+                    }
+                }
+            }
+            .onChange(of: keepers?.confirmation) { _, plan in confirmsRemoval = plan != nil }
+            .confirmationDialog(keepers?.confirmation.map(KeepersWording.confirmTitle) ?? "",
+                                isPresented: $confirmsRemoval, titleVisibility: .visible) {
+                Button(KeepersWording.remove, role: .destructive) {
+                    // Taken at once, before the dialog closes, so its closing doesn't read as Keep.
+                    guard let keepers, keepers.acceptRemoval() else { return }
+                    let model = self.model
+                    Task {
+                        await keepers.removeAccepted()
+                        await model.load()
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                Button(KeepersWording.keepInStaging, role: .cancel) { keepers?.keepStaged() }
+            } message: {
+                Text(keepers?.confirmation.map(KeepersWording.confirmMessage) ?? "")
+            }
+            // Closed any other way: the copies are kept.
+            .onChange(of: confirmsRemoval) { _, shown in
+                if !shown, keepers?.confirmation != nil { keepers?.keepStaged() }
+            }
+    }
+
+    /// Starts *Import keepers* over the rows shown, and reads Staging again when it is done.
+    private func importKeepers(_ scope: KeepersScope, with keepers: KeepersImport) {
+        let model = self.model
+        Task {
+            await keepers.start(scope, in: model.rows)
+            if keepers.confirmation == nil { await model.load() }
+        }
     }
 
     /// The longer side of the screen in pixels: the size previews are decoded to.
@@ -96,6 +167,19 @@ struct CullScreen: View {
                                 model.openLoupe(row.id, maxPixelSize: maxPixelSize)
                                 presented = model.loupe
                                 showsLoupe = presented != nil
+                            }
+                            .contextMenu {
+                                if let keepers {
+                                    Button(KeepersWording.importDayKeepers, systemImage: "photo.badge.checkmark") {
+                                        importKeepers(.day(row.id), with: keepers)
+                                    }
+                                    .disabled(keepers.isBusy)
+                                    Button(KeepersWording.importCameraKeepers(section.name),
+                                           systemImage: "photo.stack") {
+                                        importKeepers(.camera(section.name), with: keepers)
+                                    }
+                                    .disabled(keepers.isBusy)
+                                }
                             }
                         }
                     }

@@ -39,7 +39,8 @@ public enum EngineTraceWording {
         case let .finished(outcome):
             switch outcome {
             case .stopped, .catalogueUnavailable: return .error
-            case .completed, .cancelled: return .notice
+            // The person's Photos setting, not a failure of the import: the keepers wait in Staging.
+            case .completed, .cancelled, .photosAccessNeeded: return .notice
             }
         case .listed, .started, .retrying, .stalled, .sizeMismatch, .imported, .staged, .alreadyStaged, .skipped,
              .sameFileListedTwice, .waitingForPartner, .committedWithoutPartner, .destinationChanged, .routeRefused,
@@ -113,6 +114,9 @@ public enum EngineTraceWording {
             case .cancelled: return "engine: job finished: cancelled"
             case let .stopped(kind): return "engine: job stopped: \(kindWord(kind))"
             case .catalogueUnavailable: return "engine: catalogue unavailable: the job stopped"
+            case let .photosAccessNeeded(authorisation):
+                return "engine: job stopped: Photos refused the save (access \(authorisation.rawValue)); "
+                    + "nothing staged"
             }
         case let .reconnected(carrier, sinceLost, filesLeft):
             let since = sinceLost.map { ", \(TransportTraceWording.seconds($0)) after the camera went away" } ?? ""
