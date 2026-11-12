@@ -8,7 +8,7 @@ documentation on this date; the claims that rest only on forum reports are marke
 | Job | Where | Trigger | Secrets |
 | --- | --- | --- | --- |
 | Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov; each job stops after 20 minutes, #105) | PRs touching `Packages/` | none |
-| App build (unsigned, iOS Simulator and device) + the app's UI tests of the screens that need no camera in the iOS Simulator (I18) + every package's tests in the iOS Simulator (AppUI's one at a time, #109), built once from `AllPackages.xcworkspace` (12 Nov) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
+| App build (unsigned, iOS Simulator and device) + the app's UI tests of the screens that need no camera in the iOS Simulator (I18) and the Photos lookup check against assets it saves (W6-lookup) + every package's tests in the iOS Simulator (AppUI's one at a time, #109), built once from `AllPackages.xcworkspace` (12 Nov) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
 | Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`), kept until the spike is retired | PRs touching `Spike/` or `Packages/PTPKit` | none |
 | Archive → TestFlight (internal testing), **now**: the production app by default, or the spike | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`, "App to TestFlight") | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
 | Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
@@ -174,9 +174,20 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   only), with no camera discovery, no Wi-Fi or Bluetooth, Photos access read as allowed and staging on this iPhone in
   a temporary folder. It tests History, Settings and the Staging tab's cull screen; the "Browse → select → import →
   History" path needs a camera and waits for Iteration 5's review-build simulator mode, so no `PTPSimulator` is linked
-  into the app. On a failure the step's raw lines (test, assertion, compile error) are printed after it; that the
-  Simulator runs the unsigned UI-test runner is unverified until the step's first run. On the Mac, the same tests run
-  from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS Simulator through
+  into the app. The same step runs the Photos lookup check (W6-lookup, backlog section 3.1):
+  `PhotosLookupCheckUITests` launches the Debug app with `-PhotosLookupCheck` (and `-UITestFixture`), which shows only
+  the check (AppUI's `PhotosLookupCheck`, Debug builds only): it saves two small JPEGs into the Simulator's photo
+  library through the app's Photos destination, one also into an album it creates, then runs
+  `SystemPhotoLibrary.findAsset` with the engine's query for each (found), for a name never saved and for the right
+  name outside the ±1 s window (not found), and the test reads every outcome from one report. Before the tests the
+  step boots the picked simulator (`xcrun simctl bootstatus -b`) and grants the app full Photos access
+  (`xcrun simctl privacy <udid> grant photos <bundle id>`, the bundle identifier read from the app target's build
+  settings); that the grant holds for an app installed afterwards is unverified until the step's first run, and the
+  check's report says the access it read. The saved assets and album stay in that simulator's library. On a failure
+  the step's raw lines (test, assertion, compile error) are printed after it and the result bundle
+  (`UITests.xcresult`, with each failed test's screenshots) is kept as the run's `UITests-xcresult` artifact for 14
+  days; that the Simulator runs the unsigned UI-test runner is unverified until the step's first run. On the Mac, the
+  same tests run from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS Simulator through
   `AllPackages.xcworkspace` at the root, which holds the eight packages, and its shared `AllPackageTests` scheme,
   which lists their ten test targets: one `xcodebuild build-for-testing`, so each module and Apple's SDK modules are
   compiled once, then `test-without-building` twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as

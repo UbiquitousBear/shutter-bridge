@@ -11,7 +11,16 @@ public struct RootView: View {
 
     public var body: some View {
         #if canImport(UIKit) && canImport(ImageCaptureCore) && canImport(Photos) && canImport(SwiftData) && canImport(BackgroundTasks) && canImport(UserNotifications) && canImport(CoreBluetooth) && canImport(Network) && canImport(NetworkExtension) && os(iOS)
+        #if DEBUG && canImport(CoreGraphics) && canImport(ImageIO) && canImport(UniformTypeIdentifiers)
+        // The Photos lookup check (W6-lookup) in a Debug build started with its launch argument; the app otherwise.
+        if PhotosLookupCheck.isRequested() {
+            PhotosLookupCheckView()
+        } else {
+            LiveRoot()
+        }
+        #else
         LiveRoot()
+        #endif
         #else
         ContentUnavailableView(CamerasWording.title, systemImage: "cable.connector",
                                description: Text("Shutter Bridge reads cameras on iPhone."))

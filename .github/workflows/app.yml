@@ -1,6 +1,7 @@
 # Builds the production app (App/ShutterBridge.xcodeproj) with real Xcode 27 on GitHub's xcode-27 runner, unsigned,
 # for the iOS Simulator and for a generic iPhone, runs the app's UI tests of the screens that need no camera in the iOS
-# Simulator (I18), and runs every package's tests there, where the code behind `#if canImport(...)` is compiled too.
+# Simulator (I18) with the Photos lookup check (W6-lookup), and runs every package's tests there, where the code
+# behind `#if canImport(...)` is compiled too.
 # No signing and no secrets, so it is safe on PRs from forks. packages-linux.yml runs the same package tests on Linux.
 # Xcode Cloud's pull-request workflow (backlog section 8) comes when Shamil sets it up for the production app
 # (docs/ci.md).
@@ -140,10 +141,26 @@ jobs:
         # and marks (AppUI's UITestFixture; no camera, no PTPSimulator). Unsigned, as the builds above: the Simulator
         # runs the linker's ad-hoc signature (unverified for the UI-test runner until this step's first run). Each test
         # may take at most three minutes, so a stuck screen fails its test rather than the job's limit.
+        # W6-lookup: PhotosLookupCheckUITests launches the Debug app with -PhotosLookupCheck, which saves two JPEGs into
+        # the Simulator's photo library (one also into an album) and runs SystemPhotoLibrary.findAsset against them
+        # (AppUI's PhotosLookupCheck). It needs full Photos access, granted here before the tests on the picked
+        # simulator (booted first: simctl privacy works on a booted device) for the app target's bundle identifier, read
+        # from the project. That the grant holds for an app not yet installed is unverified until this step's first run;
+        # the check's report says the access it read.
         env:
           SIM: ${{ steps.sim.outputs.id }}
         run: |
           set -o pipefail
+          bundle_id="$(xcodebuild -showBuildSettings -project App/ShutterBridge.xcodeproj -target ShutterBridge \
+            -configuration Debug -sdk iphonesimulator 2>/dev/null \
+            | awk '$1 == "PRODUCT_BUNDLE_IDENTIFIER" && $2 == "=" { print $3; exit }')"
+          if [ -z "$bundle_id" ]; then
+            echo "::error::no PRODUCT_BUNDLE_IDENTIFIER for the ShutterBridge target"
+            exit 1
+          fi
+          echo "Granting full Photos access to $bundle_id"
+          xcrun simctl bootstatus "$SIM" -b
+          xcrun simctl privacy "$SIM" grant photos "$bundle_id"
           xcodebuild test \
             -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIM" -only-testing:ShutterBridgeUITests \
@@ -159,6 +176,17 @@ jobs:
           f="$RUNNER_TEMP/uitests.log"
           [ -f "$f" ] || exit 0
           grep -E 'error:|failed|XCTAssert|Test Case .* (failed|passed)' "$f" | head -n 80 || true
+
+      - name: Keep the UI tests' result bundle
+        if: ${{ failure() }}
+        # The .xcresult holds each failed UI test's screenshots and the app's console; download it from the run's
+        # summary and open it in Xcode. Absent when the step failed before xcodebuild wrote it.
+        uses: actions/upload-artifact@v7
+        with:
+          name: UITests-xcresult
+          path: ${{ runner.temp }}/UITests.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
 
   packages:
     # Every package's tests in the iOS Simulator, from AllPackages.xcworkspace at the root: one build-for-testing of
