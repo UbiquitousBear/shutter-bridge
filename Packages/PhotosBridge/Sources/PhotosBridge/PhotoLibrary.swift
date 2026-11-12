@@ -282,8 +282,9 @@ public struct AlbumPlan: Sendable, Hashable {
         /// The title used when the album has to be created.
         public var title: String
         /// Store keys earlier builds kept this album under, tried in order only when `key` has no entry or its album
-        /// is gone: the first that names an album still in the library that accepts photos is adopted (stored under
-        /// `key` too) rather than a new album made. A legacy entry is only ever read, never written or removed.
+        /// is gone: the first that names an album still in the library that accepts photos, and that no other key has
+        /// adopted (`AlbumPlan.adoptionKey(forLegacy:)`), is adopted (stored under `key` too) rather than a new album
+        /// made. A legacy entry is only ever read, never written or removed.
         public var legacyKeys: [String]
 
         public init(key: String, title: String, legacyKeys: [String] = []) {
@@ -306,6 +307,11 @@ public struct AlbumPlan: Sendable, Hashable {
     /// The store key builds before D11 kept a per-camera album under: the catalogue's camera key. Read only, to adopt
     /// that album (`Album.legacyKeys`).
     public static func legacyCameraAlbumKey(forCamera cameraKey: String) -> String { "camera:" + cameraKey }
+
+    /// The store key recording which album key adopted a legacy key's album: its value is that album's key, not an
+    /// album identifier. A legacy album is adopted by one key only, so a camera key seen under two names doesn't give
+    /// its old album to both.
+    public static func adoptionKey(forLegacy legacyKey: String) -> String { "adopted:" + legacyKey }
 
     /// - Parameters:
     ///   - cameraKey: the catalogue's camera key. It only finds the album an earlier build stored per key

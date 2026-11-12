@@ -133,12 +133,19 @@ public actor PhotosLibraryDestination: ImportDestination {
     }
 
     /// The first legacy key's album still in the library that accepts photos, stored under `album.key` too; nil when
-    /// there is none. A legacy entry is never written or removed.
+    /// there is none. A legacy entry is never written or removed. Each adoption is recorded under
+    /// `adoptionKey(forLegacy:)`, naming the key that took it, and a legacy key another key has taken is passed over:
+    /// one camera key's old album is adopted by one name only. Otherwise a key seen under two names (the MSC key's
+    /// "ILCE-7CM2" and, once another body is attached, the shared "Camera") would give its old album to both, and a
+    /// second body's photos would be filed into the first body's album.
     private static func adoptLegacy(_ album: AlbumPlan.Album, library: any PhotoLibraryClient,
                                     store: any AlbumIdentifierStore) async -> AlbumResolution? {
         for legacy in album.legacyKeys {
+            let adoption = AlbumPlan.adoptionKey(forLegacy: legacy)
+            if let takenBy = await store.albumIdentifier(forKey: adoption), takenBy != album.key { continue }
             guard let id = await store.albumIdentifier(forKey: legacy) else { continue }
             guard case .found(canAddContent: true) = await library.album(withIdentifier: id) else { continue }
+            await store.setAlbumIdentifier(album.key, forKey: adoption)
             await store.setAlbumIdentifier(id, forKey: album.key)
             return .identifier(id)
         }

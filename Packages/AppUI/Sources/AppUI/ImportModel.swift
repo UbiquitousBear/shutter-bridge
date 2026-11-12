@@ -807,11 +807,13 @@ public final class ImportModel: BrowseImporting {
 
     /// A camera was connected (or the app is back): if the job is waiting for its camera after a removal and that
     /// camera is connected again, the job carries on through the new link (`ImportEngine.reconnect`), after reading
-    /// Photos access again. Over USB, when the job's own key isn't found, or is a name hash every "Untitled" card shares,
-    /// the cameras' cards are checked for the job's files by content (`probeByContent`, D11): the job continues on the
-    /// same body in the other Image Transfer mode when that card holds every file left, and on its own name-hash key
-    /// when the card holds any. That check lists cards, which can take a minute or two in MTP, so it runs in its own
-    /// task and this returns at once; a call that comes while it runs is answered when it is done.
+    /// Photos access again. Over USB, when the job's own key isn't found, or is a name hash every "Untitled" card shares
+    /// and the job has files left that are known, the cameras' cards are checked for the job's files by content
+    /// (`probeByContent`, D11): the job continues on the same body in the other Image Transfer mode when that card holds
+    /// every file left, and on its own name-hash key when the card holds any. A job paused before its first listing has
+    /// no file left known: it continues on its own key, name hash or not, with no content check. The check lists cards,
+    /// which can take a minute or two in MTP, so it runs in its own task and this returns at once; a call that comes
+    /// while it runs is answered when it is done.
     public func cameraConnected() async {
         // A keepers job never carries on over a camera's link, even one with the staged files' key.
         guard !runsKeepers else { return }
@@ -822,7 +824,10 @@ public final class ImportModel: BrowseImporting {
         }
         reconnecting = true
         let found = await finder.link(forCameraWith: camera.key)
-        if let found, !CrossKeyContinuation.isSharedKey(camera.key) {
+        // A name-hash key is taken as it is when no file left is known yet (the job paused before its first listing):
+        // there is nothing to check a card against, and only its own key can carry it on.
+        let noFileLeftKnown = CrossKeyContinuation.filesLeft(in: await engine.currentSnapshot.files).isEmpty
+        if let found, !CrossKeyContinuation.isSharedKey(camera.key) || noFileLeftKnown {
             let route = await continuingRoute()
             do {
                 try await engine.reconnect(found, to: route)

@@ -321,7 +321,15 @@ struct ContinueByContentTests {
         #expect(r.model.state == .paused(.cameraRemoved))
         #expect(await other.listCount == 0)
         #expect(await !other.isOpen)
-        await r.model.cancel()
+        // Its own camera back with the same card: the job continues on its own name-hash key, as it did before D11.
+        r.finder.others = []
+        let back = FakeLink(items: card, id: "fake-camera-2")
+        await back.set(writesListedSize: true)
+        r.finder.links[r.camera.key] = back
+        await r.connected()
+        #expect(await r.finished())
+        #expect(await back.fetched.count == 3)
+        #expect(await other.fetched.isEmpty)
     }
 
     @Test func neverOverWiFiNorWhileNothingIsPaused() async {

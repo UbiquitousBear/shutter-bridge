@@ -295,6 +295,35 @@ struct PhotosLibraryDestinationTests {
         #expect(await library.createdAlbumTitles.isEmpty)
     }
 
+    @Test("An old per-key album is adopted by one name only: the key under a second name gets a new album")
+    func anOldPerKeyAlbumIsAdoptedByOneNameOnly() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.addAlbum("OLD", title: "ILCE-7CM2", canAdd: true)
+        let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "OLD"])
+        let byModel = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await byModel.commit(.single(try s.stage("A.JPG")))
+        #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "OLD")
+        #expect(await store.albumIdentifier(forKey: "adopted:camera:serial-1") == "camera-name:ILCE-7CM2")
+        // The same MSC key named "Camera" once a second body is attached: the old album isn't taken a second time.
+        let shared = AlbumPlan(choice: .perCamera, cameraKey: "serial-1", cameraName: "Camera", importID: "job-2",
+                               importDate: date)
+        let byShared = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: shared)
+        _ = try await byShared.commit(.single(try s.stage("B.JPG")))
+        let created = try #require(await store.albumIdentifier(forKey: "camera-name:Camera"))
+        #expect(created != "OLD")
+        #expect(await library.saved.last?.albums == [created])
+        #expect(await library.createdAlbumTitles == ["Camera"])
+        #expect(await library.albums["OLD"]?.assets.count == 1)
+        #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "OLD")
+        // The name that adopted it may adopt it again once its own album is gone.
+        await library.deleteAlbum(created)
+        await store.setAlbumIdentifier("GONE", forKey: "camera-name:ILCE-7CM2")
+        let again = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await again.commit(.single(try s.stage("C.JPG")))
+        #expect(await library.saved.last?.albums == ["OLD"])
+    }
+
     @Test("Overlapping commits adopt the old per-key album once")
     func overlappingCommitsAdoptTheOldAlbumOnce() async throws {
         let s = try Scratch()
