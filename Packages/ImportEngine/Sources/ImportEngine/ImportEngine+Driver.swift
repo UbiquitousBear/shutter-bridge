@@ -186,8 +186,7 @@ extension ImportEngine {
             }
             // A reject stays rejected (D3): left out unless picked explicitly, and counted for the outcome.
             guard !facts.rejected.contains(p.identity.contentKey) else {
-                job.rejectsLeftOut += 1
-                trace(.rejectedLeftOut(p.item.name))
+                if job.rejectsLeftOut.insert(p.identity.contentKey).inserted { trace(.rejectedLeftOut(p.item.name)) }
                 continue
             }
             kept.append(p)

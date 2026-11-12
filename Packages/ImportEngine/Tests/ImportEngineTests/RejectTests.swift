@@ -64,7 +64,8 @@ struct RejectTests {
     }
 
     /// *Select all new*'s pick (`newItems`) leaves the reject out, both when the job starts and when it is appended to a
-    /// running job; `picksToDo` agrees, so the app's count is what the job copies.
+    /// running job; `picksToDo` agrees, so the app's count is what the job copies. A reject left out twice counts once,
+    /// and one picked explicitly afterwards no longer counts.
     @Test func selectAllNewsPickLeavesOutARejectWhenStartedAndWhenAppended() async throws {
         do {
             let (h, _, card) = try await Self.seeded()
@@ -85,11 +86,17 @@ struct RejectTests {
             let held = await link.nextHeldCall("A.JPG")
             #expect(try await h.engine.append(card, newOnly: true) == 1) // C; B is a reject
             #expect(h.trace.log.contains(.rejectedLeftOut("B.JPG")))
+            // *Select all new* again: B is still one reject left out, counted and logged once.
+            #expect(try await h.engine.append(card, newOnly: true) == 0)
+            #expect(await h.engine.currentProgress.rejectsLeftOut == 1)
+            #expect(h.trace.log.filter { $0 == .rejectedLeftOut("B.JPG") }.count == 1)
             #expect(try await h.engine.append(card) == 1) // B, picked explicitly
+            // B is in the job now, so it wasn't left out after all: the outcome mustn't say it was.
+            #expect(await h.engine.currentProgress.rejectsLeftOut == 0)
             held.release()
             #expect(await h.waitFinished() == .completed)
             #expect(await link.bytesCalls == ["A.JPG", "C.JPG", "B.JPG"])
-            #expect(await h.engine.currentProgress.rejectsLeftOut == 1)
+            #expect(await h.engine.currentProgress.rejectsLeftOut == 0)
             await h.cleanup()
         }
     }

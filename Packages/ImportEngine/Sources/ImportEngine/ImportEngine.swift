@@ -298,8 +298,9 @@ public actor ImportEngine {
             }
             // *Select all new* leaves out rejects (D3); an explicit pick still imports one.
             guard !facts.rejected.contains(c.identity.contentKey) else {
-                current.rejectsLeftOut += 1
-                trace(.rejectedLeftOut(c.item.name))
+                if current.rejectsLeftOut.insert(c.identity.contentKey).inserted {
+                    trace(.rejectedLeftOut(c.item.name))
+                }
                 continue
             }
             wanted.append(c)
@@ -793,7 +794,7 @@ public actor ImportEngine {
             destination: job.route.decision, filesSkipped: skipped, filesFailed: failed, filesStaged: staged,
             runningCarrier: job.runningCarrier,
             stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled),
-            rejectsLeftOut: job.rejectsLeftOut
+            rejectsLeftOut: job.rejectsLeftOut.count
         )
     }
 
