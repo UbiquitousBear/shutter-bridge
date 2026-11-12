@@ -379,6 +379,20 @@ public final class CullModel<Image: Sendable> {
         await reloadMarks()
     }
 
+    /// Closes `which` at once, if it is still the open loupe: `loupe` is nil and its marks are in the day's counts when
+    /// this returns, and the catalogue's marks are read back once its saves have settled, in the background. For the
+    /// cover that shows the loupe, whose dismissal can't wait: the cover is bound to `loupe`, so it must read nil the
+    /// moment it is dismissed or it would be put up again.
+    public func dismissLoupe(_ which: CullLoupe<Image>) {
+        guard let loupe, loupe === which else { return }
+        self.loupe = nil
+        finish(loupe)
+        Task {
+            await loupe.settled()
+            await reloadMarks()
+        }
+    }
+
     /// Stops the loupe and takes its marks as they stand.
     private func finish(_ loupe: CullLoupe<Image>) {
         loupe.stop()

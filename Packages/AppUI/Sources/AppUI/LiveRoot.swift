@@ -324,7 +324,7 @@ struct LiveApp: View {
                 Task { await closing.closeLoupe() }
             }
             if chosen == .history, history == nil {
-                history = model.historyModel(documents: URL.documentsDirectory)
+                history = model.historyModel(documents: LiveLaunch.documents)
             }
         }
         // However Settings closes, a diagnostics file that is ready (or being made) is removed.
@@ -337,6 +337,13 @@ struct LiveApp: View {
             if model.importer.isFinished { model.importer.dismiss() }
         }) {
             ImportScreen(model: model.importer)
+        }
+        // The Staging tab's loupe (D5), full screen over the whole tab view like the sheets above, rather than from
+        // inside the tab: on a wide iPhone, whose tabs and toolbar are a strip at the side, a cover put up from the
+        // tab's own screen never showed (#139). It is bound to the model's open loupe, so leaving the tab (which lets
+        // the model go) takes it down too.
+        .fullScreenCover(item: stagingLoupe) { loupe in
+            LoupeView(loupe: loupe) { staging?.dismissLoupe(loupe) }
         }
         // The wireless screens' models (W16), each optional so a screen without one is the USB screen it was. Applied
         // outside the sheets so the Settings and Import sheets, and Browse in the stack, read them too.
@@ -403,8 +410,20 @@ struct LiveApp: View {
     /// The Staging screen's model: the staged copies under the app's Documents folder (On My iPhone) or the iCloud
     /// container's, previews decoded with ImageIO and Core Image, evicted iCloud files downloaded ahead, and the EXIF line
     /// read with ImageIO off the main actor.
+    /// The Staging tab's open loupe for its cover: a dismissal closes it at once (`dismissLoupe`), so the binding reads
+    /// nil as the cover goes and it isn't put up again.
+    private var stagingLoupe: Binding<CullLoupe<DecodedPreviewImage>?> {
+        Binding(
+            get: { staging?.loupe },
+            set: { shown in
+                guard shown == nil, let staging, let open = staging.loupe else { return }
+                staging.dismissLoupe(open)
+            }
+        )
+    }
+
     private func makeStagingModel() -> CullModel<DecodedPreviewImage> {
-        model.stagingModel(documents: URL.documentsDirectory, loader: ImageIOPreviewLoader(),
+        model.stagingModel(documents: LiveLaunch.documents, loader: ImageIOPreviewLoader(),
                            files: UbiquitousFileAvailability(), reader: StagedFileReaders.platform,
                            exif: { url in await Task.detached(priority: .utility) { EXIFSummary.read(from: url) }.value })
     }
@@ -412,7 +431,7 @@ struct LiveApp: View {
     /// *Import keepers* for the Staging tab: its jobs read the staged copies coordinated (iCloud Drive) and download an
     /// evicted keeper before the job starts.
     private func makeKeepersImport() -> KeepersImport {
-        model.keepersImport(documents: URL.documentsDirectory, files: UbiquitousFileAvailability(),
+        model.keepersImport(documents: LiveLaunch.documents, files: UbiquitousFileAvailability(),
                             reader: StagedFileReaders.platform)
     }
 
@@ -524,10 +543,29 @@ public enum LiveLaunch {
     /// The app's one launcher, over `wireless`.
     @MainActor static var launcher: AppLauncher {
         if let madeLauncher { return madeLauncher }
-        let made = AppLauncher.live(wireless: wireless)
+        let made = uiTestLauncher() ?? AppLauncher.live(wireless: wireless)
         madeLauncher = made
         return made
     }
+
+    /// The UI tests' seeded app (I18; D14 (c)) in a Debug build started with `UITestFixture.launchArgument`: the app
+    /// over an `InMemoryCatalogue` seeded with job records, staged files and marks (`UITestFixture`), with no camera.
+    /// Nil otherwise, and always in a Release build, which has no fixture.
+    @MainActor private static func uiTestLauncher() -> AppLauncher? {
+        #if DEBUG
+        if UITestFixture.isRequested() { return AppLauncher.uiTestFixture() }
+        #endif
+        return nil
+    }
+
+    /// The app's Documents folder, On My iPhone's staging root, for the Staging and History tabs; the fixture's folder in
+    /// the UI tests' seeded app (Debug builds only).
+    static let documents: URL = {
+        #if DEBUG
+        if UITestFixture.isRequested() { return UITestFixture.documents }
+        #endif
+        return URL.documentsDirectory
+    }()
 
     @MainActor static func refreshTaskRan() async {
         await wireless.refreshTaskRan()

@@ -1,8 +1,9 @@
 # Builds the production app (App/ShutterBridge.xcodeproj) with real Xcode 27 on GitHub's xcode-27 runner, unsigned,
-# for the iOS Simulator and for a generic iPhone, and runs every package's tests in the iOS Simulator, where the
-# code behind `#if canImport(...)` is compiled too. No signing and no secrets, so it is safe on PRs from forks.
-# packages-linux.yml runs the same tests on Linux. Xcode Cloud's pull-request workflow (backlog section 8) comes
-# when Shamil sets it up for the production app (docs/ci.md).
+# for the iOS Simulator and for a generic iPhone, runs the app's UI tests of the screens that need no camera in the iOS
+# Simulator (I18), and runs every package's tests there, where the code behind `#if canImport(...)` is compiled too.
+# No signing and no secrets, so it is safe on PRs from forks. packages-linux.yml runs the same package tests on Linux.
+# Xcode Cloud's pull-request workflow (backlog section 8) comes when Shamil sets it up for the production app
+# (docs/ci.md).
 name: App build and package tests (Xcode 27)
 
 on:
@@ -33,8 +34,9 @@ concurrency:
 jobs:
   build:
     runs-on: xcode-27
-    # The two app builds, a few minutes; the limit ends a hung build early.
-    timeout-minutes: 30
+    # The two app builds, a few minutes each, and the UI tests (I18: a Debug build for the simulator and a few minutes of
+    # tests); the limit ends a hung build or a stuck simulator early.
+    timeout-minutes: 45
     env:
       # 27.1 is the image default and a public release; switch to Xcode_27.2 once the image has the release
       # build (it currently symlinks the 27.2 release candidate there). Keep in step with spike-build.yml and the
@@ -125,6 +127,64 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify --renderer github-actions
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          id="$(.github/scripts/pick-iphone-simulator.sh)"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: UI tests in the iOS Simulator (the screens that need no camera)
+        # I18 (D14 (c)): ShutterBridgeUITests drives History, Settings and the Staging tab of the Debug app, which the
+        # tests launch with -UITestFixture so it runs over an in-memory catalogue seeded with job records, staged files
+        # and marks (AppUI's UITestFixture; no camera, no PTPSimulator). Signed to run locally (ad hoc, no team or
+        # profile, which the Simulator doesn't ask for): unsigned (CODE_SIGNING_ALLOWED=NO, as the builds above), the
+        # runner never started on the first run (12 Nov, #139: "The test runner failed to initialize for UI testing",
+        # timed out waiting for the accessibility "AX loaded" notification). The simulator is booted and its boot
+        # waited for first, since a cold one starting during the test launch is the other cause given for that
+        # timeout. Each test may take at most three minutes, so a stuck screen fails its test rather than the job's
+        # limit, and a failing test is run once more (-retry-tests-on-failure): on #139 the runner's Simulator left
+        # the app's threads unscheduled for about a minute (a spindump in the result bundle), so a query or the
+        # loupe's appearing timed out with the app idle. A test still has to pass in one of its two runs, and the
+        # first run's failure stays in the log and the result bundle.
+        env:
+          SIM: ${{ steps.sim.outputs.id }}
+        run: |
+          set -o pipefail
+          xcrun simctl boot "$SIM" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIM" -b
+          xcodebuild test \
+            -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIM" -only-testing:ShutterBridgeUITests \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
+            -retry-tests-on-failure -test-iterations 2 \
+            -resultBundlePath "$RUNNER_TEMP/UITests.xcresult" \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee "$RUNNER_TEMP/uitests.log" | xcbeautify --renderer github-actions
+
+      - name: UI test failures from the raw xcodebuild output
+        if: ${{ failure() }}
+        # xcbeautify shortens XCTest failures; print the lines naming the test, the assertion and any compile error.
+        run: |
+          f="$RUNNER_TEMP/uitests.log"
+          [ -f "$f" ] || exit 0
+          grep -E 'error:|failed|XCTAssert|Test Case .* (failed|passed)' "$f" | head -n 80 || true
+          r="$RUNNER_TEMP/UITests.xcresult"
+          [ -d "$r" ] || exit 0
+          xcrun xcresulttool get test-results summary --path "$r" --compact \
+            | python3 -c 'import json, sys
+          for f in json.load(sys.stdin).get("testFailures", []):
+              print(f.get("testIdentifierString") or f.get("testName"), "-", f.get("failureText"))' || true
+
+      - name: Keep the UI tests' result bundle (screenshots) when they fail
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: ui-tests-xcresult
+          path: ${{ runner.temp }}/UITests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
 
   packages:
     # Every package's tests in the iOS Simulator, from AllPackages.xcworkspace at the root: one build-for-testing of
