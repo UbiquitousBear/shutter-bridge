@@ -8,9 +8,11 @@ import PhotosBridge
 // What the App Intents reach in the app (I16; backlog section 5, D7 (a)), plain Swift so it is tested on Linux:
 //
 // - "Import new photos from <camera>" opens the app (the intent asks to run in front) and calls
-//   `AppModel.importNewPhotos(cameraWith:waitingForCamera:waitingForImport:)`, which opens Browse on the camera and, once
-//   its card is read, does what *Select All New* and *Import* do there, with the remembered Import-button choice
-//   (Photos or Stage). Browse reaches the camera, so a Wi-Fi join only ever happens with the app in front.
+//   `IntentHost.importNewPhotos(cameraWith:)`, then `AppModel.importNewPhotos(cameraWith:waitingForCamera:waitingForImport:
+//   answeringBy:)`, which opens Browse on the camera and, once its card is read, does what *Select All New* and *Import*
+//   do there, with the remembered Import-button choice (Photos or Stage). Browse reaches the camera, so a Wi-Fi join only
+//   ever happens with the app in front. A camera that isn't connected gets an offline Browse with its last-known card
+//   (W6-absent), which becomes the live Browse once the camera is listed. It answers within `NewPhotosTiming.answer`.
 // - "How many new photos" calls `AppModel.newPhotoCount(cameraWith:)`, which answers from the live card while a USB
 //   camera is connected and listed in Browse, and otherwise from the catalogue's last listing, with its age. It never
 //   opens a link.
@@ -28,6 +30,44 @@ public enum IntentHost {
     public static func model(waitingUpTo limit: Duration = .seconds(10)) async -> AppModel? {
         await launcher?.readyModel(waitingUpTo: limit)
     }
+
+    /// "Import new photos" from the intent's `perform()` (W6-absent): the app's model, waiting up to `timing.catalogue`,
+    /// then `AppModel.importNewPhotos`, all within `timing.answer` of the call, so Siri and Shortcuts hear an answer
+    /// before they give up on a foreground intent. When the card isn't read by then the answer says so, and the import
+    /// still starts once it is (`PendingNewPhotosImport`). `model` is the wait for the app's model (a fake in tests).
+    public static func importNewPhotos(
+        cameraWith key: CameraKey, timing: NewPhotosTiming = .standard,
+        model: @MainActor (Duration) async -> AppModel? = { await IntentHost.model(waitingUpTo: $0) }
+    ) async -> NewPhotosImportStart {
+        let deadline = ContinuousClock.now.advanced(by: timing.answer)
+        guard let app = await model(min(timing.catalogue, timing.answer)) else { return .appNotReady }
+        return await app.importNewPhotos(cameraWith: key, waitingForCamera: timing.camera,
+                                         waitingForImport: timing.answer, answeringBy: deadline)
+    }
+}
+
+/// How long "Import new photos" waits before it answers (W6-absent). Siri and Shortcuts give a foreground intent about
+/// 10 to 12 s (`unverified`; bench check 16), and an MTP listing alone takes 65 to 123 s, so the answer comes within
+/// `answer` in all, saying what is still happening; the import itself starts whenever the card is read, within
+/// `AppModel.newPhotosImportLifetime`.
+public struct NewPhotosTiming: Sendable, Hashable {
+    /// The most the intent waits in all before it answers.
+    public var answer: Duration
+    /// The most it waits for the app's catalogue to open (an intent that launched the app).
+    public var catalogue: Duration
+    /// The most it waits for discovery to list the camera before showing it as not connected. A camera listed later
+    /// still replaces the offline Browse, and the import starts.
+    public var camera: Duration
+
+    public init(answer: Duration, catalogue: Duration, camera: Duration) {
+        self.answer = answer
+        self.catalogue = catalogue
+        self.camera = camera
+    }
+
+    /// 10 s in all: up to 5 s for the catalogue (it opens in well under a second once the store exists) and up to 4 s for
+    /// discovery (a USB camera is listed within a second or two of the app becoming active), the rest for the card.
+    public static let standard = NewPhotosTiming(answer: .seconds(10), catalogue: .seconds(5), camera: .seconds(4))
 }
 
 extension AppLauncher {
@@ -86,7 +126,9 @@ public struct IntentNavigation: Sendable, Hashable {
 /// An "Import new photos" waiting for Browse to read its camera's card.
 @MainActor
 final class PendingNewPhotosImport {
-    let camera: CameraDescriptor.ID
+    /// The camera Browse is open on: an offline Browse's descriptor until the camera is listed, then the live one's
+    /// (`AppModel.offlineCameraReplaced(_:by:)`).
+    var camera: CameraDescriptor.ID
     let choice: DestinationKind
     /// Past it, a listing no longer starts the import: the card wasn't read in time (an MTP listing takes up to about
     /// 2 minutes, a Wi-Fi join with iOS's prompt about 1 more), and a later listing is the person's own visit.
@@ -203,22 +245,28 @@ extension AppModel {
     /// card is read does what *Select All New* then *Import* do there, with the remembered Import-button choice: Photos
     /// access is asked for in the app as *Import* asks it. Answers once that has started, or after `waitingForImport`
     /// with what is still happening (the import then starts when the card is read, unless the person leaves Browse or
-    /// the app first, or `newPhotosImportLifetime` passes). A camera that isn't listed is answered at once as not
-    /// connected, with the Cameras tab shown.
-    public func importNewPhotos(cameraWith key: CameraKey, waitingForCamera: Duration = .seconds(10),
-                                waitingForImport: Duration = .seconds(20)) async -> NewPhotosImportStart {
-        guard let camera = await listedCamera(withKey: key, waitingUpTo: waitingForCamera) else {
-            log.note("intents: import new photos: the camera isn't connected")
-            intents.navigate(showsImport: false)
-            return .notConnected
+    /// the app first, or `newPhotosImportLifetime` passes, or a newer request replaces it).
+    ///
+    /// A camera that isn't listed (W6-absent) gets an offline Browse at once, with its last-known card and a line saying
+    /// it isn't connected, and is answered as not connected; the request waits as above, and starts once the camera is
+    /// listed (over USB the live Browse replaces the offline one by itself; over Wi-Fi only the person's Connect does,
+    /// since reaching it is a join) and its card read.
+    ///
+    /// Every wait ends by `deadline` (by default `NewPhotosTiming.standard.answer` from the call), so the answer comes in
+    /// time whatever the camera does.
+    public func importNewPhotos(cameraWith key: CameraKey,
+                                waitingForCamera: Duration = NewPhotosTiming.standard.camera,
+                                waitingForImport: Duration = NewPhotosTiming.standard.answer,
+                                answeringBy deadline: ContinuousClock.Instant? = nil) async -> NewPhotosImportStart {
+        let deadline = deadline ?? ContinuousClock.now.advanced(by: NewPhotosTiming.standard.answer)
+        let choice = importer.importChoice
+        guard let camera = await listedCamera(withKey: key, waitingUpTo: min(waitingForCamera, Self.left(until: deadline)))
+        else {
+            return await showNotConnected(cameraWith: key, choice: choice)
         }
-        let request = PendingNewPhotosImport(camera: camera.id, choice: importer.importChoice,
+        let request = PendingNewPhotosImport(camera: camera.id, choice: choice,
                                              expires: .now.advanced(by: Self.newPhotosImportLifetime))
-        if let replaced = intents.pending {
-            log.note("intents: import new photos dropped: a newer request replaced it")
-            replaced.finish(.couldNotStart)
-        }
-        intents.pending = request
+        waitWith(request)
         let shown = cameras.path.last == camera
         if !shown { cameras.path = [camera] }
         intents.navigate(showsImport: false)
@@ -228,7 +276,46 @@ extension AppModel {
         } else {
             log.note("intents: import new photos: waiting for the card")
         }
-        return await request.outcome(waitingUpTo: waitingForImport)
+        return await request.outcome(waitingUpTo: min(waitingForImport, Self.left(until: deadline)))
+    }
+
+    /// The camera isn't listed (W6-absent): its offline Browse is shown, the request waits for the camera to be listed and
+    /// its card read, and the answer says it isn't connected, and whether its card was ever read.
+    private func showNotConnected(cameraWith key: CameraKey, choice: DestinationKind) async -> NewPhotosImportStart {
+        let offline = await cameras.offlineCamera(for: key)
+        let cardRead = (try? await catalogue.lastListing(for: key)) != nil
+        log.note("intents: import new photos: the camera isn't connected; showing "
+            + (cardRead ? "its last-known card" : "that its card hasn't been read"))
+        let request = PendingNewPhotosImport(camera: offline.id, choice: choice,
+                                             expires: .now.advanced(by: Self.newPhotosImportLifetime))
+        waitWith(request)
+        if cameras.path.last != offline { cameras.path = [offline] }
+        intents.navigate(showsImport: false)
+        // Listed meanwhile (discovery answered after the wait): the live Browse replaces it now.
+        await cameras.matchOfflineCamera()
+        return .waitingForConnection(choice: choice, cardRead: cardRead)
+    }
+
+    /// Makes `request` the waiting "Import new photos", replacing one still waiting.
+    private func waitWith(_ request: PendingNewPhotosImport) {
+        if let replaced = intents.pending {
+            log.note("intents: import new photos dropped: a newer request replaced it")
+            replaced.finish(.couldNotStart)
+        }
+        intents.pending = request
+    }
+
+    /// What is left of the wait until `deadline`, never below zero.
+    nonisolated static func left(until deadline: ContinuousClock.Instant) -> Duration {
+        max(.zero, ContinuousClock.now.duration(to: deadline))
+    }
+
+    /// An offline Browse is being replaced by the live Browse on its camera (W6-absent): a waiting "Import new photos"
+    /// moves over to it, so it starts once that Browse has read the card.
+    func offlineCameraReplaced(_ offline: CameraDescriptor.ID, by live: CameraDescriptor) {
+        guard let request = intents.pending, request.camera == offline else { return }
+        request.camera = live.id
+        log.note("intents: import new photos: the camera is connected; waiting for the card")
     }
 
     /// The listed camera whose catalogue key is `key`, waiting up to `limit` for it to be listed.
@@ -331,6 +418,9 @@ extension AppModel {
         case .waitingForCard: return "waiting for the card"
         case .starting: return "starting"
         case .notConnected: return "the camera isn't connected"
+        case let .waitingForConnection(_, cardRead):
+            return "the camera isn't connected (" + (cardRead ? "last-known card shown" : "card never read")
+                + "); waiting for it"
         case .couldNotStart: return "Browse couldn't hand the files over"
         case .appNotReady: return "the catalogue isn't open"
         }

@@ -431,6 +431,35 @@ extension BrowseWording {
     /// The bar's subtitle while the last-known card is shown and the live one is read.
     public static let readingSubtitle = "Reading the card…"
 
+    // The camera isn't connected (W6-absent): an offline Browse, opened by "Import new photos" with the camera away.
+
+    /// The bar's subtitle on an offline Browse.
+    public static let notConnectedSubtitle = "Not connected"
+    /// The offline Browse's empty state's title, when the catalogue has no card to show.
+    public static let notConnectedTitle = "Camera Not Connected"
+    /// The line above an offline Browse's last-known card, after `lastKnownLine(_:)`.
+    public static let notConnectedLine = "The camera isn't connected."
+    /// The offline Browse's empty state when the camera's card has never been read.
+    public static let neverReadDetail = "Shutter Bridge hasn't read this camera's card yet."
+    /// The offline Browse's empty state when the card was empty the last time it was read; `date` as in
+    /// `lastKnownLine(_:)`.
+    public static func emptyLastKnownDetail(_ date: String) -> String {
+        "The card had no files when it was last read, on \(date)."
+    }
+    /// The offline Browse's next step: connect the camera, or, for a Wi-Fi camera Shutter Bridge can try to reach now,
+    /// tap Connect (`canConnect`).
+    public static func notConnectedNextStep(carrier: CameraCarrier, canConnect: Bool) -> String {
+        switch carrier {
+        case .wifi:
+            canConnect ? "Tap Connect to reach it over Wi-Fi and read its card."
+                : "Its card will be read once Shutter Bridge can reach it."
+        case .usb, .staging:
+            "Connect it with its cable to read its card and import new photos."
+        }
+    }
+    /// The offline Browse's button for a Wi-Fi camera that is listed: it opens the camera, which starts the join.
+    public static let connect = "Connect"
+
     /// The button by the last-known line that shows the measured reading times (backlog section 6).
     public static let readingTimesButton = "Reading Times"
 
