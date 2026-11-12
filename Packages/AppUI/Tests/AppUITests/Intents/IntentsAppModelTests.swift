@@ -169,12 +169,15 @@ struct IntentsAppModelTests {
     }
 
     @Test func aCameraThatIsntListedIsNotConnected() async throws {
+        // Its offline Browse opens (W6-absent; `OfflineBrowseTests` has the rest).
         let r = try await rig(listed: false)
         let start = await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero)
-        #expect(start == .notConnected)
-        #expect(r.app.cameras.path.isEmpty)
+        #expect(start == .waitingForConnection(choice: .photos, cardRead: false))
+        #expect(r.app.cameras.path.map { r.app.cameras.isOffline($0.id) } == [true])
         #expect(r.app.intents.navigation?.showsImport == false)
-        #expect(r.log.lines.contains("intents: import new photos: the camera isn't connected"))
+        #expect(r.log.lines.contains {
+            $0.hasPrefix("intents: import new photos: the camera isn't connected")
+        })
     }
 
     @Test func aCameraListedWhileItWaitsIsFound() async throws {
