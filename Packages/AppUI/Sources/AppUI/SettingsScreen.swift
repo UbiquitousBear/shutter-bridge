@@ -8,7 +8,9 @@ import UIKit
 /// Bridge › Staging, or On My iPhone › Shutter Bridge › Staging) and, when it is on this iPhone, why, with no Settings
 /// button (the app's page in Settings has no iCloud switch). When Photos access is off or restricted, a row says
 /// *Import to Photos* stages instead (HIG Settings: show what the app will actually do), with Open Settings after a
-/// denial (HIG Privacy). Both are read when the screen appears and when the app comes back to the foreground. Shown as
+/// denial (HIG Privacy). Both are read when the screen appears and when the app comes back to the foreground. When
+/// staged files haven't uploaded to iCloud Drive the section says so, the full iCloud quota first, or else how many are
+/// waiting to upload (staging PR 7), read again when the screen appears. Shown as
 /// a sheet from the Cameras screen's toolbar; nothing here needs saving, so the sheet closes with the system close
 /// button, not Done (HIG Sheets).
 ///
@@ -35,6 +37,14 @@ struct SettingsScreen: View {
                             .accessibilityLabel(SettingsWording.stagingLocationAccessibility(place))
                     }
                     if let line = model.stagingFallbackLine {
+                        Text(line)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let line = model.uploadProblemLine {
+                        Label(line, systemImage: "exclamationmark.icloud")
+                            .font(.subheadline)
+                    } else if let line = model.uploadWaitingLine {
                         Text(line)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -95,7 +105,10 @@ struct SettingsScreen: View {
                 }
             }
         }
-        .task { await model.refresh() }
+        .task {
+            await model.refresh()
+            await model.refreshUploads()
+        }
         // The file is ready: the share sheet, from UIKit's top-most controller, over this sheet. Its close, shared or not,
         // removes the file's folder.
         .onChange(of: model.exportState) { _, state in

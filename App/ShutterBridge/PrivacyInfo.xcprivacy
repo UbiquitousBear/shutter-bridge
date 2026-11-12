@@ -13,10 +13,11 @@
   - File timestamps of files in the app's container and its iCloud container (sizes and dates of downloads in the work
     folder, of staged copies, including the modification date the pending-commit lookup compares, and of the JPEGs made
     for Copy and Share): C617.1.
-  Not declared, because nothing calls them: disk space (no free-space check of the iPhone exists; it would be E174.1,
-  or 85F4.1 if the free space were shown to the person. The free space the Cameras screen shows is the camera's card's,
-  read from the camera over PTP with GetStorageInfo, not a disk-space API of the iPhone) and system boot time (no
-  uptime or mach_absolute_time call). The App Intents read and start imports through the app's own models and call no
+  - Disk space (staging PR 7, 12 Nov): before each job starts, the app reads volumeAvailableCapacityForImportantUsage
+    of the data volume to check the files fit (E174.1), and a job that can't fit is refused with the free space shown
+    to the person (85F4.1). The free space the Cameras screen shows is still the camera's card's, read from the camera
+    over PTP with GetStorageInfo, not a disk-space API of the iPhone.
+  Not declared, because nothing calls it: system boot time (no uptime or mach_absolute_time call). The App Intents read and start imports through the app's own models and call no
   required-reason API of their own.
   Keep this in step with the code: remove an entry the app stops using and add one for each new required-reason API
   (developer.apple.com, "Describing use of required reason API").
@@ -45,6 +46,15 @@
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
 				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+				<string>85F4.1</string>
 			</array>
 		</dict>
 	</array>

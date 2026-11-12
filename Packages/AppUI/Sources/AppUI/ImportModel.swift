@@ -112,6 +112,9 @@ public final class ImportModel: BrowseImporting {
     public private(set) var message: String?
 
     @ObservationIgnored public weak var cameraFinder: (any CameraFinding)?
+    /// Whether staged files in iCloud Drive have uploaded (staging PR 7), for `uploadLine`; the app's, set by
+    /// `AppModel`. Nil says nothing about uploads.
+    @ObservationIgnored public weak var uploads: StagedUploadMonitor?
 
     @ObservationIgnored let engine: ImportEngine
     @ObservationIgnored private let settings: any DestinationSettingStore
@@ -120,6 +123,8 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private let leases: LinkLeases
     @ObservationIgnored private let log: any BenchLog
     @ObservationIgnored private let now: @Sendable () -> Date
+    /// The free space a new job is checked against before it starts (staging PR 7).
+    @ObservationIgnored private let freeSpace: any FreeSpaceReading
     @ObservationIgnored private var watchTask: Task<Void, Never>?
     /// The link the job uses, held in `leases` until the job ends.
     @ObservationIgnored private var link: (any CameraLink)?
@@ -208,9 +213,11 @@ public final class ImportModel: BrowseImporting {
         notifier: any LocalNotifier = SilentNotifier(),
         notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord(),
         abortTransfer: @escaping @Sendable (any CameraLink) async -> Void = { _ in },
+        freeSpace: any FreeSpaceReading = UnknownFreeSpace(),
         catalogue: (any CatalogueStore)? = nil
     ) {
         self.keyTags = keyTags
+        self.freeSpace = freeSpace
         self.catalogue = catalogue
         self.notifier = notifier
         self.abortTransfer = abortTransfer
@@ -362,6 +369,13 @@ public final class ImportModel: BrowseImporting {
         return ImportWording.stagingReason(reason, place: place)
     }
 
+    /// Staged files that haven't uploaded to iCloud Drive and why (the full iCloud quota first; staging PR 7), while
+    /// the job shown stages to iCloud Drive; nil otherwise, and when every staged file has uploaded or is on its way.
+    public var uploadLine: String? {
+        guard camera != nil, case .staging(_, .iCloudDrive)? = progress.destination else { return nil }
+        return uploads?.problemLine
+    }
+
     /// The button to the app's page in Settings: only when Photos access is off (restricted can't be changed there,
     /// and a chosen *Stage* needs nothing).
     public var offersPhotosSettingsLink: Bool {
@@ -486,6 +500,27 @@ public final class ImportModel: BrowseImporting {
             stagingFolderName = shown.folder
             rememberChoice(choice)
             return .nothingNew(staging: stages)
+        }
+        // Whether the files fit, before anything starts (staging PR 7, bench S4): the job's dated stills plus the spare
+        // kept against the free space. An unknown reading never stops a job; one that can't fit isn't started, and the
+        // job shown before (if any) stays shown. Appending to a running job, Continue and *Import keepers* aren't
+        // checked: the engine's out-of-space stop (`.phoneStorageFull`) is their backstop.
+        let jobBytes = FreeSpaceCheck.jobBytes(toDo, camera: camera.key, timeZone: .current)
+        switch FreeSpaceCheck.verdict(jobBytes: jobBytes, available: await freeSpace.availableBytes()) {
+        case .unknown:
+            log.note("import: free space unknown; not checked")
+        case let .fits(available, _):
+            log.note("import: free space \(available) bytes; the job needs \(jobBytes) bytes plus "
+                + "\(FreeSpaceCheck.spare) spare: it fits")
+        case let .tooLittle(available, _):
+            log.note("import: free space \(available) bytes; the job needs \(jobBytes) bytes plus "
+                + "\(FreeSpaceCheck.spare) spare: not started", level: .notice)
+            self.camera = shown.camera
+            snapshot = shown.snapshot
+            rows = shown.rows
+            stagingFolderName = shown.folder
+            return remember(.failed(ImportWording.notEnoughSpace(free: available, needed: jobBytes,
+                                                                 spare: FreeSpaceCheck.spare, staging: stages)))
         }
         jobChoice = choice
         jobStagingPlace = made.stagingPlace

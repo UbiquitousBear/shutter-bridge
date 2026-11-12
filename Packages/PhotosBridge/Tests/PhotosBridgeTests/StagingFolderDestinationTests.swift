@@ -197,6 +197,14 @@ struct StagingFolderDestinationTests {
         #expect(FolderPlacer.takenNames([".icloud"]) == [".icloud"])
     }
 
+    @Test func presentNamesCountAnICloudPlaceholderAsItsFile() {
+        let present = StagingFolderNames.present(in: [".DSC00001.ARW.icloud", "DSC00002.JPG"])
+        #expect(present.contains("dsc00001.arw"))
+        #expect(present.contains(".dsc00001.arw.icloud"))
+        #expect(present.contains("dsc00002.jpg"))
+        #expect(!present.contains("dsc00003.jpg"))
+    }
+
     @Test("A missing staged file fails before anything is placed")
     func missingStaged() async throws {
         let s = try Scratch()

@@ -386,6 +386,20 @@ extension CatalogueStore {
         return true
     }
 
+    /// Forgets the staged copy of the row for exactly this identity only while that row still records `location`
+    /// (its root, its path and its `stagedAt`), the copy the caller found gone from Staging: the reconcile step after
+    /// a file was deleted in Files (staging PR 7). Read and written in one actor call, as `resetPartial` is, so a copy
+    /// staged again since the caller read the row (to the same path or another) is never forgotten. Its state and
+    /// location are kept, as `clearStaged(_:)` keeps them. Returns whether it cleared; nothing happens (false) when
+    /// there is no row, when the row has no staged copy or another one, or when its copy is under a root this build
+    /// can't read. No schema change: it is `record(for:)` and `clearStaged(_:)`, so every store and test double has it.
+    @discardableResult
+    public func clearStaged(_ identity: ObjectIdentity, ifAt location: StagedLocation) throws -> Bool {
+        guard let row = try record(for: identity), row.staged == location else { return false }
+        try clearStaged(identity)
+        return true
+    }
+
     /// Marks the files at the current time (`setMark(_:rating:for:at:)`).
     public func setMark(_ decision: MarkRecord.Decision?, rating: Int = 0, for keys: [ObjectIdentity.ContentKey])
         throws {

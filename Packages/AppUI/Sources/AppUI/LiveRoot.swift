@@ -55,7 +55,11 @@ extension AppModel {
     ///   each paired camera's `WirelessSession` (W11) over the app's one central (`wireless.bluetooth`, W10),
     ///   `NEHotspotJoiner` (W12), `NWPathGateway` and `NWByteChannelFactory` on Wi-Fi only (W9), and the scene as
     ///   `wireless.foreground`; the cameras paired but not yet connected and the Local Network explanation's record in
-    ///   `UserDefaults`; the recovery (W14) and the reminder's holds (W18) follow each job (`AppModel`).
+    ///   `UserDefaults`; the recovery (W14) and the reminder's holds (W18) follow each job (`AppModel`);
+    /// - staging's upkeep (staging PR 7): staged files deleted in Files reconciled under Documents (the same root
+    ///   `StandardImportDestinations` stages under) and the iCloud container's Documents, the iCloud upload status read
+    ///   with `UbiquitousUploadReader`, and each job's free space checked with `VolumeFreeSpace` on the data volume.
+    ///   The seeded UI-test app (`UITestFixture+Live.swift`) has none of these, so it never reconciles its fixture rows.
     static func live(catalogue: any CatalogueStore, wireless: WirelessRuntime) -> AppModel {
         let library = SystemPhotoLibrary()
         let logging = AppLogging.shared
@@ -134,7 +138,11 @@ extension AppModel {
             background: ContinuedImportRunner(),
             wifi: wifi,
             wireless: wireless,
-            diagnostics: logging.exporter(catalogue: catalogue)
+            diagnostics: logging.exporter(catalogue: catalogue),
+            stagingDocuments: URL.documentsDirectory,
+            ubiquityIdentity: FileManagerUbiquityIdentity(),
+            uploadReader: UbiquitousUploadReader(),
+            freeSpace: VolumeFreeSpace(url: URL.documentsDirectory)
         )
         Task { await model.runLaunchPass() }
         return model

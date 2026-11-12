@@ -57,7 +57,8 @@ struct ImportModelTests {
     func harness(setting: DestinationKind = .photos, photos: FakePhotosAccess = FakePhotosAccess(),
                  hangs: Bool = false, catalogue: InMemoryCatalogue = InMemoryCatalogue(),
                  log: any BenchLog = SilentBenchLog(),
-                 staging: StagingAvailability = .unavailable(.containerUnavailable)) async -> Harness {
+                 staging: StagingAvailability = .unavailable(.containerUnavailable),
+                 freeSpace: any FreeSpaceReading = UnknownFreeSpace()) async -> Harness {
         let link = FakeLink(items: card)
         await link.set(writesListedSize: true)
         await link.set(bytesHangs: hangs)
@@ -71,7 +72,7 @@ struct ImportModelTests {
         let leases = LinkLeases()
         let finder = FakeFinder()
         let model = ImportModel(engine: engine, settings: settings, photos: photos, destinations: destinations,
-                                leases: leases, log: log)
+                                leases: leases, log: log, freeSpace: freeSpace)
         model.cameraFinder = finder
         let camera = ImportCamera(descriptor: link.descriptor, key: CameraKeys.key(for: link.descriptor, material: nil))
         return Harness(model: model, engine: engine, catalogue: catalogue, settings: settings, photos: photos,

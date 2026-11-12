@@ -32,6 +32,12 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
   addresses removed, and opens the share sheet. Nothing is sent unless you share it.
 - **Card free space** on the Cameras screen, under a camera connected in *Image Transfer (MTP)*, once its card has been
   opened in Browse.
+- **Room on this iPhone first.** An import or staging that wouldn't fit, with 1 GB kept spare, doesn't start: the app
+  says how much space is free, what the photos need and how much more to free.
+- **Staged photos deleted in Files come back.** Delete staged photos in the Files app and return to Shutter Bridge:
+  Browse offers them for staging again.
+- **iCloud storage full.** When staged photos can't upload because your iCloud storage is full, Settings' Staging
+  section says so, and so does the Import screen while it stages to iCloud Drive.
 
 **Please try**
 
@@ -43,6 +49,8 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
 5. Run *Import New Photos* with the camera unplugged: the app should open its last card and say the camera isn't
    connected. Plug it in with that screen open; the import should start once the card has been read.
 6. Use the app at the largest text size (Settings › Accessibility › Display & Text Size › Larger Text).
+7. Delete a few staged photos in the Files app, return to Shutter Bridge with the camera's card open in Browse: they
+   should lose their *Staged* badge.
 
 **Known limits**
 
@@ -50,6 +58,8 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
   back. Over Wi-Fi it keeps going in the background for a while.
 - Videos are shown but not imported yet.
 - Battery level isn't shown yet, and free space is shown only in *Image Transfer (MTP)*.
+- Deleting a whole day's folder (or the Staging folder) in iCloud Drive leaves those photos marked *Staged*; delete the
+  photos inside it instead.
 
 **When something goes wrong**
 
