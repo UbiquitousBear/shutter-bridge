@@ -183,6 +183,11 @@ struct OfflineBrowseTests {
         // Nothing that needs the camera: no selection, no import, no Copy or Share, no thumbnail asked of a link.
         for file in shownItems {
             #expect(!browse.canSelect(file))
+            // VoiceOver hears why: the camera isn't connected (not "wait until the card has been read").
+            if file.format != .video {
+                #expect(browse.selectionBlock(for: file) == .cameraNotConnected)
+                #expect(browse.accessibilityValue(for: file) == "Connect the camera to select this file.")
+            }
             #expect(!browse.offersJPEGActions(file))
             #expect(await browse.thumbnail(for: file.id) == nil)
             browse.tap(file)

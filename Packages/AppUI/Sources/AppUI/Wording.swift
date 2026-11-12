@@ -390,6 +390,7 @@ extension BrowseWording {
         case .notAPhoto: "This kind of file can't be imported."
         case .noCaptureDate: "No capture date, so it can't be imported yet."
         case .cardNotRead: "Wait until the card has been read."
+        case .cameraNotConnected: "Connect the camera to select this file."
         }
     }
 

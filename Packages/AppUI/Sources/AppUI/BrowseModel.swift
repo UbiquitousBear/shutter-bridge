@@ -118,6 +118,9 @@ public final class BrowseModel {
         case noCaptureDate
         /// The card isn't read yet (the last-known card, or still reading).
         case cardNotRead
+        /// The camera isn't connected (an offline Browse, W6-absent): its last-known card is shown, and nothing on it can
+        /// be picked until the camera is.
+        case cameraNotConnected
     }
 
     public let camera: CameraDescriptor
@@ -1326,7 +1329,9 @@ public final class BrowseModel {
         case .other: return .notAPhoto
         case .photo: break
         }
-        guard phase == .listed, lastKnownListedAt == nil else { return .cardNotRead }
+        guard phase == .listed, lastKnownListedAt == nil else {
+            return phase == .notConnected ? .cameraNotConnected : .cardNotRead
+        }
         if item.captureDate == nil { return .noCaptureDate }
         return nil
     }
