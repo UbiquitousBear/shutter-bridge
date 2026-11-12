@@ -648,6 +648,31 @@ struct HistoryForgetTests {
         #expect(states[identity(other, camera: camB)] != .imported)
     }
 
+    @Test func forgettingACameraWhoseImportRunsIsRefusedAndKeepsItsMarkers() async throws {
+        let rig = Rig()
+        await rig.camera(camA, name: "ILCE-7CM2")
+        let one = item("DSC00001.ARW", at: 0)
+        let inFlight = item("DSC00002.ARW", at: 10)
+        try await rig.imported(one)
+        // A commit of the running job, bracketed by its marker.
+        let commit = PendingCommit(id: UUID(), destination: .photos,
+                                   files: [.init(identity: identity(inFlight), format: .raw, role: .single)],
+                                   writtenAt: at(day: 11, hour: 9))
+        try await rig.catalogue.beginCommit(commit)
+        try await rig.record(job(1, startedAt: at(day: 11, hour: 9), outcome: nil, imported: 1))
+        rig.active = camA
+        await rig.model.load()
+        await rig.model.forgetImports(of: try #require(rig.model.forgettableCameras.first))
+        #expect(rig.model.notice?.text == "Wait for the import from ILCE-7CM2 to finish, then forget its imports.")
+        #expect(await rig.catalogue.states(of: [identity(one)])[identity(one)] == .imported)
+        #expect(await rig.catalogue.pendingCommits().map(\.id) == [commit.id])
+        #expect(rig.log.lines.contains("history: didn't forget a camera's imports while its import runs"))
+        // Once it has finished, the same request forgets.
+        rig.active = nil
+        await rig.model.forgetImports(of: try #require(rig.model.forgettableCameras.first))
+        #expect(rig.model.notice?.text == "Forgot 1 import from ILCE-7CM2.")
+    }
+
     @Test func aStagedFileStaysStagedAfterItsImportIsForgotten() async throws {
         let rig = Rig()
         let one = item("DSC00001.ARW", at: 0)

@@ -211,6 +211,11 @@ public enum HistoryWording {
             cancel: "Cancel")
     }
 
+    /// *Forget imports* asked for while that camera's import is running or paused.
+    public static func forgetWhileImporting(_ camera: String) -> String {
+        "Wait for the import from \(camera) to finish, then forget its imports."
+    }
+
     /// After *Forget imports*: "Forgot 48 imports from ILCE-7CM2.", or that there was nothing to forget.
     public static func forgot(_ count: Int, camera: String) -> String {
         switch count {

@@ -401,8 +401,15 @@ public final class HistoryModel {
 
     /// *Forget imports* for every key of `camera` (`CatalogueStore.forgetImports(camera:)`, D6): the camera's imported
     /// and skipped rows go, or go back to new where a staged copy is kept; Photos, Staging, marks, the card and the job
-    /// records are left alone. Called once the person confirmed.
+    /// records are left alone. Called once the person confirmed. Refused while that camera's import runs: forgetting
+    /// removes the camera's pending-commit markers too, and a commit in flight must stay bracketed by its marker
+    /// (section 3.1), or a kill before its row lands would import the file twice.
     public func forgetImports(of camera: HistoryCamera) async {
+        if let active = activeCamera(), camera.keys.contains(active) {
+            log.note("history: didn't forget a camera's imports while its import runs")
+            show(HistoryWording.forgetWhileImporting(camera.name), tone: .info)
+            return
+        }
         var forgotten = 0
         do {
             for key in camera.keys { forgotten += try await catalogue.forgetImports(camera: key) }
