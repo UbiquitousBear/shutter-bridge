@@ -166,7 +166,8 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   builds `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and
   `generic/platform=iOS` (Release). Then it runs the app's UI tests in the iOS Simulator (I18, decision D14 (c)):
   `xcodebuild test -scheme ShutterBridge -only-testing:ShutterBridgeUITests` on the simulator
-  `pick-iphone-simulator.sh` picks, unsigned like the builds, with each test limited to three minutes
+  `pick-iphone-simulator.sh` picks, booted and waited for first, signed to run locally (ad hoc, no team or
+  profile) rather than unsigned like the builds, with each test limited to three minutes
   (`-default-test-execution-time-allowance 180`) and the job's limit raised to 45 minutes for it. The
   `ShutterBridgeUITests` target (`App/ShutterBridgeUITests/`, a synchronised folder, in the shared scheme's
   TestAction) launches the Debug app with `-UITestFixture`, which composes it over an in-memory catalogue seeded with
@@ -174,9 +175,11 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   only), with no camera discovery, no Wi-Fi or Bluetooth, Photos access read as allowed and staging on this iPhone in
   a temporary folder. It tests History, Settings and the Staging tab's cull screen; the "Browse → select → import →
   History" path needs a camera and waits for Iteration 5's review-build simulator mode, so no `PTPSimulator` is linked
-  into the app. On a failure the step's raw lines (test, assertion, compile error) are printed after it; that the
-  Simulator runs the unsigned UI-test runner is unverified until the step's first run. On the Mac, the same tests run
-  from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS Simulator through
+  into the app. On a failure the step's raw lines (test, assertion, compile error) and the result bundle's failures
+  are printed after it. Unsigned, the runner never started on the first run (12 Nov, #139: timed out waiting for
+  the accessibility "AX loaded" notification), hence the ad-hoc signature and the boot beforehand. On the Mac, the
+  same tests run from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS
+  Simulator through
   `AllPackages.xcworkspace` at the root, which holds the eight packages, and its shared `AllPackageTests` scheme,
   which lists their ten test targets: one `xcodebuild build-for-testing`, so each module and Apple's SDK modules are
   compiled once, then `test-without-building` twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as

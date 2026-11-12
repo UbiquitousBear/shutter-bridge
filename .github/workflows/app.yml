@@ -137,19 +137,26 @@ jobs:
       - name: UI tests in the iOS Simulator (the screens that need no camera)
         # I18 (D14 (c)): ShutterBridgeUITests drives History, Settings and the Staging tab of the Debug app, which the
         # tests launch with -UITestFixture so it runs over an in-memory catalogue seeded with job records, staged files
-        # and marks (AppUI's UITestFixture; no camera, no PTPSimulator). Unsigned, as the builds above: the Simulator
-        # runs the linker's ad-hoc signature (unverified for the UI-test runner until this step's first run). Each test
-        # may take at most three minutes, so a stuck screen fails its test rather than the job's limit.
+        # and marks (AppUI's UITestFixture; no camera, no PTPSimulator). Signed to run locally (ad hoc, no team or
+        # profile, which the Simulator doesn't ask for): unsigned (CODE_SIGNING_ALLOWED=NO, as the builds above), the
+        # runner never started on the first run (12 Nov, #139: "The test runner failed to initialize for UI testing",
+        # timed out waiting for the accessibility "AX loaded" notification). The simulator is booted and its boot
+        # waited for first, since a cold one starting during the test launch is the other cause given for that
+        # timeout. Each test may take at most three minutes, so a stuck screen fails its test rather than the job's
+        # limit.
         env:
           SIM: ${{ steps.sim.outputs.id }}
         run: |
           set -o pipefail
+          xcrun simctl boot "$SIM" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIM" -b
           xcodebuild test \
             -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIM" -only-testing:ShutterBridgeUITests \
             -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
             -resultBundlePath "$RUNNER_TEMP/UITests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             | tee "$RUNNER_TEMP/uitests.log" | xcbeautify --renderer github-actions
 
       - name: UI test failures from the raw xcodebuild output
@@ -159,6 +166,12 @@ jobs:
           f="$RUNNER_TEMP/uitests.log"
           [ -f "$f" ] || exit 0
           grep -E 'error:|failed|XCTAssert|Test Case .* (failed|passed)' "$f" | head -n 80 || true
+          r="$RUNNER_TEMP/UITests.xcresult"
+          [ -d "$r" ] || exit 0
+          xcrun xcresulttool get test-results summary --path "$r" --compact \
+            | python3 -c 'import json, sys
+          for f in json.load(sys.stdin).get("testFailures", []):
+              print(f.get("testIdentifierString") or f.get("testName"), "-", f.get("failureText"))' || true
 
   packages:
     # Every package's tests in the iOS Simulator, from AllPackages.xcworkspace at the root: one build-for-testing of
