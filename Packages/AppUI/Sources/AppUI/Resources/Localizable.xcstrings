@@ -78,6 +78,28 @@
         }
       }
     },
+    "%@ has no new photos to import." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ has no new photos to import."
+          }
+        }
+      }
+    },
+    "%@ has no new photos to stage." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ has no new photos to stage."
+          }
+        }
+      }
+    },
     "%@ imported" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -107,6 +129,83 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ imported, %@ staged"
+          }
+        }
+      }
+    },
+    "%@ is disconnected. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is disconnected. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "%@ is disconnected. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is disconnected. Open Browse and tap %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
+    "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be imported to Photos." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be imported to Photos."
+          }
+        }
+      }
+    },
+    "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be staged." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be staged."
+          }
+        }
+      }
+    },
+    "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be imported to Photos." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be imported to Photos."
+          }
+        }
+      }
+    },
+    "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be staged." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be staged."
+          }
+        }
+      }
+    },
+    "%@ isn't connected. Connect it, then try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected. Connect it, then try again."
           }
         }
       }
@@ -2172,6 +2271,17 @@
         }
       }
     },
+    "Importing %@ to Photos." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing %@ to Photos."
+          }
+        }
+      }
+    },
     "Importing %@." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3690,6 +3800,28 @@
         }
       }
     },
+    "Reaching %@. Its new photos will be imported to Photos once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reaching %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "Reaching %@. Its new photos will be staged once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reaching %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
     "Reaching the camera again…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3741,6 +3873,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Reading the Card"
+          }
+        }
+      }
+    },
+    "Reading the card in %@. Its new photos will be imported to Photos once it's read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the card in %@. Its new photos will be imported to Photos once it's read."
+          }
+        }
+      }
+    },
+    "Reading the card in %@. Its new photos will be staged once it's read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the card in %@. Its new photos will be staged once it's read."
           }
         }
       }
@@ -4153,6 +4307,39 @@
         }
       }
     },
+    "Shutter Bridge couldn't open its catalogue. Open the app to see why." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't open its catalogue. Open the app to see why."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
     "Shutter Bridge couldn't read its catalogue. Try again in a moment." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4171,6 +4358,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Shutter Bridge couldn't read its list of staged files."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@, so its new photos won't be imported to Photos. Open Browse to see why." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@, so its new photos won't be imported to Photos. Open Browse to see why."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@, so its new photos won't be staged. Open Browse to see why." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@, so its new photos won't be staged. Open Browse to see why."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be staged once the card is read."
           }
         }
       }
@@ -4523,6 +4754,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Start Pairing"
+          }
+        }
+      }
+    },
+    "Starting to import the new photos to Photos." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting to import the new photos to Photos."
+          }
+        }
+      }
+    },
+    "Starting to stage the new photos." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting to stage the new photos."
           }
         }
       }
@@ -5073,6 +5326,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The import couldn't start. Check the camera is still connected, then try again."
+          }
+        }
+      }
+    },
+    "The import from %@ didn't start. Open Browse and tap Import." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The import from %@ didn't start. Open Browse and tap Import."
           }
         }
       }
@@ -5877,6 +6141,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "so far"
+          }
+        }
+      }
+    },
+    "the camera" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera"
           }
         }
       }

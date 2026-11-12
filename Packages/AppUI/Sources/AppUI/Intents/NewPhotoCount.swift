@@ -178,7 +178,12 @@ public enum NewPhotosWording {
 
     /// The camera as a sentence's subject: its name, or "The camera" for the generic name.
     static func subject(_ camera: String) -> String {
-        camera == CamerasWording.genericName ? "The camera" : camera
+        camera == CamerasWording.genericName ? AppText.string("The camera") : camera
+    }
+
+    /// The camera in the middle of a sentence: its name, or "the camera" for the generic name.
+    static func object(_ camera: String) -> String {
+        camera == CamerasWording.genericName ? AppText.string("the camera") : camera
     }
 
     /// When a listing was read or a camera last connected: "today at 14:05", "yesterday at 09:12", "on 3 Nov 2026 at
@@ -226,56 +231,86 @@ public enum NewPhotosWording {
     }
 
     /// "Import new photos"'s answer: "Importing 48 new photos to Photos.", "Staging 48 new photos.", or why nothing
-    /// started.
+    /// started. Each sentence is whole in the String Catalog, one per choice, so a translation needn't join fragments.
     public static func importAnswer(_ start: NewPhotosImportStart, camera: String) -> String {
         let subject = subject(camera)
+        let name = object(camera)
         switch start {
         case let .requested(outcome, choice):
             let staging = choice == .staging
             switch outcome {
             case let .started(n):
-                return staging ? "Staging \(newPhotosLower(n))." : "Importing \(newPhotosLower(n)) to Photos."
+                return staging ? AppText.format("Staging %@.", newPhotosLower(n))
+                    : AppText.format("Importing %@ to Photos.", newPhotosLower(n))
             case let .appended(n):
-                return "Added \(newPhotosLower(n)) to " + (staging ? "staging." : "the import.")
+                return staging ? AppText.format("Added %@ to staging.", newPhotosLower(n))
+                    : AppText.format("Added %@ to the import.", newPhotosLower(n))
             case .nothingNew:
-                return "\(subject) has no new photos to " + (staging ? "stage." : "import.")
+                return staging ? AppText.format("%@ has no new photos to stage.", subject)
+                    : AppText.format("%@ has no new photos to import.", subject)
             case .busyWithAnotherCamera, .busyWithAnotherMode, .busyWithKeepers, .stillStarting, .failed:
-                return BrowseWording.importRequested(outcome, choice: choice) ?? couldNotStart(subject)
+                return BrowseWording.importRequested(outcome, choice: choice) ?? couldNotStart(name)
             }
         case let .waitingForCard(choice):
-            return "Reading the card in \(camera == CamerasWording.genericName ? "the camera" : camera). Its new photos "
-                + (choice == .staging ? "will be staged" : "will be imported to Photos") + " once it's read."
+            return choice == .staging
+                ? AppText.format("Reading the card in %@. Its new photos will be staged once it's read.", name)
+                : AppText.format("Reading the card in %@. Its new photos will be imported to Photos once it's read.", name)
         case let .waitingForPerson(choice, why):
-            let name = camera == CamerasWording.genericName ? "the camera" : camera
-            let then = "Its new photos " + (choice == .staging ? "will be staged" : "will be imported to Photos")
-                + " once the card is read."
+            let staging = choice == .staging
             switch why {
             case .reaching:
-                return "Reaching \(name). \(then)"
+                return staging
+                    ? AppText.format("Reaching %@. Its new photos will be staged once the card is read.", name)
+                    : AppText.format("Reaching %@. Its new photos will be imported to Photos once the card is read.", name)
             case .listingFailed:
-                return "Shutter Bridge couldn't read the card in \(name). Open Browse and tap \(BrowseWording.tryAgain). \(then)"
+                return staging
+                    ? AppText.format("Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. "
+                        + "Its new photos will be staged once the card is read.", name, BrowseWording.tryAgain)
+                    : AppText.format("Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. "
+                        + "Its new photos will be imported to Photos once the card is read.", name, BrowseWording.tryAgain)
             case .couldNotReach:
-                return "Shutter Bridge couldn't reach \(name). Open Browse and tap \(BrowseWording.tryAgain). \(then)"
+                return staging
+                    ? AppText.format("Shutter Bridge couldn't reach %@. Open Browse and tap %@. "
+                        + "Its new photos will be staged once the card is read.", name, BrowseWording.tryAgain)
+                    : AppText.format("Shutter Bridge couldn't reach %@. Open Browse and tap %@. "
+                        + "Its new photos will be imported to Photos once the card is read.", name, BrowseWording.tryAgain)
             case .failedWithNoRetry:
-                return "Shutter Bridge couldn't read the card in \(name), so its new photos won't be "
-                    + (choice == .staging ? "staged" : "imported to Photos") + ". Open Browse to see why."
+                return staging
+                    ? AppText.format("Shutter Bridge couldn't read the card in %@, so its new photos won't be staged. "
+                        + "Open Browse to see why.", name)
+                    : AppText.format("Shutter Bridge couldn't read the card in %@, so its new photos won't be imported "
+                        + "to Photos. Open Browse to see why.", name)
             case .disconnected:
-                return "\(subject) is disconnected. Open Browse and tap \(BrowseWording.reconnect). \(then)"
+                return staging
+                    ? AppText.format("%@ is disconnected. Open Browse and tap %@. "
+                        + "Its new photos will be staged once the card is read.", subject, BrowseWording.reconnect)
+                    : AppText.format("%@ is disconnected. Open Browse and tap %@. "
+                        + "Its new photos will be imported to Photos once the card is read.", subject, BrowseWording.reconnect)
             }
         case let .starting(choice):
-            return choice == .staging ? "Starting to stage the new photos." : "Starting to import the new photos to Photos."
+            return choice == .staging ? AppText.string("Starting to stage the new photos.")
+                : AppText.string("Starting to import the new photos to Photos.")
         case .notConnected:
-            return "\(subject) isn't connected. Connect it, then try again."
+            return AppText.format("%@ isn't connected. Connect it, then try again.", subject)
         case let .waitingForConnection(choice, cardRead):
-            let photos = choice == .staging ? "its new photos will be staged" : "its new photos will be imported to Photos"
-            return cardRead
-                ? "\(subject) isn't connected. Connect it while Shutter Bridge shows its card, and \(photos)."
-                : "\(subject) isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter "
-                    + "Bridge is open, and \(photos)."
+            switch (cardRead, choice == .staging) {
+            case (true, true):
+                return AppText.format("%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new "
+                    + "photos will be staged.", subject)
+            case (true, false):
+                return AppText.format("%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new "
+                    + "photos will be imported to Photos.", subject)
+            case (false, true):
+                return AppText.format("%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while "
+                    + "Shutter Bridge is open, and its new photos will be staged.", subject)
+            case (false, false):
+                return AppText.format("%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while "
+                    + "Shutter Bridge is open, and its new photos will be imported to Photos.", subject)
+            }
         case .couldNotStart:
-            return couldNotStart(subject)
+            return couldNotStart(name)
         case .appNotReady:
-            return "Shutter Bridge couldn't open its catalogue. Open the app to see why."
+            return AppText.string("Shutter Bridge couldn't open its catalogue. Open the app to see why.")
         }
     }
 
@@ -284,8 +319,8 @@ public enum NewPhotosWording {
         AppText.counted(n, one: "%lld new photo", other: "%lld new photos")
     }
 
-    private static func couldNotStart(_ subject: String) -> String {
-        let possessive = subject == "The camera" ? "the camera" : subject
-        return "The import from \(possessive) didn't start. Open Browse and tap Import."
+    /// `name` as `object(_:)` gives it.
+    private static func couldNotStart(_ name: String) -> String {
+        AppText.format("The import from %@ didn't start. Open Browse and tap Import.", name)
     }
 }
