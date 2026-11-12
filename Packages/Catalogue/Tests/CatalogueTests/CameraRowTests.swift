@@ -545,6 +545,34 @@ struct CameraRowContractTests {
     }
 
     @Test(arguments: StoreKind.available)
+    func aForgottenPartialIsNewWithNoFileAndKeepsTheRest(_ kind: StoreKind) async throws {
+        let staged = StagedLocation(root: .onThisIPhone, relativePath: "Staging/ILCE-7CM2/2026-11-01/DSC00001.ARW")
+        let s = try await kind.make()
+        try await s.store.markStaged(file, format: .raw, at: staged)
+        let url = F.partialFile("DSC00001")
+        try await s.store.markPartial(file, format: .raw, tempURL: url, offset: 33_554_432)
+        // Not at the offset read, or another file: left alone.
+        #expect(try await !s.store.forgetPartial(file, ifTempURL: url, offset: 4096))
+        #expect(try await !s.store.forgetPartial(file, ifTempURL: F.partialFile("DSC00002"), offset: 33_554_432))
+        #expect(try await s.store.record(for: file)?.state == .partial)
+        // Given in the other form `markPartial` takes: relative to a staging folder.
+        let sameFile = URL(fileURLWithPath: url.relativePath, relativeTo: F.stagingAfter)
+        #expect(try await s.store.forgetPartial(file, ifTempURL: sameFile, offset: 33_554_432))
+        let expected = CatalogueRecord(identity: file, format: .raw, state: .new, resumeOffset: 0, tempURL: nil,
+                                       staged: staged)
+        #expect(try await s.store.record(for: file) == expected)
+        #expect(try await s.store.states(of: [file]) == [file: .new])
+        #expect(try await s.store.partialRecords().isEmpty)
+        #expect(try await !s.store.forgetPartial(file, ifTempURL: url, offset: 33_554_432))
+        // An imported row is never forgotten.
+        let imported = CatalogueRecord(identity: file, format: .raw, state: .imported,
+                                       location: .photosAsset(localIdentifier: "A/L0/001"))
+        try await s.store.upsert(imported)
+        #expect(try await !s.store.forgetPartial(file, ifTempURL: url, offset: 0))
+        #expect(try await s.store.record(for: file)?.state == .imported)
+    }
+
+    @Test(arguments: StoreKind.available)
     func aRowThatMovedOnIsNotReset(_ kind: StoreKind) async throws {
         let s = try await kind.make()
         // No row.

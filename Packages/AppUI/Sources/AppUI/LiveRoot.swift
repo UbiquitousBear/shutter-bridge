@@ -34,7 +34,8 @@ extension AppModel {
     /// - one `ImportEngine` with it, its work folder in Caches (`ImportEngine.cachesWorkFolder`, `Library/Caches/Imports`,
     ///   which iOS doesn't empty while the app is suspended, as it may `tmp`; I13), emptied at start-up except the partial
     ///   files a later job resumes; partials an earlier build left in `tmp/Imports` move in first, and the launch pass
-    ///   (`reconcilePartials()`) sends a row whose partial file is gone back to offset 0;
+    ///   (`launchPass()`) resolves pending commits left behind (I15, with `LibraryCommitLookup`), then sends a row whose
+    ///   partial file is gone back to offset 0;
     /// - Photos through `SystemPhotoLibrary` (`PhotosLibraryDestination`, one album per camera by default), and the
     ///   staging folder, one folder per camera and capture day (`StagingFolderDestination`): in the app's iCloud Drive
     ///   folder when `UbiquityStagingLocator` finds it (iCloud Drive › Shutter Bridge › Staging, moved in with
@@ -63,10 +64,25 @@ extension AppModel {
         let workFolder = ImportEngine.cachesWorkFolder
         ImportEngine.movePartials(from: FileManager.default.temporaryDirectory
             .appendingPathComponent("Imports", isDirectory: true), to: workFolder)
-        let engine = ImportEngine(catalogue: catalogue, stagingDirectory: workFolder, trace: .bench(logging.log))
-        // The launch pass, after the engine's prune: rows whose partial file iOS emptied from Caches, or the prune
-        // deleted, go back to offset 0 (each job's diff runs it again first).
-        Task { await engine.reconcilePartials() }
+        // A commit whose catalogue write was lost (the app killed after the save, or the store failing every try) is
+        // looked for before the next diff (backlog section 3.1, I15): in the library by date and original file names
+        // (the album not consulted), or in its Staging day folder on this iPhone or in iCloud Drive.
+        let commitLookup = LibraryCommitLookup(library: library, staging: UbiquityStagingLocator(),
+                                               onThisIPhone: URL.documentsDirectory)
+        let engine = ImportEngine(catalogue: catalogue, stagingDirectory: workFolder, trace: .bench(logging.log),
+                                  commitLookup: commitLookup)
+        // The launch pass the engine owns, after its prune: pending commits resolved, then rows whose partial file iOS
+        // emptied from Caches, or the prune deleted, back to offset 0. The first job's pass waits for it; `AppModel`
+        // awaits the same pass below, to read Browse's badges again if it wrote rows.
+        Task { await engine.launchPass() }
+        #if DEBUG
+        // The commit-boundary bench check (docs/iteration-2-bench.md): Debug builds only.
+        let benchLog = logging.log
+        Task {
+            await CommitBoundaryBench.install(on: engine, arguments: ProcessInfo.processInfo.arguments, log: benchLog,
+                                              end: { exit(0) })
+        }
+        #endif
         let destinations = StandardImportDestinations(
             library: library,
             albumStore: UserDefaultsAlbumIdentifierStore(),
@@ -101,7 +117,7 @@ extension AppModel {
             explained: UserDefaultsLocalNetworkExplainedRecord(),
             log: wifiLog
         )
-        return AppModel(
+        let model = AppModel(
             discovery: CompositeDiscovery(sources: [USBCameraBrowser(), wifi.source]),
             services: .system(log: wifiLog),
             catalogue: catalogue,
@@ -120,6 +136,8 @@ extension AppModel {
             wireless: wireless,
             diagnostics: logging.exporter(catalogue: catalogue)
         )
+        Task { await model.runLaunchPass() }
+        return model
     }
 }
 

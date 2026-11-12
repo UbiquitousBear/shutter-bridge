@@ -174,6 +174,15 @@ public final class CamerasModel: CameraFinding {
         return model
     }
 
+    /// Reads the Imported and Staged badges again in every Browse model still alive, after the catalogue's rows changed
+    /// outside a job (the launch pass resolving pending commits, I15).
+    public func refreshBrowseBadges() async {
+        browsing.removeAll { $0.model == nil }
+        for entry in browsing {
+            await entry.model?.refreshImportedStates()
+        }
+    }
+
     // MARK: - App Intents (I16)
 
     /// Told when a Browse model has listed its camera's live card (`BrowseModel.onListed`). Set by `AppModel`, which

@@ -245,6 +245,9 @@ final class Job {
     /// appended during the listing and left out by the diff too) counts once; a file added to the job later (an
     /// explicit pick) leaves it, since it wasn't left out after all.
     var rejectsLeftOut: Set<ObjectIdentity.ContentKey> = []
+    /// Possible duplicates the pending-commit passes found before this job's diffs (`ImportProgress.possibleDuplicates`;
+    /// I15).
+    var possibleDuplicates = 0
     /// Pending files, kept sorted by `FileEntry.index`.
     var queue: [ObjectIdentity] = []
     var nextIndex = 0

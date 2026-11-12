@@ -684,6 +684,15 @@ public enum ImportWording {
         return line + "."
     }
 
+    /// Photos an interrupted import may have saved twice (backlog section 3.1's fallback, I15: a pending commit not found
+    /// under Limited Access, `ImportProgress.possibleDuplicates`): "1 photo from an interrupted import may now be in
+    /// Photos twice."; nil for none.
+    public static func possibleDuplicates(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1 ? "1 photo from an interrupted import may now be in Photos twice."
+            : "\(count) photos from an interrupted import may now be in Photos twice."
+    }
+
     /// Why files were left out for having no capture date (D10: skip them and say how many): "1 file was left out
     /// because it has no capture date, so Shutter Bridge can't tell whether it was imported before."; nil for none.
     public static func undatedLeftOut(_ count: Int) -> String? {

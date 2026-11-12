@@ -758,7 +758,8 @@ struct KeepersImportTests {
         let rows = cull.rows
         let run = Task { @MainActor in await keepers.start(.all, in: rows) }
         #expect(await eventually { reader.waiting > 0 })
-        // The model reads the job's start from the engine's progress, which can come after the first read.
+        // The engine reads the file before the import model has applied the job's first snapshot, so wait for the
+        // model to see the job running rather than reading it once.
         #expect(await eventually { app.importer.activeJobKey == camA })
 
         let history = app.historyModel(documents: documents)
