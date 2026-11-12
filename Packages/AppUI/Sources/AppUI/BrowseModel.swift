@@ -190,6 +190,9 @@ public final class BrowseModel {
     }
     /// What an offline Browse (`Phase.notConnected`) found in the catalogue: nil for a Browse on a listed camera.
     public private(set) var offlineCard: OfflineCard?
+    /// The camera's name by the one-name-per-body rule (D11, `CameraNaming`): in Image Transfer (MSC) the one named
+    /// body's. Nil: discovery's name (`CamerasWording.displayName(for:)`).
+    public private(set) var cameraName: String?
     /// Whether an offline Browse offers Connect: its camera is a Wi-Fi camera that is now listed, which only the person's
     /// tap reaches (a join is never started by itself, Shamil 10 Nov). Over USB the live Browse replaces it instead.
     public private(set) var canConnect = false
@@ -272,6 +275,8 @@ public final class BrowseModel {
     ///     Local Network explanation), so `onDeclined` closes the screen with no notice instead of `onGone`'s.
     ///   - offline: Makes this an offline Browse for a camera that isn't connected (`Phase.notConnected`): it shows the
     ///     catalogue's last-known card for that key and never calls `openLink`.
+    ///   - cameraName: The camera's name for the title, as the Cameras model names it (`CamerasModel.displayName(for:)`,
+    ///     D11); nil, discovery's name. Read again from the catalogue once the camera's key is known.
     public init(
         camera: CameraDescriptor,
         openLink: @escaping @Sendable () async throws(CameraLinkFailure) -> any CameraLink,
@@ -286,9 +291,11 @@ public final class BrowseModel {
         keyTags: CameraKeyTags = .shared,
         now: @escaping @Sendable () -> Date = { Date() },
         calendar: Calendar = .current,
-        offline: OfflineBrowse? = nil
+        offline: OfflineBrowse? = nil,
+        cameraName: String? = nil
     ) {
         self.offline = offline
+        self.cameraName = cameraName
         offlineCard = offline == nil ? nil : .looking
         self.keyTags = keyTags
         self.camera = camera
@@ -485,6 +492,8 @@ public final class BrowseModel {
         } else {
             cameraKey = key
             guard !reconnecting else { return }
+            let name = await CameraNaming.name(for: camera, key: key, catalogue: catalogue.store)
+            if name != cameraName { cameraName = name }
             // Another camera answered than the one whose card is shown: its card is not this one's.
             if let shown = shownEarlyFor, shown != key { clearLastKnown() }
             await showLastKnown(for: key, from: catalogue.store)
@@ -1318,6 +1327,8 @@ public final class BrowseModel {
         } catch {
             services.log.note("browse: the listing couldn't be saved: \(type(of: error))")
         }
+        // The camera's row gets the name its album and folder would have (D11), so History and Cameras agree.
+        await CameraNaming.learn(cameraName ?? CamerasWording.displayName(for: camera), for: key, in: catalogue.store)
     }
 
     // MARK: - Selection
@@ -1429,7 +1440,7 @@ public final class BrowseModel {
     /// reports the selection).
     public var navigationTitle: String {
         isSelecting ? BrowseWording.selectingTitle(selectionSummary)
-            : offline?.name ?? CamerasWording.displayName(for: camera)
+            : offline?.name ?? cameraName ?? CamerasWording.displayName(for: camera)
     }
 
     /// The bar's subtitle: the selection's size while selecting something, "Connecting to the camera…" or "Reading the

@@ -132,7 +132,8 @@ public final class AppModel {
                                    leases: leases, log: services.log, now: now,
                                    background: WiFiOnlyBackgroundRun(background, carrier: { jobShown.carrier }),
                                    notifier: notifier, notificationAsks: notificationAsks,
-                                   abortTransfer: { link in await TransferAbort.abort(link) }, freeSpace: freeSpace)
+                                   abortTransfer: { link in await TransferAbort.abort(link) }, freeSpace: freeSpace,
+                                   catalogue: catalogue)
         importer.uploads = uploads
         self.importer = importer
         jobShown.importer = importer
@@ -211,6 +212,8 @@ public final class AppModel {
         }
         queueReminder { await $0.begin(.importing, camera: camera.key) }
         uploads?.refreshSoon()
+        // The job wrote its camera's name to its row (D11), which may name the one body an MSC camera is named after.
+        Task { [weak self] in await self?.cameras.refreshOnlyBodyName() }
     }
 
     /// The job ended: the recovery lets the session go (the job's end has already reset it), and the camera's reminders
@@ -283,7 +286,8 @@ public final class AppModel {
             // Taken only once it is found, and only if it is still the one asked for.
             guard reminders.cameraToOpen == key else { return false }
             _ = reminders.takeCameraToOpen()
-            if cameras.path.last != camera { cameras.path = [camera] }
+            // By ID: a Wi-Fi camera's descriptor is renamed by its model at its first connection (D11).
+            if cameras.path.last?.id != camera.id { cameras.path = [camera] }
             return true
         }
         return false
@@ -465,8 +469,17 @@ struct SourceAdoptingRecoverySession: WiFiRecoverySession {
     let id: CameraDescriptor.ID
 
     func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
-        let link = try await base.prepareImport(bluetoothSwitchOnWhenAway: bluetoothSwitchOnWhenAway)
+        // While it reopens, a connection a Browse left that shares this preparation isn't stopped (bench 22.1's stop).
+        await source.recoveryReopening(id, true)
+        let link: any CameraLink
+        do throws(WirelessFailure) {
+            link = try await base.prepareImport(bluetoothSwitchOnWhenAway: bluetoothSwitchOnWhenAway)
+        } catch {
+            await source.recoveryReopening(id, false)
+            throw error
+        }
         await source.adoptRecovered(link, for: id)
+        await source.recoveryReopening(id, false)
         return link
     }
 

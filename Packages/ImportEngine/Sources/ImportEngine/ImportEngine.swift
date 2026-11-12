@@ -181,6 +181,11 @@ public actor ImportEngine {
     /// The current job, for `reconnect(_:to:knownItems:route:)`; nil when there is none.
     public var currentJobID: ImportJobID? { job.map { ImportJobID($0.id) } }
 
+    /// The zone the current job's identities are made in, fixed at its start; nil when there is none. The app matches a
+    /// listing against the job's files in it (D11: continuing a paused job on another camera key by content), as
+    /// `remap` does.
+    public var currentJobTimeZone: TimeZone? { job?.timeZone }
+
     /// What the current job is for: `.staging` for a stage job, `.photos` for an import job (`ImportRoute.purpose`);
     /// nil when there is none. A pick for the other purpose can't be appended to it.
     public var currentPurpose: DestinationKind? { job?.route.purpose }

@@ -14,9 +14,10 @@ import Foundation
 /// the types it holds redact it, and `description` says only which are set.
 public struct WiFiCameraEntry: Sendable, Hashable, CustomStringConvertible {
     /// The descriptor discovery lists. Its ID is made once, from the initiator GUID, and never changes, so a camera
-    /// being browsed isn't dropped when its key becomes known. Its name is the person's (the catalogue's friendly
-    /// name) or "Camera": the model name from DeviceInfo isn't used, so the staging folder and album a first import makes
-    /// carry the same name as every later one.
+    /// being browsed isn't dropped when its key becomes known. Its name (D11, one name per body; Shamil, 12 Nov) is the
+    /// catalogue's friendly name, else the model the camera reported in DeviceInfo ("ILCE-7CM2", written at each
+    /// connection), else "Camera" until the camera has connected (`WiFiCameraSource` renames it then), so its Staging
+    /// folder and album are the ones its MTP imports use.
     public var descriptor: CameraDescriptor
     /// The catalogue's key once a session has read the serial.
     public var key: CameraKey?
@@ -39,8 +40,15 @@ public struct WiFiCameraEntry: Sendable, Hashable, CustomStringConvertible {
     public var id: CameraDescriptor.ID { descriptor.id }
     public var isConnectedBefore: Bool { key != nil }
 
-    /// The name every Wi-Fi camera has until the person can rename one (the staging folder and album are named from it).
+    /// The name a Wi-Fi camera has before its first connection has read its model.
     public static let defaultName = CamerasWording.genericName
+
+    /// The name for a camera's catalogue row: its friendly name, else its model, else `defaultName`.
+    static func name(for record: CameraRecord) -> String {
+        if !record.friendlyName.isEmpty { return record.friendlyName }
+        let model = record.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.isEmpty ? defaultName : model
+    }
 
     /// The descriptor's ID for an initiator GUID.
     public static func id(forGUID guid: UUID) -> CameraDescriptor.ID {
@@ -56,7 +64,7 @@ public struct WiFiCameraEntry: Sendable, Hashable, CustomStringConvertible {
         let paired = record.bluetoothPeripheralID != nil
         let typed = paired ? nil : record.lastIP.flatMap(TypedCameraAddress.init)
             .flatMap { $0.host == WirelessCamera.cameraNetworkGateway ? nil : $0 }
-        let name = record.friendlyName.isEmpty ? Self.defaultName : record.friendlyName
+        let name = Self.name(for: record)
         self.init(descriptor: CameraDescriptor(id: Self.id(forGUID: guid), name: name,
                                                mode: .wifi(typed == nil ? .cameraNetwork : .otherNetwork)),
                   key: record.key, peripheral: record.bluetoothPeripheralID.map(PeripheralID.init), guid: guid,

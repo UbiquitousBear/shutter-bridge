@@ -61,8 +61,9 @@ struct CameraDisplayNameTests {
         #expect(inMSC.stagingPlace == .onThisIPhone(.iCloudDriveOff))
         let photos = try #require(inMSC.photos as? PhotosLibraryDestination)
         let albums = photos.albumPlan.albums
-        // The per-camera album is still found by the camera's key; only a new album's title changes.
-        #expect(albums.first?.key == "camera:k1")
+        // Named and keyed by the camera's name (D11); the album an earlier build stored under the key is adopted.
+        #expect(albums.first?.key == "camera-name:Camera")
+        #expect(albums.first?.legacyKeys == ["camera:k1"])
         #expect(albums.first?.title == "Camera")
         #expect(albums.last?.title.hasPrefix("Camera, ") == true)
         #expect(albums.allSatisfy { !$0.title.contains("Untitled") })
@@ -71,6 +72,7 @@ struct CameraDisplayNameTests {
         #expect(inMTP.stagingFolderName == "ILCE-7CM2")
         let mtpPhotos = try #require(inMTP.photos as? PhotosLibraryDestination)
         #expect(mtpPhotos.albumPlan.albums.first?.title == "ILCE-7CM2")
+        #expect(mtpPhotos.albumPlan.albums.first?.key == "camera-name:ILCE-7CM2")
     }
 }
 

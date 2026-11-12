@@ -283,6 +283,19 @@ struct DiagnosticsExporterTests {
             == scratch.standardizedFileURL.path)
     }
 
+    /// D11: an MSC or MTP row named after a body's model (`CameraNaming`) isn't a private name, so the header's model
+    /// isn't redacted; a name the person gave stays private.
+    @Test func aRowNamedAfterAModelDoesNotRedactTheHeader() async {
+        let catalogue = InMemoryCatalogue(cameras: [
+            CameraRecord(key: CameraKey(rawValue: "wifi-serial:a"), model: "ILCE-7CM2", preferredCarrier: .wifi),
+            CameraRecord(key: CameraKey(rawValue: "usb-msc-name:b"), friendlyName: "ILCE-7CM2"),
+            CameraRecord(key: CameraKey(rawValue: "usb-device:c"), friendlyName: "Shamil's camera"),
+        ])
+        let facts = await DiagnosticsFacts.read(from: catalogue, firmware: nil)
+        #expect(facts.cameras.map(\.model) == ["ILCE-7CM2"])
+        #expect(facts.privateValues == ["Shamil's camera"])
+    }
+
     @Test func discardEmptiesTheFolderAndTouchesNothingElse() async throws {
         let scratch = folder()
         defer { try? FileManager.default.removeItem(at: scratch) }

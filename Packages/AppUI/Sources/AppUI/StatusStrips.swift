@@ -38,12 +38,19 @@ struct StatusStrips<Content: View>: View {
 
     var body: some View {
         let spacing = CGFloat(StripLayout.spacing(isCompactHeight: verticalSizeClass == .compact))
-        GlassEffectContainer(spacing: spacing) {
-            VStack(spacing: spacing) {
-                content
+        // Only strips that are up take space: with none, the bar is empty and the content keeps its place.
+        Group(subviews: content) { strips in
+            if !strips.isEmpty {
+                GlassEffectContainer(spacing: spacing) {
+                    VStack(spacing: spacing) {
+                        ForEach(strips) { strip in strip }
+                    }
+                }
+                .padding(.horizontal, CGFloat(StripLayout.horizontalMargin))
+                // Space under the last strip, so it doesn't sit against the first row or the card's line (bench 22.1).
+                .padding(.bottom, spacing)
             }
         }
-        .padding(.horizontal)
     }
 }
 

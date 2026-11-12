@@ -91,8 +91,8 @@ final class Scratch {
 struct PhotosLibraryDestinationTests {
     let date = Date(timeIntervalSince1970: 1_793_142_018)
 
-    func plan(_ choice: PhotosImportOptions.Albums = .perCamera) -> AlbumPlan {
-        AlbumPlan(choice: choice, cameraKey: "serial-1", cameraName: "ILCE-7CM2", importID: "job-1", importDate: date,
+    func plan(_ choice: PhotosImportOptions.Albums = .perCamera, cameraKey: String = "serial-1") -> AlbumPlan {
+        AlbumPlan(choice: choice, cameraKey: cameraKey, cameraName: "ILCE-7CM2", importID: "job-1", importDate: date,
                   importTitle: "ILCE-7CM2, 8 Nov")
     }
 
@@ -155,7 +155,7 @@ struct PhotosLibraryDestinationTests {
         let second = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
         _ = try await second.commit(.single(try s.stage("C.JPG")))
         #expect(await library.createdAlbumTitles == ["ILCE-7CM2"])
-        let stored = try #require(await store.albumIdentifier(forKey: "camera:serial-1"))
+        let stored = try #require(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2"))
         #expect(await library.saved.allSatisfy { $0.albums == [stored] })
         #expect(await library.albums[stored]?.assets.count == 3)
     }
@@ -178,7 +178,7 @@ struct PhotosLibraryDestinationTests {
         for id in stored.values { #expect(await library.albums[id]?.assets.count == 3) }
     }
 
-    @Test("Another album with the same title doesn't matter: the identifier finds ours")
+    @Test("Another album with the same title doesn't matter: the identifier finds ours (here through adoption)")
     func titleClash() async throws {
         let s = try Scratch()
         let library = FakePhotoLibrary()
@@ -198,8 +198,9 @@ struct PhotosLibraryDestinationTests {
         let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "GONE"])
         let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
         _ = try await d.commit(.single(try s.stage("A.JPG")))
-        let stored = try #require(await store.albumIdentifier(forKey: "camera:serial-1"))
+        let stored = try #require(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2"))
         #expect(stored != "GONE")
+        #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "GONE")
         #expect(await library.createdAlbumTitles == ["ILCE-7CM2"])
     }
 
@@ -208,13 +209,138 @@ struct PhotosLibraryDestinationTests {
         let s = try Scratch()
         let library = FakePhotoLibrary()
         await library.addAlbum("SHARED", title: "ILCE-7CM2", canAdd: false)
-        let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "SHARED"])
+        let store = InMemoryAlbumIdentifierStore(["camera-name:ILCE-7CM2": "SHARED"])
         let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
         _ = try await d.commit(.single(try s.stage("A.JPG")))
         #expect(await library.saved.first?.albums == [])
-        #expect(await d.albumIssues == [.doesNotAcceptPhotos(key: "camera:serial-1")])
-        #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "SHARED")
+        #expect(await d.albumIssues == [.doesNotAcceptPhotos(key: "camera-name:ILCE-7CM2")])
+        #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "SHARED")
         #expect(await library.createdAlbumTitles.isEmpty)
+    }
+
+    @Test("An old per-key album that refuses new content isn't adopted: a new album is made, the old entry kept")
+    func legacyAlbumRefusesContent() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.addAlbum("SHARED", title: "ILCE-7CM2", canAdd: false)
+        let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "SHARED"])
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        let stored = try #require(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2"))
+        #expect(stored != "SHARED")
+        #expect(await library.saved.first?.albums == [stored])
+        #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "SHARED")
+        #expect(await library.createdAlbumTitles == ["ILCE-7CM2"])
+        #expect(await d.albumIssues.isEmpty)
+    }
+
+    @Test("An album stored under the old per-key key is adopted under the name, the old entry kept, nothing created")
+    func anAlbumStoredUnderTheOldPerKeyKeyIsAdoptedByName() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.addAlbum("OURS", title: "ILCE-7CM2", canAdd: true)
+        let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "OURS"])
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        #expect(await library.saved.first?.albums == ["OURS"])
+        #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "OURS")
+        #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "OURS")
+        #expect(await library.createdAlbumTitles.isEmpty)
+    }
+
+    @Test("Two camera keys with one name share one album (commits one after the other: serialised per destination)")
+    func twoKeysWithOneNameShareOneAlbum() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        let store = InMemoryAlbumIdentifierStore()
+        // Resolution is serialised per destination actor, so two destinations committing at once could each create
+        // the album; one job runs at a time, so their commits come one after the other.
+        let msc = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan(cameraKey: "serial-1"))
+        _ = try await msc.commit(.single(try s.stage("A.JPG")))
+        let wifi = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan(cameraKey: "serial-2"))
+        _ = try await wifi.commit(.single(try s.stage("B.JPG")))
+        #expect(await library.createdAlbumTitles == ["ILCE-7CM2"])
+        let saved = await library.saved
+        #expect(saved.count == 2)
+        #expect(saved[0].albums == saved[1].albums)
+        let id = try #require(saved[0].albums.first)
+        #expect(await library.albums[id]?.assets.count == 2)
+    }
+
+    @Test("The name's album wins over a key's own old per-key album, which is neither used nor changed")
+    func theNameKeyWinsOverAnOldPerKeyAlbum() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.addAlbum("A", title: "ILCE-7CM2", canAdd: true)
+        await library.addAlbum("B", title: "ILCE-7CM2", canAdd: true)
+        let store = InMemoryAlbumIdentifierStore(["camera-name:ILCE-7CM2": "A", "camera:serial-2": "B"])
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan(cameraKey: "serial-2"))
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        #expect(await library.saved.first?.albums == ["A"])
+        #expect(await library.albums["B"]?.assets.isEmpty == true)
+        #expect(await store.albumIdentifier(forKey: "camera:serial-2") == "B")
+        #expect(await library.createdAlbumTitles.isEmpty)
+    }
+
+    @Test("The name's album deleted: the old per-key album is adopted rather than a new one made")
+    func aDeletedNameAlbumFallsBackToTheOldPerKeyAlbum() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.addAlbum("OLD", title: "ILCE-7CM2", canAdd: true)
+        let store = InMemoryAlbumIdentifierStore(["camera-name:ILCE-7CM2": "GONE", "camera:serial-1": "OLD"])
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        #expect(await library.saved.first?.albums == ["OLD"])
+        #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "OLD")
+        #expect(await library.createdAlbumTitles.isEmpty)
+    }
+
+    @Test("An old per-key album is adopted by one name only: the key under a second name gets a new album")
+    func anOldPerKeyAlbumIsAdoptedByOneNameOnly() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.addAlbum("OLD", title: "ILCE-7CM2", canAdd: true)
+        let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "OLD"])
+        let byModel = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await byModel.commit(.single(try s.stage("A.JPG")))
+        #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "OLD")
+        #expect(await store.albumIdentifier(forKey: "adopted:camera:serial-1") == "camera-name:ILCE-7CM2")
+        // The same MSC key named "Camera" once a second body is attached: the old album isn't taken a second time.
+        let shared = AlbumPlan(choice: .perCamera, cameraKey: "serial-1", cameraName: "Camera", importID: "job-2",
+                               importDate: date)
+        let byShared = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: shared)
+        _ = try await byShared.commit(.single(try s.stage("B.JPG")))
+        let created = try #require(await store.albumIdentifier(forKey: "camera-name:Camera"))
+        #expect(created != "OLD")
+        #expect(await library.saved.last?.albums == [created])
+        #expect(await library.createdAlbumTitles == ["Camera"])
+        #expect(await library.albums["OLD"]?.assets.count == 1)
+        #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "OLD")
+        // The name that adopted it may adopt it again once its own album is gone.
+        await library.deleteAlbum(created)
+        await store.setAlbumIdentifier("GONE", forKey: "camera-name:ILCE-7CM2")
+        let again = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await again.commit(.single(try s.stage("C.JPG")))
+        #expect(await library.saved.last?.albums == ["OLD"])
+    }
+
+    @Test("Overlapping commits adopt the old per-key album once")
+    func overlappingCommitsAdoptTheOldAlbumOnce() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        await library.setCreateDelay(.milliseconds(50))
+        await library.addAlbum("OURS", title: "ILCE-7CM2", canAdd: true)
+        let store = InMemoryAlbumIdentifierStore(["camera:serial-1": "OURS"])
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        let a = try s.stage("A.JPG"), b = try s.stage("B.JPG"), c = try s.stage("C.JPG")
+        async let first = d.commit(.single(a))
+        async let second = d.commit(.single(b))
+        async let third = d.commit(.single(c))
+        _ = try await (first, second, third)
+        #expect(await library.saved.allSatisfy { $0.albums == ["OURS"] })
+        #expect(await library.createdAlbumTitles.isEmpty)
+        #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "OURS")
+        #expect(await library.albums["OURS"]?.assets.count == 3)
     }
 
     @Test("Both albums: per camera and per import, each created once")
@@ -227,7 +353,7 @@ struct PhotosLibraryDestinationTests {
         _ = try await d.commit(.single(try s.stage("B.JPG")))
         #expect(await library.createdAlbumTitles == ["ILCE-7CM2", "ILCE-7CM2, 8 Nov"])
         #expect(await library.saved.allSatisfy { $0.albums.count == 2 })
-        #expect(await store.all.keys.sorted() == ["camera:serial-1", "import:job-1"])
+        #expect(await store.all.keys.sorted() == ["camera-name:ILCE-7CM2", "import:job-1"])
     }
 
     @Test("3311 on a save is a denial, not a failed file, and the staged files stay for staging")
@@ -356,12 +482,14 @@ struct AlbumPlanTests {
     @Test func choices() {
         let d = Date(timeIntervalSince1970: 0)
         let camera = AlbumPlan(choice: .perCamera, cameraKey: "k", cameraName: "α7C II", importID: "j", importDate: d)
-        #expect(camera.albums == [.init(key: "camera:k", title: "α7C II")])
+        #expect(camera.albums == [.init(key: "camera-name:α7C II", title: "α7C II", legacyKeys: ["camera:k"])])
         let job = AlbumPlan(choice: .perImport, cameraKey: "k", cameraName: "α7C II", importID: "j", importDate: d)
         #expect(job.albums.map(\.key) == ["import:j"])
         #expect(job.albums[0].title.hasPrefix("α7C II, "))
         let both = AlbumPlan(choice: .both, cameraKey: "k", cameraName: "α7C II", importID: "j", importDate: d, importTitle: "T")
-        #expect(both.albums == [.init(key: "camera:k", title: "α7C II"), .init(key: "import:j", title: "T")])
+        #expect(both.albums == [.init(key: "camera-name:α7C II", title: "α7C II", legacyKeys: ["camera:k"]),
+                                .init(key: "import:j", title: "T")])
+        #expect(both.albums[1].legacyKeys.isEmpty)
     }
 }
 

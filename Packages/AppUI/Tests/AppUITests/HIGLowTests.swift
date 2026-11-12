@@ -152,6 +152,12 @@ struct StripLayoutTests {
         // Confirmations still collapse.
         #expect(StripLayout.lineLimit(isAccessibilitySize: false, isCompactHeight: true, isProblem: false) == 1)
     }
+
+    /// Bench 22.1: the strips and the Cameras list share one side margin, so a strip lines up with the rows under it.
+    @Test func stripsAndTheCamerasListShareOneSideMargin() {
+        #expect(StripLayout.horizontalMargin == 16)
+        #expect(StripLayout.spacing(isCompactHeight: false) == 8)
+    }
 }
 
 @MainActor
