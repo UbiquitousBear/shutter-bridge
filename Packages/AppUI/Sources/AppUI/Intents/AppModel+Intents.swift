@@ -252,13 +252,16 @@ extension AppModel {
     /// listed (over USB the live Browse replaces the offline one by itself; over Wi-Fi only the person's Connect does,
     /// since reaching it is a join) and its card read.
     ///
-    /// Every wait ends by `deadline` (by default `NewPhotosTiming.standard.answer` from the call), so the answer comes in
-    /// time whatever the camera does.
+    /// Every wait ends by `deadline` when there is one (the intent passes `NewPhotosTiming.answer` from its call,
+    /// `IntentHost.importNewPhotos`), so the answer comes in time whatever the camera does; without one, each wait is
+    /// bounded by its own limit, as given.
     public func importNewPhotos(cameraWith key: CameraKey,
                                 waitingForCamera: Duration = NewPhotosTiming.standard.camera,
                                 waitingForImport: Duration = NewPhotosTiming.standard.answer,
                                 answeringBy deadline: ContinuousClock.Instant? = nil) async -> NewPhotosImportStart {
-        let deadline = deadline ?? ContinuousClock.now.advanced(by: NewPhotosTiming.standard.answer)
+        // Without a deadline, the two waits as given: an explicit `waitingForImport` isn't cut short by a budget the
+        // caller didn't ask for.
+        let deadline = deadline ?? ContinuousClock.now.advanced(by: waitingForCamera + waitingForImport)
         let choice = importer.importChoice
         guard let camera = await listedCamera(withKey: key, waitingUpTo: min(waitingForCamera, Self.left(until: deadline)))
         else {
