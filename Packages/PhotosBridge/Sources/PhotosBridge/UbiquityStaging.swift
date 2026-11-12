@@ -4,15 +4,15 @@ import Foundation
 // The iCloud side of staging (Shamil, 11 Nov). iOS only, so compiled only by CI's Xcode job; the rule, the folder
 // layout and the placement it relies on are tested on Linux.
 //
-// Until the App ID has iCloud and the app is signed with the iCloud entitlements and declares the container in its
-// Info.plist (a follow-up change, docs/ci.md), the locator answers `.containerUnavailable` without asking iCloud, and
-// staging goes to the app's folder on this iPhone, saying "iCloud Drive isn't available to Shutter Bridge".
+// The app is signed with the iCloud entitlements and declares the container in its Info.plist (12 Nov, docs/ci.md).
+// A build without that declaration (the spike, or an older build) gets `.containerUnavailable` without asking iCloud,
+// and staging goes to the app's folder on this iPhone, saying "iCloud Drive isn't available to Shutter Bridge".
 
 /// Finds the app's iCloud Drive folder: the Documents folder of the container `containerIdentifier`, which Files
 /// shows as iCloud Drive › Shutter Bridge.
 ///
-/// - Until the app declares the container (`NSUbiquitousContainers` in its Info.plist, added with the iCloud
-///   entitlements by the follow-up in docs/ci.md), iCloud isn't asked at all: the answer is `.containerUnavailable`
+/// - Unless the app declares the container (`NSUbiquitousContainers` in its Info.plist, added with the iCloud
+///   entitlements; docs/ci.md), iCloud isn't asked at all: the answer is `.containerUnavailable`
 ///   ("iCloud Drive isn't available to Shutter Bridge"). Asking would mislead: `ubiquityIdentityToken` is commonly
 ///   reported nil for an app without the entitlement (unverified on the iPhone; bench S1), which would read as
 ///   iCloud Drive being off for a person who is signed in with it on.
@@ -38,8 +38,8 @@ public actor UbiquityStagingLocator: StagingLocator {
         Self.find()
     }
 
-    /// Whether the app's Info.plist declares the container under `NSUbiquitousContainers`, which the follow-up adds
-    /// with the iCloud entitlements (docs/ci.md, "to do once the App ID has iCloud").
+    /// Whether the app's Info.plist declares the container under `NSUbiquitousContainers`, added with the iCloud
+    /// entitlements (docs/ci.md, "iCloud for staging").
     static var declaresContainer: Bool {
         guard let containers = Bundle.main.object(forInfoDictionaryKey: "NSUbiquitousContainers") as? [String: Any]
         else { return false }
