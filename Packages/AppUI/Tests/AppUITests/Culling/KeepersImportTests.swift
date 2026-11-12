@@ -536,6 +536,23 @@ struct KeepersImportTests {
         #expect(!importer.hasJob)
     }
 
+    /// The keepers line belongs to a keepers job: a camera's import started after *Import keepers* (with its last job
+    /// never dismissed) doesn't say "Keepers, 2 of 2 cameras".
+    @Test func aCameraImportAfterTheKeepersHasNoKeepersLine() async throws {
+        let (rig, _) = try await twoCameras()
+        defer { rig.cleanup() }
+        await rig.keepers.start(.all, in: rig.cull.rows)
+        rig.keepers.keepStaged()
+        #expect(rig.importer.keepersLine == "Keepers, 2 of 2 cameras")
+        let link = FakeLink(items: [item("DSC09999.JPG")])
+        let outcome = await rig.importer.importItems(
+            [item("DSC09999.JPG")], from: ImportCamera(descriptor: link.descriptor, key: CameraKey(rawValue: "cam-z")),
+            link: link, as: .photos, newOnly: false)
+        #expect(outcome == .started(1))
+        #expect(rig.importer.camera?.descriptor.carrier != .staging)
+        #expect(rig.importer.keepersLine == nil)
+    }
+
     @Test func aSecondStartWhileOneRunsIsIgnored() async throws {
         let reader = HoldingReader()
         let (rig, _) = try await twoCameras(reader: reader)

@@ -978,9 +978,10 @@ public struct KeepersRun: Sendable, Hashable {
 
 extension ImportModel {
     /// "Keepers, 2 of 3 cameras" while *Import keepers* shows one of several jobs; "Importing keepers from Staging" for
-    /// one.
+    /// one. Only for a keepers job: a camera's import started later, with the last keepers job never dismissed, has
+    /// none.
     public var keepersLine: String? {
-        guard camera != nil, let keepers else { return nil }
+        guard isKeepersJob, let keepers else { return nil }
         return KeepersWording.sequence(keepers)
     }
 
