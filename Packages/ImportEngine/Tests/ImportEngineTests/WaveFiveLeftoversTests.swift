@@ -183,6 +183,35 @@ struct WaveFiveLeftoversTests {
         await h.cleanup()
     }
 
+    /// A pair whose RAW was staged elsewhere meanwhile and whose JPEG wasn't: the JPEG's row is written at the found copy,
+    /// the RAW's row keeps the copy it has, and the RAW's spare copy is said under its own name.
+    @Test func aFoundPairWithOneFileStagedElsewhereSaysItsSpareCopy() async throws {
+        let store = InMemoryCatalogue()
+        let folder = "Staging/ILCE-7CM2/2026-10-26"
+        let found = [FileLocation(relativePath: folder + "/DSC00001.ARW"),
+                     FileLocation(relativePath: folder + "/DSC00001.JPG")]
+        let h = Harness(catalogue: store, commitLookup: SwitchableLookup { .found($0.stagedWrites(at: found) ?? []) })
+        let raw = h.item("DSC00001.ARW", size: 4016)
+        let jpeg = h.item("DSC00001.JPG", size: 900)
+        let elsewhere = StagedLocation(root: .onThisIPhone, relativePath: folder + "/DSC00001.ARW", stagedAt: Harness.t0)
+        await store.markStaged(h.identity(of: raw), format: raw.format, at: elsewhere)
+        let pair = PendingCommit(id: UUID(), destination: .staging(root: .iCloudDrive, folder: folder), files: [
+            PendingCommit.File(identity: h.identity(of: raw), format: raw.format, role: .raw, assetDate: raw.captureDate),
+            PendingCommit.File(identity: h.identity(of: jpeg), format: jpeg.format, role: .processed,
+                               assetDate: jpeg.captureDate),
+        ], writtenAt: Harness.t0)
+        try await store.beginCommit(pair)
+        #expect(await h.engine.resolvePendingCommits() == PendingCommitReport(foundInStaging: 1))
+        #expect(await store.pendingCommits().isEmpty)
+        #expect(await h.record(for: raw)?.staged == elsewhere, "the RAW's row keeps the copy it has")
+        #expect(await h.record(for: jpeg)?.staged
+            == StagedLocation(root: .iCloudDrive, relativePath: folder + "/DSC00001.JPG", stagedAt: Harness.t0))
+        #expect(h.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", .spareStagedCopy)))
+        #expect(h.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", .foundInStaging)))
+        #expect(!h.trace.log.contains(.pendingCommitResolved("DSC00001.JPG", .spareStagedCopy)))
+        await h.cleanup()
+    }
+
     /// With no staged copy elsewhere, a found stage marker writes its row as before.
     @Test func aFoundStageMarkerWithNoOtherCopyWritesItsRow() async throws {
         let store = InMemoryCatalogue()

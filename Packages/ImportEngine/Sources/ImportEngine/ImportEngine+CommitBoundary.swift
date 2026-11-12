@@ -149,7 +149,7 @@ extension ImportEngine {
             switch answer {
             case let .found(found):
                 var writes = found
-                var spared = 0
+                var spared: [String] = []
                 if case .staging = marker.destination {
                     (writes, spared) = await withoutSpareCopies(found)
                 }
@@ -158,12 +158,13 @@ extension ImportEngine {
                     trace(.pendingCommitResolved(name, .waiting))
                     continue
                 }
+                // Each spare copy is said under its own file's name, also when the pair's other file was written.
+                for file in spared { trace(.pendingCommitResolved(file, .spareStagedCopy)) }
                 if case .photos = marker.destination {
                     report.foundInPhotos += 1
                     trace(.pendingCommitResolved(name, .foundInPhotos))
-                } else if writes.isEmpty, spared > 0 {
+                } else if writes.isEmpty, !spared.isEmpty {
                     report.spareCopies += 1
-                    trace(.pendingCommitResolved(name, .spareStagedCopy))
                 } else {
                     report.foundInStaging += 1
                     trace(.pendingCommitResolved(name, .foundInStaging))
@@ -195,15 +196,15 @@ extension ImportEngine {
         return report
     }
 
-    /// A found stage commit's writes without those for a file whose row already has a staged copy elsewhere, and how
-    /// many were left out. A marker for iCloud Drive that couldn't be looked up waits, and a stage job meanwhile stages
+    /// A found stage commit's writes without those for a file whose row already has a staged copy elsewhere, and the
+    /// camera file names of those left out. A marker for iCloud Drive that couldn't be looked up waits, and a stage job meanwhile stages
     /// the same file On My iPhone; found once iCloud Drive is back, writing the marker's rows would repoint the row at
     /// the iCloud copy and leave the other copy with no row. The row that exists is kept (the person's copy that Staging
     /// shows and culls), the marker goes, and the spare copy stays where it is: nothing is deleted. A row that can't be
     /// read counts as having none, so the write is tried (and waits if the catalogue is down).
-    func withoutSpareCopies(_ writes: [CommitWrite]) async -> (writes: [CommitWrite], spared: Int) {
+    func withoutSpareCopies(_ writes: [CommitWrite]) async -> (writes: [CommitWrite], spared: [String]) {
         var kept: [CommitWrite] = []
-        var spared = 0
+        var spared: [String] = []
         for write in writes {
             guard case let .staged(identity, _, location) = write,
                   // A row that names this very copy is no spare; one that names another copy is.
@@ -212,7 +213,7 @@ extension ImportEngine {
                 kept.append(write)
                 continue
             }
-            spared += 1
+            spared.append(identity.filename)
         }
         return (kept, spared)
     }
