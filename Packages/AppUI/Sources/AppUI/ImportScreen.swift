@@ -187,6 +187,12 @@ struct ImportSummary: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+            if let leftOut = model.undatedLine {
+                Text(leftOut)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if model.keepsScreenOn {
                 Text(ImportWording.screenOnNote)
                     .font(.footnote)

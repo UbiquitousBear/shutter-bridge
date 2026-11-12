@@ -257,7 +257,8 @@ public actor ImportEngine {
 
     /// Adds files picked in Browse while a job runs; they go at the end. Files already in the job or already done for
     /// the job's purpose (both by content: name, capture time and size, whatever the folder or camera key), files
-    /// without a capture date (no identity) and non-stills aren't added. Returns how many were added.
+    /// without a capture date (no identity) and non-stills aren't added; stills without a capture date are counted
+    /// as left out instead (D10, `ImportProgress.filesUndated`). Returns how many were added.
     ///
     /// Done follows the job's purpose (`DoneRule`; Shamil, 11 Nov): an import job leaves out imported files and
     /// ignores staging; a stage job leaves out staged files, and imported ones too when `newOnly` is set.
@@ -270,6 +271,15 @@ public actor ImportEngine {
     public func append(_ items: [CameraItem], newOnly: Bool = false) async throws(ImportEngineError) -> Int {
         guard let job else { throw .noJob }
         let id = job.id
+        // A still without a capture date has no identity to match or write a row under: left out and counted (D10),
+        // as the job's listing does, so *Select All New* handing one over shows in the Import screen's count.
+        var leftOut = false
+        for item in items where item.format.isStill && item.identity(camera: job.camera, timeZone: job.timeZone) == nil
+            && job.leaveOut(undated: item) {
+            trace(.skipped(item.name, .noCaptureDate))
+            leftOut = true
+        }
+        if leftOut { refreshState() }
         // "Already in this job" and "already imported" are by content (name, capture time, size; Shamil, 8 Nov), so a
         // file Browse lists in another folder than the job's listing did is never added twice.
         var seen = Set<ObjectIdentity.ContentKey>()
@@ -794,7 +804,8 @@ public actor ImportEngine {
             destination: job.route.decision, filesSkipped: skipped, filesFailed: failed, filesStaged: staged,
             runningCarrier: job.runningCarrier,
             stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled),
-            rejectsLeftOut: job.rejectsLeftOut.count
+            rejectsLeftOut: job.rejectsLeftOut.count,
+            filesUndated: job.unkeyed.count
         )
     }
 

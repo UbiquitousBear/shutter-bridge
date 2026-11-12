@@ -76,6 +76,10 @@ public actor USBLink: CameraLink {
     private var items: [CameraItem.ID: CameraItem] = [:]
     private var ranks: [CameraItem.ID: Int] = [:]
     private var nextItem: UInt64 = 0
+    /// The phone's zone when this link was made, at the camera's plug-in, which is when ImageCaptureCore reads the
+    /// catalogue and makes its items' dates (`unverified`); each item carries it, so its identity reads the
+    /// camera's own time even after the phone changes zone.
+    private let catalogueZone = TimeZone(identifier: TimeZone.current.identifier) ?? TimeZone.current
 
     init(device: ICObject<ICCameraDevice>, descriptor: CameraDescriptor, deviceUUID: String?) {
         self.device = device.object
@@ -383,7 +387,8 @@ public actor USBLink: CameraLink {
             folder = current.parentFolder
         }
         return USBCatalogueEntry(id: id, ancestorsNearestFirst: ancestors, name: file.name,
-                                 fileSize: Int64(file.fileSize), creationDate: file.creationDate)
+                                 fileSize: Int64(file.fileSize), creationDate: file.creationDate,
+                                 creationTimeZone: catalogueZone)
     }
 
     // MARK: - Requests
