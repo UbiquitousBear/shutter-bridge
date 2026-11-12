@@ -108,6 +108,14 @@ private func blockingRun(_ work: @escaping @Sendable () async -> Void) {
     done.wait()
 }
 
+/// An iCloud account a test switches between passes, or during one from the listing's hook.
+private final class SettableIdentity: UbiquityIdentityReading, Sendable {
+    private let value: Mutex<Data?>
+    init(_ account: String?) { value = Mutex(account.map { Data($0.utf8) }) }
+    func set(_ account: String?) { value.withLock { $0 = account.map { Data($0.utf8) } } }
+    func currentIdentity() -> Data? { value.withLock { $0 } }
+}
+
 private struct FixedFreeSpace: FreeSpaceReading {
     let bytes: UInt64?
     func availableBytes() async -> UInt64? { bytes }
@@ -118,6 +126,10 @@ private final class ChangingFreeSpace: FreeSpaceReading, Sendable {
     func set(_ bytes: UInt64?) { value.withLock { $0 = bytes } }
     func availableBytes() async -> UInt64? { value.withLock { $0 } }
 }
+
+/// The quota error as Apple's headers describe it (bench S10 settles what iOS 27 reports).
+private let quotaError = StagedUploadState.failed(.quotaFull(seen: UploadErrorSeen(domain: NSCocoaErrorDomain,
+                                                                                  code: 4354)))
 
 /// Answers from a table by file name, counting each read.
 private final class TableUploadReader: StagedUploadReading, Sendable {
@@ -146,9 +158,10 @@ struct StagedCopyReconcilerTests {
     private func reconciler(_ tree: StagingTree, _ catalogue: any CatalogueStore,
                             locator: any StagingLocator = FakeStagingLocator(.unavailable(.iCloudDriveOff)),
                             onThisIPhone: URL? = nil, listing: any StagingFolderListing = PlainStagingFolderListing(),
+                            identity: any UbiquityIdentityReading = NoUbiquityIdentityReading(),
                             log: any BenchLog = SilentBenchLog()) -> StagedCopyReconciler {
         StagedCopyReconciler(catalogue: catalogue, onThisIPhone: onThisIPhone ?? tree.documents, locator: locator,
-                             listing: listing, log: log)
+                             listing: listing, identity: identity, log: log)
     }
 
     @Test func deletedFilesAreClearedAndTheRestKept() async throws {
@@ -332,6 +345,74 @@ struct StagedCopyReconcilerTests {
         // The next one clears it.
         #expect(await reconciler.reconcile().cleared == 1)
         #expect(await catalogue.stagedStates(of: [deleted.0]).isEmpty)
+    }
+
+    /// Bench S3's sign-in row when the app returned once while signed out, but its pass ended as iCloud Drive went
+    /// away or moved: the next pass that finds it may list folders still coming down, so it clears nothing there.
+    @Test func iCloudDriveFoundGoneOrMovedAtThePassEndMakesTheNextPassJustBack() async throws {
+        let local = try StagingTree()
+        let elsewhere = try StagingTree()
+        for second in [StagingAvailability.unavailable(.iCloudDriveOff), .iCloudDrive(documents: elsewhere.documents)] {
+            let iCloud = try StagingTree()
+            let catalogue = InMemoryCatalogue()
+            let deleted = try await iCloud.stage("DSC00001.ARW", at: 1, root: .iCloudDrive, in: catalogue)
+            try await iCloud.stage("DSC00002.ARW", at: 2, root: .iCloudDrive, in: catalogue)
+            try iCloud.remove(deleted.1.relativePath)
+            let here = StagingAvailability.iCloudDrive(documents: iCloud.documents)
+            let locator = ScriptedLocator(here, second, here)
+            let reconciler = reconciler(local, catalogue, locator: locator)
+            #expect(await reconciler.reconcile().iCloudDriveUnsettled == 1, "went away or moved during the pass")
+            let next = await reconciler.reconcile()
+            #expect(next.iCloudDriveUnsettled == 1, "the first pass after it came back")
+            #expect(next.cleared == 0)
+            #expect(await locator.locateCount == 3, "a just-back pass doesn't ask again")
+            #expect(await catalogue.stagedStates(of: [deleted.0]) == [deleted.0])
+            #expect(await reconciler.reconcile().cleared == 1)
+            #expect(await catalogue.stagedStates(of: [deleted.0]).isEmpty)
+        }
+    }
+
+    /// Bench S3's other sign-in row: signing out and in, or into another Apple ID, while the app stays away. No pass
+    /// sees iCloud Drive unavailable, so the account read at each pass is what tells.
+    @Test func anICloudAccountChangeWhileAwayMakesTheNextPassJustBack() async throws {
+        let local = try StagingTree()
+        let iCloud = try StagingTree()
+        let catalogue = InMemoryCatalogue()
+        let deleted = try await iCloud.stage("DSC00001.ARW", at: 1, root: .iCloudDrive, in: catalogue)
+        try await iCloud.stage("DSC00002.ARW", at: 2, root: .iCloudDrive, in: catalogue)
+        let identity = SettableIdentity("first account")
+        let reconciler = reconciler(local, catalogue,
+                                    locator: FakeStagingLocator(.iCloudDrive(documents: iCloud.documents)),
+                                    identity: identity)
+        #expect(await reconciler.reconcile() == StagedReconcileReport(looked: 2, present: 2))
+        // Away: the file is deleted and the account changes; iCloud Drive is available at every pass.
+        try iCloud.remove(deleted.1.relativePath)
+        identity.set("second account")
+        let first = await reconciler.reconcile()
+        #expect(first.iCloudDriveUnsettled == 1)
+        #expect(first.cleared == 0)
+        #expect(await catalogue.stagedStates(of: [deleted.0]) == [deleted.0])
+        // The same account at the next pass: cleared.
+        #expect(await reconciler.reconcile().cleared == 1)
+        #expect(await catalogue.stagedStates(of: [deleted.0]).isEmpty)
+    }
+
+    /// The account changing during a pass is the same as iCloud Drive moving: nothing there is cleared, nor in the
+    /// pass after.
+    @Test func anICloudAccountChangeDuringThePassClearsNothingThere() async throws {
+        let local = try StagingTree()
+        let iCloud = try StagingTree()
+        let catalogue = InMemoryCatalogue()
+        let deleted = try await iCloud.stage("DSC00001.ARW", at: 1, root: .iCloudDrive, in: catalogue)
+        try iCloud.remove(deleted.1.relativePath)
+        let identity = SettableIdentity("first account")
+        let listing = InstrumentedListing(before: { _ in identity.set("second account") })
+        let reconciler = reconciler(local, catalogue,
+                                    locator: FakeStagingLocator(.iCloudDrive(documents: iCloud.documents)),
+                                    listing: listing, identity: identity)
+        #expect(await reconciler.reconcile().iCloudDriveUnsettled == 1)
+        #expect(await reconciler.reconcile().iCloudDriveUnsettled == 1)
+        #expect(await reconciler.reconcile().cleared == 1)
     }
 
     @Test func anUnreadableFolderClearsNothingUnderIt() async throws {
@@ -636,7 +717,7 @@ struct StagingUpkeepAppTests {
         let iCloud = try StagingTree()
         let catalogue = InMemoryCatalogue()
         try await iCloud.stage("DSC00001.ARW", at: 1, root: .iCloudDrive, in: catalogue)
-        let reader = TableUploadReader(["DSC00001.ARW": .failed(.quotaFull)])
+        let reader = TableUploadReader(["DSC00001.ARW": quotaError])
         let app = appModel(discovery: FakeDiscovery(link: FakeLink(items: [])), catalogue: catalogue,
                            documents: try StagingTree().documents, uploadReader: reader,
                            staging: .iCloudDrive(documents: iCloud.documents))
@@ -761,7 +842,7 @@ extension ImportModelTests {
         try await iCloud.stage("DSC00009.ARW", at: 9, root: .iCloudDrive, in: catalogue)
         let monitor = StagedUploadMonitor(catalogue: catalogue,
                                           locator: FakeStagingLocator(.iCloudDrive(documents: iCloud.documents)),
-                                          reader: TableUploadReader(otherwise: .failed(.quotaFull)))
+                                          reader: TableUploadReader(otherwise: quotaError))
         await monitor.refresh()
         let inICloud = await harness(setting: .staging, staging: .iCloudDrive(documents: iCloud.documents))
         inICloud.model.uploads = monitor
@@ -795,20 +876,23 @@ struct StagedUploadMonitorTests {
         let tree = try StagingTree()
         let catalogue = InMemoryCatalogue()
         try await iCloudRows(3, in: tree, catalogue: catalogue)
-        let reader = TableUploadReader(["DSC00000.ARW": .failed(.quotaFull), "DSC00001.ARW": .failed(.quotaFull)],
+        let reader = TableUploadReader(["DSC00000.ARW": quotaError, "DSC00001.ARW": quotaError],
                                        otherwise: .uploaded)
         let log = RecordingLog()
         let monitor = StagedUploadMonitor(catalogue: catalogue,
                                           locator: FakeStagingLocator(.iCloudDrive(documents: tree.documents)),
                                           reader: reader, log: log)
         await monitor.refresh()
-        #expect(monitor.summary == StagedUploadSummary(read: 3, uploaded: 1, quotaFull: 2))
+        #expect(monitor.summary == StagedUploadSummary(read: 3, uploaded: 1, quotaFull: 2,
+                                                       firstQuota: UploadErrorSeen(domain: NSCocoaErrorDomain,
+                                                                                   code: 4354)))
         let settings = SettingsModel(uploads: monitor)
         #expect(settings.uploadProblemLine == "Your iCloud storage is full, so 2 staged files haven't uploaded to "
             + "iCloud Drive. They stay on this iPhone; free up iCloud storage and they'll upload.")
         #expect(settings.uploadWaitingLine == nil)
         let line = try #require(log.lines.first { $0.hasPrefix("staging: upload status of ") })
-        #expect(line.hasSuffix("1 uploaded, 0 waiting, 2 over the iCloud quota, 0 other problems (none), 0 not read"))
+        #expect(line.hasSuffix("1 uploaded, 0 waiting, 2 over the iCloud quota (NSCocoaErrorDomain 4354), "
+            + "0 other problems (none), 0 not read"))
         #expect(!line.contains("DSC"))
         // Without a monitor, Settings says nothing about uploads.
         #expect(SettingsModel().uploadProblemLine == nil)
@@ -818,7 +902,7 @@ struct StagedUploadMonitorTests {
         let tree = try StagingTree()
         let catalogue = InMemoryCatalogue()
         try await iCloudRows(2, in: tree, catalogue: catalogue)
-        let reader = TableUploadReader(otherwise: .failed(.quotaFull))
+        let reader = TableUploadReader(otherwise: quotaError)
         let locator = FakeStagingLocator(.iCloudDrive(documents: tree.documents))
         let monitor = StagedUploadMonitor(catalogue: catalogue, locator: locator, reader: reader)
         await monitor.refresh()
@@ -877,6 +961,15 @@ struct StagedUploadMonitorTests {
                                                .failed(.other(domain: "E", code: 2))], notRead: 0)
         #expect(other.otherProblems == 2)
         #expect(other.firstOther == .other(domain: "D", code: 1))
+        // The first quota error is kept as iOS reported it, the error under it included, and logged that way.
+        let under = UploadErrorSeen(domain: "BRCloudDocsErrorDomain", code: 35, underlyingDomain: NSCocoaErrorDomain,
+                                    underlyingCode: 4354)
+        let quota = StagedUploadSummary.tally([.uploaded, .failed(.quotaFull(seen: under)), quotaError], notRead: 0)
+        #expect(quota == StagedUploadSummary(read: 3, uploaded: 1, quotaFull: 2, firstQuota: under))
+        #expect(StagedUploadMonitor.line(quota, seconds: 0).contains(
+            "2 over the iCloud quota (BRCloudDocsErrorDomain 35 over NSCocoaErrorDomain 4354), 0 other problems (none)"))
+        #expect(StagedUploadMonitor.line(StagedUploadSummary(read: 1, uploaded: 1), seconds: 0)
+            .contains("0 over the iCloud quota (none), "))
     }
 
     @Test func theLinesSayTheProblemFirstThenTheWaiting() async throws {

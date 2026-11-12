@@ -140,6 +140,7 @@ extension AppModel {
             wireless: wireless,
             diagnostics: logging.exporter(catalogue: catalogue),
             stagingDocuments: URL.documentsDirectory,
+            ubiquityIdentity: FileManagerUbiquityIdentity(),
             uploadReader: UbiquitousUploadReader(),
             freeSpace: VolumeFreeSpace(url: URL.documentsDirectory)
         )

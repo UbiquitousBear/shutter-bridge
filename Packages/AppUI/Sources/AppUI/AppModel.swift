@@ -83,6 +83,7 @@ public final class AppModel {
         diagnostics: (any DiagnosticsExporting)? = nil,
         stagingDocuments: URL? = nil,
         folderListing: any StagingFolderListing = PlainStagingFolderListing(),
+        ubiquityIdentity: any UbiquityIdentityReading = NoUbiquityIdentityReading(),
         uploadReader: (any StagedUploadReading)? = nil,
         freeSpace: any FreeSpaceReading = UnknownFreeSpace()
     ) {
@@ -91,7 +92,7 @@ public final class AppModel {
         stagingLocator = destinations
         reconciler = stagingDocuments.map {
             StagedCopyReconciler(catalogue: catalogue, onThisIPhone: $0, locator: destinations, listing: folderListing,
-                                 log: services.log)
+                                 identity: ubiquityIdentity, log: services.log)
         }
         let uploads = uploadReader.map {
             StagedUploadMonitor(catalogue: catalogue, locator: destinations, reader: $0, log: services.log)

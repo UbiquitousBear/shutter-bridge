@@ -4,10 +4,34 @@ import Foundation
 // and the reading protocol are pure Foundation, tested on Linux; the reader over the files' URL resource values
 // (`UbiquitousUploadReader`) is iOS only, compiled only by CI.
 
+/// An uploading error as iOS reported it: its domain and code, and those of the error under it, if any. Never a
+/// message, a file name or a path, so it can go in the bench log as it is (`description`).
+public struct UploadErrorSeen: Sendable, Hashable, CustomStringConvertible {
+    public var domain: String
+    public var code: Int
+    /// `NSUnderlyingErrorKey`'s domain and code, when there was an error under it.
+    public var underlyingDomain: String?
+    public var underlyingCode: Int?
+
+    public init(domain: String, code: Int, underlyingDomain: String? = nil, underlyingCode: Int? = nil) {
+        self.domain = domain
+        self.code = code
+        self.underlyingDomain = underlyingDomain
+        self.underlyingCode = underlyingCode
+    }
+
+    /// "NSCocoaErrorDomain 4354", or "BRCloudDocsErrorDomain 35 over NSCocoaErrorDomain 4354" with an error under it.
+    public var description: String {
+        guard let underlyingDomain, let underlyingCode else { return "\(domain) \(code)" }
+        return "\(domain) \(code) over \(underlyingDomain) \(underlyingCode)"
+    }
+}
+
 /// Why iCloud Drive hasn't uploaded a staged file, from the file's `ubiquitousItemUploadingError`.
 public enum UploadProblem: Sendable, Hashable {
-    /// The person's iCloud storage is full (`NSUbiquitousFileNotUploadedDueToQuotaError`, 4354).
-    case quotaFull
+    /// The person's iCloud storage is full (`NSUbiquitousFileNotUploadedDueToQuotaError`, 4354), with the error as it
+    /// was reported, so the bench log can settle which domain iOS uses for it (S10).
+    case quotaFull(seen: UploadErrorSeen)
     /// iCloud's servers can't be reached just now (`NSUbiquitousFileUbiquityServerNotAvailable`, 4355): the file is
     /// waiting, not refused.
     case serverUnavailable
@@ -23,8 +47,8 @@ public enum UploadProblem: Sendable, Hashable {
     public static let ubiquitousFileErrorDomain = "NSUbiquitousFileErrorDomain"
 
     /// The problem an uploading error describes: quota full when the error, or the error under it, is 4354 in
-    /// `NSCocoaErrorDomain` or `NSUbiquitousFileErrorDomain`; server unavailable likewise for 4355; otherwise the top
-    /// error's domain and code.
+    /// `NSCocoaErrorDomain` or `NSUbiquitousFileErrorDomain` (with both errors' domains and codes as seen); server
+    /// unavailable likewise for 4355; otherwise the top error's domain and code.
     ///
     /// `unverified` (bench S10): that iOS 27 sets exactly this domain and code on a staged file in the app's own
     /// container when the quota is full. If it reports the quota some other way, the problem reads as `.other`, and
@@ -33,8 +57,10 @@ public enum UploadProblem: Sendable, Hashable {
         func matches(_ domain: String, _ code: Int, _ wanted: Int) -> Bool {
             code == wanted && (domain == NSCocoaErrorDomain || domain == ubiquitousFileErrorDomain)
         }
-        if matches(domain, code, quotaCode) { return .quotaFull }
-        if let underlying, matches(underlying.domain, underlying.code, quotaCode) { return .quotaFull }
+        if matches(domain, code, quotaCode) || underlying.map({ matches($0.domain, $0.code, quotaCode) }) == true {
+            return .quotaFull(seen: UploadErrorSeen(domain: domain, code: code, underlyingDomain: underlying?.domain,
+                                                    underlyingCode: underlying?.code))
+        }
         if matches(domain, code, serverUnavailableCode) { return .serverUnavailable }
         if let underlying, matches(underlying.domain, underlying.code, serverUnavailableCode) {
             return .serverUnavailable

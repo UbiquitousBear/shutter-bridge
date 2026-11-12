@@ -16,6 +16,8 @@ public struct StagedUploadSummary: Sendable, Hashable {
     public var waiting = 0
     /// Not uploaded because the iCloud quota is full (4354).
     public var quotaFull = 0
+    /// The domain and code iOS reported for the first of those, for the log (bench S10).
+    public var firstQuota: UploadErrorSeen?
     /// Not uploaded for any other error.
     public var otherProblems = 0
     /// The first of those, for the log.
@@ -23,12 +25,14 @@ public struct StagedUploadSummary: Sendable, Hashable {
     /// Staged in iCloud Drive but not read (past the limit).
     public var notRead = 0
 
-    public init(read: Int = 0, uploaded: Int = 0, waiting: Int = 0, quotaFull: Int = 0, otherProblems: Int = 0,
-                firstOther: UploadProblem? = nil, notRead: Int = 0) {
+    public init(read: Int = 0, uploaded: Int = 0, waiting: Int = 0, quotaFull: Int = 0,
+                firstQuota: UploadErrorSeen? = nil, otherProblems: Int = 0, firstOther: UploadProblem? = nil,
+                notRead: Int = 0) {
         self.read = read
         self.uploaded = uploaded
         self.waiting = waiting
         self.quotaFull = quotaFull
+        self.firstQuota = firstQuota
         self.otherProblems = otherProblems
         self.firstOther = firstOther
         self.notRead = notRead
@@ -42,7 +46,9 @@ public struct StagedUploadSummary: Sendable, Hashable {
             switch state {
             case .uploaded: summary.uploaded += 1
             case .uploading, .waiting, .failed(.serverUnavailable): summary.waiting += 1
-            case .failed(.quotaFull): summary.quotaFull += 1
+            case let .failed(.quotaFull(seen)):
+                summary.quotaFull += 1
+                if summary.firstQuota == nil { summary.firstQuota = seen }
             case let .failed(problem):
                 summary.otherProblems += 1
                 if summary.firstOther == nil { summary.firstOther = problem }
@@ -170,13 +176,16 @@ public final class StagedUploadMonitor {
         return (kept, newestFirst.count - kept.count)
     }
 
-    /// The bench line: counts only, and the domain and code of the first other problem.
+    /// The bench line: counts only, and the domain and code of the first quota error and of the first other problem
+    /// (never a file name or a path).
     static func line(_ summary: StagedUploadSummary, seconds: Double) -> String {
         let other: String
         if case let .other(domain, code)? = summary.firstOther { other = "\(domain) \(code)" } else { other = "none" }
+        let quota = summary.firstQuota?.description ?? "none"
         return "staging: upload status of \(summary.read) staged file(s) in iCloud Drive in "
             + "\(String(format: "%.2f", seconds)) s: \(summary.uploaded) uploaded, \(summary.waiting) waiting, "
-            + "\(summary.quotaFull) over the iCloud quota, \(summary.otherProblems) other problems (\(other)), "
+            + "\(summary.quotaFull) over the iCloud quota (\(quota)), \(summary.otherProblems) other problems "
+            + "(\(other)), "
             + "\(summary.notRead) not read"
     }
 

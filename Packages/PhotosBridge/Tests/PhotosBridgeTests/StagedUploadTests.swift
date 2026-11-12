@@ -7,11 +7,13 @@ import Testing
 @Suite("Staged uploads: reading an upload error")
 struct StagedUploadTests {
     @Test func quotaFullIsCocoa4354InEitherDomainOrUnderneath() {
-        #expect(UploadProblem.classify(domain: NSCocoaErrorDomain, code: 4354, underlying: nil) == .quotaFull)
+        #expect(UploadProblem.classify(domain: NSCocoaErrorDomain, code: 4354, underlying: nil)
+            == .quotaFull(seen: UploadErrorSeen(domain: NSCocoaErrorDomain, code: 4354)))
         #expect(UploadProblem.classify(domain: "NSUbiquitousFileErrorDomain", code: 4354, underlying: nil)
-            == .quotaFull)
+            == .quotaFull(seen: UploadErrorSeen(domain: "NSUbiquitousFileErrorDomain", code: 4354)))
         #expect(UploadProblem.classify(domain: "SomeOtherDomain", code: 1, underlying: (NSCocoaErrorDomain, 4354))
-            == .quotaFull)
+            == .quotaFull(seen: UploadErrorSeen(domain: "SomeOtherDomain", code: 1,
+                                                underlyingDomain: NSCocoaErrorDomain, underlyingCode: 4354)))
         #expect(UploadProblem.quotaCode == CocoaError.Code.ubiquitousFileNotUploadedDueToQuota.rawValue)
         #expect(UploadProblem.serverUnavailableCode
             == CocoaError.Code.ubiquitousFileUbiquityServerNotAvailable.rawValue)
@@ -31,9 +33,15 @@ struct StagedUploadTests {
     @Test func anErrorIsReadWithTheErrorUnderIt() {
         let underlying = NSError(domain: NSCocoaErrorDomain, code: 4354)
         let top = NSError(domain: "BRCloudDocsErrorDomain", code: 35, userInfo: [NSUnderlyingErrorKey: underlying])
-        #expect(UploadProblem.classify(top) == .quotaFull)
+        #expect(UploadProblem.classify(top) == .quotaFull(seen: UploadErrorSeen(
+            domain: "BRCloudDocsErrorDomain", code: 35, underlyingDomain: NSCocoaErrorDomain, underlyingCode: 4354)))
         #expect(UploadProblem.classify(NSError(domain: "BRCloudDocsErrorDomain", code: 35))
             == .other(domain: "BRCloudDocsErrorDomain", code: 35))
+        // What was seen reads as domain and code, with the error under it after "over".
+        #expect(UploadErrorSeen(domain: NSCocoaErrorDomain, code: 4354).description == "NSCocoaErrorDomain 4354")
+        #expect(UploadErrorSeen(domain: "BRCloudDocsErrorDomain", code: 35, underlyingDomain: NSCocoaErrorDomain,
+                                underlyingCode: 4354).description
+            == "BRCloudDocsErrorDomain 35 over NSCocoaErrorDomain 4354")
         #expect(NoStagedUploadReading().uploadState(of: URL(fileURLWithPath: "/nowhere")) == .unreadable)
     }
 }

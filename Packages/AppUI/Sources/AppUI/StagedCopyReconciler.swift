@@ -27,6 +27,39 @@ public struct PlainStagingFolderListing: StagingFolderListing {
     }
 }
 
+/// Reads which iCloud account is signed in, for the reconcile step to see a sign-in with another Apple ID (or a sign-out
+/// and sign-in) that happened while the app was away.
+public protocol UbiquityIdentityReading: Sendable {
+    /// An opaque value for the signed-in iCloud account, equal for as long as it is the same account; nil when no
+    /// account is signed in or it can't be read. Never logged.
+    func currentIdentity() -> Data?
+}
+
+/// Reads no account: every pass sees the same identity, so only iCloud Drive's availability counts. For Linux, previews
+/// and tests.
+public struct NoUbiquityIdentityReading: UbiquityIdentityReading {
+    public init() {}
+    public func currentIdentity() -> Data? { nil }
+}
+
+#if os(iOS)
+/// Reads `FileManager.ubiquityIdentityToken`, archived (Apple's documented way to keep the token and compare it later),
+/// so two reads compare as plain bytes. A token that won't archive reads as an empty value: an account, whose changes
+/// aren't seen. Compiled only by CI's Xcode job.
+///
+/// `unverified` (bench S3): that the token changes when the person signs in with another Apple ID while the app is
+/// away. Apple documents it as the same for the same account, so signing out and back in with the same Apple ID is
+/// likely not seen through it, only through a pass that finds iCloud Drive unavailable or moved.
+public struct FileManagerUbiquityIdentity: UbiquityIdentityReading {
+    public init() {}
+
+    public func currentIdentity() -> Data? {
+        guard let token = FileManager.default.ubiquityIdentityToken else { return nil }
+        return (try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: false)) ?? Data()
+    }
+}
+#endif
+
 /// Whether a staged copy is still where its row says, from folder listings alone: no file is opened, read for its size
 /// or downloaded.
 enum StagedPresenceRule {
@@ -82,8 +115,9 @@ public struct StagedReconcileReport: Sendable, Hashable {
     public var stagedAgain = 0
     /// In iCloud Drive while it isn't available: not checked.
     public var inICloudDriveUnavailable = 0
-    /// Gone from iCloud Drive while iCloud Drive had just come back (the previous pass found it unavailable) or went
-    /// away or changed during the pass: not cleared this time.
+    /// Gone from iCloud Drive while iCloud Drive had just come back (the previous pass found it unavailable, or gone
+    /// or moved at its end, or the iCloud account changed since the previous pass) or went away, moved or changed
+    /// account during the pass: not cleared this time.
     public var iCloudDriveUnsettled = 0
     /// With no known path, or one outside Staging: never resolved.
     public var unknownPath = 0
@@ -124,8 +158,10 @@ public struct StagedReconcileReport: Sendable, Hashable {
 ///
 /// Never cleared:
 /// - a row whose path is unknown or outside Staging;
-/// - an iCloud Drive row while iCloud Drive isn't available, in the first pass after it came back (the previous pass in
-///   this run found it unavailable), or when `locate()`, asked again after the walk, finds it gone or elsewhere;
+/// - an iCloud Drive row while iCloud Drive isn't available; in the first pass after it came back (the previous pass in
+///   this run found it unavailable, or found it gone or elsewhere when it asked again after its walk) or after the
+///   iCloud account changed (`UbiquityIdentityReading`, compared with the previous pass's); or when `locate()` or the
+///   account, asked again after the walk, finds it gone, elsewhere or another account;
 /// - any row under a folder that couldn't be listed, or under a folder missing from iCloud Drive (Staging, the camera's
 ///   or the day's): only a file missing from its listed day folder counts as gone there;
 /// - a file whose name is still listed (its size isn't checked, so a replaced or still-downloading file stays).
@@ -134,19 +170,27 @@ public actor StagedCopyReconciler {
     private let onThisIPhone: URL
     private let locator: any StagingLocator
     private let listing: any StagingFolderListing
+    private let identity: any UbiquityIdentityReading
     private let log: any BenchLog
-    /// The last pass found iCloud Drive unavailable: the next one that finds it available doesn't clear iCloud rows.
+    /// The last pass found iCloud Drive unavailable, or gone or moved when it asked again after its walk: the next one
+    /// that finds it available doesn't clear iCloud rows.
     private var iCloudDriveWasUnavailable = false
+    /// The iCloud account the last pass saw; nil before the first pass.
+    private var lastIdentity: Data??
 
     /// - Parameters:
     ///   - onThisIPhone: The app's Documents folder, the root of On My iPhone › Shutter Bridge › Staging.
     ///   - locator: Where iCloud Drive's staging root is, when it is available.
+    ///   - identity: Which iCloud account is signed in (`FileManagerUbiquityIdentity` in the app).
     public init(catalogue: any CatalogueStore, onThisIPhone: URL, locator: any StagingLocator,
-                listing: any StagingFolderListing = PlainStagingFolderListing(), log: any BenchLog = SilentBenchLog()) {
+                listing: any StagingFolderListing = PlainStagingFolderListing(),
+                identity: any UbiquityIdentityReading = NoUbiquityIdentityReading(),
+                log: any BenchLog = SilentBenchLog()) {
         self.catalogue = catalogue
         self.onThisIPhone = onThisIPhone
         self.locator = locator
         self.listing = listing
+        self.identity = identity
         self.log = log
     }
 
@@ -174,7 +218,12 @@ public actor StagedCopyReconciler {
             return StagedReconcileReport()
         }
         let iCloud = await locator.locate().iCloudDocuments
-        let justBack = iCloud != nil && iCloudDriveWasUnavailable
+        // Signing out and in, or into another Apple ID, while the app was away is "just back" too: the previous pass
+        // may never have seen iCloud Drive unavailable.
+        let account = identity.currentIdentity()
+        let accountChanged = lastIdentity.map { $0 != account } ?? false
+        lastIdentity = .some(account)
+        let justBack = iCloud != nil && (iCloudDriveWasUnavailable || accountChanged)
         iCloudDriveWasUnavailable = iCloud == nil
 
         let onThisIPhone = self.onThisIPhone
@@ -224,13 +273,15 @@ public actor StagedCopyReconciler {
             case .gone: gone.append(checked)
             }
         }
-        // iCloud Drive must still be where it was when the folders were listed (a sign-out during the pass), and not
-        // have only just come back.
+        // iCloud Drive must still be where it was when the folders were listed, under the same account (a sign-out
+        // during the pass), and not have only just come back. Found gone or moved, the next pass counts as just back.
         if gone.contains(where: { $0.location.root == .iCloudDrive }) {
             var settled = !justBack
             if settled {
                 let after = await locator.locate().iCloudDocuments
                 settled = after.map(Self.comparable) == iCloud.map(Self.comparable)
+                    && identity.currentIdentity() == account
+                if !settled { iCloudDriveWasUnavailable = true }
             }
             if !settled {
                 report.iCloudDriveUnsettled = gone.filter { $0.location.root == .iCloudDrive }.count
