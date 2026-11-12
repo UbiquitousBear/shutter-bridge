@@ -1,4 +1,5 @@
 import Foundation
+import ImportEngine
 import Testing
 @testable import AppUI
 
@@ -133,9 +134,21 @@ struct AppTextCatalogueTests {
         #expect(AppText.counted(2, one: "%lld file", other: "%lld files") == "2 files")
     }
 
-    #if canImport(Darwin)
-    /// On the Mac and in CI's iOS Simulator run the catalogue is compiled into `Bundle.module`: every key must be found
-    /// there (a miss falls back to the code's English without a sound), and the plural variants must choose.
+    /// Counts are plain digits, as before the catalogue and as every other number in the copy, so a sentence never
+    /// mixes "1500" with "2,000".
+    @Test("A count of a thousand or more is written in plain digits, like the numbers around it")
+    func largeCountsArePlainDigits() {
+        #expect(ByteWording.files(1234) == "1234 files")
+        #expect(KeepersWording.photos(12_345) == "12345 photos")
+        let progress = ImportProgress(filesDone: 1500, filesTotal: 2000, bytesDone: 0, bytesTotal: 0, state: .running)
+        #expect(ImportWording.status(progress) == "1500 of 2000 files done")
+    }
+
+    // The catalogue as Xcode compiles it into `Bundle.module`: CI's iOS Simulator run. SwiftPM's own build system on a
+    // Mac copies a String Catalog as it is rather than compiling it, so `swift test` there would find no compiled key.
+    #if os(iOS)
+    /// Every key must be found in the compiled catalogue (a miss falls back to the code's English without a sound), the
+    /// plural variants must choose, and the number stays in plain digits.
     @Test("The compiled catalogue has every key, and its plural variants choose")
     func compiledCatalogue() throws {
         for use in try SourceKeys.scan() {
@@ -143,7 +156,12 @@ struct AppTextCatalogueTests {
         }
         #expect(AppText.counted(1, one: "%lld file", other: "%lld files") == "1 file")
         #expect(AppText.counted(3, one: "%lld file", other: "%lld files") == "3 files")
+        #expect(AppText.counted(0, one: "%lld file", other: "%lld files") == "0 files")
         #expect(AppText.counted(1, one: "%lld photo", other: "%lld photos") == "1 photo")
+        #expect(AppText.counted(1234, one: "%lld file", other: "%lld files") == "1234 files")
+        #expect(AppText.counted(1, one: "%lld rejected file left out. Pick it in Browse to import it anyway.",
+                                other: "%lld rejected files left out. Pick them in Browse to import them anyway.")
+            == "1 rejected file left out. Pick it in Browse to import it anyway.")
     }
     #endif
 }

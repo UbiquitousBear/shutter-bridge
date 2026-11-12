@@ -37,12 +37,17 @@ enum AppText {
     /// A counted phrase with its plural variants: `one` is the English for exactly 1 and `other`, the key, for every
     /// other count, each with one `%lld` for the number, e.g. `AppText.counted(n, one: "%lld file", other: "%lld
     /// files")` reads "1 file" and "3 files". The catalogue's entry varies by plural, so a language with more forms
-    /// gets them. On Apple platforms the number is written by `String.localizedStringWithFormat`, in the person's
-    /// locale (so "1,234 files" in en-GB); on Linux as plain digits.
+    /// gets them. The number is plain digits on every platform ("1234 files"), as it was before the catalogue and as
+    /// the copy writes every other number (`"12 of 1234 files"`, never `"12 of 1,234 files"`).
     static func counted(_ count: Int, one: String, other: String) -> String {
         let english = count == 1 ? one : other
         #if canImport(Darwin)
-        return String.localizedStringWithFormat(lookUp(other, english: english), count)
+        // `localizedStringWithFormat` picks the plural variant for the person's language, and also writes the number
+        // in their locale ("1,234", "1.234"): that is taken back to plain digits.
+        let text = String.localizedStringWithFormat(lookUp(other, english: english), count)
+        let localDigits = String.localizedStringWithFormat("%lld", count)
+        let plainDigits = String(count)
+        return localDigits == plainDigits ? text : text.replacingOccurrences(of: localDigits, with: plainDigits)
         #else
         return english.replacingOccurrences(of: "%lld", with: String(count))
         #endif
