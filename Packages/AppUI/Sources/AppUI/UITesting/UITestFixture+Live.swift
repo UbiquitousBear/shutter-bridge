@@ -34,10 +34,12 @@ extension AppModel {
     /// same), no discovery, Photos access allowed, and the diagnostics export as the app has it.
     static func uiTestFixture(catalogue: any CatalogueStore) -> AppModel {
         let logging = AppLogging.shared
+        // No commit lookup (the engine's default, `NoCommitLookup`): the seeded catalogue has no pending commits, and a
+        // marker would wait rather than be looked up in this Simulator's real photo library.
         let engine = ImportEngine(catalogue: catalogue, stagingDirectory: UITestFixture.workFolder,
-                                  trace: .bench(logging.log))
-        // The launch pass, as the live app runs it.
-        Task { await engine.reconcilePartials() }
+                                  trace: .bench(logging.log), commitLookup: NoCommitLookup())
+        // The launch pass, as the live app runs it (I15: pending commits, then partial rows).
+        Task { await engine.launchPass() }
         let destinations = StandardImportDestinations(
             library: SystemPhotoLibrary(),
             albumStore: InMemoryAlbumIdentifierStore(),
