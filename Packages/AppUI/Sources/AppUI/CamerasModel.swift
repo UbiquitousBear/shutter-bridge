@@ -367,26 +367,29 @@ extension CamerasModel {
 
     /// The offline Browse on screen, if any, becomes the live Browse once its camera is listed: at once over USB, where
     /// listing opens nothing; a Wi-Fi camera's Browse offers Connect instead, since reaching it is a join, which only the
-    /// person's tap starts (Shamil, 10 Nov). Matched by the key discovery knows for a camera (a Wi-Fi camera that has
+    /// person's tap starts (Shamil, 10 Nov). A camera listed over both goes live over USB: a Wi-Fi listing offering
+    /// Connect doesn't hold back the cable. Matched by the key discovery knows for a camera (a Wi-Fi camera that has
     /// connected before), else, over USB, by the key read from its link (nothing is opened), as
     /// `link(forCameraWith:)` matches.
     func matchOfflineCamera() async {
         guard let shown = path.last, let offline = offlineCameras[shown.id] else { return }
+        var overWiFi: CameraDescriptor?
         for camera in cameras {
             guard await isCamera(camera, withKey: offline.browse.key) else { continue }
             // The person may have left while discovery was asked.
             guard path.last?.id == shown.id else { return }
             if camera.carrier == .wifi {
-                guard offlineCameras[shown.id]?.listed != camera else { return }
-                offlineCameras[shown.id]?.listed = camera
-                services.log.note("cameras: the camera shown as not connected is listed over Wi-Fi; offering Connect")
-                offerConnect(true, on: shown.id)
-            } else {
-                services.log.note("cameras: the camera shown as not connected is connected; opening its card")
-                replaceOffline(shown.id, with: camera)
+                if overWiFi == nil { overWiFi = camera }
+                continue
             }
+            services.log.note("cameras: the camera shown as not connected is connected; opening its card")
+            replaceOffline(shown.id, with: camera)
             return
         }
+        guard let overWiFi, offlineCameras[shown.id]?.listed != overWiFi else { return }
+        offlineCameras[shown.id]?.listed = overWiFi
+        services.log.note("cameras: the camera shown as not connected is listed over Wi-Fi; offering Connect")
+        offerConnect(true, on: shown.id)
     }
 
     /// Connect on an offline Browse: the live Browse on the listed Wi-Fi camera replaces it, and starts the join.

@@ -38,6 +38,40 @@ actor KeyedDiscovery: CameraDiscovery {
     func knownKey(for id: CameraDescriptor.ID) -> CameraKey? { id == link.descriptor.id ? key : nil }
 }
 
+/// A discovery with several cameras: each link by its camera's id, a key known without a link for some (as
+/// `WiFiCameraSource` knows a Wi-Fi camera that has connected before), the links asked for counted by camera (over
+/// Wi-Fi a link is a join), and the next few asks failing when scripted (a USB camera not ready yet).
+actor MultiCameraDiscovery: CameraDiscovery {
+    nonisolated let discoveries: AsyncStream<CameraDiscoveryEvent>
+    private let sink: AsyncStream<CameraDiscoveryEvent>.Continuation
+    private let links: [CameraDescriptor.ID: FakeLink]
+    private let keys: [CameraDescriptor.ID: CameraKey]
+    private(set) var linksAsked: [CameraDescriptor.ID: Int] = [:]
+    private var failuresLeft = 0
+
+    init(links: [FakeLink], knownKeys: [CameraDescriptor.ID: CameraKey] = [:]) {
+        self.links = Dictionary(uniqueKeysWithValues: links.map { ($0.descriptor.id, $0) })
+        keys = knownKeys
+        (discoveries, sink) = AsyncStream.makeStream()
+    }
+
+    func send(_ event: CameraDiscoveryEvent) { sink.yield(event) }
+    func failNextLinks(_ count: Int) { failuresLeft = count }
+    func start() throws(CameraLinkFailure) {}
+
+    func cameraLink(for id: CameraDescriptor.ID) throws(CameraLinkFailure) -> any CameraLink {
+        linksAsked[id, default: 0] += 1
+        if failuresLeft > 0 {
+            failuresLeft -= 1
+            throw CameraLinkFailure(.disconnected, detail: "not ready yet")
+        }
+        guard let link = links[id] else { throw CameraLinkFailure(.disconnected, detail: "no such camera") }
+        return link
+    }
+
+    func knownKey(for id: CameraDescriptor.ID) -> CameraKey? { keys[id] }
+}
+
 @MainActor
 @Suite("Import new photos with the camera away: the offline Browse and the intent's timing")
 struct OfflineBrowseTests {
@@ -303,6 +337,44 @@ struct OfflineBrowseTests {
         await discovery.send(.disappeared(link.descriptor.id))
         #expect(await eventually { !browse.canConnect })
         await finish(app, run)
+    }
+
+    /// A USB camera and a Wi-Fi camera with the offline Browse's key, sharing it (the same camera on both links).
+    func twoLinkRig() async -> (app: AppModel, usb: FakeLink, wifi: FakeLink, discovery: MultiCameraDiscovery,
+                                key: CameraKey, log: RecordingLog) {
+        let usb = FakeLink(items: card)
+        await usb.set(writesListedSize: true)
+        let wifi = FakeLink(items: card, mode: .wifi(.cameraNetwork), id: "wifi-camera", name: "ILCE-7CM2")
+        let key = CameraKeys.key(for: usb.descriptor, material: nil)
+        let discovery = MultiCameraDiscovery(links: [usb, wifi], knownKeys: [wifi.descriptor.id: key])
+        let catalogue = InMemoryCatalogue()
+        let log = RecordingLog()
+        await catalogue.upsertCamera(CameraRecord(key: key, model: "ILCE-7CM2", friendlyName: "ILCE-7CM2",
+                                                  lastSeen: listedAt, preferredCarrier: .wifi))
+        await catalogue.saveListing(listing(for: key))
+        let app = AppModel(discovery: discovery, services: services(log: log), catalogue: catalogue,
+                           engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
+                           settingsStore: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(),
+                           destinations: FakeDestinations(), cameraKey: CameraKeys.fromDescriptor)
+        await app.scenePhaseChanged(.active)
+        return (app, usb, wifi, discovery, key, log)
+    }
+
+    @Test func aUSBCameraPluggedInGoesLiveEvenWhileConnectIsOfferedOverWiFi() async throws {
+        let r = await twoLinkRig()
+        _ = await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero)
+        let (browse, run) = try #require(pushBrowse(r.app))
+        #expect(await eventually { browse.offlineCard == .shown })
+        await r.discovery.send(.appeared(r.wifi.descriptor))
+        #expect(await eventually { browse.canConnect })
+        // The cable goes in: the USB listing turns it live, though the Wi-Fi listing came first and offers Connect.
+        await r.discovery.send(.appeared(r.usb.descriptor))
+        #expect(await eventually { r.app.cameras.path == [r.usb.descriptor] })
+        #expect(r.app.intents.pending?.camera == r.usb.descriptor.id)
+        #expect(r.log.lines.contains("cameras: the camera shown as not connected is connected; opening its card"))
+        // Nothing joined the Wi-Fi camera.
+        #expect(await r.discovery.linksAsked[r.wifi.descriptor.id] == nil)
+        await finish(r.app, run)
     }
 
     @Test func aLiveBrowseIsNeverOfferedConnect() async throws {
