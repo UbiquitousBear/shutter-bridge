@@ -57,10 +57,12 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
   no `CFBundleIconName` (ITMS-90713; on iOS it sits under `CFBundleIcons` › `CFBundlePrimaryIcon`) or no compiled
   asset catalogue.
 - **Privacy manifest:** `App/ShutterBridge/PrivacyInfo.xcprivacy` declares UserDefaults (CA92.1: the import settings, the
-  reminder's holds and the Wi-Fi cameras' records) and file timestamps (C617.1). The 9 Nov sweep removed disk space
-  (E174.1): nothing in the app asks for the iPhone's free space, so declaring it was unused. I17's review (12 Nov)
-  kept it that way: the Cameras screen's free space is the camera card's, read over PTP (GetStorageInfo), not a
-  disk-space API. Add an entry when a new required-reason API is called, with its reason code.
+  reminder's holds and the Wi-Fi cameras' records), file timestamps (C617.1) and disk space (E174.1 and 85F4.1). The
+  9 Nov sweep had removed disk space, unused then; staging PR 7 declares it again, because the free-space check before
+  each job reads `volumeAvailableCapacityForImportantUsage` (E174.1) and shows the number when a job can't fit
+  (85F4.1). The Cameras screen's free space is still the camera card's, read over PTP (GetStorageInfo), not a
+  disk-space API. Only TestFlight processing and App Store review check the manifest, not CI. Add an entry when a new
+  required-reason API is called, with its reason code.
 - **Export compliance:** `ITSAppUsesNonExemptEncryption = false` in `App/Info.plist`.
 - **Versions:** `MARKETING_VERSION` 0.1 and `CURRENT_PROJECT_VERSION` 1 in the project; `Info.plist` reads both from
   build settings, so CI sets the build number.
