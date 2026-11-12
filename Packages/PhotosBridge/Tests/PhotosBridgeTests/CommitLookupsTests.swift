@@ -137,8 +137,16 @@ struct CommitLookupsTests {
     @Test func theModificationDateBreaksATieWithinOneNumber() throws {
         let f = Folder()
         try f.put("DSC00001.ARW", size: 40, date: Self.date.addingTimeInterval(-3600))
-        try f.put("dsc00001.arw", size: 40, date: Self.date)
-        // Only a case-sensitive volume holds both; elsewhere the second write replaced the first.
+        // Only a case-sensitive volume (an iPhone's, Linux's) holds both. A case-insensitive one (a Mac's, so the
+        // Simulator's) refuses the second name (Foundation's "a file with the same name already exists") or, on an
+        // older Foundation, writes over the first, and the tie can't arise there: the one file is found.
+        do {
+            try f.put("dsc00001.arw", size: 40, date: Self.date)
+        } catch let error as CocoaError where error.code == .fileWriteFileExists {
+            #expect(f.find([.init(filename: "DSC00001.ARW", size: 40, modificationDate: Self.date)])
+                == [f.path("DSC00001.ARW")])
+            return
+        }
         let names = try FileManager.default.contentsOfDirectory(atPath: f.url.path)
         let expected = names.count == 2 ? "dsc00001.arw" : names[0]
         #expect(f.find([.init(filename: "DSC00001.ARW", size: 40, modificationDate: Self.date)]) == [f.path(expected)])
