@@ -20,6 +20,9 @@ proprietary phone protocol.
 | [`docs/iteration-1-backlog.md`](docs/iteration-1-backlog.md) | The Iteration 1 backlog (wired import), the current phase: acceptance criteria per package and screen, and the spike findings that could change each item; section 0 records how the workspace was set up. |
 | [`docs/iteration-3-4-backlog.md`](docs/iteration-3-4-backlog.md) | The Iteration 3 and 4 backlog (Wi-Fi, Bluetooth, background and proximity): acceptance criteria per section, what the spike measured, and a status table per section (Built, Bench, Open or Later, with the pull request) checked against the merged code on 9 Nov. |
 | [`docs/iteration-3-4-bench.md`](docs/iteration-3-4-bench.md) | The results checklist for the wireless bench run (eleven checks, with what to record and an empty result for each), and the camera wording still to read off the camera. |
+| [`docs/iteration-2-backlog.md`](docs/iteration-2-backlog.md) | The Iteration 2 backlog (differential import, resume, the fault matrix, History, App Intents, diagnostics, culling over staged files, the internal TestFlight): a status table per section checked against the merged code on 12 Nov, the work plan (I1 to I22, waves 1 to 6, #116 to #143), and its "Iteration 2 at close" section: what was built, what CI verifies, what still needs the bench, and what is open for Shamil. |
+| [`docs/iteration-2-bench.md`](docs/iteration-2-bench.md) | The results checklist for the Iteration 2 bench run, set up for TestFlight build 22 (twenty-two checks and the iCloud rows, none run yet), with the log line each reads. |
+| [`docs/onboarding.md`](docs/onboarding.md) | The onboarding pack for the second engineer (18 Jan 2027): what to read in which order, the rules, the codebase map, building and testing, the engine's invariants and where they are tested. |
 | [`docs/remote-shoot-notes.md`](docs/remote-shoot-notes.md) | Later scope: design notes for remote shoot and a live-view monitor, from the reference apps Shamil shared, and the level guide (horizontal and vertical) neither of them has. |
 | [`docs/ci.md`](docs/ci.md) | How the apps are built and tested on every pull request (GitHub Actions: Xcode 27 builds, every package's tests on Linux and in the iOS Simulator) and delivered to TestFlight, with the one-time setup. |
 | `App/` | The iPhone app: a hand-written, committed `ShutterBridge.xcodeproj` whose target is only the `@main` shim, the app icon and the privacy manifest, on top of `AppUI`, with `Info.plist` (Bluetooth, Local Network and Photos strings, the `bluetooth-central` and `fetch` background modes, the background task identifiers) and `ShutterBridge.entitlements` (Hotspot Configuration, for joining the camera's Wi-Fi) beside it. `make app` opens it. |
@@ -88,6 +91,11 @@ out in `Spike/Spike.entitlements` until it is granted, so signing works meanwhil
       models and rules are tested on Linux, the screens and Apple-only code only compiled by CI
 - [ ] Wireless bench run on the iPhone and the camera ([`docs/iteration-3-4-bench.md`](docs/iteration-3-4-bench.md)):
       nothing wireless has run against the camera in the product app yet
+- [x] Iteration 2 built ahead of plan (11 to 12 Nov, #116 to #143): differential import and resume, the fault
+      matrix, History, culling over staged files, App Intents, the diagnostics export and TestFlight readiness.
+      Compiled and tested on Linux and in CI only; nothing of it has run against the camera
+      ([`docs/iteration-2-bench.md`](docs/iteration-2-bench.md))
+- [ ] Open for Shamil, Iteration 2: the list in ["Iteration 2 at close"](docs/iteration-2-backlog.md#iteration-2-at-close-12-nov)
 - [ ] Open for Shamil: the camera's pairing wording and menu path read off the camera, Hotspot Configuration ticked on the
       App ID, and the multicast entitlement (Apple's answer pending)
 
