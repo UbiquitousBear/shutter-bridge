@@ -377,6 +377,41 @@ struct OfflineBrowseTests {
         await finish(r.app, run)
     }
 
+    @Test func aCameraFoundAsTheOfflineBrowseOpensIsAnsweredAsBeingRead() async throws {
+        let r = await twoLinkRig()
+        await r.discovery.send(.appeared(r.usb.descriptor))
+        #expect(await eventually { r.app.cameras.cameras == [r.usb.descriptor] })
+        // The camera isn't ready when the discovery wait looks (its link fails once), and is as the offline Browse opens.
+        await r.discovery.failNextLinks(1)
+        let started = ContinuousClock.now
+        let start = await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero,
+                                                waitingForImport: .seconds(30),
+                                                answeringBy: started.advanced(by: .milliseconds(300)))
+        // Its live Browse is open and reading: the answer says so, not that the camera isn't connected.
+        #expect(start == .waitingForCard(choice: .photos))
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(r.app.cameras.path == [r.usb.descriptor])
+        #expect(r.app.intents.pending?.camera == r.usb.descriptor.id)
+        #expect(r.log.lines.contains("intents: import new photos: the camera is connected; waiting for the card"))
+    }
+
+    @Test func theCardWaitEndsByTheDeadlineToo() async throws {
+        let r = try await rig(listed: true)
+        await r.link.set(listHangs: true)
+        let started = ContinuousClock.now
+        let asked = Task {
+            await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .seconds(30), waitingForImport: .seconds(30),
+                                        answeringBy: started.advanced(by: .milliseconds(300)))
+        }
+        #expect(await eventually { r.app.cameras.path == [r.descriptor] })
+        let (_, run) = try #require(pushBrowse(r.app))
+        #expect(await asked.value == .waitingForCard(choice: .photos))
+        #expect(ContinuousClock.now - started < .seconds(10))
+        await r.link.set(listHangs: false)
+        #expect(await eventually { r.app.importer.hasJob })
+        await finish(r.app, run)
+    }
+
     @Test func aLiveBrowseIsNeverOfferedConnect() async throws {
         let r = try await rig(listed: true)
         let browse = r.app.browseModel(for: r.descriptor)

@@ -262,7 +262,8 @@ extension AppModel {
         let choice = importer.importChoice
         guard let camera = await listedCamera(withKey: key, waitingUpTo: min(waitingForCamera, Self.left(until: deadline)))
         else {
-            return await showNotConnected(cameraWith: key, choice: choice)
+            return await showNotConnected(cameraWith: key, choice: choice, waitingForImport: waitingForImport,
+                                          answeringBy: deadline)
         }
         let request = PendingNewPhotosImport(camera: camera.id, choice: choice,
                                              expires: .now.advanced(by: Self.newPhotosImportLifetime))
@@ -280,8 +281,11 @@ extension AppModel {
     }
 
     /// The camera isn't listed (W6-absent): its offline Browse is shown, the request waits for the camera to be listed and
-    /// its card read, and the answer says it isn't connected, and whether its card was ever read.
-    private func showNotConnected(cameraWith key: CameraKey, choice: DestinationKind) async -> NewPhotosImportStart {
+    /// its card read, and the answer says it isn't connected, and whether its card was ever read. A camera found as the
+    /// offline Browse opens (listed just after the discovery wait) is answered as a listed one is, by `deadline`: its
+    /// live Browse has replaced the offline one, so "isn't connected" would be wrong.
+    private func showNotConnected(cameraWith key: CameraKey, choice: DestinationKind, waitingForImport: Duration,
+                                  answeringBy deadline: ContinuousClock.Instant) async -> NewPhotosImportStart {
         let offline = await cameras.offlineCamera(for: key)
         let cardRead = (try? await catalogue.lastListing(for: key)) != nil
         log.note("intents: import new photos: the camera isn't connected; showing "
@@ -293,6 +297,10 @@ extension AppModel {
         intents.navigate(showsImport: false)
         // Listed meanwhile (discovery answered after the wait): the live Browse replaces it now.
         await cameras.matchOfflineCamera()
+        // The request moved over to the live camera, or ended (left, or replaced by a newer one): its own answer.
+        if request.camera != offline.id || request.result != nil {
+            return await request.outcome(waitingUpTo: min(waitingForImport, Self.left(until: deadline)))
+        }
         return .waitingForConnection(choice: choice, cardRead: cardRead)
     }
 
