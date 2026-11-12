@@ -14,8 +14,10 @@ import UIKit
 ///   ahead), with a progress bar while the unit's iCloud file downloads, and a line when a RAW shows only the camera's
 ///   embedded preview. A small EXIF line sits under the photo (D5).
 /// - VoiceOver: the photo is one adjustable element (swipe up or down with one finger for the next or previous photo),
-///   whose value is its position, mark and stars, with Next Photo, Previous Photo, Keep, Reject, Clear Mark, the stars,
-///   Undo and the zoom as actions; each mark is announced. The stars are one adjustable element too.
+///   whose value is its position, mark and stars, and, while no preview shows, the download's progress, the failure or
+///   the missing preview (`CullLoupe.spokenValue`, I17), with Next Photo, Previous Photo, Keep, Reject, Clear Mark, the
+///   stars, Undo, the zoom and, after a failure, Try Again as actions; each mark is announced, and so is a preview that
+///   couldn't be shown. The stars are one adjustable element too.
 struct LoupeView: View {
     let loupe: CullLoupe<DecodedPreviewImage>
     let close: () -> Void
@@ -62,6 +64,11 @@ struct LoupeView: View {
         .onChange(of: loupe.announcement) { _, new in new?.announcement.post() }
         .onChange(of: loupe.writeFailureNotice) { _, notice in notice?.announcement.post() }
         .onChange(of: loupe.session.index) { _, _ in resetZoom() }
+        // The failure's Try Again is inside the photo's one element, out of VoiceOver's reach but for the action, so
+        // the failure is said.
+        .onChange(of: loupe.previewFailed) { _, failed in
+            if failed { StatusAnnouncement(CullWording.previewFailedTitle).post() }
+        }
     }
 
     // MARK: The photo
@@ -134,7 +141,7 @@ struct LoupeView: View {
         .onChange(of: loupe.preview?.fullPixelSize) { _, _ in updateDetail(in: size) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(loupe.accessibilityLabel)
-        .accessibilityValue(loupe.accessibilityValue)
+        .accessibilityValue(loupe.spokenValue)
         .accessibilityHint(CullWording.loupeHint)
         .accessibilityAddTraits(.isImage)
         .accessibilityAdjustableAction { direction in
@@ -154,6 +161,9 @@ struct LoupeView: View {
                 Button(CullWording.rateAction(rating)) { loupe.setRating(rating) }
             }
             Button(CullWording.undo) { loupe.undo() }
+            if loupe.previewFailed {
+                Button(CullWording.tryAgain) { loupe.retryPreview() }
+            }
             if let preview = loupe.preview {
                 Button(zoom > 1 ? CullWording.zoomOut
                     : preview.fullPixelSize != nil ? CullWording.zoomIn : CullWording.zoomInPreview) {

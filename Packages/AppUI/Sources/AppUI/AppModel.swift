@@ -480,12 +480,13 @@ public final class AppLauncher {
 /// App-wide copy.
 public enum AppWording {
     /// The launch spinner's VoiceOver label; nothing is written on screen (HIG Launching).
-    public static let openingCatalogue = "Opening Shutter Bridge…"
+    public static let openingCatalogue = AppText.string("Opening Shutter Bridge…")
     /// How long launch waits before showing a spinner: the catalogue usually opens well within it.
     public static let spinnerDelay: Duration = .milliseconds(500)
-    public static let catalogueFailedTitle = "Shutter Bridge Couldn't Start"
+    public static let catalogueFailedTitle = AppText.string("Shutter Bridge Couldn't Start")
     /// The screen has Try Again, so it never asks to restart the app (HIG: don't ask people to quit).
-    public static let catalogueFailedDetail = "It couldn't open its catalogue of imported files, so it can't tell "
-        + "which photos are already imported. Free some space on this iPhone, then tap Try Again."
-    public static let tryAgain = "Try Again"
+    public static let catalogueFailedDetail = AppText.string("It couldn't open its catalogue of imported files, so it "
+        + "can't tell "
+        + "which photos are already imported. Free some space on this iPhone, then tap Try Again.")
+    public static let tryAgain = AppText.string("Try Again")
 }

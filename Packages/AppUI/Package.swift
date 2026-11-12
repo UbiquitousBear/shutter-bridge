@@ -10,8 +10,20 @@ import PackageDescription
 // Section 6 of docs/iteration-1-backlog.md: Cameras,
 // Browse (selection, filters, the last-known card, the already-imported badge, Copy as JPEG and Share as JPEG…),
 // Import and Settings.
+//
+// The user-facing strings are in a String Catalog (`Sources/AppUI/Resources/Localizable.xcstrings`, British English,
+// I17), looked up through `AppText` in `Bundle.module`. Xcode and SwiftPM on a Mac compile it; SwiftPM on Linux has no
+// rule for it and would warn, so there it is left out and `AppText` uses the English the code gives, which
+// `AppTextCatalogueTests` checks against the catalogue.
+#if canImport(Darwin)
+let stringCatalogue: (exclude: [String], resources: [Resource]) = ([], [.process("Resources/Localizable.xcstrings")])
+#else
+let stringCatalogue: (exclude: [String], resources: [Resource]) = (["Resources/Localizable.xcstrings"], [])
+#endif
+
 let package = Package(
     name: "AppUI",
+    defaultLocalization: "en-GB",
     platforms: [
         // iOS 27 is the app's deployment target; tools 6.2 has no `.v27` case, hence the string form. macOS 26 is
         // only so `swift test` runs on a Mac (see AGENTS.md, "Platforms").
@@ -45,7 +57,9 @@ let package = Package(
                 .product(name: "PTPKit", package: "PTPKit"),
                 .product(name: "Catalogue", package: "Catalogue"),
                 .product(name: "PhotosBridge", package: "PhotosBridge"),
-            ]
+            ],
+            exclude: stringCatalogue.exclude,
+            resources: stringCatalogue.resources
         ),
         .testTarget(
             name: "AppUITests",

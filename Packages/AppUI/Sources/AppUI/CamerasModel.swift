@@ -87,6 +87,9 @@ public final class CamerasModel: CameraFinding {
     /// connected before), for the *nearby* badge (W16). Read when a camera appears and when the app becomes active, since
     /// a Wi-Fi camera's key becomes known at its first session.
     public private(set) var knownKeys: [CameraDescriptor.ID: CameraKey] = [:]
+    /// The free space last read on each listed camera's card, in bytes (I17: USB in Image Transfer (MTP), once Browse
+    /// has listed the card; `readCardFreeSpace(of:)`). A camera with no entry shows no free-space line.
+    public private(set) var cardFreeBytes: [CameraDescriptor.ID: UInt64] = [:]
 
     /// The import, told when a camera is connected, and handed Browse's selection. Set by the app (`AppModel`).
     @ObservationIgnored public weak var importModel: ImportModel?
@@ -179,7 +182,10 @@ public final class CamerasModel: CameraFinding {
         )
         browsing.removeAll { $0.model == nil }
         browsing.append(WeakBrowse(model: model))
-        model.onListed = { [weak self] listed in self?.onBrowseListed?(listed) }
+        model.onListed = { [weak self] listed in
+            self?.onBrowseListed?(listed)
+            self?.browseListed(camera)
+        }
         return model
     }
 
@@ -243,11 +249,40 @@ public final class CamerasModel: CameraFinding {
 
     /// What the camera's row may say about the device: its battery level and the card's free space, only for a link that
     /// reports them (`CameraLinkCapabilities.reportsBatteryAndFreeSpace`; Wi-Fi's does not, B:70). `nil` for a value
-    /// nobody has read: unknown is never shown as 0. The app reads neither over USB yet (`unverified`), so today the
-    /// rule has nothing to show; it is here so a Wi-Fi row can never grow a "0%" or "0 bytes free".
+    /// nobody has read: unknown is never shown as 0, so a Wi-Fi row can never grow a "0%" or "0 bytes free". The free
+    /// space is the one last read (`cardFreeBytes`) unless one is given; the battery level isn't read yet
+    /// (`unverified`).
     public func deviceStatusLines(for camera: CameraDescriptor, batteryPercent: Int? = nil,
                                   freeBytes: UInt64? = nil) -> [String] {
-        CamerasWording.deviceStatus(carrier: camera.carrier, batteryPercent: batteryPercent, freeBytes: freeBytes)
+        CamerasWording.deviceStatus(carrier: camera.carrier, batteryPercent: batteryPercent,
+                                    freeBytes: freeBytes ?? cardFreeBytes[camera.id])
+    }
+
+    // MARK: - The card's free space (I17)
+
+    /// Browse listed `camera`'s live card: its catalogue has completed, so a USB link in Image Transfer (MTP) can now
+    /// say how much space is free on the card.
+    private func browseListed(_ camera: CameraDescriptor) {
+        Task { [weak self] in await self?.readCardFreeSpace(of: camera) }
+    }
+
+    /// Reads the card's free space over `camera`'s link, when its carrier reports one (USB; never Wi-Fi, whose link
+    /// would be joined just to ask, and whose storage reports nothing) and the link can read it
+    /// (`CardFreeSpaceReading`: `USBLink` in MTP, after the catalogue, between downloads). A value it can't read now
+    /// leaves the last one in place; the camera going away clears it.
+    func readCardFreeSpace(of camera: CameraDescriptor) async {
+        guard CameraLinkCapabilities.defaults(for: camera.carrier).reportsBatteryAndFreeSpace,
+              let link = try? await discovery.cameraLink(for: camera.id),
+              let reader = link as? any CardFreeSpaceReading
+        else { return }
+        guard let free = await reader.cardFreeSpace() else {
+            services.log.note("cameras: the card's free space wasn't read")
+            return
+        }
+        // The camera may have gone while the link was asked.
+        guard cameras.contains(where: { $0.id == camera.id }) else { return }
+        cardFreeBytes[camera.id] = free
+        services.log.note("cameras: the card has \(free) bytes free")
     }
 
     // MARK: - Keys and the nearby badge (W16)
@@ -315,6 +350,7 @@ public final class CamerasModel: CameraFinding {
             cameras.removeAll { $0.id == id }
             knownKeys[id] = nil
             withdrawOfflineConnect(from: id)
+            cardFreeBytes[id] = nil
             cameraWentAway(id)
         }
     }

@@ -19,9 +19,10 @@ import Foundation
 /// 632 s suspension while the spike's 60 s limit failed three files. Only opening (60 s) and thumbnails (10 s) time
 /// out, as `noAnswer`.
 enum USBFailureMapping {
-    /// What the link was doing.
+    /// What the link was doing. `storageInfo` is the card's free space through the PTP pass-through (I17,
+    /// `CardFreeSpace`), whose failure leaves the free space unknown and fails nothing else.
     enum Operation: String, Sendable, Hashable, CaseIterable {
-        case open, list, thumbnail, download, close
+        case open, list, thumbnail, download, close, storageInfo
     }
 
     /// How long a failed download waits for a removal before it is classified (`unverified`). In MTP `didRemove`
@@ -38,7 +39,7 @@ enum USBFailureMapping {
     static func removalGrace(for operation: Operation) -> Duration? {
         switch operation {
         case .download: removalGrace
-        case .open, .list, .thumbnail: shortRemovalGrace
+        case .open, .list, .thumbnail, .storageInfo: shortRemovalGrace
         case .close: nil
         }
     }
@@ -156,7 +157,7 @@ enum USBFailureMapping {
     static func fallback(_ operation: Operation) -> CameraLinkFailure.Kind {
         switch operation {
         case .thumbnail: .unreadableItem
-        case .open, .list, .download, .close: .busy
+        case .open, .list, .download, .close, .storageInfo: .busy
         }
     }
 

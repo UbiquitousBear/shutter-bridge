@@ -126,7 +126,8 @@ struct HistoryScreen: View {
 
 /// One job: its title and time, how it ended, the counts, the bytes and duration, where its files went and, when it
 /// applies, *Resumable* or the failures left with their button. VoiceOver reads it as one line, with the button and the
-/// folder as actions.
+/// folder as actions; a double tap does the row's main one (`HistoryRow.spokenDefault`, I17), which makes the row a
+/// button, and while the card is read for it the row's value says so.
 private struct HistoryRowView: View {
     let row: HistoryRow
     let isBusy: Bool
@@ -135,10 +136,6 @@ private struct HistoryRowView: View {
 
     private var actionTitle: String {
         if case .rerun = row.action { HistoryWording.rerun } else { HistoryWording.resume }
-    }
-
-    private var actionHint: String {
-        if case .rerun = row.action { HistoryWording.rerunHint } else { HistoryWording.resumeHint }
     }
 
     var body: some View {
@@ -188,7 +185,16 @@ private struct HistoryRowView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.accessibilityLabel)
-        .accessibilityHint(row.action != nil ? actionHint : row.opensStagingFolder ? HistoryWording.openStagingHint : "")
+        .accessibilityValue(isBusy ? HistoryWording.busyValue : "")
+        .accessibilityHint(row.spokenHint(isBusy: isBusy))
+        .accessibilityAddTraits(row.spokenDefault(isBusy: isBusy) != nil ? .isButton : [])
+        .accessibilityAction {
+            switch row.spokenDefault(isBusy: isBusy) {
+            case .act?: act()
+            case .openFolder?: openFolder()
+            case nil: break
+            }
+        }
         .accessibilityActions {
             if row.action != nil, !isBusy {
                 Button(actionTitle, action: act)

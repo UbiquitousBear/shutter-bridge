@@ -170,29 +170,30 @@ public struct SilentNotifier: LocalNotifier {
 /// serial number or network name.
 public enum NotificationWording {
     /// The pause notification (backlog Iteration 3, section 9, *Expiry is normal*; section 13, *did suspend*).
-    public static let importPaused = "Import paused. Open Shutter Bridge to continue."
+    public static let importPaused = AppText.string("Import paused. Open Shutter Bridge to continue.")
     /// The pause notification for a *Stage* job (Shamil, 11 Nov).
-    public static let stagingPaused = "Staging paused. Open Shutter Bridge to continue."
+    public static let stagingPaused = AppText.string("Staging paused. Open Shutter Bridge to continue.")
     /// While a Wi-Fi join waits for the app to come back (bench 19.1).
-    public static let joinWaiting = "Open Shutter Bridge to join the camera's Wi-Fi."
+    public static let joinWaiting = AppText.string("Open Shutter Bridge to join the camera's Wi-Fi.")
     /// Shown at the first Import on either link, alongside iOS's prompt: iOS's notification prompt carries no reason
     /// of the app's own (decided by Shamil, 8 Nov, decision 4: "so we can tell you if the import pauses").
-    public static let reason = "Shutter Bridge asks to send notifications so it can tell you if an import pauses."
+    public static let reason = AppText.string("Shutter Bridge asks to send notifications so it can tell you if an "
+        + "import pauses.")
 
     // The proximity reminder (Iteration 4, section 12). "Nearby", never "switched on" (decision 8): the camera is noticed
     // while off. Button titles are in title case, as iOS's own are (Shamil, 9 Nov: "Snooze 1 Hour").
-    public static let cameraNearbyTitle = "Camera Nearby"
-    public static let importNow = "Import Now"
-    public static let notNow = "Not Now"
-    public static let snoozeOneHour = "Snooze 1 Hour"
+    public static let cameraNearbyTitle = AppText.string("Camera Nearby")
+    public static let importNow = AppText.string("Import Now")
+    public static let notNow = AppText.string("Not Now")
+    public static let snoozeOneHour = AppText.string("Snooze 1 Hour")
 
     /// The reminder's text. The count is the last known one (the card as last listed), so the text says so; with no
     /// count, or none to import, it says only that the camera is nearby.
     public static func cameraNearbyBody(notImported: Int?) -> String {
         guard let count = notImported, count > 0 else {
-            return "Your camera is nearby. Open Shutter Bridge to import your photos."
+            return AppText.string("Your camera is nearby. Open Shutter Bridge to import your photos.")
         }
-        let photos = count == 1 ? "1 photo" : "\(count) photos"
-        return "Your camera is nearby. \(photos) not yet imported when you last connected."
+        let photos = AppText.counted(count, one: "%lld photo", other: "%lld photos")
+        return AppText.format("Your camera is nearby. %@ not yet imported when you last connected.", photos)
     }
 }

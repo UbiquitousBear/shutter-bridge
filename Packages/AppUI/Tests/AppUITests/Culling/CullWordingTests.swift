@@ -87,7 +87,7 @@ struct CullWordingTests {
     }
 
     @Test func theCopyIsBritishAndNamesNoMark() {
-        let all = [CullWording.title, CullWording.openStagingHint, CullWording.emptyTitle, CullWording.emptyDetail,
+        let all = [CullWording.title, CullWording.emptyTitle, CullWording.emptyDetail,
                    CullWording.loadFailedTitle, CullWording.loadFailedDetail, CullWording.dayHint,
                    CullWording.loupeHint, CullWording.writeFailed, CullWording.embeddedOnly,
                    CullWording.previewFailedTitle, CullWording.downloading, CullWording.zoomIn,

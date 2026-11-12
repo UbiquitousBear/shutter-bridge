@@ -105,6 +105,8 @@ struct SettingsScreen: View {
                                    onFinish: { model.exportFinished() },
                                    onFailure: { model.exportCouldNotBePresented() })
         }
+        // The row only dims while the file is made, and a failure appears under it: say both (I17).
+        .onChange(of: model.exportAnnouncement) { _, announcement in announcement?.post() }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await model.refresh() }

@@ -210,6 +210,33 @@ struct NewPhotosWordingTests {
             == "The camera isn't connected. Connect it, then try again.")
         #expect(say(.couldNotStart) == "The import from ILCE-7CM2 didn't start. Open Browse and tap Import.")
         #expect(say(.appNotReady) == "Shutter Bridge couldn't open its catalogue. Open the app to see why.")
+        // Each sentence is whole in the String Catalog, one per choice (wave 6's integration): the rest of the pairs.
+        #expect(say(.waitingForPerson(choice: .staging, why: .reaching), camera: CamerasWording.genericName)
+            == "Reaching the camera. Its new photos will be staged once the card is read.")
+        #expect(say(.waitingForPerson(choice: .photos, why: .listingFailed))
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2. Open Browse and tap Try Again. "
+            + "Its new photos will be imported to Photos once the card is read.")
+        #expect(say(.waitingForPerson(choice: .staging, why: .couldNotReach))
+            == "Shutter Bridge couldn't reach ILCE-7CM2. Open Browse and tap Try Again. "
+            + "Its new photos will be staged once the card is read.")
+        #expect(say(.waitingForPerson(choice: .staging, why: .disconnected))
+            == "ILCE-7CM2 is disconnected. Open Browse and tap Reconnect. "
+            + "Its new photos will be staged once the card is read.")
+        #expect(say(.starting(choice: .staging)) == "Starting to stage the new photos.")
+        #expect(say(.waitingForConnection(choice: .photos, cardRead: true))
+            == "ILCE-7CM2 isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be "
+            + "imported to Photos.")
+        #expect(say(.waitingForConnection(choice: .staging, cardRead: true), camera: CamerasWording.genericName)
+            == "The camera isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be "
+            + "staged.")
+        #expect(say(.waitingForConnection(choice: .photos, cardRead: false))
+            == "ILCE-7CM2 isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge "
+            + "is open, and its new photos will be imported to Photos.")
+        #expect(say(.waitingForConnection(choice: .staging, cardRead: false))
+            == "ILCE-7CM2 isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge "
+            + "is open, and its new photos will be staged.")
+        #expect(say(.couldNotStart, camera: CamerasWording.genericName)
+            == "The import from the camera didn't start. Open Browse and tap Import.")
     }
 
     @Test func theLogSaysCountsAndKindsOnly() {

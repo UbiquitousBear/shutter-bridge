@@ -1,0 +1,5782 @@
+{
+  "sourceLanguage" : "en-GB",
+  "strings" : {
+    "%@ %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@."
+          }
+        }
+      }
+    },
+    "%@ Nothing was removed from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Nothing was removed from Staging"
+          }
+        }
+      }
+    },
+    "%@ added. Tap it to open its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ added. Tap it to open its card."
+          }
+        }
+      }
+    },
+    "%@ already in Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ already in Photos"
+          }
+        }
+      }
+    },
+    "%@ and its RAW" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ and its RAW"
+          }
+        }
+      }
+    },
+    "%@ couldn't be removed and stay staged; try again from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ couldn't be removed and stay staged; try again from Staging"
+          }
+        }
+      }
+    },
+    "%@ free" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ free"
+          }
+        }
+      }
+    },
+    "%@ has no new photos to import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ has no new photos to import."
+          }
+        }
+      }
+    },
+    "%@ has no new photos to stage." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ has no new photos to stage."
+          }
+        }
+      }
+    },
+    "%@ imported" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ imported"
+          }
+        }
+      }
+    },
+    "%@ imported to Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ imported to Photos"
+          }
+        }
+      }
+    },
+    "%@ imported, %@ staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ imported, %@ staged"
+          }
+        }
+      }
+    },
+    "%@ is disconnected. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is disconnected. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "%@ is disconnected. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is disconnected. Open Browse and tap %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
+    "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be imported to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be imported to Photos."
+          }
+        }
+      }
+    },
+    "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be staged." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be staged."
+          }
+        }
+      }
+    },
+    "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be imported to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be imported to Photos."
+          }
+        }
+      }
+    },
+    "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be staged." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be staged."
+          }
+        }
+      }
+    },
+    "%@ isn't connected. Connect it, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ isn't connected. Connect it, then try again."
+          }
+        }
+      }
+    },
+    "%@ of %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ of %@"
+          }
+        }
+      }
+    },
+    "%@ of %@ done" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ of %@ done"
+          }
+        }
+      }
+    },
+    "%@ or %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ or %@"
+          }
+        }
+      }
+    },
+    "%@ per second" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ per second"
+          }
+        }
+      }
+    },
+    "%@ percent" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ percent"
+          }
+        }
+      }
+    },
+    "%@ rejected since, not imported" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ rejected since, not imported"
+          }
+        }
+      }
+    },
+    "%@ removed from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ removed from Staging"
+          }
+        }
+      }
+    },
+    "%@ staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ staged"
+          }
+        }
+      }
+    },
+    "%@ was disconnected. Connect it again to see its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ was disconnected. Connect it again to see its card."
+          }
+        }
+      }
+    },
+    "%@ · %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · %@"
+          }
+        }
+      }
+    },
+    "%@, %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, %@"
+          }
+        }
+      }
+    },
+    "%@, %@. %@. %@. %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@, %@. %@. %@. %@"
+          }
+        }
+      }
+    },
+    "%@/s" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@/s"
+          }
+        }
+      }
+    },
+    "%@: %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: %@"
+          }
+        }
+      }
+    },
+    "%lld Selected" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Selected"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Selected"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld Stars" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Star"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Stars"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld failed" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld failed and stay in Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed and stay in Staging"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed and stay in Staging"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld failed files are no longer on the card." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed file is no longer on the card."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed files are no longer on the card."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld failed files not imported yet" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed file not imported yet"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed files not imported yet"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld failed files not staged yet" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed file not staged yet"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld failed files not staged yet"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld files" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld files were left out because they have no capture date, so Shutter Bridge can't tell whether they were imported before." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld file was left out because it has no capture date, so Shutter Bridge can't tell whether it was imported before."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld files were left out because they have no capture date, so Shutter Bridge can't tell whether they were imported before."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld imported" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld imported"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld imported"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld imports" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld import"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld imports"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld keepers are in Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld keeper is in Photos"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld keepers are in Photos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld keepers aren't in Photos, so they stay in Staging with their marks" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld keeper isn't in Photos, so it stays in Staging with its mark"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld keepers aren't in Photos, so they stay in Staging with their marks"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld kept" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld kept"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld kept"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld new photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld new photo"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld new photos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld photo"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld photos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld photos from an interrupted import may now be in Photos twice." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld photo from an interrupted import may now be in Photos twice."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld photos from an interrupted import may now be in Photos twice."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld rejected" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld rejected"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld rejected"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld rejected files left out. Pick them in Browse to import them anyway." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld rejected file left out. Pick it in Browse to import it anyway."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld rejected files left out. Pick them in Browse to import them anyway."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld rejects will be deleted from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld reject will be deleted from Staging"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld rejects will be deleted from Staging"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld skipped" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld skipped"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld skipped"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld staged files are in iCloud Drive, which isn't available to Shutter Bridge now." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged file is in iCloud Drive, which isn't available to Shutter Bridge now."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged files are in iCloud Drive, which isn't available to Shutter Bridge now."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld staged files are no longer in Staging as they were staged." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged file is no longer in Staging as it was staged."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged files are no longer in Staging as they were staged."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld staged files can't be shown: Shutter Bridge doesn't know where their copies are." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged file can't be shown: Shutter Bridge doesn't know where its copy is."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged files can't be shown: Shutter Bridge doesn't know where their copies are."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld stars" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld star"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld stars"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "A name can only have letters, numbers, hyphens and dots." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A name can only have letters, numbers, hyphens and dots."
+          }
+        }
+      }
+    },
+    "A photo also imported from another camera stays imported." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A photo also imported from another camera stays imported."
+          }
+        }
+      }
+    },
+    "A reminder says your camera is nearby, once, and not again for 4 hours." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A reminder says your camera is nearby, once, and not again for 4 hours."
+          }
+        }
+      }
+    },
+    "About %@ left" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About %@ left"
+          }
+        }
+      }
+    },
+    "Accept the pairing request on this iPhone, then confirm on the camera. Keep the camera's Pairing screen open. This can take about 15 seconds." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accept the pairing request on this iPhone, then confirm on the camera. Keep the camera's Pairing screen open. This can take about 15 seconds."
+          }
+        }
+      }
+    },
+    "Add Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Camera"
+          }
+        }
+      }
+    },
+    "Add Wi-Fi Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Wi-Fi Camera"
+          }
+        }
+      }
+    },
+    "Add a camera on this iPhone's Wi-Fi network by its address." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a camera on this iPhone's Wi-Fi network by its address."
+          }
+        }
+      }
+    },
+    "Added %@ to staging." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added %@ to staging."
+          }
+        }
+      }
+    },
+    "Added %@ to the import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added %@ to the import."
+          }
+        }
+      }
+    },
+    "Address" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Address"
+          }
+        }
+      }
+    },
+    "Adds the camera to the list. Tap it there to connect." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adds the camera to the list. Tap it there to connect."
+          }
+        }
+      }
+    },
+    "All Cameras" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Cameras"
+          }
+        }
+      }
+    },
+    "Allow Local Network Access" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Local Network Access"
+          }
+        }
+      }
+    },
+    "Allow Shutter Bridge to use Bluetooth in Settings, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Shutter Bridge to use Bluetooth in Settings, then tap Try Again."
+          }
+        }
+      }
+    },
+    "Already Paired" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Already Paired"
+          }
+        }
+      }
+    },
+    "An address has four numbers from 0 to 255 with dots between them, such as 10.0.0.12." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An address has four numbers from 0 to 255 with dots between them, such as 10.0.0.12."
+          }
+        }
+      }
+    },
+    "An import is running. Stage these when it's done." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An import is running. Stage these when it's done."
+          }
+        }
+      }
+    },
+    "Another camera's import is still running. Let it finish, or cancel it, then import from this camera." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another camera's import is still running. Let it finish, or cancel it, then import from this camera."
+          }
+        }
+      }
+    },
+    "Another import is running. Import the keepers when it's done" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another import is running. Import the keepers when it's done"
+          }
+        }
+      }
+    },
+    "Any Date" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Any Date"
+          }
+        }
+      }
+    },
+    "Battery %@%%" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Battery %@%%"
+          }
+        }
+      }
+    },
+    "Bluetooth Access Is Off" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth Access Is Off"
+          }
+        }
+      }
+    },
+    "Bluetooth Function and Bluetooth Rmt Ctrl" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth Function and Bluetooth Rmt Ctrl"
+          }
+        }
+      }
+    },
+    "Bluetooth Is Off" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth Is Off"
+          }
+        }
+      }
+    },
+    "Bluetooth access is off for Shutter Bridge. Allow it in Settings, then open the camera again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth access is off for Shutter Bridge. Allow it in Settings, then open the camera again."
+          }
+        }
+      }
+    },
+    "Bluetooth is off. Turn it on to reach the camera, then open it again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bluetooth is off. Turn it on to reach the camera, then open it again."
+          }
+        }
+      }
+    },
+    "Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera"
+          }
+        }
+      }
+    },
+    "Camera Access Is Off" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera Access Is Off"
+          }
+        }
+      }
+    },
+    "Camera Address" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera Address"
+          }
+        }
+      }
+    },
+    "Camera Disconnected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera Disconnected"
+          }
+        }
+      }
+    },
+    "Camera Nearby" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera Nearby"
+          }
+        }
+      }
+    },
+    "Camera Not Connected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera Not Connected"
+          }
+        }
+      }
+    },
+    "Camera Paired" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera Paired"
+          }
+        }
+      }
+    },
+    "Camera added. Tap it to open its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera added. Tap it to open its card."
+          }
+        }
+      }
+    },
+    "Cameras" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cameras"
+          }
+        }
+      }
+    },
+    "Can't Look for Cameras" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't Look for Cameras"
+          }
+        }
+      }
+    },
+    "Can't Pair With This Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Can't Pair With This Camera"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        }
+      }
+    },
+    "Cancel Import" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel Import"
+          }
+        }
+      }
+    },
+    "Cancel this import?" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel this import?"
+          }
+        }
+      }
+    },
+    "Cancelled" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled"
+          }
+        }
+      }
+    },
+    "Cancelling…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelling…"
+          }
+        }
+      }
+    },
+    "Check that %@ are on." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check that %@ are on."
+          }
+        }
+      }
+    },
+    "Check that the camera is on and close to this iPhone with Bluetooth Function on, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check that the camera is on and close to this iPhone with Bluetooth Function on, then tap Try Again."
+          }
+        }
+      }
+    },
+    "Clear Filters" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Filters"
+          }
+        }
+      }
+    },
+    "Clear Mark" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Mark"
+          }
+        }
+      }
+    },
+    "Close" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close"
+          }
+        }
+      }
+    },
+    "Closes pairing. The camera is in the list." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Closes pairing. The camera is in the list."
+          }
+        }
+      }
+    },
+    "Come back to Shutter Bridge to finish joining the camera's Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Come back to Shutter Bridge to finish joining the camera's Wi-Fi."
+          }
+        }
+      }
+    },
+    "Connect" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect"
+          }
+        }
+      }
+    },
+    "Connect %@ with its USB-C cable, then tap here again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect %@ with its USB-C cable, then tap here again."
+          }
+        }
+      }
+    },
+    "Connect it with its cable to read its card and import new photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect it with its cable to read its card and import new photos."
+          }
+        }
+      }
+    },
+    "Connect the camera again to see its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect the camera again to see its card."
+          }
+        }
+      }
+    },
+    "Connect the camera to select this file." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect the camera to select this file."
+          }
+        }
+      }
+    },
+    "Connect the camera with a USB-C data cable and switch it on. When it asks, choose %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect the camera with a USB-C data cable and switch it on. When it asks, choose %@."
+          }
+        }
+      }
+    },
+    "Connecting to the Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting to the Camera"
+          }
+        }
+      }
+    },
+    "Connecting to the camera…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting to the camera…"
+          }
+        }
+      }
+    },
+    "Connection Lost" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection Lost"
+          }
+        }
+      }
+    },
+    "Connects to the camera and opens its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connects to the camera and opens its card."
+          }
+        }
+      }
+    },
+    "Continue" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue"
+          }
+        }
+      }
+    },
+    "Copied %@ as a JPEG." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied %@ as a JPEG."
+          }
+        }
+      }
+    },
+    "Copied the camera's preview: this RAW couldn't be decoded on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied the camera's preview: this RAW couldn't be decoded on this iPhone."
+          }
+        }
+      }
+    },
+    "Copy as JPEG" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy as JPEG"
+          }
+        }
+      }
+    },
+    "Copying from the camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copying from the camera"
+          }
+        }
+      }
+    },
+    "Couldn't Connect to the Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Connect to the Camera"
+          }
+        }
+      }
+    },
+    "Couldn't Find the Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Find the Camera"
+          }
+        }
+      }
+    },
+    "Couldn't Read History" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Read History"
+          }
+        }
+      }
+    },
+    "Couldn't Read Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Read Staging"
+          }
+        }
+      }
+    },
+    "Couldn't Read the Card" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Read the Card"
+          }
+        }
+      }
+    },
+    "Couldn't Show This Photo" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't Show This Photo"
+          }
+        }
+      }
+    },
+    "Couldn't read Staging again, so this list may be out of date." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read Staging again, so this list may be out of date."
+          }
+        }
+      }
+    },
+    "Couldn't read the marks, so nothing was imported or removed." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the marks, so nothing was imported or removed."
+          }
+        }
+      }
+    },
+    "Couldn't save the mark, so it's back as it was." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save the mark, so it's back as it was."
+          }
+        }
+      }
+    },
+    "Date" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Date"
+          }
+        }
+      }
+    },
+    "Deselect All" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deselect All"
+          }
+        }
+      }
+    },
+    "Disconnected from the camera's Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnected from the camera's Wi-Fi."
+          }
+        }
+      }
+    },
+    "Doesn't connect to the camera now." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Doesn't connect to the camera now."
+          }
+        }
+      }
+    },
+    "Done" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        }
+      }
+    },
+    "Downloading %@ from iCloud Drive before the import (%@ of %@)…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading %@ from iCloud Drive before the import (%@ of %@)…"
+          }
+        }
+      }
+    },
+    "Downloading from iCloud Drive, %@ percent" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading from iCloud Drive, %@ percent"
+          }
+        }
+      }
+    },
+    "Downloading from iCloud Drive…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading from iCloud Drive…"
+          }
+        }
+      }
+    },
+    "Export Diagnostics…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export Diagnostics…"
+          }
+        }
+      }
+    },
+    "Exports a text file of this app's own log: what it did, when, and how it went, with network names, serial numbers, identifiers and addresses removed. It is made on this iPhone and sent nowhere until you choose where to share it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exports a text file of this app's own log: what it did, when, and how it went, with network names, serial numbers, identifiers and addresses removed. It is made on this iPhone and sent nowhere until you choose where to share it."
+          }
+        }
+      }
+    },
+    "Failed: %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed: %@"
+          }
+        }
+      }
+    },
+    "Fetching %@ from the camera…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fetching %@ from the camera…"
+          }
+        }
+      }
+    },
+    "Files already imported are kept. The rest stay on the card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Files already imported are kept. The rest stay on the card."
+          }
+        }
+      }
+    },
+    "Files you stage from a camera's card appear here by camera and day, to keep or reject with no camera connected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Files you stage from a camera's card appear here by camera and day, to keep or reject with no camera connected."
+          }
+        }
+      }
+    },
+    "Filters" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filters"
+          }
+        }
+      }
+    },
+    "Finished" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finished"
+          }
+        }
+      }
+    },
+    "First photo of the day." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "First photo of the day."
+          }
+        }
+      }
+    },
+    "Fit to Screen" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fit to Screen"
+          }
+        }
+      }
+    },
+    "Forget Imports" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget Imports"
+          }
+        }
+      }
+    },
+    "Forget Imports from %@?" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget Imports from %@?"
+          }
+        }
+      }
+    },
+    "Forgot %@ from %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forgot %@ from %@."
+          }
+        }
+      }
+    },
+    "Four numbers with dots, such as 10.0.0.12, or a name. Add :port only if the camera uses a port other than 15740." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Four numbers with dots, such as 10.0.0.12, or a name. Add :port only if the camera uses a port other than 15740."
+          }
+        }
+      }
+    },
+    "From" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From"
+          }
+        }
+      }
+    },
+    "Getting ready…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Getting ready…"
+          }
+        }
+      }
+    },
+    "HEIF" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEIF"
+          }
+        }
+      }
+    },
+    "Hides these notes." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hides these notes."
+          }
+        }
+      }
+    },
+    "History" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "History"
+          }
+        }
+      }
+    },
+    "If the camera doesn't ask, unplug the cable and plug it in again, or change the USB connection mode in the camera's menu." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If the camera doesn't ask, unplug the cable and plug it in again, or change the USB connection mode in the camera's menu."
+          }
+        }
+      }
+    },
+    "If you swipe Shutter Bridge away in the app switcher, reminders stop until you next open it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If you swipe Shutter Bridge away in the app switcher, reminders stop until you next open it."
+          }
+        }
+      }
+    },
+    "Import" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import"
+          }
+        }
+      }
+    },
+    "Import Keepers" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Keepers"
+          }
+        }
+      }
+    },
+    "Import Keepers of %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Keepers of %@"
+          }
+        }
+      }
+    },
+    "Import Keepers of This Day" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Keepers of This Day"
+          }
+        }
+      }
+    },
+    "Import Now" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Now"
+          }
+        }
+      }
+    },
+    "Import cancelled." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import cancelled."
+          }
+        }
+      }
+    },
+    "Import finished." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import finished."
+          }
+        }
+      }
+    },
+    "Import from %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import from %@"
+          }
+        }
+      }
+    },
+    "Import paused. Open Shutter Bridge to continue." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import paused. Open Shutter Bridge to continue."
+          }
+        }
+      }
+    },
+    "Import stopped: %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import stopped: %@"
+          }
+        }
+      }
+    },
+    "Import stopped: Shutter Bridge couldn't read or update its catalogue of imported files, so it stopped rather than import files twice." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import stopped: Shutter Bridge couldn't read or update its catalogue of imported files, so it stopped rather than import files twice."
+          }
+        }
+      }
+    },
+    "Import to Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import to Photos"
+          }
+        }
+      }
+    },
+    "Imported" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported"
+          }
+        }
+      }
+    },
+    "Imported to Files" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported to Files"
+          }
+        }
+      }
+    },
+    "Imported to Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported to Photos"
+          }
+        }
+      }
+    },
+    "Imported to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported to Photos."
+          }
+        }
+      }
+    },
+    "Importing %@ to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing %@ to Photos."
+          }
+        }
+      }
+    },
+    "Importing %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing %@."
+          }
+        }
+      }
+    },
+    "Importing keepers from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing keepers from Staging"
+          }
+        }
+      }
+    },
+    "Importing keepers to Photos…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing keepers to Photos…"
+          }
+        }
+      }
+    },
+    "Importing photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing photos"
+          }
+        }
+      }
+    },
+    "Importing to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing to Photos."
+          }
+        }
+      }
+    },
+    "Imports and staging from your cameras are listed here, newest first." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imports and staging from your cameras are listed here, newest first."
+          }
+        }
+      }
+    },
+    "Imports the photos you kept to Photos, then offers to remove the staged copies." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imports the photos you kept to Photos, then offers to remove the staged copies."
+          }
+        }
+      }
+    },
+    "In %@ it takes longer, about 65–123 seconds, and the photos all appear at the end. %@ reads the card much sooner." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In %@ it takes longer, about 65–123 seconds, and the photos all appear at the end. %@ reads the card much sooner."
+          }
+        }
+      }
+    },
+    "In %@ the camera shares no photos over USB, so choose one of the Image Transfer modes." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In %@ the camera shares no photos over USB, so choose one of the Image Transfer modes."
+          }
+        }
+      }
+    },
+    "In %@ this takes about 7–12 seconds." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In %@ this takes about 7–12 seconds."
+          }
+        }
+      }
+    },
+    "In This Import" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In This Import"
+          }
+        }
+      }
+    },
+    "In progress" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In progress"
+          }
+        }
+      }
+    },
+    "It couldn't open its catalogue of imported files, so it can't tell which photos are already imported. Free some space on this iPhone, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It couldn't open its catalogue of imported files, so it can't tell which photos are already imported. Free some space on this iPhone, then tap Try Again."
+          }
+        }
+      }
+    },
+    "Its card will be read once Shutter Bridge can reach it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its card will be read once Shutter Bridge can reach it."
+          }
+        }
+      }
+    },
+    "JPEG" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JPEG"
+          }
+        }
+      }
+    },
+    "Joining the camera's Wi-Fi. Tap Join if iOS asks." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joining the camera's Wi-Fi. Tap Join if iOS asks."
+          }
+        }
+      }
+    },
+    "Joins the camera's Wi-Fi again and reads its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joins the camera's Wi-Fi again and reads its card."
+          }
+        }
+      }
+    },
+    "Joins the camera's Wi-Fi when opened" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joins the camera's Wi-Fi when opened"
+          }
+        }
+      }
+    },
+    "Keep" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep"
+          }
+        }
+      }
+    },
+    "Keep Importing" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Importing"
+          }
+        }
+      }
+    },
+    "Keep Shutter Bridge open until the JPEG is ready." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Shutter Bridge open until the JPEG is ready."
+          }
+        }
+      }
+    },
+    "Keep Shutter Bridge open while it imports over USB: the import pauses within a couple of seconds of leaving the app, and carries on when you come back. The screen stays on meanwhile." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Shutter Bridge open while it imports over USB: the import pauses within a couple of seconds of leaving the app, and carries on when you come back. The screen stays on meanwhile."
+          }
+        }
+      }
+    },
+    "Keep in Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep in Staging"
+          }
+        }
+      }
+    },
+    "Keepers are being imported from Staging. Import these when it's done." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keepers are being imported from Staging. Import these when it's done."
+          }
+        }
+      }
+    },
+    "Keepers from %@ to Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keepers from %@ to Photos"
+          }
+        }
+      }
+    },
+    "Keepers, %@ of %@ cameras" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keepers, %@ of %@ cameras"
+          }
+        }
+      }
+    },
+    "Kept" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kept"
+          }
+        }
+      }
+    },
+    "Kept." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kept."
+          }
+        }
+      }
+    },
+    "Last photo of the day." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last photo of the day."
+          }
+        }
+      }
+    },
+    "Leave out http:// and anything after the address." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave out http:// and anything after the address."
+          }
+        }
+      }
+    },
+    "Leaves the camera's Wi-Fi in" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leaves the camera's Wi-Fi in"
+          }
+        }
+      }
+    },
+    "Leaving the camera's Wi-Fi…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leaving the camera's Wi-Fi…"
+          }
+        }
+      }
+    },
+    "Lift Reject" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lift Reject"
+          }
+        }
+      }
+    },
+    "Loading the preview" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading the preview"
+          }
+        }
+      }
+    },
+    "Looking for a camera on the USB-C port." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Looking for a camera on the USB-C port."
+          }
+        }
+      }
+    },
+    "Looks for the camera over Bluetooth again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Looks for the camera over Bluetooth again."
+          }
+        }
+      }
+    },
+    "Low Power Mode may stop reminders." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Low Power Mode may stop reminders."
+          }
+        }
+      }
+    },
+    "MENU › Network › Bluetooth › Pairing" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MENU › Network › Bluetooth › Pairing"
+          }
+        }
+      }
+    },
+    "Makes a text file of the app's log and opens the share sheet. Nothing is sent until you choose where to share it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Makes a text file of the app's log and opens the share sheet. Nothing is sent until you choose where to share it."
+          }
+        }
+      }
+    },
+    "Makes this photo new again, so Select All New picks it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Makes this photo new again, so Select All New picks it."
+          }
+        }
+      }
+    },
+    "Making a JPEG from the HEIF…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Making a JPEG from the HEIF…"
+          }
+        }
+      }
+    },
+    "Making a JPEG from the RAW…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Making a JPEG from the RAW…"
+          }
+        }
+      }
+    },
+    "Mark cleared." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark cleared."
+          }
+        }
+      }
+    },
+    "Mark undone. %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark undone. %@."
+          }
+        }
+      }
+    },
+    "Nearby" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nearby"
+          }
+        }
+      }
+    },
+    "New" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New"
+          }
+        }
+      }
+    },
+    "New Only" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Only"
+          }
+        }
+      }
+    },
+    "Next Photo" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next Photo"
+          }
+        }
+      }
+    },
+    "No Camera Connected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Camera Connected"
+          }
+        }
+      }
+    },
+    "No Date" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Date"
+          }
+        }
+      }
+    },
+    "No Files over USB" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Files over USB"
+          }
+        }
+      }
+    },
+    "No Imports Yet" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Imports Yet"
+          }
+        }
+      }
+    },
+    "No Matching Files" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Matching Files"
+          }
+        }
+      }
+    },
+    "No Photos on the Card" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Photos on the Card"
+          }
+        }
+      }
+    },
+    "No Stars" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Stars"
+          }
+        }
+      }
+    },
+    "No capture date, so it can't be imported yet." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No capture date, so it can't be imported yet."
+          }
+        }
+      }
+    },
+    "No file on the card has a capture date." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No file on the card has a capture date."
+          }
+        }
+      }
+    },
+    "No files on the card match these filters." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No files on the card match these filters."
+          }
+        }
+      }
+    },
+    "No files selected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No files selected"
+          }
+        }
+      }
+    },
+    "No keepers or rejects to import or remove." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No keepers or rejects to import or remove."
+          }
+        }
+      }
+    },
+    "No mark" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No mark"
+          }
+        }
+      }
+    },
+    "No new photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No new photos"
+          }
+        }
+      }
+    },
+    "No quiet hours." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No quiet hours."
+          }
+        }
+      }
+    },
+    "No reminders from %@ to %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No reminders from %@ to %@."
+          }
+        }
+      }
+    },
+    "No stars" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No stars"
+          }
+        }
+      }
+    },
+    "None" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        }
+      }
+    },
+    "Not Now" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Now"
+          }
+        }
+      }
+    },
+    "Not Paired Yet" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Paired Yet"
+          }
+        }
+      }
+    },
+    "Not a photo" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not a photo"
+          }
+        }
+      }
+    },
+    "Not added to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not added to Photos."
+          }
+        }
+      }
+    },
+    "Not added to Photos. iCloud Drive uploads the files in the background." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not added to Photos. iCloud Drive uploads the files in the background."
+          }
+        }
+      }
+    },
+    "Not connected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not connected"
+          }
+        }
+      }
+    },
+    "Not imported: still in Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not imported: still in Staging"
+          }
+        }
+      }
+    },
+    "Not imported: still on the card" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not imported: still on the card"
+          }
+        }
+      }
+    },
+    "Nothing Staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Staged"
+          }
+        }
+      }
+    },
+    "Nothing imported" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing imported"
+          }
+        }
+      }
+    },
+    "Nothing left to import: those files are imported already." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing left to import: those files are imported already."
+          }
+        }
+      }
+    },
+    "Nothing left to stage: those files are staged already." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing left to stage: those files are staged already."
+          }
+        }
+      }
+    },
+    "Nothing staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing staged"
+          }
+        }
+      }
+    },
+    "Nothing to Import" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to Import"
+          }
+        }
+      }
+    },
+    "Nothing to undo." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to undo."
+          }
+        }
+      }
+    },
+    "Nothing was removed from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing was removed from Staging"
+          }
+        }
+      }
+    },
+    "Notifications are off for Shutter Bridge. Turn them on in Settings to get reminders." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications are off for Shutter Bridge. Turn them on in Settings to get reminders."
+          }
+        }
+      }
+    },
+    "Off" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off"
+          }
+        }
+      }
+    },
+    "On" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On"
+          }
+        }
+      }
+    },
+    "On the camera, open %@ and leave that screen open." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the camera, open %@ and leave that screen open."
+          }
+        }
+      }
+    },
+    "On the camera, turn on Bluetooth Function and Remote Power ON/OFF so it can be noticed nearby while it's off." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the camera, turn on Bluetooth Function and Remote Power ON/OFF so it can be noticed nearby while it's off."
+          }
+        }
+      }
+    },
+    "On this iPhone's Wi-Fi network" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On this iPhone's Wi-Fi network"
+          }
+        }
+      }
+    },
+    "Only These Dates" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only These Dates"
+          }
+        }
+      }
+    },
+    "Open %@ in Cameras to connect over Wi-Fi, then tap here again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open %@ in Cameras to connect over Wi-Fi, then tap here again."
+          }
+        }
+      }
+    },
+    "Open Settings" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Settings"
+          }
+        }
+      }
+    },
+    "Open Shutter Bridge to join the camera's Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Shutter Bridge to join the camera's Wi-Fi."
+          }
+        }
+      }
+    },
+    "Opening Shutter Bridge…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opening Shutter Bridge…"
+          }
+        }
+      }
+    },
+    "Opening the camera…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opening the camera…"
+          }
+        }
+      }
+    },
+    "Opens Import with the files this job didn't finish, when the camera is connected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens Import with the files this job didn't finish, when the camera is connected."
+          }
+        }
+      }
+    },
+    "Opens Import with this job's failed files that still aren't imported, when the camera is connected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens Import with this job's failed files that still aren't imported, when the camera is connected."
+          }
+        }
+      }
+    },
+    "Opens Shutter Bridge's page in Settings." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens Shutter Bridge's page in Settings."
+          }
+        }
+      }
+    },
+    "Opens the camera's card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the camera's card."
+          }
+        }
+      }
+    },
+    "Opens the import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the import."
+          }
+        }
+      }
+    },
+    "Opens the photos of this day, at the first one with no mark." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the photos of this day, at the first one with no mark."
+          }
+        }
+      }
+    },
+    "Opens the settings for the reminder when your camera is nearby." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the settings for the reminder when your camera is nearby."
+          }
+        }
+      }
+    },
+    "Opens the staged files." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens the staged files."
+          }
+        }
+      }
+    },
+    "Or set up a camera over Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Or set up a camera over Wi-Fi."
+          }
+        }
+      }
+    },
+    "Other" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other"
+          }
+        }
+      }
+    },
+    "Pair Over Bluetooth" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pair Over Bluetooth"
+          }
+        }
+      }
+    },
+    "Pair Your Camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pair Your Camera"
+          }
+        }
+      }
+    },
+    "Pair a camera over Bluetooth, or add one on this iPhone's Wi-Fi network by its address." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pair a camera over Bluetooth, or add one on this iPhone's Wi-Fi network by its address."
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause"
+          }
+        }
+      }
+    },
+    "Paused while Shutter Bridge was in the background. Tap Continue to resume." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused while Shutter Bridge was in the background. Tap Continue to resume."
+          }
+        }
+      }
+    },
+    "Paused. Tap Continue to resume." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused. Tap Continue to resume."
+          }
+        }
+      }
+    },
+    "Paused: Shutter Bridge couldn't join the camera's Wi-Fi. Tap Try Again, then tap Join if iOS asks." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: Shutter Bridge couldn't join the camera's Wi-Fi. Tap Try Again, then tap Join if iOS asks."
+          }
+        }
+      }
+    },
+    "Paused: open Shutter Bridge to continue." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: open Shutter Bridge to continue."
+          }
+        }
+      }
+    },
+    "Paused: open Shutter Bridge to join the camera's Wi-Fi, then the import carries on." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: open Shutter Bridge to join the camera's Wi-Fi, then the import carries on."
+          }
+        }
+      }
+    },
+    "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on, then tap Try Again."
+          }
+        }
+      }
+    },
+    "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on; the import resumes when it's back in reach." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on; the import resumes when it's back in reach."
+          }
+        }
+      }
+    },
+    "Paused: the camera isn't offering its card. Check that the card is in the camera, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera isn't offering its card. Check that the card is in the camera, then tap Try Again."
+          }
+        }
+      }
+    },
+    "Paused: the camera isn't offering its card. Check that the card is in the camera; the import resumes by itself." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera isn't offering its card. Check that the card is in the camera; the import resumes by itself."
+          }
+        }
+      }
+    },
+    "Paused: the camera stopped sending. Check the cable and the camera, then tap Continue." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera stopped sending. Check the cable and the camera, then tap Continue."
+          }
+        }
+      }
+    },
+    "Paused: the camera was disconnected. Connect it again and the import carries on." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera was disconnected. Connect it again and the import carries on."
+          }
+        }
+      }
+    },
+    "Paused: the camera was disconnected. Connect it again in %@ and the import carries on." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused: the camera was disconnected. Connect it again in %@ and the import carries on."
+          }
+        }
+      }
+    },
+    "Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos"
+          }
+        }
+      }
+    },
+    "Photos access is off" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos access is off"
+          }
+        }
+      }
+    },
+    "Photos access is off, so Import to Photos stages the photos instead." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos access is off, so Import to Photos stages the photos instead."
+          }
+        }
+      }
+    },
+    "Photos access is off, so photos are being staged instead. Allow access in Settings to import to Photos next time." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos access is off, so photos are being staged instead. Allow access in Settings to import to Photos next time."
+          }
+        }
+      }
+    },
+    "Photos access needed: Photos access is off, so the keepers not yet imported stay in Staging. Allow access in Settings, then import the keepers again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos access needed: Photos access is off, so the keepers not yet imported stay in Staging. Allow access in Settings, then import the keepers again."
+          }
+        }
+      }
+    },
+    "Photos access needed: Photos is restricted on this iPhone, so the keepers not yet imported stay in Staging." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos access needed: Photos is restricted on this iPhone, so the keepers not yet imported stay in Staging."
+          }
+        }
+      }
+    },
+    "Photos is restricted on this iPhone, by Screen Time or device management, so photos are being staged instead." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos is restricted on this iPhone, by Screen Time or device management, so photos are being staged instead."
+          }
+        }
+      }
+    },
+    "Photos is restricted on this iPhone, so Import to Photos stages the photos instead." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos is restricted on this iPhone, so Import to Photos stages the photos instead."
+          }
+        }
+      }
+    },
+    "Photos, album “%@”" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos, album “%@”"
+          }
+        }
+      }
+    },
+    "Preparing the JPEG…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing the JPEG…"
+          }
+        }
+      }
+    },
+    "Preparing the file…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing the file…"
+          }
+        }
+      }
+    },
+    "Previous Photo" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous Photo"
+          }
+        }
+      }
+    },
+    "Quiet Hours" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quiet Hours"
+          }
+        }
+      }
+    },
+    "RAW" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RAW"
+          }
+        }
+      }
+    },
+    "RAW+%@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RAW+%@"
+          }
+        }
+      }
+    },
+    "RAW+HEIF" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RAW+HEIF"
+          }
+        }
+      }
+    },
+    "RAW+JPEG" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RAW+JPEG"
+          }
+        }
+      }
+    },
+    "Re-run Failed Files" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Re-run Failed Files"
+          }
+        }
+      }
+    },
+    "Reaching %@. Its new photos will be imported to Photos once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reaching %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "Reaching %@. Its new photos will be staged once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reaching %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
+    "Reaching the camera again…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reaching the camera again…"
+          }
+        }
+      }
+    },
+    "Reading History…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading History…"
+          }
+        }
+      }
+    },
+    "Reading Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading Staging"
+          }
+        }
+      }
+    },
+    "Reading Times" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading Times"
+          }
+        }
+      }
+    },
+    "Reading the Card" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the Card"
+          }
+        }
+      }
+    },
+    "Reading the card in %@. Its new photos will be imported to Photos once it's read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the card in %@. Its new photos will be imported to Photos once it's read."
+          }
+        }
+      }
+    },
+    "Reading the card in %@. Its new photos will be staged once it's read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the card in %@. Its new photos will be staged once it's read."
+          }
+        }
+      }
+    },
+    "Reading the card…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the card…"
+          }
+        }
+      }
+    },
+    "Reading the keepers…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the keepers…"
+          }
+        }
+      }
+    },
+    "Reading the staged files." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading the staged files."
+          }
+        }
+      }
+    },
+    "Reconnect" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnect"
+          }
+        }
+      }
+    },
+    "Reconnecting to the camera…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnecting to the camera…"
+          }
+        }
+      }
+    },
+    "Reject" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reject"
+          }
+        }
+      }
+    },
+    "Rejected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rejected"
+          }
+        }
+      }
+    },
+    "Rejected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rejected."
+          }
+        }
+      }
+    },
+    "Remind Me About" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remind Me About"
+          }
+        }
+      }
+    },
+    "Remind Me When My Camera Is Nearby" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remind Me When My Camera Is Nearby"
+          }
+        }
+      }
+    },
+    "Reminders" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reminders"
+          }
+        }
+      }
+    },
+    "Remove" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        }
+      }
+    },
+    "Remove %lld Staged Files?" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Remove %lld Staged File?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Remove %lld Staged Files?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Removing staged copies…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removing staged copies…"
+          }
+        }
+      }
+    },
+    "Resumable" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resumable"
+          }
+        }
+      }
+    },
+    "Resumable: %@ left" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resumable: %@ left"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume"
+          }
+        }
+      }
+    },
+    "Saving to Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving to Photos"
+          }
+        }
+      }
+    },
+    "Saving to Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving to Staging"
+          }
+        }
+      }
+    },
+    "Select" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select"
+          }
+        }
+      }
+    },
+    "Select All New" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select All New"
+          }
+        }
+      }
+    },
+    "Select Items" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select Items"
+          }
+        }
+      }
+    },
+    "Select photos on a camera's card and tap Import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select photos on a camera's card and tap Import."
+          }
+        }
+      }
+    },
+    "Settings" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings"
+          }
+        }
+      }
+    },
+    "Share as JPEG…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share as JPEG…"
+          }
+        }
+      }
+    },
+    "Sharing the camera's preview: this RAW couldn't be decoded on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sharing the camera's preview: this RAW couldn't be decoded on this iPhone."
+          }
+        }
+      }
+    },
+    "Show in Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show in Staging"
+          }
+        }
+      }
+    },
+    "Showing the camera's preview: this RAW couldn't be decoded on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Showing the camera's preview: this RAW couldn't be decoded on this iPhone."
+          }
+        }
+      }
+    },
+    "Showing the card as it was on %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Showing the card as it was on %@."
+          }
+        }
+      }
+    },
+    "Shows iOS's Local Network prompt next." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows iOS's Local Network prompt next."
+          }
+        }
+      }
+    },
+    "Shows this job's folder in Staging." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows this job's folder in Staging."
+          }
+        }
+      }
+    },
+    "Shutter Bridge Couldn't Start" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge Couldn't Start"
+          }
+        }
+      }
+    },
+    "Shutter Bridge asks to send notifications so it can tell you if an import pauses." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge asks to send notifications so it can tell you if an import pauses."
+          }
+        }
+      }
+    },
+    "Shutter Bridge can now switch on the camera's Wi-Fi and join it for you." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge can now switch on the camera's Wi-Fi and join it for you."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't find the camera. Check that it is on and close to this iPhone with Bluetooth on, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't find the camera. Check that it is on and close to this iPhone with Bluetooth on, then try again."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't open its catalogue. Open the app to see why." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't open its catalogue. Open the app to see why."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read its catalogue. Try again in a moment." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read its catalogue. Try again in a moment."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read its list of staged files." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read its list of staged files."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@, so its new photos won't be imported to Photos. Open Browse to see why." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@, so its new photos won't be imported to Photos. Open Browse to see why."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@, so its new photos won't be staged. Open Browse to see why." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@, so its new photos won't be staged. Open Browse to see why."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be staged once the card is read."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't read the card in %@. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't read the card in %@. Try again."
+          }
+        }
+      }
+    },
+    "Shutter Bridge couldn't start looking for a camera on the USB-C port. Tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge couldn't start looking for a camera on the USB-C port. Tap Try Again."
+          }
+        }
+      }
+    },
+    "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in Shutter Bridge until iOS asks to join." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in Shutter Bridge until iOS asks to join."
+          }
+        }
+      }
+    },
+    "Shutter Bridge hasn't read this camera's card yet." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge hasn't read this camera's card yet."
+          }
+        }
+      }
+    },
+    "Shutter Bridge is reaching the camera over Bluetooth and its Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge is reaching the camera over Bluetooth and its Wi-Fi."
+          }
+        }
+      }
+    },
+    "Shutter Bridge isn't allowed to read from a connected camera. Check Shutter Bridge's Camera setting in Settings. If Screen Time or a profile restricts it on this iPhone, it can't be changed here." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge isn't allowed to read from a connected camera. Check Shutter Bridge's Camera setting in Settings. If Screen Time or a profile restricts it on this iPhone, it can't be changed here."
+          }
+        }
+      }
+    },
+    "Shutter Bridge isn't allowed to read from the camera." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge isn't allowed to read from the camera."
+          }
+        }
+      }
+    },
+    "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Open the camera again and choose Join when iOS asks." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Open the camera again and choose Join when iOS asks."
+          }
+        }
+      }
+    },
+    "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Try again, and choose Join when iOS asks." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Try again, and choose Join when iOS asks."
+          }
+        }
+      }
+    },
+    "Shutter Bridge will forget which photos it imported from %@, so they show as new on its card and could be imported again. The photos stay in Photos, staged copies stay in Staging, and nothing on the camera changes." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shutter Bridge will forget which photos it imported from %@, so they show as new on its card and could be imported again. The photos stay in Photos, staged copies stay in Staging, and nothing on the camera changes."
+          }
+        }
+      }
+    },
+    "Skipped: %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skipped: %@"
+          }
+        }
+      }
+    },
+    "Snooze 1 Hour" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snooze 1 Hour"
+          }
+        }
+      }
+    },
+    "Stage" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage"
+          }
+        }
+      }
+    },
+    "Stage copies the camera's originals into this folder, in a folder for each camera and capture day, and leaves Photos alone. Choose Import to Photos or Stage from the Import button each time you import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage copies the camera's originals into this folder, in a folder for each camera and capture day, and leaves Photos alone. Choose Import to Photos or Stage from the Import button each time you import."
+          }
+        }
+      }
+    },
+    "Stage from %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage from %@"
+          }
+        }
+      }
+    },
+    "Stage in iCloud Drive" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage in iCloud Drive"
+          }
+        }
+      }
+    },
+    "Stage on iPhone" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stage on iPhone"
+          }
+        }
+      }
+    },
+    "Staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staged"
+          }
+        }
+      }
+    },
+    "Staged files on this iPhone or in iCloud Drive" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staged files on this iPhone or in iCloud Drive"
+          }
+        }
+      }
+    },
+    "Staged in %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staged in %@."
+          }
+        }
+      }
+    },
+    "Staged in iCloud Drive" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staged in iCloud Drive"
+          }
+        }
+      }
+    },
+    "Staged on this iPhone" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staged on this iPhone"
+          }
+        }
+      }
+    },
+    "Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging"
+          }
+        }
+      }
+    },
+    "Staging %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging %@."
+          }
+        }
+      }
+    },
+    "Staging folder, %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging folder, %@"
+          }
+        }
+      }
+    },
+    "Staging instead of Photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging instead of Photos"
+          }
+        }
+      }
+    },
+    "Staging is running. Import these when it's done." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging is running. Import these when it's done."
+          }
+        }
+      }
+    },
+    "Staging paused. Open Shutter Bridge to continue." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging paused. Open Shutter Bridge to continue."
+          }
+        }
+      }
+    },
+    "Staging photos" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging photos"
+          }
+        }
+      }
+    },
+    "Staging to %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging to %@."
+          }
+        }
+      }
+    },
+    "Stars" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stars"
+          }
+        }
+      }
+    },
+    "Start Pairing" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Pairing"
+          }
+        }
+      }
+    },
+    "Starting to import the new photos to Photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting to import the new photos to Photos."
+          }
+        }
+      }
+    },
+    "Starting to stage the new photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting to stage the new photos."
+          }
+        }
+      }
+    },
+    "Starts looking for the camera over Bluetooth." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts looking for the camera over Bluetooth."
+          }
+        }
+      }
+    },
+    "Step %@ of %@. %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Step %@ of %@. %@"
+          }
+        }
+      }
+    },
+    "Still joined to the camera's Wi-Fi, so a second import starts at once." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still joined to the camera's Wi-Fi, so a second import starts at once."
+          }
+        }
+      }
+    },
+    "Still waiting. If you didn't see a prompt, turn on Local Network for Shutter Bridge in Settings, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still waiting. If you didn't see a prompt, turn on Local Network for Shutter Bridge in Settings, then try again."
+          }
+        }
+      }
+    },
+    "Stopped" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped"
+          }
+        }
+      }
+    },
+    "Stopped early" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped early"
+          }
+        }
+      }
+    },
+    "Stopped: %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped: %@"
+          }
+        }
+      }
+    },
+    "Stopped: Photos access needed" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped: Photos access needed"
+          }
+        }
+      }
+    },
+    "Stopped: Shutter Bridge couldn't read or update its catalogue" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped: Shutter Bridge couldn't read or update its catalogue"
+          }
+        }
+      }
+    },
+    "Stops pairing and goes back to the steps." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stops pairing and goes back to the steps."
+          }
+        }
+      }
+    },
+    "Swipe up or down with one finger for the next or previous photo. Keep, Reject, the stars, Undo and zoom are in the actions." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Swipe up or down with one finger for the next or previous photo. Keep, Reject, the stars, Undo and zoom are in the actions."
+          }
+        }
+      }
+    },
+    "Switch a camera off to stop reminders about it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch a camera off to stop reminders about it."
+          }
+        }
+      }
+    },
+    "Switches on the camera's Wi-Fi over Bluetooth if needed, joins it and carries on with the import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switches on the camera's Wi-Fi over Bluetooth if needed, joins it and carries on with the import."
+          }
+        }
+      }
+    },
+    "Switches on the camera's Wi-Fi, joins it and opens the camera's card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switches on the camera's Wi-Fi, joins it and opens the camera's card."
+          }
+        }
+      }
+    },
+    "Switching on the camera's Wi-Fi…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switching on the camera's Wi-Fi…"
+          }
+        }
+      }
+    },
+    "Tap Connect to reach it over Wi-Fi and read its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap Connect to reach it over Wi-Fi and read its card."
+          }
+        }
+      }
+    },
+    "Tap Start Pairing. Two prompts follow: first iOS asks to pair this iPhone with the camera over Bluetooth, then %@. Accept both." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap Start Pairing. Two prompts follow: first iOS asks to pair this iPhone with the camera over Bluetooth, then %@. Accept both."
+          }
+        }
+      }
+    },
+    "That address can't be a camera. Check the numbers, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That address can't be a camera. Check the numbers, then try again."
+          }
+        }
+      }
+    },
+    "That is the camera's own network. Set the camera up with Bluetooth instead: Shutter Bridge joins that network for you." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That is the camera's own network. Set the camera up with Bluetooth instead: Shutter Bridge joins that network for you."
+          }
+        }
+      }
+    },
+    "That isn't an address Shutter Bridge can use. Check it, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That isn't an address Shutter Bridge can use. Check it, then try again."
+          }
+        }
+      }
+    },
+    "The Bluetooth connection to the camera dropped twice. Open %@ on the camera again and move closer, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Bluetooth connection to the camera dropped twice. Open %@ on the camera again and move closer, then tap Try Again."
+          }
+        }
+      }
+    },
+    "The Bluetooth connection to the camera failed. Move closer to the camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Bluetooth connection to the camera failed. Move closer to the camera, then try again."
+          }
+        }
+      }
+    },
+    "The JPEG couldn't be copied. Try again, or use Share as JPEG." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The JPEG couldn't be copied. Try again, or use Share as JPEG."
+          }
+        }
+      }
+    },
+    "The JPEG couldn't be prepared. Check that this iPhone has free space, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The JPEG couldn't be prepared. Check that this iPhone has free space, then try again."
+          }
+        }
+      }
+    },
+    "The camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera"
+          }
+        }
+      }
+    },
+    "The camera couldn't read its card. Check the card in the camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera couldn't read its card. Check the card in the camera, then try again."
+          }
+        }
+      }
+    },
+    "The camera couldn't read this file. Check the card in the camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera couldn't read this file. Check the card in the camera, then try again."
+          }
+        }
+      }
+    },
+    "The camera didn't accept the pairing. On the camera, open %@ and leave that screen open, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera didn't accept the pairing. On the camera, open %@ and leave that screen open, then tap Try Again."
+          }
+        }
+      }
+    },
+    "The camera didn't answer. Check that it is on and its Wi-Fi is on, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera didn't answer. Check that it is on and its Wi-Fi is on, then try again."
+          }
+        }
+      }
+    },
+    "The camera didn't answer. Check the cable and that the camera is on, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera didn't answer. Check the cable and that the camera is on, then try again."
+          }
+        }
+      }
+    },
+    "The camera didn't answer. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera didn't answer. Try again."
+          }
+        }
+      }
+    },
+    "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then try again."
+          }
+        }
+      }
+    },
+    "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Check that its firmware is up to date, or import over USB-C instead." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Check that its firmware is up to date, or import over USB-C instead."
+          }
+        }
+      }
+    },
+    "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Import over USB-C instead." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Import over USB-C instead."
+          }
+        }
+      }
+    },
+    "The camera is sharing no files over USB. Reconnect it and choose %@ or %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera is sharing no files over USB. Reconnect it and choose %@ or %@."
+          }
+        }
+      }
+    },
+    "The camera isn't connected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera isn't connected."
+          }
+        }
+      }
+    },
+    "The camera isn't offering its card right now. Check that the card is in the camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera isn't offering its card right now. Check that the card is in the camera, then try again."
+          }
+        }
+      }
+    },
+    "The camera isn't offering its card right now. Try again in a moment." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera isn't offering its card right now. Try again in a moment."
+          }
+        }
+      }
+    },
+    "The camera isn't paired with this iPhone. Open %@ on the camera, then open the camera here again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera isn't paired with this iPhone. Open %@ on the camera, then open the camera here again."
+          }
+        }
+      }
+    },
+    "The camera refused the connection. Check its network settings, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera refused the connection. Check its network settings, then try again."
+          }
+        }
+      }
+    },
+    "The camera refused the connection. Close any other app connected to it, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera refused the connection. Close any other app connected to it, then try again."
+          }
+        }
+      }
+    },
+    "The camera stopped sending, so the file is being copied again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera stopped sending, so the file is being copied again."
+          }
+        }
+      }
+    },
+    "The camera was disconnected. Connect it again, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera was disconnected. Connect it again, then try again."
+          }
+        }
+      }
+    },
+    "The camera's Wi-Fi didn't answer after joining. Move closer to the camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera's Wi-Fi didn't answer after joining. Move closer to the camera, then try again."
+          }
+        }
+      }
+    },
+    "The camera's Wi-Fi may stay on for a while. Switching the camera off ends it." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera's Wi-Fi may stay on for a while. Switching the camera off ends it."
+          }
+        }
+      }
+    },
+    "The camera's Wi-Fi switched itself off before iOS joined it. Try again, and tap Join as soon as iOS asks." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera's Wi-Fi switched itself off before iOS joined it. Try again, and tap Join as soon as iOS asks."
+          }
+        }
+      }
+    },
+    "The camera's Wi-Fi switched itself off while joining. Try again, and tap Join as soon as iOS asks." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The camera's Wi-Fi switched itself off while joining. Try again, and tap Join as soon as iOS asks."
+          }
+        }
+      }
+    },
+    "The card had no files when it was last read, on %@." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The card had no files when it was last read, on %@."
+          }
+        }
+      }
+    },
+    "The diagnostics file couldn't be made. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The diagnostics file couldn't be made. Try again."
+          }
+        }
+      }
+    },
+    "The import couldn't start. Check the camera is still connected, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The import couldn't start. Check the camera is still connected, then try again."
+          }
+        }
+      }
+    },
+    "The import from %@ didn't start. Open Browse and tap Import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The import from %@ didn't start. Open Browse and tap Import."
+          }
+        }
+      }
+    },
+    "The import is starting. Try again in a moment." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The import is starting. Try again in a moment."
+          }
+        }
+      }
+    },
+    "The import stopped, so nothing was removed from Staging" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The import stopped, so nothing was removed from Staging"
+          }
+        }
+      }
+    },
+    "The port must be a number from 1 to 65535. Leave it out to use 15740." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The port must be a number from 1 to 65535. Leave it out to use 15740."
+          }
+        }
+      }
+    },
+    "The reject couldn't be lifted. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The reject couldn't be lifted. Try again."
+          }
+        }
+      }
+    },
+    "The share sheet couldn't be shown. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The share sheet couldn't be shown. Try again."
+          }
+        }
+      }
+    },
+    "The staged file couldn't be read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The staged file couldn't be read."
+          }
+        }
+      }
+    },
+    "There are no files on the card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There are no files on the card."
+          }
+        }
+      }
+    },
+    "There were no imports from %@ to forget." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There were no imports from %@ to forget."
+          }
+        }
+      }
+    },
+    "There's no preview for this file." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There's no preview for this file."
+          }
+        }
+      }
+    },
+    "These files are already imported or in the import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These files are already imported or in the import."
+          }
+        }
+      }
+    },
+    "These files are already staged or being staged." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These files are already staged or being staged."
+          }
+        }
+      }
+    },
+    "These files couldn't be added to the import. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These files couldn't be added to the import. Try again."
+          }
+        }
+      }
+    },
+    "This can take a while on a full card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This can take a while on a full card."
+          }
+        }
+      }
+    },
+    "This file can't be made into a JPEG. Import it to keep the original." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This file can't be made into a JPEG. Import it to keep the original."
+          }
+        }
+      }
+    },
+    "This file is no longer on the card. Go back to Cameras and open the camera again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This file is no longer on the card. Go back to Cameras and open the camera again."
+          }
+        }
+      }
+    },
+    "This iPhone is already paired with the camera, so there was nothing to confirm. Shutter Bridge can switch on the camera's Wi-Fi and join it for you." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone is already paired with the camera, so there was nothing to confirm. Shutter Bridge can switch on the camera's Wi-Fi and join it for you."
+          }
+        }
+      }
+    },
+    "This iPhone is out of space. Free some space, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone is out of space. Free some space, then try again."
+          }
+        }
+      }
+    },
+    "This isn't the camera that was connected before. Connect that camera again, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This isn't the camera that was connected before. Connect that camera again, then try again."
+          }
+        }
+      }
+    },
+    "This isn't the camera that was connected before. Connect to the same camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This isn't the camera that was connected before. Connect to the same camera, then try again."
+          }
+        }
+      }
+    },
+    "This kind of file can't be imported." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This kind of file can't be imported."
+          }
+        }
+      }
+    },
+    "This photo couldn't be made into a JPEG on this iPhone. Import it to keep the original." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This photo couldn't be made into a JPEG on this iPhone. Import it to keep the original."
+          }
+        }
+      }
+    },
+    "To" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To"
+          }
+        }
+      }
+    },
+    "To talk to the camera over Wi-Fi, iOS asks whether Shutter Bridge may find devices on your local network. Tap Allow. Without it the camera can't be reached over Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To talk to the camera over Wi-Fi, iOS asks whether Shutter Bridge may find devices on your local network. Tap Allow. Without it the camera can't be reached over Wi-Fi."
+          }
+        }
+      }
+    },
+    "Today" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today"
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try Again"
+          }
+        }
+      }
+    },
+    "Trying again" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trying again"
+          }
+        }
+      }
+    },
+    "Turn on Bluetooth in Control Centre or Settings, then tap Try Again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn on Bluetooth in Control Centre or Settings, then tap Try Again."
+          }
+        }
+      }
+    },
+    "Type" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type"
+          }
+        }
+      }
+    },
+    "Type an Address" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type an Address"
+          }
+        }
+      }
+    },
+    "USB-C" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USB-C"
+          }
+        }
+      }
+    },
+    "Undo" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Undo"
+          }
+        }
+      }
+    },
+    "Unmarked files stay." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unmarked files stay."
+          }
+        }
+      }
+    },
+    "Use an IPv4 address (four numbers with dots) or a name. IPv6 isn't supported." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use an IPv4 address (four numbers with dots) or a name. IPv6 isn't supported."
+          }
+        }
+      }
+    },
+    "Use this when the camera and this iPhone are on the same Wi-Fi network. Find the camera's IP address in its network settings and type it here." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use this when the camera and this iPhone are on the same Wi-Fi network. Find the camera's IP address in its network settings and type it here."
+          }
+        }
+      }
+    },
+    "Uses the last choice. Import to Photos and Stage are in its menu." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uses the last choice. Import to Photos and Stage are in its menu."
+          }
+        }
+      }
+    },
+    "Video" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video"
+          }
+        }
+      }
+    },
+    "Video: from 1.1" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video: from 1.1"
+          }
+        }
+      }
+    },
+    "Videos can't be imported yet." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Videos can't be imported yet."
+          }
+        }
+      }
+    },
+    "Wait for the import from %@ to finish, then forget its imports." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wait for the import from %@ to finish, then forget its imports."
+          }
+        }
+      }
+    },
+    "Wait until the card has been read." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wait until the card has been read."
+          }
+        }
+      }
+    },
+    "Waiting" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting"
+          }
+        }
+      }
+    },
+    "Waiting for Local Network access. Tap Allow in the iOS prompt." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for Local Network access. Tap Allow in the iOS prompt."
+          }
+        }
+      }
+    },
+    "Waiting for You" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for You"
+          }
+        }
+      }
+    },
+    "Waiting for your answer about Photos access…" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for your answer about Photos access…"
+          }
+        }
+      }
+    },
+    "When the camera asks you to Select USB Connect Mode, choose %@: it shows your photos soonest. %@ works too, but reads the card more slowly." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When the camera asks you to Select USB Connect Mode, choose %@: it shows your photos soonest. %@ works too, but reads the card more slowly."
+          }
+        }
+      }
+    },
+    "Which USB Mode?" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Which USB Mode?"
+          }
+        }
+      }
+    },
+    "While this iPhone is joined to the camera's Wi-Fi, its internet uses mobile data." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "While this iPhone is joined to the camera's Wi-Fi, its internet uses mobile data."
+          }
+        }
+      }
+    },
+    "Wi-Fi" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wi-Fi"
+          }
+        }
+      }
+    },
+    "Yesterday" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yesterday"
+          }
+        }
+      }
+    },
+    "Your camera is nearby. %@ not yet imported when you last connected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your camera is nearby. %@ not yet imported when you last connected."
+          }
+        }
+      }
+    },
+    "Your camera is nearby. Open Shutter Bridge to import your photos." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your camera is nearby. Open Shutter Bridge to import your photos."
+          }
+        }
+      }
+    },
+    "Zoom In" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom In"
+          }
+        }
+      }
+    },
+    "Zoom to Actual Size" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom to Actual Size"
+          }
+        }
+      }
+    },
+    "a different camera answered." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "a different camera answered."
+          }
+        }
+      }
+    },
+    "already staged" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "already staged"
+          }
+        }
+      }
+    },
+    "and so do %lld rejects of the same days" : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "and so does %lld reject of the same day"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "and so do %lld rejects of the same days"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "iCloud Drive became unavailable, so staging is on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive became unavailable, so staging is on this iPhone."
+          }
+        }
+      }
+    },
+    "iCloud Drive became unavailable, so the rest are staged on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive became unavailable, so the rest are staged on this iPhone."
+          }
+        }
+      }
+    },
+    "iCloud Drive is off or you're not signed in to iCloud, so staging is on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive is off or you're not signed in to iCloud, so staging is on this iPhone."
+          }
+        }
+      }
+    },
+    "iCloud Drive is off or you're not signed in to iCloud, so they stay on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive is off or you're not signed in to iCloud, so they stay on this iPhone."
+          }
+        }
+      }
+    },
+    "iCloud Drive isn't available" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive isn't available"
+          }
+        }
+      }
+    },
+    "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone."
+          }
+        }
+      }
+    },
+    "iCloud Drive isn't available to Shutter Bridge, so they stay on this iPhone." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iCloud Drive isn't available to Shutter Bridge, so they stay on this iPhone."
+          }
+        }
+      }
+    },
+    "iOS also asks whether Shutter Bridge may use Bluetooth." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS also asks whether Shutter Bridge may use Bluetooth."
+          }
+        }
+      }
+    },
+    "iOS couldn't join the camera's Wi-Fi. Move closer to the camera, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS couldn't join the camera's Wi-Fi. Move closer to the camera, then try again."
+          }
+        }
+      }
+    },
+    "iOS couldn't use the camera's network details. Try again; if it keeps happening, switch the camera off and on." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS couldn't use the camera's network details. Try again; if it keeps happening, switch the camera off and on."
+          }
+        }
+      }
+    },
+    "in %@" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "in %@"
+          }
+        }
+      }
+    },
+    "it couldn't be saved" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "it couldn't be saved"
+          }
+        }
+      }
+    },
+    "no capture date" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no capture date"
+          }
+        }
+      }
+    },
+    "no longer on the card" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no longer on the card"
+          }
+        }
+      }
+    },
+    "not a photo" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "not a photo"
+          }
+        }
+      }
+    },
+    "so far" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "so far"
+          }
+        }
+      }
+    },
+    "the camera" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera"
+          }
+        }
+      }
+    },
+    "the camera asks you to confirm" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera asks you to confirm"
+          }
+        }
+      }
+    },
+    "the camera asks ‘%@’" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera asks ‘%@’"
+          }
+        }
+      }
+    },
+    "the camera couldn't read it" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera couldn't read it"
+          }
+        }
+      }
+    },
+    "the camera couldn't read its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera couldn't read its card."
+          }
+        }
+      }
+    },
+    "the camera couldn't send it" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera couldn't send it"
+          }
+        }
+      }
+    },
+    "the camera is in %@, which shares no files over USB." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera is in %@, which shares no files over USB."
+          }
+        }
+      }
+    },
+    "the camera refused the connection." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera refused the connection."
+          }
+        }
+      }
+    },
+    "the camera stopped answering." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera stopped answering."
+          }
+        }
+      }
+    },
+    "the camera stopped offering its card." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera stopped offering its card."
+          }
+        }
+      }
+    },
+    "the camera was disconnected." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the camera was disconnected."
+          }
+        }
+      }
+    },
+    "the copy didn't match the size the camera gave" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the copy didn't match the size the camera gave"
+          }
+        }
+      }
+    },
+    "the copy went missing before it was saved" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "the copy went missing before it was saved"
+          }
+        }
+      }
+    },
+    "this iPhone is out of space" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "this iPhone is out of space"
+          }
+        }
+      }
+    },
+    "this iPhone is out of space." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "this iPhone is out of space."
+          }
+        }
+      }
+    },
+    "this kind of file can't be imported" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "this kind of file can't be imported"
+          }
+        }
+      }
+    },
+    "videos can't be imported yet" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "videos can't be imported yet"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
