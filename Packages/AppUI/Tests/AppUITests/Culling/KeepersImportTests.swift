@@ -86,6 +86,27 @@ private final class HookedReader: StagedFileReading, @unchecked Sendable {
     }
 }
 
+/// Marks `keys` Reject in `catalogue` as the file named `trigger` is read, once: a person rejecting keepers in the loupe
+/// while *Import keepers* runs.
+private actor RejectHook {
+    private var catalogue: InMemoryCatalogue?
+    private var trigger = ""
+    private var keys: [ObjectIdentity.ContentKey] = []
+    private var fired = false
+
+    func arm(_ catalogue: InMemoryCatalogue, when trigger: String, reject keys: [ObjectIdentity.ContentKey]) {
+        self.catalogue = catalogue
+        self.trigger = trigger
+        self.keys = keys
+    }
+
+    func reading(_ url: URL) async {
+        guard !fired, url.lastPathComponent == trigger, let catalogue else { return }
+        fired = true
+        try? await catalogue.setMark(.reject, for: keys)
+    }
+}
+
 /// iCloud's file availability as a test scripts it: `evicted` files aren't local until downloaded; each download notes
 /// what Photos had been given by then.
 private final class EvictedFiles: StagedFileAvailability, @unchecked Sendable {
@@ -322,6 +343,30 @@ struct KeepersImportTests {
         for file in [two.a1, two.b1raw, two.b1jpg] { #expect(!rig.exists(file)) }
         #expect(summary.removal?.removed == 3 && summary.removal?.failed == 0)
         #expect(rig.exists(two.a3))
+    }
+
+    /// A keeper marked Reject while the jobs run (the loupe stays usable over the screen) is never imported (D3, I21):
+    /// its job leaves it out as a job queued again does, and the run goes on to its end, so the removal is still offered,
+    /// planned on the new marks.
+    @Test func aKeeperRejectedWhileTheJobsRunIsLeftOutAndTheRunGoesOn() async throws {
+        let hook = RejectHook()
+        let (rig, two) = try await twoCameras(reader: HookedReader { url in await hook.reading(url) })
+        defer { rig.cleanup() }
+        // cam-a's job runs first; as it reads its keeper, the person rejects cam-b's kept pair.
+        await hook.arm(rig.catalogue, when: two.a1.identity.filename, reject: [two.b1raw.key, two.b1jpg.key])
+
+        await rig.keepers.start(.all, in: rig.cull.rows)
+        let plan = try #require(rig.keepers.confirmation)
+        #expect(await rig.destinations.photos.names == ["DSC00001.JPG"])
+        for file in [two.b1raw, two.b1jpg] { #expect(await rig.row(file)?.state == .new) }
+        #expect(plan.keepersInPhotos == 1 && plan.rejects == 2)
+        #expect(rig.log.lines.contains { $0.hasPrefix("import: keepers job 2 of 2: 2 file(s) rejected since, left out") })
+
+        rig.keepers.keepStaged()
+        let summary = try #require(rig.keepers.summary)
+        #expect(summary.run?.end == .completed && summary.run?.rejectedSince == 2 && summary.run?.alreadyImported == 0)
+        #expect(KeepersWording.finished(summary).contains("2 files rejected since, not imported"))
+        for file in two.all { #expect(rig.exists(file)) }
     }
 
     /// If the catalogue can't be read when the person confirms, the plan can't be checked again: nothing is removed,

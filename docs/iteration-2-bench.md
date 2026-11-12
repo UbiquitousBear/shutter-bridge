@@ -74,6 +74,7 @@ Existing lines come from `OSLogBenchLog` (category `browse` for the import and B
 | --- | --- | --- |
 | `keepers: downloading … evicted keeper file(s) before the import` | Evicted iCloud keepers fetched before the first job starts, so a long download can't stall the job (notice; a `keepers: an evicted keeper didn't download first (…)` line is error level, and the job's reader tries again). | 11, 13 |
 | `import: keepers job <i> of <n> ended <outcome>, key k<n>`, `import: keepers job <i> of <n>: nothing new, key k<n>` | Each staged camera key's job: one per key, in sequence (notice). | 13 |
+| `import: keepers job <i> of <n>: <r> file(s) rejected since, left out, key k<n>` | Keepers marked Reject after the plan, while the jobs ran: left out of their job, never imported, and the run goes on (D3; notice). The strip adds "<r> files rejected since, not imported". | 13 |
 | `import: keepers not started, Photos access denied \| restricted` | Photos access off before the first job: no job starts (notice). | 13 |
 | `engine: job stopped: Photos refused the save (access denied \| restricted); nothing staged` | A keepers job Photos refused (3311): it stops, nothing is staged again and no later job starts (notice: the person's setting, not a failure). | 13 |
 | `import: keepers done: … of … job(s), … imported, … already imported, … skipped, … failed` | The keepers' totals over every job (notice). | 13 |
