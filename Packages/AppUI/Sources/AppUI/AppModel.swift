@@ -32,18 +32,21 @@ public final class AppModel {
     /// Wi-Fi; nil leaves the screen as the USB screen it was. It pairs over the app's one central
     /// (`BluetoothPairingChecker` over `wireless.bluetooth`) and offers no pairing without one (W16).
     public let wirelessSetup: WirelessSetupModel?
+    /// What the App Intents asked the app to do (I16): the import "Import new photos" waits to start, and what the
+    /// screens show for it (`AppIntentRequests.navigation`).
+    public let intents = AppIntentRequests()
     @ObservationIgnored private let notifier: any LocalNotifier
-    @ObservationIgnored private let discovery: any CameraDiscovery
-    @ObservationIgnored private let log: any BenchLog
+    @ObservationIgnored let discovery: any CameraDiscovery
+    @ObservationIgnored let log: any BenchLog
     /// The catalogue key of a camera, as Browse and the import read it.
-    @ObservationIgnored private let cameraKeying: CameraKeying
+    @ObservationIgnored let cameraKeying: CameraKeying
     @ObservationIgnored private var registeredCategories = false
     /// The reminder's begin and end for connections and imports, one after the other, so an end never overtakes its begin.
     @ObservationIgnored private var reminderActivity: Task<Void, Never>?
     /// When each camera counts as connected for the reminder (W18), when the app has a reminder.
     @ObservationIgnored let connectionHolds: ConnectionHolds?
     /// For the Staging screen (`stagingModel`): the staged files and their marks, and where staging's iCloud folder is.
-    @ObservationIgnored private let catalogue: any CatalogueStore
+    @ObservationIgnored let catalogue: any CatalogueStore
     @ObservationIgnored private let stagingLocator: any StagingLocator
 
     public init(
@@ -148,6 +151,10 @@ public final class AppModel {
                 self?.queueReminder { $0.end(.connection, camera: camera) }
             }
         }
+        // "Import new photos" (I16) starts once Browse has read the camera's card.
+        cameras.onBrowseListed = { [weak self] browse in self?.browseListed(browse) }
+        // ... and is dropped as soon as Browse is left, so a later visit of the person's own starts nothing.
+        cameras.onPathChanged = { [weak self] path in self?.browsePathChanged(path) }
         importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
         importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
         if let wireless {
@@ -207,7 +214,7 @@ public final class AppModel {
 
     /// Whether `camera` is the one whose catalogue key is `key`. A Wi-Fi camera with no key yet has never connected, so it
     /// can't be the reminder's camera, and asking for its link would start a join.
-    private func isCamera(_ camera: CameraDescriptor, withKey key: CameraKey) async -> Bool {
+    func isCamera(_ camera: CameraDescriptor, withKey key: CameraKey) async -> Bool {
         if let known = await discovery.knownKey(for: camera.id) { return known == key }
         guard camera.carrier != .wifi, let link = try? await discovery.cameraLink(for: camera.id) else { return false }
         return await cameraKeying(camera, link) == key
@@ -272,7 +279,11 @@ public final class AppModel {
         // The reminder's request as it stood when the app left, so one made while this runs (Import Now) isn't dropped.
         let requestOnLeaving = phase == .background ? wireless?.reminders.cameraToOpen : nil
         // Browse hears the way to the background before its link is let go, so it doesn't take the end for one in front.
-        if phase == .background { cameras.browseScenePhaseChanged(.background) }
+        if phase == .background {
+            cameras.browseScenePhaseChanged(.background)
+            // An "Import new photos" still waiting for its card doesn't outlive the app leaving the foreground (I16).
+            dropPendingNewPhotosImport(because: "the app is in the background")
+        }
         if phase == .active {
             wifi?.status.start()
             await cameras.becameActive()

@@ -349,6 +349,24 @@ struct LiveApp: View {
             OutcomeFeedback.forImport(from: old, to: new)?.sensoryFeedback
         }
         .task { model.cameras.launch() }
+        // "Import new photos" (I16) opened its camera in Browse, or found it not connected: the Cameras tab, with
+        // Settings closed, and the Import sheet once the import has started (otherwise closed unless its job is that
+        // camera's).
+        .onChange(of: model.intents.navigation) { _, navigation in
+            guard let navigation else { return }
+            tab = .cameras
+            showsSettings = false
+            if navigation.showsImport {
+                showsImport = true
+            } else if model.importer.camera?.descriptor.id != model.cameras.path.last?.id {
+                showsImport = false
+            }
+        }
+        // A card listed may be a camera the intents' picker didn't list yet: App Shortcuts' phrases with a camera are
+        // made again.
+        .onChange(of: model.intents.camerasRevision, initial: true) { _, _ in
+            Self.refreshShortcutParameters()
+        }
         .onChange(of: scenePhase, initial: true) { _, phase in
             let previous = phaseTask
             let model = self.model
@@ -373,6 +391,13 @@ struct LiveApp: View {
         .onChange(of: model.cameras.cameras) { _, _ in
             Task { @MainActor in await openCameraFromReminder() }
         }
+    }
+
+    /// Tells App Shortcuts the cameras may have changed (I16), so its phrases that name a camera are made again.
+    private static func refreshShortcutParameters() {
+        #if canImport(AppIntents)
+        ShutterBridgeShortcuts.updateAppShortcutParameters()
+        #endif
     }
 
     /// The Staging screen's model: the staged copies under the app's Documents folder (On My iPhone) or the iCloud
@@ -460,7 +485,9 @@ private final class SceneChangeAwake {
 ///   finds it; the scan's reports read from now on;
 /// - the delegate that hands a reminder's response (Import Now, Not Now, Snooze 1 Hour, a tap, a swipe away) to the
 ///   reminder model;
-/// - the catalogue's opening (`launcher`), so a background relaunch with no scene still builds the app's models.
+/// - the catalogue's opening (`launcher`), so a background relaunch with no scene still builds the app's models;
+/// - the App Intents' way to the app's model (`IntentHost.launcher`, I16), so an intent that launched the app waits for
+///   the catalogue.
 public enum LiveLaunch {
     @MainActor private static var runtime: WirelessRuntime?
     @MainActor private static var madeLauncher: AppLauncher?
@@ -473,6 +500,8 @@ public enum LiveLaunch {
             wireless.launchEarly()
             UNUserNotificationCenter.current().delegate = responder
             let launcher = self.launcher
+            // The App Intents (I16) wait for the catalogue through it, even when one launched the app.
+            IntentHost.launcher = launcher
             Task { await launcher.launch() }
         }
     }

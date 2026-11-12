@@ -75,7 +75,9 @@ public final class CamerasModel: CameraFinding {
     /// True once discovery has started.
     public private(set) var isLooking = false
     /// The navigation stack: the camera being browsed, if any.
-    public var path: [CameraDescriptor] = []
+    public var path: [CameraDescriptor] = [] {
+        didSet { if path != oldValue { onPathChanged?(path) } }
+    }
     /// A message for the top of the screen, such as a camera disconnected while it was browsed. It goes when that
     /// camera is connected again, or when the person closes it.
     public var notice: String?
@@ -168,6 +170,7 @@ public final class CamerasModel: CameraFinding {
         )
         browsing.removeAll { $0.model == nil }
         browsing.append(WeakBrowse(model: model))
+        model.onListed = { [weak self] listed in self?.onBrowseListed?(listed) }
         return model
     }
 
@@ -178,6 +181,23 @@ public final class CamerasModel: CameraFinding {
         for entry in browsing {
             await entry.model?.refreshImportedStates()
         }
+    }
+
+    // MARK: - App Intents (I16)
+
+    /// Told when a Browse model has listed its camera's live card (`BrowseModel.onListed`). Set by `AppModel`, which
+    /// starts an "Import new photos" waiting for that camera.
+    @ObservationIgnored var onBrowseListed: (@MainActor (BrowseModel) -> Void)?
+
+    /// Told when the navigation stack changes (the person left Browse, or opened another camera). Set by `AppModel`,
+    /// which drops an "Import new photos" waiting for a camera no longer shown.
+    @ObservationIgnored var onPathChanged: (@MainActor ([CameraDescriptor]) -> Void)?
+
+    /// The Browse models still alive that show their camera's live card, the most recently made last. A model whose
+    /// screen was never shown never runs, so it never shows a live card.
+    func liveBrowses() -> [BrowseModel] {
+        browsing.removeAll { $0.model == nil }
+        return browsing.compactMap { entry in entry.model.flatMap { $0.showsLiveCard ? $0 : nil } }
     }
 
     /// The scene changed: every Browse model still alive is told, so a Wi-Fi Browse knows whether a lost session happened

@@ -557,6 +557,7 @@ public final class BrowseModel {
             listed(items, seconds: Self.seconds(since: start))
             await refreshImportedStates(.listing)
             await saveListing(items)
+            if showsLiveCard, !Task.isCancelled { onListed?(self) }
             return true
         } catch {
             guard !Task.isCancelled else { return true }
@@ -1008,6 +1009,25 @@ public final class BrowseModel {
         case .photos: return imported.contains(id)
         case .staging: return staged.contains(id) || (newOnly && imported.contains(id))
         }
+    }
+
+    // MARK: - App Intents (I16)
+
+    /// Told after each listing of the live card, once its badges are read and the listing saved: `AppModel` starts an
+    /// "Import new photos" that waited for the card (D7 (a)).
+    @ObservationIgnored var onListed: (@MainActor (BrowseModel) -> Void)?
+
+    /// Whether the live card is shown and read, rather than the last-known card or none.
+    var showsLiveCard: Bool { phase == .listed && lastKnownListedAt == nil }
+
+    /// The catalogue key of the live card shown; nil while the last-known card (or none) is shown.
+    var liveCardKey: CameraKey? { showsLiveCard ? cameraKey : nil }
+
+    /// How many files of the live card *Select All New* would pick with no filter (`NewPhotoCount`): nil while the
+    /// last-known card (or none) is shown. "How many new photos" answers with it while a USB camera is listed.
+    var liveNewPhotoCount: Int? {
+        guard showsLiveCard else { return nil }
+        return NewPhotoCount.count(items) { isDone($0.id) }
     }
 
     /// Why the badges are read, for the bench log.
