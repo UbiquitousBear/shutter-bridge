@@ -102,8 +102,10 @@ extension PhotoLibraryClient {
 ///   with the same name and size (uncompressed RAW has a fixed size, and a file-number reset reuses names) is then not
 ///   mistaken for the copy of a commit killed before its file was placed: the row would point at another photo and the
 ///   new one would never be staged. A file whose time can't be read doesn't count either (a doubtful answer is "not
-///   found"). That the iCloud mover's move and an iCloud upload leave the time as described is `unverified`: the worst
-///   case is a spare copy, never a lost photo.
+///   found"). That iCloud Drive keeps the time as described is `unverified` both ways: a placed file whose time the
+///   mover left earlier reads as not staged (the worst case a spare copy after the next stage job, never a lost photo);
+///   an older file whose attributes iCloud touched after the commit began (an upload, an eviction, a download) passes
+///   the check, as every file did before it.
 /// - Only regular files whose size can be read count: an evicted iCloud file (".NAME.icloud") is not a match (whether
 ///   its size can be read without downloading it is `unverified`).
 public struct StagedCopyFinder: Sendable {
