@@ -68,6 +68,24 @@ private final class HoldingReader: StagedFileReading, @unchecked Sendable {
     }
 }
 
+/// The plain reader, running `before` ahead of each copy, so a test can change something as a given file is read.
+private final class HookedReader: StagedFileReading, @unchecked Sendable {
+    private let plain = PlainStagedFileReader()
+    private let before: @Sendable (URL) async -> Void
+
+    init(before: @escaping @Sendable (URL) async -> Void) { self.before = before }
+
+    func presence(of source: URL, expectedSize: UInt64) -> StagedPresence {
+        plain.presence(of: source, expectedSize: expectedSize)
+    }
+
+    func copy(_ source: URL, expectedSize: UInt64, to destination: URL,
+              progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) {
+        await before(source)
+        try await plain.copy(source, expectedSize: expectedSize, to: destination, progress: progress)
+    }
+}
+
 /// iCloud's file availability as a test scripts it: `evicted` files aren't local until downloaded; each download notes
 /// what Photos had been given by then.
 private final class EvictedFiles: StagedFileAvailability, @unchecked Sendable {
@@ -405,6 +423,33 @@ struct KeepersImportTests {
         #expect(KeepersWording.finished(summary).contains("Nothing was removed from Staging"))
     }
 
+    /// The first camera's job completes, the second's is refused (Photos access turned off as it reads its files): the
+    /// keepers stopped, so nothing is offered or removed, not even the first camera's copies that the rules alone would
+    /// let go (section 7.5: "nothing is removed from Staging").
+    @Test func aLaterJobRefusedRemovesNothingEvenWhereAnEarlierJobCompleted() async throws {
+        let box = DestinationsBox()
+        let photos = FakePhotosAccess()
+        let reader = HookedReader { source in
+            guard source.path.contains("/ZV-E1/") else { return }
+            photos.set(.denied)
+            await box.destinations?.photos.setDenies(true)
+        }
+        let (rig, two) = try await twoCameras(photos: photos, reader: reader)
+        defer { rig.cleanup() }
+        box.destinations = rig.destinations
+
+        await rig.keepers.start(.all, in: rig.cull.rows)
+        let summary = try #require(rig.keepers.summary)
+        #expect(summary.run?.end == .photosAccessNeeded(.denied))
+        #expect(summary.run?.jobsStarted == 2)
+        #expect(await rig.row(two.a1)?.state == .imported)
+        #expect(summary.plan == nil && summary.removal == nil)
+        for file in two.all {
+            #expect(rig.exists(file))
+            #expect(await rig.row(file)?.staged != nil)
+        }
+    }
+
     @Test func photosAccessOffBeforehandStartsNoJob() async throws {
         let (rig, two) = try await twoCameras(photos: FakePhotosAccess(.denied))
         defer { rig.cleanup() }
@@ -582,6 +627,62 @@ struct KeepersImportTests {
         #expect(outcome == .started(1))
         #expect(rig.importer.camera?.descriptor.carrier != .staging)
         #expect(rig.importer.keepersLine == nil)
+    }
+
+    /// iOS ended the continued task and the person taps Continue: a keepers job carries on over its own Staging link;
+    /// the camera with the staged files' key, though connected, isn't even looked up.
+    @Test func aKeepersJobContinuedAfterAnExpiryNeverTakesACamerasLink() async throws {
+        let reader = HoldingReader()
+        let (rig, _) = try await twoCameras(reader: reader)
+        defer { rig.cleanup() }
+        let camera = FakeLink(items: [item("DSC00001.JPG")])
+        rig.finder.links[CameraKey(rawValue: "cam-a")] = camera
+        let keepers = rig.keepers
+        let rows = rig.cull.rows
+        let run = Task { @MainActor in await keepers.start(.all, in: rows) }
+        #expect(await eventually { reader.waiting > 0 })
+
+        try await rig.engine.pause(.taskExpired)
+        await rig.importer.resume()
+        #expect(rig.finder.asked.isEmpty)
+        reader.release()
+        guard await eventually({ keepers.confirmation != nil }) else {
+            Issue.record("the keepers didn't finish after Continue")
+            return
+        }
+        _ = await run.value
+        #expect(rig.finder.asked.isEmpty)
+        #expect(await camera.isOpen == false)
+        #expect(await camera.bytesStarted == 0)
+        #expect(await camera.fetched.isEmpty)
+    }
+
+    /// A keepers job left waiting for its link (as a removal would leave a camera's job) is never handed a connected
+    /// camera's link, even one with the staged files' key: the camera isn't looked up, and the job stays waiting.
+    @Test func aKeepersJobWaitingForItsLinkIsNeverHandedACamerasLink() async throws {
+        let reader = HoldingReader()
+        let (rig, _) = try await twoCameras(reader: reader)
+        defer { rig.cleanup() }
+        let camera = FakeLink(items: [item("DSC00001.JPG")])
+        rig.finder.links[CameraKey(rawValue: "cam-a")] = camera
+        let keepers = rig.keepers
+        let rows = rig.cull.rows
+        let run = Task { @MainActor in await keepers.start(.all, in: rows) }
+        #expect(await eventually { reader.waiting > 0 })
+
+        try await rig.engine.pause(.cameraRemoved)
+        await rig.importer.cameraConnected()
+        await rig.importer.refresh()
+        #expect(rig.finder.asked.isEmpty)
+        #expect(await rig.engine.state == .paused(.cameraRemoved))
+
+        await rig.importer.cancel()
+        reader.release()
+        _ = await run.value
+        #expect(keepers.summary?.run?.end == .ended(.cancelled))
+        #expect(keepers.summary?.plan == nil)
+        #expect(await camera.isOpen == false)
+        #expect(await camera.bytesStarted == 0)
     }
 
     @Test func aSecondStartWhileOneRunsIsIgnored() async throws {

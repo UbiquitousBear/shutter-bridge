@@ -195,6 +195,21 @@ struct StagingRemoverTests {
         }
     }
 
+    /// A copy recorded directly in a camera's folder, or in Staging itself, is removed, but the folder it leaves empty
+    /// stays: only a day folder ("Staging/<camera>/<day>/") is ever removed.
+    @Test func aCameraFolderOrStagingLeftEmptyStays() async {
+        let folder = Folder()
+        defer { folder.remove() }
+        let inCamera = staged("DSC00001.JPG", path: "Staging/ILCE-7CM2/DSC00001.JPG", in: folder)
+        let inStaging = staged("DSC00002.JPG", path: "Staging/DSC00002.JPG", in: folder)
+        let catalogue = InMemoryCatalogue(records: [inCamera.0, inStaging.0])
+        let result = await StagingRemover(catalogue: catalogue, onThisIPhone: folder.documents, iCloud: nil)
+            .remove([inCamera.1, inStaging.1])
+        #expect(result.removed == 2 && result.foldersRemoved == 0)
+        #expect(!folder.exists("Staging/ILCE-7CM2/DSC00001.JPG") && !folder.exists("Staging/DSC00002.JPG"))
+        #expect(folder.exists("Staging/ILCE-7CM2") && folder.exists("Staging"))
+    }
+
     @Test func aDayFolderWithAnythingElseInItStays() async {
         let folder = Folder()
         defer { folder.remove() }
