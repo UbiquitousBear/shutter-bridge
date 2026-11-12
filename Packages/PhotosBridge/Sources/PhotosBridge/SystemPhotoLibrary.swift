@@ -103,6 +103,52 @@ public struct SystemPhotoLibrary: PhotoLibraryClient {
         return identifier
     }
 
+    /// Looks for an asset the app saved, for a pending commit left behind (backlog section 3.1, I15). Only with read
+    /// access, read and never requested: full access and Limited Access look; not determined, denied and restricted
+    /// can't. Library-wide, never through the album (the album may have refused the asset, or been changed since):
+    /// images whose creation date is within `AssetQuery.dateTolerance` of the date the asset was given, hidden ones
+    /// included, oldest first; the first whose original resources (`.photo` and `.alternatePhoto`) are the query's,
+    /// role for role and by original file name (`AssetQuery.matches(_:)`), is found. Assets in Recently Deleted
+    /// aren't fetched, so one deleted since reads as not found.
+    ///
+    /// `Unverified` (bench, docs/iteration-2-bench.md): that an asset the app created stays visible under Limited
+    /// Access (hence `notFound(underLimitedAccess: true)`, said as a possible duplicate); that `originalFilename` reads
+    /// back as the save set it for the α7C II's ARW and JPG; that Photos keeps the creation date to the second; that
+    /// assets saved into an iCloud Shared Library are returned by the default fetch.
+    public func findAsset(_ query: AssetQuery) async -> AssetSearch {
+        let limited: Bool
+        switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
+        case .authorized: limited = false
+        case .limited: limited = true
+        case .notDetermined, .denied, .restricted: return .cannotSearch
+        @unknown default: return .cannotSearch
+        }
+        let range = query.dateRange
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate <= %@",
+                                        range.lowerBound as NSDate, range.upperBound as NSDate)
+        options.includeHiddenAssets = true
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        let assets = PHAsset.fetchAssets(with: .image, options: options)
+        for index in 0 ..< assets.count {
+            let asset = assets.object(at: index)
+            var originals: [AssetQuery.Original] = []
+            for resource in PHAssetResource.assetResources(for: asset) {
+                switch resource.type {
+                case .photo:
+                    originals.append(AssetQuery.Original(role: .photo, originalFilename: resource.originalFilename))
+                case .alternatePhoto:
+                    originals.append(AssetQuery.Original(role: .alternatePhoto,
+                                                         originalFilename: resource.originalFilename))
+                default:
+                    continue
+                }
+            }
+            if query.matches(originals) { return .found(localIdentifier: asset.localIdentifier) }
+        }
+        return .notFound(underLimitedAccess: limited)
+    }
+
     static func map(_ status: PHAuthorizationStatus) -> PhotosAuthorisation {
         switch status {
         case .notDetermined: .notDetermined

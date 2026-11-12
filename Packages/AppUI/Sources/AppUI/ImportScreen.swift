@@ -198,6 +198,12 @@ struct ImportSummary: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let duplicates = model.possibleDuplicatesLine {
+                Text(duplicates)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if model.keepsScreenOn {
                 Text(ImportWording.screenOnNote)
                     .font(.footnote)

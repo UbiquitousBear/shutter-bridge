@@ -151,6 +151,9 @@ extension ImportEngine {
         // A job that ended (cancel, stop) may still be committing one of these files: its row has to land first, or
         // the file would be queued, copied and saved again.
         await settleCommits(ofJobsOtherThan: id)
+        // A commit whose row was lost (a kill after the save, or a store failing every try) is resolved before the
+        // catalogue is read, after the launch pass (backlog section 3.1, I15).
+        await resolveCommitBoundary(for: id)
         // A partial file iOS emptied from Caches, or the prune deleted, sends its row back to offset 0 first (I13).
         await reconcilePartials()
         guard currentListing(id, generation) != nil else { return }

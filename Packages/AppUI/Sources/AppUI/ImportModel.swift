@@ -112,7 +112,7 @@ public final class ImportModel: BrowseImporting {
 
     @ObservationIgnored public weak var cameraFinder: (any CameraFinding)?
 
-    @ObservationIgnored private let engine: ImportEngine
+    @ObservationIgnored let engine: ImportEngine
     @ObservationIgnored private let settings: any DestinationSettingStore
     @ObservationIgnored private let photos: any PhotosAuthorising
     @ObservationIgnored private let destinations: any ImportDestinationMaking

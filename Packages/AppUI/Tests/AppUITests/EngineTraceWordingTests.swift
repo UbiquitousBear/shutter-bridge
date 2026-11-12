@@ -145,6 +145,25 @@ struct EngineTraceWordingTests {
             == "engine: the partial copy of DSC00001.ARW is gone; it will be copied from its start")
     }
 
+    /// One line per pending commit resolved (I15): the camera file name and the outcome only.
+    @Test func theLinesForPendingCommitsResolved() {
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .replayed))
+            == "engine: interrupted commit of DSC00001.ARW: its row was written from memory")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .foundInPhotos))
+            == "engine: interrupted commit of DSC00001.ARW: found in Photos, marked imported")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .foundInStaging))
+            == "engine: interrupted commit of DSC00001.ARW: found in Staging, marked staged")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .notFound))
+            == "engine: interrupted commit of DSC00001.ARW: not found, so it reads as not imported")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .possibleDuplicate))
+            == "engine: interrupted commit of DSC00001.ARW: not found with Limited Access, so it may be imported twice")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .waiting))
+            == "engine: interrupted commit of DSC00001.ARW: can't be checked yet; kept for the next pass")
+        for resolution in PendingCommitResolution.allCases {
+            #expect(EngineTraceWording.level(for: .pendingCommitResolved("A.JPG", resolution)) == .notice)
+        }
+    }
+
     @Test func eventsThatHaveNoLine() {
         #expect(line(.imported("A.JPG", .photos)) == nil) // the import model's line carries it
         #expect(line(.staged("A.JPG", nil)) == nil)
@@ -173,6 +192,7 @@ struct EngineTraceWordingTests {
             .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero), .commitMarkerNotWritten("A.ARW"),
             .jobRecordNotWritten, .lateSessionLossIgnored(generation: 1), .partialReset("A.JPG"),
             .rejectedLeftOut("A.JPG"),
+            .pendingCommitResolved("A.JPG", .foundInPhotos),
         ]
     }
 
@@ -223,7 +243,7 @@ struct EngineTraceWordingTests {
         // The checkpoint-wait and lone-half lines carry a name too, so they clean it the same way.
         for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name),
                       .committedWithoutPartner(name), .commitMarkerNotWritten(name), .partialReset(name),
-                      .rejectedLeftOut(name)] {
+                      .rejectedLeftOut(name), .pendingCommitResolved(name, .possibleDuplicate)] {
             let waiting = try #require(line(event))
             #expect(!waiting.contains("\n") && !waiting.contains("\u{0}") && !waiting.contains("\u{7}"))
         }

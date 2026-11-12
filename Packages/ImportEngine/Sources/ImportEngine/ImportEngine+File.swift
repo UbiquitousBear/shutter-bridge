@@ -542,6 +542,7 @@ extension ImportEngine {
                 break // unreachable: a commit's outcome is imported or staged
             }
         }
+        beforeFinishCommit?() // the bench check's kill point (Debug builds only; I15)
         let written = await writeRow { try await self.catalogue.finishCommit(token, writing: writes) }
         if !written { unrecordedCommits[token] = writes }
         // Photos copies; the staging folder moves the file, leaving only its folder.

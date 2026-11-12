@@ -64,7 +64,22 @@ public actor ImportEngine {
     /// The rows of commits that reached their destination but whose `finishCommit` failed every try, by commit token
     /// (the marker's id, still in the store): the resolution writes exactly these later in this launch, with no lookup
     /// (backlog section 3.1).
-    var unrecordedCommits: [UUID: [CommitWrite]] = [:]
+    var unrecordedCommits: [UUID: [CommitWrite]] = [:] {
+        didSet { if unrecordedCommits.keys.contains(where: { oldValue[$0] == nil }) { unrecordedEpoch += 1 } }
+    }
+    /// Counts the commits whose rows went into `unrecordedCommits`, so a caller joining a `resolvePendingCommits()`
+    /// pass that began before one of them runs another pass after it (I15).
+    var unrecordedEpoch = 0
+    /// Answers whether a pending commit left behind reached its destination (backlog section 3.1, I15).
+    let commitLookup: any CommitLookup
+    /// The `resolvePendingCommits()` pass running now, which a second caller awaits, with `unrecordedEpoch` as it began.
+    var pendingCommitPass: (task: Task<PendingCommitReport, Never>, epoch: Int)?
+    /// The launch pass (`launchPass()`), once started: every job's pass before its diff waits for it.
+    var launchPassTask: Task<PendingCommitReport, Never>?
+    /// Possible duplicates the passes found (not found under Limited Access) that no job's outcome has said yet.
+    var possibleDuplicatesUnreported = 0
+    /// Runs right after a destination returns and before `finishCommit`: the bench check's Debug-only launch argument.
+    var beforeFinishCommit: (@Sendable () -> Void)?
     /// The latest write of a job record (`JobRecorder`); each waits for the one before, so they land in order.
     var jobRecordWrite: Task<Void, Never>?
     /// The `reconcilePartials()` pass running now, which a second caller awaits.
@@ -82,6 +97,8 @@ public actor ImportEngine {
     ///     keeps the zone it started with (an autoupdating zone is fixed at the start, so a change of zone mid-job
     ///     doesn't give Browse's items new identities).
     ///   - trace: Where the engine's own decisions go (the app's log); `.none` records nothing.
+    ///   - commitLookup: Looks for what a pending commit left behind reached (backlog section 3.1, I15); the default
+    ///     can't look, so such markers wait and nothing is guessed.
     public init(
         catalogue: any CatalogueStore,
         settings: ImportSettings = ImportSettings(),
@@ -89,10 +106,11 @@ public actor ImportEngine {
             .appendingPathComponent("Imports", isDirectory: true),
         clock: some Clock<Duration> = ContinuousClock(),
         timeZone: TimeZone = .autoupdatingCurrent,
-        trace: EngineTraceSink = .none
+        trace: EngineTraceSink = .none,
+        commitLookup: any CommitLookup = NoCommitLookup()
     ) {
         self.init(catalogue: catalogue, settings: settings, stagingDirectory: stagingDirectory, clock: clock,
-                  timeZone: timeZone, policy: .standard, trace: trace.sink)
+                  timeZone: timeZone, policy: .standard, trace: trace.sink, commitLookup: commitLookup)
     }
 
     init(
@@ -102,9 +120,11 @@ public actor ImportEngine {
         clock: some Clock<Duration>,
         timeZone: TimeZone,
         policy: ImportPolicy,
-        trace: (@Sendable (EngineTrace) -> Void)?
+        trace: (@Sendable (EngineTrace) -> Void)?,
+        commitLookup: any CommitLookup = NoCommitLookup()
     ) {
         self.catalogue = catalogue
+        self.commitLookup = commitLookup
         self.settings = settings
         self.stagingDirectory = stagingDirectory
         self.clock = EngineClock(clock)
@@ -228,6 +248,8 @@ public actor ImportEngine {
         let purpose = route.purpose
         // An ended job may still be committing one of these files: its row has to land first.
         await settleCommits(ofJobsOtherThan: UUID())
+        // So does any commit whose row was lost (backlog section 3.1, I15).
+        await resolveCommitBoundary(for: nil)
         let states: [ObjectIdentity: ObjectState]
         let staged: Set<ObjectIdentity>
         let rejected: Set<ObjectIdentity.ContentKey>
@@ -291,6 +313,8 @@ public actor ImportEngine {
         }
         guard !candidates.isEmpty else { return 0 }
         await settleCommits(ofJobsOtherThan: id)
+        // Commits whose rows were lost are resolved first (I15); this job's own in flight are left alone.
+        await resolveCommitBoundary(for: id)
         let facts: DoneFacts?
         do {
             facts = try await doneFacts(of: candidates.map(\.identity), job: id, readingRejects: newOnly)
@@ -810,7 +834,8 @@ public actor ImportEngine {
             runningCarrier: job.runningCarrier,
             stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled),
             rejectsLeftOut: job.rejectsLeftOut.count,
-            filesUndated: job.unkeyed.count
+            filesUndated: job.unkeyed.count,
+            possibleDuplicates: job.possibleDuplicates
         )
     }
 

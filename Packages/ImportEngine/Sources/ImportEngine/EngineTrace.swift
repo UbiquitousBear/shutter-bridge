@@ -69,6 +69,9 @@ public enum EngineTrace: Sendable, Hashable {
     /// partial): the row was sent back to offset 0 with no temporary file, so the next job copies the file from its
     /// start (`ImportEngine.reconcilePartials()`, I13).
     case partialReset(String)
+    /// A pending-commit marker resolved (backlog section 3.1, I15), named by its first file (a pair's RAW), and how:
+    /// rows written from memory or found in Photos or Staging, not found, a possible duplicate, or kept waiting.
+    case pendingCommitResolved(String, PendingCommitResolution)
     /// The job carries on after the camera was lost and listed again (`reconnect`, or `.storeAdded` on the same
     /// session): `sinceLost` is the time from the loss (the first removal, lost session or lost card since the job last
     /// ran) to now, when the card has been listed again and the queue is released; `filesLeft` is the files still to
