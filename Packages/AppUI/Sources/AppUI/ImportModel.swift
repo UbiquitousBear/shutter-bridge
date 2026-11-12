@@ -646,15 +646,18 @@ public final class ImportModel: BrowseImporting {
         await refresh()
     }
 
-    /// Clears a finished job from the screen.
+    /// Clears a finished job from the screen. While *Import keepers* runs its jobs, a finished one stays shown until the
+    /// next replaces it: the sequence reads each job's end from it (`waitForJobEnd()`), and clearing it as the job ends
+    /// (the Import screen closed at that moment) would leave the sequence waiting for ever, every later import refused
+    /// as busy with keepers.
     public func dismiss() {
-        guard !state.isActive else { return }
+        guard !state.isActive, !runsKeepers else { return }
         camera = nil
         rows = []
         snapshot = .none
         stagingFolderName = nil
         message = nil
-        if !runsKeepers { keepers = nil }
+        keepers = nil
     }
 
     // MARK: - Scene phase and the camera coming back

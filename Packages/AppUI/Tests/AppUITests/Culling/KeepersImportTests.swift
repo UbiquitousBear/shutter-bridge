@@ -113,13 +113,13 @@ private final class Rig {
 
     init(_ staged: (URL) -> [StagedFile], extra: [CatalogueRecord] = [],
          photos: FakePhotosAccess = FakePhotosAccess(), files: any StagedFileAvailability = AlwaysLocalFiles(),
-         reader: any StagedFileReading = PlainStagedFileReader()) {
+         reader: any StagedFileReading = PlainStagedFileReader(), leases: LinkLeases = LinkLeases()) {
         try? FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
         catalogue = InMemoryCatalogue(records: staged(documents).map(\.record) + extra)
         self.photos = photos
         engine = ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging())
         importer = ImportModel(engine: engine, settings: InMemoryDestinationSettingStore(), photos: photos,
-                               destinations: destinations, log: log)
+                               destinations: destinations, leases: leases, log: log)
         importer.cameraFinder = finder
         loader.autoRelease = true
         let locator = FakeStagingLocator(.unavailable(.containerUnavailable))
@@ -178,14 +178,15 @@ struct KeepersImportTests {
 
     private func twoCameras(photos: FakePhotosAccess = FakePhotosAccess(),
                             reader: any StagedFileReading = PlainStagedFileReader(),
-                            files: any StagedFileAvailability = AlwaysLocalFiles()) async throws
+                            files: any StagedFileAvailability = AlwaysLocalFiles(),
+                            leases: LinkLeases = LinkLeases()) async throws
         -> (Rig, TwoCameras) {
         var made: TwoCameras?
         let rig = Rig({ documents in
             let two = TwoCameras(in: documents)
             made = two
             return two.all
-        }, photos: photos, files: files, reader: reader)
+        }, photos: photos, files: files, reader: reader, leases: leases)
         let two = try #require(made)
         try await rig.mark(.keep, two.a1, two.b1raw, two.b1jpg)
         try await rig.mark(.reject, two.a2)
@@ -503,6 +504,38 @@ struct KeepersImportTests {
         #expect(await link.bytesStarted == 0)
     }
 
+    /// The person closes the Import screen just as a keepers job ends (LiveRoot dismisses a finished job when its sheet
+    /// closes): the sequence still reads that job's end, goes on to the next camera and offers the removal, rather than
+    /// waiting for ever on a job no longer shown, which would also refuse every later import as busy with keepers.
+    @Test func closingTheImportScreenAsAKeepersJobEndsDoesntStallTheSequence() async throws {
+        let leases = LinkLeases()
+        let (rig, _) = try await twoCameras(leases: leases)
+        defer { rig.cleanup() }
+        let importer = rig.importer
+        let closes = Counter()
+        // Staging's link is let go once its job has ended and that end is on the screen, before the sequence reads it.
+        leases.onClosed = { link in
+            guard link is StagingFolderLink, importer.isFinished else { return }
+            closes.count += 1
+            importer.dismiss()
+        }
+        let keepers = rig.keepers
+        let rows = rig.cull.rows
+        let run = Task { @MainActor in await keepers.start(.all, in: rows) }
+        // Bounded, so a sequence stalled on the dismissed job fails here instead of hanging (and isn't awaited).
+        guard await eventually({ keepers.confirmation != nil }) else {
+            Issue.record("the keepers sequence stalled after the Import screen was dismissed")
+            return
+        }
+        #expect(closes.count == 2)
+        #expect(rig.destinations.cameras.map(\.key.rawValue) == ["cam-a", "cam-b"])
+        keepers.keepStaged()
+        _ = await run.value
+        // Once the sequence is over, closing the Import screen clears the finished job as before.
+        importer.dismiss()
+        #expect(!importer.hasJob)
+    }
+
     @Test func aSecondStartWhileOneRunsIsIgnored() async throws {
         let reader = HoldingReader()
         let (rig, _) = try await twoCameras(reader: reader)
@@ -542,6 +575,12 @@ struct KeepersImportTests {
         #expect(entry.captureDate.flatMap { CaptureDate($0, in: TimeZone(identifier: "UTC")!) }
             == a1.identity.captureDate)
     }
+}
+
+/// A count a main-actor closure can change.
+@MainActor
+private final class Counter {
+    var count = 0
 }
 
 /// Lets a download check what Photos had been given, from a closure made before the rig.
