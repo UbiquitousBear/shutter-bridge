@@ -138,13 +138,20 @@ jobs:
       - name: UI tests in the iOS Simulator (the screens that need no camera)
         # I18 (D14 (c)): ShutterBridgeUITests drives History, Settings and the Staging tab of the Debug app, which the
         # tests launch with -UITestFixture so it runs over an in-memory catalogue seeded with job records, staged files
-        # and marks (AppUI's UITestFixture; no camera, no PTPSimulator). Unsigned, as the builds above: the Simulator
-        # runs the linker's ad-hoc signature (unverified for the UI-test runner until this step's first run). Each test
-        # may take at most three minutes, so a stuck screen fails its test rather than the job's limit.
+        # and marks (AppUI's UITestFixture; no camera, no PTPSimulator). Signed to run locally (ad hoc, no team or
+        # profile, which the Simulator doesn't ask for): unsigned (CODE_SIGNING_ALLOWED=NO, as the builds above), the
+        # runner never started on the first run (12 Nov, #139: "The test runner failed to initialize for UI testing",
+        # timed out waiting for the accessibility "AX loaded" notification). The simulator is booted and its boot
+        # waited for first, since a cold one starting during the test launch is the other cause given for that
+        # timeout. Each test may take at most three minutes, so a stuck screen fails its test rather than the job's
+        # limit, and a failing test is run once more (-retry-tests-on-failure): on #139 the runner's Simulator left
+        # the app's threads unscheduled for about a minute (a spindump in the result bundle), so a query or the
+        # loupe's appearing timed out with the app idle. A test still has to pass in one of its two runs, and the
+        # first run's failure stays in the log and the result bundle.
         # W6-lookup: PhotosLookupCheckUITests launches the Debug app with -PhotosLookupCheck, which saves two JPEGs into
         # the Simulator's photo library (one also into an album) and runs SystemPhotoLibrary.findAsset against them
         # (AppUI's PhotosLookupCheck). It needs full Photos access, granted here before the tests on the picked
-        # simulator (booted first: simctl privacy works on a booted device) for the app target's bundle identifier, read
+        # simulator (once booted: simctl privacy works on a booted device) for the app target's bundle identifier, read
         # from the project. That the grant holds for an app not yet installed is unverified until this step's first run;
         # the check's report says the access it read. The awk reads the whole listing rather than exiting at the match:
         # the step's shell runs with -e and pipefail, so an awk that exits early can end xcodebuild with SIGPIPE and the
@@ -153,6 +160,7 @@ jobs:
           SIM: ${{ steps.sim.outputs.id }}
         run: |
           set -o pipefail
+          xcrun simctl boot "$SIM" 2>/dev/null || true
           bundle_id="$(xcodebuild -showBuildSettings -project App/ShutterBridge.xcodeproj -target ShutterBridge \
             -configuration Debug -sdk iphonesimulator \
             | awk '$1 == "PRODUCT_BUNDLE_IDENTIFIER" && $2 == "=" && id == "" { id = $3 } END { print id }')"
@@ -167,8 +175,10 @@ jobs:
             -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIM" -only-testing:ShutterBridgeUITests \
             -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
+            -retry-tests-on-failure -test-iterations 2 \
             -resultBundlePath "$RUNNER_TEMP/UITests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             | tee "$RUNNER_TEMP/uitests.log" | xcbeautify --renderer github-actions
 
       - name: UI test failures from the raw xcodebuild output
@@ -178,6 +188,12 @@ jobs:
           f="$RUNNER_TEMP/uitests.log"
           [ -f "$f" ] || exit 0
           grep -E 'error:|failed|XCTAssert|Test Case .* (failed|passed)' "$f" | head -n 80 || true
+          r="$RUNNER_TEMP/UITests.xcresult"
+          [ -d "$r" ] || exit 0
+          xcrun xcresulttool get test-results summary --path "$r" --compact \
+            | python3 -c 'import json, sys
+          for f in json.load(sys.stdin).get("testFailures", []):
+              print(f.get("testIdentifierString") or f.get("testName"), "-", f.get("failureText"))' || true
 
       - name: Keep the UI tests' result bundle
         if: ${{ failure() }}
@@ -185,7 +201,7 @@ jobs:
         # summary and open it in Xcode. Absent when the step failed before xcodebuild wrote it. Two paths, so the
         # artifact's root is their common folder and it holds UITests.xcresult as a bundle Xcode opens, beside the raw
         # log (one directory alone would put the bundle's contents at the root).
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v5
         with:
           name: UITests-xcresult
           path: |
@@ -265,7 +281,9 @@ jobs:
         if: ${{ failure() }}
         # xcbeautify shortens Swift Testing failures to "Recorded an issue" and drops compiler crashes, so print the raw
         # lines that name the test and the expectation that failed, any compile error, and a crashed compiler's stack
-        # dump (which names the file and declaration it was type-checking).
+        # dump (which names the file and declaration it was type-checking). Tests run in parallel clones don't print
+        # their issues to xcodebuild's output at all, so each result bundle's failures are printed too, with the
+        # failure text the test recorded.
         run: |
           for log in build appui rest; do
             f="$RUNNER_TEMP/$log.log"
@@ -273,4 +291,12 @@ jobs:
             echo "--- $log ---"
             grep -E 'recorded an issue|Expectation failed|failed after|error:' "$f" | head -n 80 || true
             grep -E -A 12 'Stack dump:|Please submit a bug report|Assertion failed|Segmentation fault|While (evaluating|type-checking|emitting|SILGen)' "$f" | head -n 120 || true
+          done
+          for r in "$RUNNER_TEMP"/dd/Logs/Test/*.xcresult; do
+            [ -d "$r" ] || continue
+            echo "--- $(basename "$r") ---"
+            xcrun xcresulttool get test-results summary --path "$r" --compact \
+              | python3 -c 'import json, sys
+          for f in json.load(sys.stdin).get("testFailures", []):
+              print(f.get("testIdentifierString") or f.get("testName"), "-", f.get("failureText"))' || true
           done
