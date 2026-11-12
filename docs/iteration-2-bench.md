@@ -70,6 +70,7 @@ Existing lines come from `OSLogBenchLog` (category `browse` for the import and B
 | `engine: job stopped: Photos refused the save (access denied \| restricted); nothing staged` | A keepers job Photos refused (3311): it stops, nothing is staged again and no later job starts (notice: the person's setting, not a failure). | 13 |
 | `import: keepers done: … of … job(s), … imported, … already imported, … skipped, … failed` | The keepers' totals over every job (notice). | 13 |
 | `keepers: removal offered for … file(s): keepers …, rejects …, held keepers …, held rejects …, unmarked …`, `keepers: the staged copies were kept` | The one confirmation's plan (D2), in units but the file count, and the person keeping the copies (notice). | 13 |
+| `keepers: … staged file(s) kept, their marks changed since the confirmation was offered` | Removal re-reads the marks: copies whose mark changed while the confirmation waited stay (notice). | 13 |
 | `staging: removed … staged file(s), … not removed, … skipped, … day folder(s)` | What the removal did: removed, left staged (gone, busy, an iCloud error, not the recorded file), skipped (an unknown or out-of-Staging path, never touched), and emptied day folders removed (notice). Each copy not removed also writes `staging: a staged copy wasn't removed (<why>)` (**error level**). | 13 |
 
 **Not written yet (until each lands, record by stopwatch and screen and mark the line column *no line yet*).** The wording is the intent; the work item's final wording replaces it, and this sheet is updated to match when it merges.

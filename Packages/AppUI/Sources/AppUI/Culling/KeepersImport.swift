@@ -62,7 +62,9 @@ public struct KeepersSummary: Sendable, Hashable {
 /// 4. The jobs run one after another through the Import screen's model (`ImportModel.importKeepers(_:reader:)`).
 /// 5. Only if every job ran to its end, the removal is planned from the catalogue as it is now (`StagingRemovalRule`)
 ///    and offered in **one confirmation** (D2). Photos access off, a cancelled or stopped job: nothing is removed.
-/// 6. Confirmed, `StagingRemover` removes only the recorded copies; kept, nothing is removed.
+/// 6. Confirmed, the plan is made again from the catalogue as it is then, and `StagingRemover` removes only the recorded
+///    copies both plans name: a mark changed while the confirmation waited (the loupe stays usable over the screen) is
+///    never removed on its old mark. Kept, nothing is removed.
 ///
 /// Nothing in this flow can reach a camera: the only link is Staging's, which has no delete call and reports
 /// `deletes: false`. Pure logic on the main actor, tested on Linux against `InMemoryCatalogue` and a temporary Staging
@@ -96,6 +98,8 @@ public final class KeepersImport {
     @ObservationIgnored private let log: any BenchLog
     /// The summary so far, while a removal is offered.
     @ObservationIgnored private var pending = KeepersSummary()
+    /// The days the removal was planned over, so the accepted plan is checked against the catalogue again at removal.
+    @ObservationIgnored private var plannedDays: [CullDayRow] = []
     /// The accepted removal is under way.
     @ObservationIgnored private var removalStarted = false
 
@@ -202,7 +206,12 @@ public final class KeepersImport {
             finish(problem: pending.run == nil ? .nothingToDo : nil)
             return
         }
+        // Counts only.
+        log.note("keepers: removal offered for \(plan.copies.count) file(s): keepers \(plan.keepersInPhotos), "
+            + "rejects \(plan.rejects), held keepers \(plan.keepersHeld), held rejects \(plan.rejectsHeld), "
+            + "unmarked \(plan.unmarked)")
         pending.plan = plan
+        plannedDays = days
         phase = .confirming(plan)
     }
 
@@ -221,15 +230,32 @@ public final class KeepersImport {
         return true
     }
 
-    /// Removes what the accepted plan names (`acceptRemoval()`), once.
+    /// Removes what the accepted plan names (`acceptRemoval()`), once, and only what the rules still allow now: the
+    /// plan was made when the jobs ended, and the person may have changed a mark before confirming (a reject made a
+    /// keeper not in Photos, or a new keeper that holds its day's rejects back). A copy the plan made now doesn't name,
+    /// or names at another path, stays; if the catalogue can't be read now, nothing is removed.
     public func removeAccepted() async {
         guard case .removing = phase, !removalStarted, let plan = pending.plan else { return }
         removalStarted = true
         defer { removalStarted = false }
+        guard let now = await self.plan(plannedDays) else {
+            var kept = StagingRemovalResult()
+            kept.failed = plan.copies.count
+            pending.removal = kept
+            finish()
+            return
+        }
+        let allowed = Set(now.copies)
+        let copies = plan.copies.filter { allowed.contains($0) }
+        if copies.count < plan.copies.count {
+            // Counts only.
+            log.note("keepers: \(plan.copies.count - copies.count) staged file(s) kept, their marks changed since the "
+                + "confirmation was offered")
+        }
         let iCloud = await locator.locate().iCloudDocuments
         let remover = StagingRemover(catalogue: catalogue, onThisIPhone: onThisIPhone, iCloud: iCloud, plain: plain,
                                      coordinated: coordinated, log: log)
-        pending.removal = await remover.remove(plan.copies)
+        pending.removal = await remover.remove(copies)
         finish()
     }
 
@@ -294,12 +320,7 @@ public final class KeepersImport {
             for record in try await catalogue.stagedRecords(camera: nil) where wanted.contains(record.identity) {
                 if let location = record.staged { staged[record.identity] = location }
             }
-            let plan = StagingRemovalRule.plan(days: days, marks: marks, states: states, staged: staged)
-            // Counts only.
-            log.note("keepers: removal offered for \(plan.copies.count) file(s): keepers \(plan.keepersInPhotos), "
-                + "rejects \(plan.rejects), held keepers \(plan.keepersHeld), held rejects \(plan.rejectsHeld), "
-                + "unmarked \(plan.unmarked)")
-            return plan
+            return StagingRemovalRule.plan(days: days, marks: marks, states: states, staged: staged)
         } catch {
             log.note("keepers: couldn't read the catalogue for the removal (\(type(of: error)))", level: .error)
             return nil

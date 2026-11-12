@@ -273,6 +273,61 @@ struct KeepersImportTests {
         #expect(rig.keepers.phase == .idle)
     }
 
+    /// The plan is made when the jobs end, but the confirmation can wait (the loupe stays open over the screen): a mark
+    /// changed meanwhile is read again at removal, so a reject changed to a keeper (not in Photos) isn't removed on its
+    /// old mark, and the keeper now holds its day's other rejects back.
+    @Test func aMarkChangedWhileTheConfirmationWaitsIsReadAgainAtRemoval() async throws {
+        let (rig, two) = try await twoCameras()
+        defer { rig.cleanup() }
+        await rig.keepers.start(.all, in: rig.cull.rows)
+        let plan = try #require(rig.keepers.confirmation)
+        #expect(plan.copies.map(\.identity).contains(two.a2.identity))
+        // The person changes their mind about the reject before confirming.
+        try await rig.mark(.keep, two.a2)
+
+        await rig.keepers.confirmRemoval()
+        let summary = try #require(rig.keepers.summary)
+        #expect(rig.exists(two.a2))
+        #expect(await rig.row(two.a2)?.staged != nil)
+        // What the rules still allow, and the person confirmed, goes: the keepers in Photos.
+        for file in [two.a1, two.b1raw, two.b1jpg] { #expect(!rig.exists(file)) }
+        #expect(summary.removal?.removed == 3 && summary.removal?.failed == 0)
+        #expect(rig.exists(two.a3))
+    }
+
+    /// If the catalogue can't be read when the person confirms, the plan can't be checked again: nothing is removed,
+    /// and the strip says the copies stay staged.
+    @Test func aCatalogueUnreadableAtRemovalRemovesNothing() async throws {
+        let documents = FileManager.default.temporaryDirectory
+            .appendingPathComponent("KeepersImportTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: documents) }
+        let reject = stage("DSC00001.JPG", at: "20261105T140001", camera: "cam-a", cameraFolder: "ILCE-7CM2",
+                           in: documents)
+        let catalogue = SwitchableCatalogue(records: [reject.record])
+        try await catalogue.setMark(.reject, rating: 0, for: [reject.key], at: Date())
+        let locator = FakeStagingLocator(.unavailable(.containerUnavailable))
+        let engine = ImportEngine(catalogue: InMemoryCatalogue(), stagingDirectory: temporaryStaging())
+        let importer = ImportModel(engine: engine, settings: InMemoryDestinationSettingStore(),
+                                   photos: FakePhotosAccess(), destinations: FakeDestinations())
+        let loader = FakeLoader()
+        loader.autoRelease = true
+        let cull = CullModel<String>(catalogue: catalogue, onThisIPhone: documents, locator: locator,
+                                     reader: PlainStagedFileReader(), loader: loader)
+        await cull.load()
+        let keepers = KeepersImport(catalogue: catalogue, importer: importer, onThisIPhone: documents,
+                                    locator: locator, reader: PlainStagedFileReader(), plain: PlainStagedFileRemover(),
+                                    coordinated: PlainStagedFileRemover())
+        await keepers.start(.all, in: cull.rows)
+        #expect(keepers.confirmation?.rejects == 1)
+
+        await catalogue.setFailsListing(true)
+        await keepers.confirmRemoval()
+        let summary = try #require(keepers.summary)
+        #expect(summary.removal?.removed == 0 && summary.removal?.failed == 1)
+        #expect(FileManager.default.fileExists(atPath: documents.appendingPathComponent(reject.relativePath).path))
+        #expect(await catalogue.record(for: reject.identity)?.staged != nil)
+    }
+
     @Test func aDayScopeImportsOnlyThatDaysKeepers() async throws {
         let (rig, two) = try await twoCameras()
         defer { rig.cleanup() }
