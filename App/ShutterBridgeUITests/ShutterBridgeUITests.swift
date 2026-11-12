@@ -12,8 +12,8 @@ import XCTest
 final class ShutterBridgeUITests: XCTestCase {
     /// The fixture's camera, by its display name.
     private let camera = "ILCE-7CM2"
-    /// Long enough for a cold Simulator launch on CI.
-    private let launchTimeout: TimeInterval = 30
+    /// Long enough for a cold Simulator launch of the Debug app on CI.
+    private let launchTimeout: TimeInterval = 60
     private let timeout: TimeInterval = 10
 
     override func setUpWithError() throws {
@@ -105,20 +105,40 @@ final class ShutterBridgeUITests: XCTestCase {
 
     // MARK: Helpers
 
-    /// The app over the seeded catalogue, launched afresh.
+    /// The app over the seeded catalogue, launched afresh, once its tabs show (the tab bar, or its History tab as a
+    /// button where the system's tab bar isn't offered as one). If they never show, the test fails with what is on the
+    /// screen instead: the app's state, a screenshot kept in the result bundle, and the accessibility tree.
     @MainActor
     private func launchFixture() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-UITestFixture"]
         app.launch()
-        XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: launchTimeout),
-                      "the tab bar, once the catalogue is open")
+        let tabBar = app.tabBars.firstMatch
+        let historyTab = app.buttons[Self.historyTab]
+        let deadline = Date().addingTimeInterval(launchTimeout)
+        while !tabBar.exists, !historyTab.exists, Date() < deadline {
+            _ = tabBar.waitForExistence(timeout: 1)
+        }
+        if !tabBar.exists, !historyTab.exists {
+            let screenshot = XCTAttachment(screenshot: app.screenshot())
+            screenshot.name = "The screen when the tabs didn't show"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            let tree = String(app.debugDescription.prefix(6000))
+            XCTFail("the tab bar, once the catalogue is open: not there after \(Int(launchTimeout)) s; the app's "
+                + "state is \(app.state.rawValue) (4 is running in front) and its screen holds:\n\(tree)")
+        }
         return app
     }
 
+    /// The History tab's title (HistoryWording.title).
+    private static let historyTab = "History"
+
+    /// Chooses the tab called `name`: in the tab bar, or as a button where the tab bar isn't offered as one.
     @MainActor
     private func openTab(_ name: String, in app: XCUIApplication) {
-        let tab = app.tabBars.buttons[name]
+        let inTabBar = app.tabBars.buttons[name]
+        let tab = inTabBar.exists ? inTabBar : app.buttons[name]
         XCTAssertTrue(tab.waitForExistence(timeout: timeout), "the \(name) tab")
         tab.tap()
     }

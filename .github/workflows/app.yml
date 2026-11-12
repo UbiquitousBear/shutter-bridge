@@ -173,6 +173,15 @@ jobs:
           for f in json.load(sys.stdin).get("testFailures", []):
               print(f.get("testIdentifierString") or f.get("testName"), "-", f.get("failureText"))' || true
 
+      - name: Keep the UI tests' result bundle (screenshots) when they fail
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-tests-xcresult
+          path: ${{ runner.temp }}/UITests.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
   packages:
     # Every package's tests in the iOS Simulator, from AllPackages.xcworkspace at the root: one build-for-testing of
     # its AllPackageTests scheme (the ten test targets of the eight packages), so each module and Apple's SDK modules
