@@ -59,7 +59,10 @@ extension ImportEngine {
     /// Follows the failure's outcome. Returns true when a new attempt has begun in this lane.
     ///
     /// A partial file is deleted, except on a link that resumes while the file is still to be copied (a retry, or
-    /// waiting for the camera or the card), where its latest checkpoint is written to the catalogue instead.
+    /// waiting for the camera or the card), where its latest checkpoint is written to the catalogue instead, and when
+    /// the job stops for a reason that isn't the file's (a full phone), where the partial copy and its row are kept
+    /// for the next job (`keepsPartialWhenStopped(by:download:entry:)`). A skipped file's `.partial` row goes back to
+    /// new with its copy (`forgetPartialRow(of:)`).
     func linkFailed(_ failure: CameraLinkFailure, entry: FileEntry, download: Download, job: Job) async -> Bool {
         let id = job.id
         if !download.attempt.keepsFiles { try? FileManager.default.removeItem(at: download.attempt.directory) }
@@ -79,11 +82,37 @@ extension ImportEngine {
             if failure.kind == .cardUnavailable { cardLost(job) } else { cameraLost(job, job.cameraLossReason) }
             return false
         case .skipFile:
+            // Nothing will continue its partial copy: its row goes back to new first, while the file is the lane's.
+            if entry.resumable != nil {
+                await forgetPartialRow(of: entry)
+                guard stillDownloading(entry, download, in: id) else { return false }
+            }
             resolve(entry, .skipped(.link(failure.kind)))
             commitLoneHalves(of: job) // a partner kept for this file goes alone
             refreshState()
             return false
         case .stopJob:
+            // While the engine awaits the catalogue below, the camera can go (the file is put back in the queue, its
+            // partial copy kept or not by `stopDownloads` and `end` as for any queued file), but the reason to stop
+            // holds: the job still ends, rather than waiting for a reconnect that would meet the same failure.
+            if keepsPartialWhenStopped(by: failure, download: download, entry: entry) {
+                // Not the file's failure: its partial copy stays for the next job, its latest checkpoint written first
+                // (the row is what the next job continues from), as after a drop.
+                await saveLatestCheckpoint(of: entry, in: id)
+                guard let job = current(id) else { return false }
+                if stillDownloading(entry, download, in: id) {
+                    resolve(entry, .failed(.link(failure.kind)), keepingPartial: true)
+                }
+                end(job, .stopped(failure.kind))
+                return false
+            }
+            if entry.resumable != nil { // a stop that is the file's own (another camera's): its copy goes
+                await forgetPartialRow(of: entry)
+                guard let job = current(id) else { return false }
+                if stillDownloading(entry, download, in: id) { resolve(entry, .failed(.link(failure.kind))) }
+                end(job, .stopped(failure.kind))
+                return false
+            }
             resolve(entry, .failed(.link(failure.kind)))
             end(job, .stopped(failure.kind))
             return false
@@ -161,6 +190,11 @@ extension ImportEngine {
     func retry(_ identity: ObjectIdentity, of id: UUID, after reason: FailureReason) async -> Bool {
         guard let job = current(id), let entry = job.entries[identity] else { return false }
         guard entry.retries < policy.retryDelays.count else {
+            // Nothing will continue its partial copy: its row goes back to new first, while the file is the lane's.
+            if entry.resumable != nil, let download = entry.download {
+                await forgetPartialRow(of: entry)
+                guard stillDownloading(entry, download, in: id) else { return false }
+            }
             resolve(entry, .failed(reason))
             refreshState()
             return false
@@ -702,10 +736,16 @@ extension ImportEngine {
         job.signal.fire()
     }
 
-    func resolve(_ entry: FileEntry, _ outcome: FileOutcome, into kind: DestinationKind? = nil) {
+    /// Resolves the file. A partial copy it keeps is deleted (skipped or failed: nothing in this job will continue it),
+    /// unless `keepingPartial` (the job stopped for a reason that isn't the file's) and the catalogue holds its
+    /// checkpoint, so the next job continues it; it is no longer the job's either way.
+    func resolve(_ entry: FileEntry, _ outcome: FileOutcome, into kind: DestinationKind? = nil,
+                 keepingPartial: Bool = false) {
         entry.phase = .done(outcome)
-        if let resumable = entry.resumable { // skipped or failed: nothing will continue the partial copy
-            try? FileManager.default.removeItem(at: resumable.folder)
+        if let resumable = entry.resumable {
+            if !(keepingPartial && resumable.persistedOffset > 0) {
+                try? FileManager.default.removeItem(at: resumable.folder)
+            }
             entry.resumable = nil
         }
         switch outcome {

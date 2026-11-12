@@ -136,6 +136,14 @@ enum PartialMark {
         return record
     }
 
+    /// The row `forgetPartial(_:ifTempURL:offset:)` leaves: `existing` back to `.new` with no offset and no temporary
+    /// file, location and staged copy kept; nil under the same conditions as `reset(_:ifTempURL:offset:)`.
+    static func forget(_ existing: CatalogueRecord?, ifTempURL tempURL: URL, offset: UInt64) -> CatalogueRecord? {
+        guard var record = reset(existing, ifTempURL: tempURL, offset: offset) else { return nil }
+        record.state = .new
+        return record
+    }
+
     /// The form of a partial file's URL the catalogue keeps: its part relative to the staging folder, with no base
     /// URL, so nothing of the container's current path is stored. A URL with a base (relative to the staging folder,
     /// or to the working directory, as `URL(fileURLWithPath:)` makes a relative path on Apple platforms) keeps its

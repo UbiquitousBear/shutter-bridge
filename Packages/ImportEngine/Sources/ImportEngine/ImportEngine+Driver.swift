@@ -73,6 +73,12 @@ extension ImportEngine {
         guard let job = currentListing(id, generation) else { return }
         job.listRetries = 0
         if job.hasListed {
+            // A file that left the card (a card swapped, its handles reused) is skipped by `remap`, which deletes its
+            // partial copy: its `.partial` row goes back to new first, while it is still queued, so the job can't end
+            // before the row has gone.
+            let leaving = resumablesLeavingTheCard(job, listed)
+            for entry in leaving { await forgetPartialRow(of: entry) }
+            guard let job = currentListing(id, generation) else { return }
             remap(job, listed)
         } else {
             await diff(listed, id: id, generation: generation)
@@ -283,8 +289,7 @@ extension ImportEngine {
                 entry.item = item
             } else {
                 job.queue.removeAll { $0 == entry.identity }
-                entry.phase = .done(.skipped(.link(.itemNotFound)))
-                trace(.skipped(entry.item.name, .link(.itemNotFound)))
+                resolve(entry, .skipped(.link(.itemNotFound))) // and its partial copy goes
             }
         }
         job.phase = .downloading

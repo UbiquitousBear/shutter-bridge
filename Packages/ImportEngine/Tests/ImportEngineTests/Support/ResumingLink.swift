@@ -20,6 +20,9 @@ actor ResumingLink: CameraLink {
         case holdIgnoringCancellationAfter(UInt64)
         /// As `holdAfter`, once after each of these offsets in turn: each hold waits for its own `release(_:)`.
         case holdAfterEach([UInt64])
+        /// Writes up to this many bytes, waits for `release(_:)` (or a cancellation, as `holdAfter`), then throws: the
+        /// checkpoints written before the failure are settled while the call is held.
+        case holdThenFail(UInt64, CameraLinkFailure.Kind)
     }
 
     /// A `bytes` call that continued a partial file.
@@ -170,6 +173,10 @@ actor ResumingLink: CameraLink {
                 guard await hold(item.name) else { throw CameraLinkFailure(.noAnswer, detail: "cancelled") }
             }
             try write(item, &offset, to: item.size, at: url, checkpoint, progress)
+        case let .holdThenFail(n, kind):
+            try write(item, &offset, to: min(n, item.size), at: url, checkpoint, progress)
+            guard await hold(item.name) else { throw CameraLinkFailure(.noAnswer, detail: "cancelled") }
+            throw CameraLinkFailure(kind)
         case let .holdIgnoringCancellationAfter(n):
             try write(item, &offset, to: min(n, item.size), at: url, checkpoint, progress)
             _ = await holdIgnoringCancellation(item.name)

@@ -811,6 +811,9 @@ public actor ImportEngine {
                 case .failed: failed += 1
                 }
             case .held, .committing:
+                // Its bytes are all here: the high-water mark too, so a file put back in the queue from here (a commit
+                // that didn't begin, a save Photos refused on a keepers job) holds its place, as a restarted download does.
+                entry.shownBytes = size
                 bytesDone += size
             case let .downloading(d):
                 // A high-water mark: a restarted download holds its place until the new attempt passes it, so
