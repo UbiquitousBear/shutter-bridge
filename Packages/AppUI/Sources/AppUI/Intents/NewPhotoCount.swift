@@ -128,9 +128,8 @@ public enum NewPhotosWording {
     /// "12 new photos", "1 new photo", "No new photos".
     public static func newPhotos(_ n: Int) -> String {
         switch n {
-        case 0: "No new photos"
-        case 1: "1 new photo"
-        default: "\(n) new photos"
+        case 0: AppText.string("No new photos")
+        default: AppText.counted(n, one: "%lld new photo", other: "%lld new photos")
         }
     }
 
@@ -215,7 +214,9 @@ public enum NewPhotosWording {
     }
 
     /// "48 new photos", "1 new photo", in the middle of a sentence.
-    private static func newPhotosLower(_ n: Int) -> String { n == 1 ? "1 new photo" : "\(n) new photos" }
+    private static func newPhotosLower(_ n: Int) -> String {
+        AppText.counted(n, one: "%lld new photo", other: "%lld new photos")
+    }
 
     private static func couldNotStart(_ subject: String) -> String {
         let possessive = subject == "The camera" ? "the camera" : subject

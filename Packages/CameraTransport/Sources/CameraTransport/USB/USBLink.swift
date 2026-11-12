@@ -1,15 +1,18 @@
 #if canImport(ImageCaptureCore) && os(iOS)
 import Foundation
 import ImageCaptureCore
+import PTPKit
 
 /// The `CameraLink` over ImageCaptureCore (backlog section 2): one camera on a USB-C cable, in Image Transfer (MSC)
 /// or Image Transfer (MTP). Get one from `USBCameraBrowser.link(for:)`.
 ///
 /// What it does, and what it never does:
 /// - **One import path** (decision 7): `requestDownload` per file into the folder the engine names, never into
-///   memory; an interrupted file is copied again from its start. No PTP command is sent at all: not in the import
-///   path, not to list (listing over PTP is no faster in MTP and impossible in MSC), and never a whole-card
-///   `GetObjectPropList` (no answer in 60 s, and the camera answered nothing more until it was replugged).
+///   memory; an interrupted file is copied again from its start. No PTP command is sent in the import path, nor to
+///   list (listing over PTP is no faster in MTP and impossible in MSC), and never a whole-card `GetObjectPropList` (no
+///   answer in 60 s, and the camera answered nothing more until it was replugged). The only PTP it sends is the card's
+///   free space (`cardFreeSpace()`, I17): GetStorageIDs and GetStorageInfo, in MTP, after the catalogue, between
+///   downloads.
 /// - **Branches on the transport type**, not on `acceptsPTPCommands` (decision 7; `USBModeClassifier`).
 /// - **Lists from ImageCaptureCore's own items** (name, folder where it has one, size, capture date), newest first,
 ///   once its catalogue has completed: 7–12 s in MSC and 65–123 s in MTP on the bench.
@@ -463,7 +466,7 @@ public actor USBLink: CameraLink {
             throw await USBFailureMapping.classify(
                 domain: domain, code: code, outOfSpace: outOfSpace, operation: operation
             ) { [self] in await self.isGone }
-        case .done, .data, .downloaded:
+        case .done, .data, .downloaded, .ptpReply:
             return outcome
         }
     }
@@ -504,6 +507,36 @@ public actor USBLink: CameraLink {
     private static func seconds(_ duration: Duration) -> Double {
         let parts = duration.components
         return Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+    }
+}
+// MARK: - The card's free space (I17)
+
+extension USBLink: CardFreeSpaceReading {
+    /// The card's free space through ImageCaptureCore's PTP pass-through (`CardFreeSpace.read(send:)`): in Image
+    /// Transfer (MTP) only, once the catalogue has completed and with no download in flight (`CardFreeSpace.mayAsk`);
+    /// nil otherwise, and on any failure, which fails nothing else. On the bench GetStorageInfo answered at once in MTP
+    /// after the catalogue (1 Nov); during a download it is untried, so it isn't sent then.
+    public func cardFreeSpace() async -> UInt64? {
+        guard state == .open, !removed,
+              CardFreeSpace.mayAsk(mode: mode, catalogueComplete: catalogueComplete, downloadsInFlight: downloads.count)
+        else { return nil }
+        return await CardFreeSpace.read { [self] command in try await self.passThrough(command) }
+    }
+
+    /// One PTP request through `requestSendPTPCommand`, with the two values it completes with, as they came.
+    private func passThrough(_ command: PTPContainer) async throws -> (first: Data, second: Data) {
+        try requireOpen(.storageInfo)
+        let device = self.device
+        let encoded = command.encode()
+        let outcome = await request(.storageInfo, timeout: CardFreeSpace.requestLimit) { _, done in
+            device.requestSendPTPCommand(encoded, outData: nil) { @Sendable first, second, error in
+                if let error { done(.error(error)) } else { done(.ptpReply(first: first, second: second)) }
+            }
+        }
+        guard case let .ptpReply(first, second) = try await resolve(outcome, .storageInfo) else {
+            throw CameraLinkFailure(.unreadableItem, detail: "storage info: unexpected reply")
+        }
+        return (first, second)
     }
 }
 #endif

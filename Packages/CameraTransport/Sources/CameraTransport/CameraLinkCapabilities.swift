@@ -20,9 +20,10 @@ public struct CameraLinkCapabilities: Sendable, Hashable {
     /// USB: false; ImageCaptureCore copies whole files, so the engine deletes a partial file and starts at 0.
     public var resumesPartialFiles: Bool
 
-    /// Whether the camera's battery level and the card's free space can be read over this link. USB: true in
-    /// principle (`unverified`: the app reads neither yet). Wi-Fi: false, the whole-card session lists no device
-    /// properties and the storage reports capacity 0, so the Cameras screen hides both rather than show 0.
+    /// Whether the camera's battery level and the card's free space can be read over this link. USB: true; the card's
+    /// free space is read in Image Transfer (MTP) once the catalogue has completed (`CardFreeSpaceReading`, I17), the
+    /// battery level not yet (`unverified`). Wi-Fi: false, the whole-card session lists no device properties and the
+    /// storage reports capacity 0, so the Cameras screen hides both rather than show 0.
     public var reportsBatteryAndFreeSpace: Bool
 
     /// Whether files can be deleted on the camera through this link. Wi-Fi: false, the session's storage is

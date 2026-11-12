@@ -50,16 +50,16 @@ public struct NoImportBackgroundRun: ImportBackgroundRun {
 /// The copy the system's continued-task UI shows for an import. No camera name: over Wi-Fi it could carry the
 /// camera's network name, which the app never shows outside the join (AGENTS.md).
 public enum ImportBackgroundWording {
-    public static let title = "Importing photos"
+    public static let title = AppText.string("Importing photos")
     /// The title for a *Stage* job (Shamil, 11 Nov).
-    public static let stagingTitle = "Staging photos"
+    public static let stagingTitle = AppText.string("Staging photos")
 
     /// The title for a job: `stagingTitle` when it was started as *Stage*, `title` otherwise.
     public static func title(staging: Bool) -> String { staging ? stagingTitle : title }
 
     /// "12 of 360 files" once the job has counted its files; "Getting ready…" before.
     public static func subtitle(_ progress: ImportProgress) -> String {
-        guard progress.filesTotal > 0 else { return "Getting ready…" }
-        return "\(progress.filesDone) of \(ByteWording.files(progress.filesTotal))"
+        guard progress.filesTotal > 0 else { return AppText.string("Getting ready…") }
+        return AppText.format("%@ of %@", String(progress.filesDone), ByteWording.files(progress.filesTotal))
     }
 }

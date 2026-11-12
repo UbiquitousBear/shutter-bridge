@@ -176,14 +176,17 @@ public struct DiagnosticsExporter: DiagnosticsExporting {
 
 /// The Settings row's words.
 public enum DiagnosticsWording {
-    public static let rowTitle = "Export Diagnostics…"
+    public static let rowTitle = AppText.string("Export Diagnostics…")
     /// Under the row: what is in the file, and that nothing is sent anywhere until the person shares it.
-    public static let footer = "Exports a text file of this app's own log: what it did, when, and how it went, with "
-        + "network names, serial numbers, identifiers and addresses removed. It is made on this iPhone and sent nowhere "
-        + "until you choose where to share it."
-    public static let accessibilityHint = "Makes a text file of the app's log and opens the share sheet. Nothing is "
-        + "sent until you choose where to share it."
-    public static let preparing = "Preparing the file…"
-    public static let failed = "The diagnostics file couldn't be made. Try again."
-    public static let couldNotShare = "The share sheet couldn't be shown. Try again."
+    public static let footer = AppText.string("Exports a text file of this app's own log: what it did, when, and how "
+        + "it went, with "
+        + "network names, serial numbers, identifiers and addresses removed. It is made on this iPhone and sent "
+        + "nowhere "
+        + "until you choose where to share it.")
+    public static let accessibilityHint = AppText.string("Makes a text file of the app's log and opens the share "
+        + "sheet. Nothing is "
+        + "sent until you choose where to share it.")
+    public static let preparing = AppText.string("Preparing the file…")
+    public static let failed = AppText.string("The diagnostics file couldn't be made. Try again.")
+    public static let couldNotShare = AppText.string("The share sheet couldn't be shown. Try again.")
 }

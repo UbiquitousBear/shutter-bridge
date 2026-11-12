@@ -123,6 +123,8 @@ final class USBBrowserDelegate: NSObject, ICDeviceBrowserDelegate, Sendable {
 enum USBRequestOutcome: Sendable {
     case done
     case data(Data)
+    /// `requestSendPTPCommand`'s two values, as they came (`PTPPassThrough.decodeReply` reads them; I17).
+    case ptpReply(first: Data, second: Data)
     /// `requestDownload`'s completion string: a file name inside the requested folder on the bench.
     case downloaded(String?)
     /// `outOfSpace`: the error or one underneath it (`NSUnderlyingErrorKey`) said the phone is full.

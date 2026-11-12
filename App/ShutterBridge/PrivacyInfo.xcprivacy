@@ -3,14 +3,21 @@
 <!--
   Privacy manifest for Shutter Bridge. No tracking and nothing collected: photos go from the camera to this iPhone,
   and staged copies to the person's own iCloud Drive through Apple's service when they choose Stage; nothing reaches
-  the developer. The "required reason" APIs the app calls, checked against the code on 9 Nov (W19's sweep):
+  the developer. The diagnostics export (Settings, Export Diagnostics) is a file made on the iPhone and handed to the
+  share sheet; nothing is sent unless the person shares it, so it collects nothing either. The "required reason" APIs
+  the app calls, checked against the code on 9 Nov (W19's sweep) and again on 12 Nov (I17: the export and its rolling
+  log file, the App Intents, staging and its pending-commit lookup, and the card's free space):
   - UserDefaults (import settings, such as downloads in flight; the destination setting; the proximity reminder's settings,
     holds and snooze; the Wi-Fi cameras' pending list and the Local Network explanation's record): CA92.1, read and
     written only by the app itself.
-  - File timestamps of files in the app's container (sizes and dates of staged downloads, of imports to the Files
-    folder and of the JPEGs made for Copy and Share): C617.1.
-  Not declared, because nothing calls them: disk space (no free-space check exists; it would be E174.1, or 85F4.1 if
-  the free space were shown to the person) and system boot time (no uptime or mach_absolute_time call).
+  - File timestamps of files in the app's container and its iCloud container (sizes and dates of downloads in the work
+    folder, of staged copies, including the modification date the pending-commit lookup compares, and of the JPEGs made
+    for Copy and Share): C617.1.
+  Not declared, because nothing calls them: disk space (no free-space check of the iPhone exists; it would be E174.1,
+  or 85F4.1 if the free space were shown to the person. The free space the Cameras screen shows is the camera's card's,
+  read from the camera over PTP with GetStorageInfo, not a disk-space API of the iPhone) and system boot time (no
+  uptime or mach_absolute_time call). The App Intents read and start imports through the app's own models and call no
+  required-reason API of their own.
   Keep this in step with the code: remove an entry the app stops using and add one for each new required-reason API
   (developer.apple.com, "Describing use of required reason API").
 -->
