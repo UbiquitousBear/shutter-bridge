@@ -244,7 +244,9 @@ jobs:
         if: ${{ failure() }}
         # xcbeautify shortens Swift Testing failures to "Recorded an issue" and drops compiler crashes, so print the raw
         # lines that name the test and the expectation that failed, any compile error, and a crashed compiler's stack
-        # dump (which names the file and declaration it was type-checking).
+        # dump (which names the file and declaration it was type-checking). Tests run in parallel clones don't print
+        # their issues to xcodebuild's output at all, so each result bundle's failures are printed too, with the
+        # failure text the test recorded.
         run: |
           for log in build appui rest; do
             f="$RUNNER_TEMP/$log.log"
@@ -252,4 +254,12 @@ jobs:
             echo "--- $log ---"
             grep -E 'recorded an issue|Expectation failed|failed after|error:' "$f" | head -n 80 || true
             grep -E -A 12 'Stack dump:|Please submit a bug report|Assertion failed|Segmentation fault|While (evaluating|type-checking|emitting|SILGen)' "$f" | head -n 120 || true
+          done
+          for r in "$RUNNER_TEMP"/dd/Logs/Test/*.xcresult; do
+            [ -d "$r" ] || continue
+            echo "--- $(basename "$r") ---"
+            xcrun xcresulttool get test-results summary --path "$r" --compact \
+              | python3 -c 'import json, sys
+          for f in json.load(sys.stdin).get("testFailures", []):
+              print(f.get("testIdentifierString") or f.get("testName"), "-", f.get("failureText"))' || true
           done
