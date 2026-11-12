@@ -310,6 +310,33 @@ struct CullModelTests {
         #expect(await rig.marks([file!])[file!.key]?.decision == .reject)
     }
 
+    @Test func dismissingTheLoupeClosesItAtOnceAndOnlyThatOne() async throws {
+        // The cover over the tab view is bound to `loupe`: a dismissal must leave it nil before returning, or the
+        // cover would be put up again, and a stale dismissal must leave a loupe opened since alone.
+        var files: [Staged] = []
+        let rig = Rig { f in
+            files = [stage("DSC00001.JPG", in: f.documents),
+                     stage("DSC00002.JPG", at: "20261105T140001", in: f.documents)]
+            return files
+        }
+        await rig.model.load()
+        rig.model.openLoupe(rig.onlyRow.id)
+        let first = try #require(rig.model.loupe)
+        first.keep()
+        rig.model.dismissLoupe(first)
+        #expect(rig.model.loupe == nil)
+        #expect(rig.model.counts(of: rig.onlyRow).kept == 1, "its mark counted when the cover goes")
+        await first.settled()
+        #expect(await eventually { await rig.marks(files).count == 1 }, "and saved")
+
+        rig.model.openLoupe(rig.onlyRow.id)
+        let second = try #require(rig.model.loupe)
+        rig.model.dismissLoupe(first)
+        #expect(rig.model.loupe === second, "a dismissal of the first loupe leaves the one opened since")
+        rig.model.dismissLoupe(second)
+        #expect(rig.model.loupe == nil)
+    }
+
     @Test func aMarkThatCantBeSavedIsShownPutBackAndLoggedWithoutNames() async throws {
         var failing: SwitchableCatalogue?
         let rig = Rig({ f in [stage("DSC00001.JPG", in: f.documents)] }, catalogue: { records in
