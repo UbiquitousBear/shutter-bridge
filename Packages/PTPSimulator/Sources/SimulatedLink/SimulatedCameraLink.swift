@@ -474,6 +474,8 @@ public actor SimulatedCameraLink: CameraLink {
         switch descriptor.mode.carrier {
         case .usb: remove()
         case .wifi: if isOpen { loseSession() }
+        // Staging isn't a camera the simulator plays; a link given its mode goes as a removed one would.
+        case .staging: remove()
         }
     }
 

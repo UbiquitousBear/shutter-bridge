@@ -330,6 +330,9 @@ extension ImportEngine {
         case .markerNotWritten:
             requeueUncommitted(halves, of: id)
             return false
+        case let .photosRefused(authorisation):
+            stopForPhotosAccess(halves, authorisation, of: id)
+            return false
         case let .committed(outcomes, kind, written):
             // A commit that finishes after its job ended (cancelled, stopped) still resolves its files on the ended
             // job, so the finished Import screen's rows and counts show them as imported or staged.
@@ -386,6 +389,9 @@ extension ImportEngine {
         case committed([FileOutcome], DestinationKind, rowWritten: Bool)
         case failed(ImportDestinationFailure)
         case markerNotWritten
+        /// Photos refused the save (3311) on a route with no fallback (a keepers job's): nothing was saved or staged,
+        /// the marker is gone, and the job stops for Photos access (`stopForPhotosAccess`).
+        case photosRefused(PhotosAuthorisation)
     }
 
     /// The commit itself, its rows and the cleanup of the staged files. Runs whether or not the job is still current:
@@ -430,6 +436,16 @@ extension ImportEngine {
             result = try await used.commit(unit)
         } catch {
             failure = error
+        }
+
+        // Photos refused the save (3311) on a keepers job's route, which has no fallback (backlog section 7.5): the files
+        // are in Staging already, so nothing is staged again. Nothing was saved either, so the marker goes with the
+        // downloads, and the job stops for Photos access, the authorisation read now to tell a denial from a
+        // restriction.
+        if failure == .photosAccessDenied, used.kind == .photos, !route.fallsBackToStaging {
+            for i in going { Self.discard(files[i]) }
+            await abandonMarker(token)
+            return .photosRefused(await route.authorisation())
         }
 
         // Photos refused the save (3311): not a failed file. This unit and the rest are staged, and the Import screen

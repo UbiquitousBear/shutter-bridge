@@ -39,7 +39,8 @@ extension ImportEngine {
             if case .failed = entry.outcome { entry.identity.contentKey } else { nil }
         }
         return JobRecord(
-            id: job.id, camera: job.camera, purpose: JobRecord.Purpose(job.startPurpose),
+            id: job.id, camera: job.camera,
+            purpose: job.route.isKeepers ? .keepers : JobRecord.Purpose(job.startPurpose),
             destination: job.route.decision.kind.map(JobRecord.Destination.init),
             carrier: JobRecord.Carrier(job.link.descriptor.carrier),
             selection: Self.recordedSelection(job.selection, camera: job.camera, timeZone: job.timeZone),
@@ -67,8 +68,8 @@ extension ImportEngine {
 }
 
 extension JobRecord.Purpose {
-    /// A job's purpose from its route's when it started (`ImportRoute.purpose`). *Import keepers* is a Photos job over
-    /// Staging's link, which I12 tells apart.
+    /// A job's purpose from its route's when it started (`ImportRoute.purpose`). *Import keepers* is a Photos job whose
+    /// route has no fallback (`ImportRoute.isKeepers`), recorded as `.keepers` by `jobRecord(of:)`.
     init(_ purpose: DestinationKind) {
         switch purpose {
         case .photos: self = .import
@@ -92,11 +93,16 @@ extension JobRecord.Carrier {
         switch carrier {
         case .usb: self = .usb
         case .wifi: self = .wifi
+        case .staging: self = .staging
         }
     }
 }
 
 extension JobRecord.Outcome {
+    /// The reason a keepers job stopped for Photos access is recorded under (`JobOutcome.photosAccessNeeded`): not a
+    /// `CameraLinkFailure.Kind`, so it can't be taken for one.
+    static let photosAccessReason = "photosAccess"
+
     /// The engine's outcome; a stop keeps its kind's name, for wording.
     init(_ outcome: JobOutcome) {
         switch outcome {
@@ -104,6 +110,7 @@ extension JobRecord.Outcome {
         case .cancelled: self = .cancelled
         case let .stopped(kind): self = .stopped(reason: kind.rawValue)
         case .catalogueUnavailable: self = .catalogueUnavailable
+        case .photosAccessNeeded: self = .stopped(reason: Self.photosAccessReason)
         }
     }
 }

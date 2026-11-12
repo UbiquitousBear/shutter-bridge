@@ -106,7 +106,7 @@ struct ImportScreen: View {
                     }
                 }
             }
-            if model.destinationLine != nil || model.stagingReasonLine != nil {
+            if model.destinationLine != nil || model.stagingReasonLine != nil || model.offersPhotosSettingsLink {
                 Section {
                     destination
                 }
@@ -158,6 +158,11 @@ struct ImportSummary: View {
                 Text(model.statusLine ?? "")
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            // *Import keepers* (I12): which of its jobs this is ("Keepers, 2 of 3 cameras").
+            if let keepers = model.keepersLine {
+                Text(keepers)
+                    .foregroundStyle(.secondary)
             }
             if model.progress.bytesTotal > 0 {
                 ProgressView(value: model.progress.fractionCompleted)

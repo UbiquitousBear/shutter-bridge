@@ -17,6 +17,10 @@ import PhotosBridge
 /// **The job's purpose comes from its route** (`purpose`): a staging decision makes a stage job, which leaves out
 /// what is already staged; a Photos decision an import job, which leaves out what is already imported and ignores
 /// staging. A stage job never becomes an import job (`ImportEngine.change(_:to:)`).
+///
+/// **A keepers route (`keepers(_:authorisation:)`) has no fallback** (backlog section 7.5): *Import keepers* reads its
+/// files from Staging, so a Photos refusal (3311) can't stage them again; the engine ends the job with a Photos-access
+/// stop instead (`JobOutcome.photosAccessNeeded`), and nothing goes to Staging.
 public struct ImportRoute: Sendable {
     /// What the Import screen shows: Photos, or staging, where and why. Never `.askForPhotosAccess`.
     public let decision: DestinationDecision
@@ -34,17 +38,40 @@ public struct ImportRoute: Sendable {
     /// right reason (`DestinationDecision.afterDeniedSave(authorisation:staging:)`: a restriction gets no Settings
     /// link).
     let authorisation: @Sendable () async -> PhotosAuthorisation
+    /// Whether Photos refusing a save (3311) sends that file and the rest to `staging`: true for every route but a
+    /// keepers job's (`keepers(_:authorisation:)`), whose files are in Staging already.
+    public let fallsBackToStaging: Bool
 
     private init(decision: DestinationDecision, destination: any ImportDestination, staging: any ImportDestination,
                  stagingOnThisIPhone: any ImportDestination, stagingPlace: StagingPlace,
-                 authorisation: @escaping @Sendable () async -> PhotosAuthorisation) {
+                 authorisation: @escaping @Sendable () async -> PhotosAuthorisation, fallsBackToStaging: Bool = true) {
         self.decision = decision
         self.destination = destination
         self.staging = staging
         self.stagingOnThisIPhone = stagingOnThisIPhone
         self.stagingPlace = stagingPlace
         self.authorisation = authorisation
+        self.fallsBackToStaging = fallsBackToStaging
     }
+
+    /// *Import keepers* (backlog section 7.5): into Photos with **no fallback**. The files come from Staging, so a save
+    /// Photos refuses (3311) ends the job with a Photos-access stop (`JobOutcome.photosAccessNeeded`) rather than
+    /// staging the rest again; its staging folders refuse anything handed to them (`NoFallbackDestination`), so nothing
+    /// can reach Staging through this route. The job's record says `keepers` (`isKeepers`).
+    ///
+    /// - Parameter authorisation: Reads the `.readWrite` authorisation without asking, after a refused save, so the
+    ///   stop says whether Settings can change it (a restriction can't).
+    public static func keepers(
+        _ photos: any ImportDestination, authorisation: @escaping @Sendable () async -> PhotosAuthorisation
+    ) -> ImportRoute {
+        let none = NoFallbackDestination()
+        return ImportRoute(decision: .photos, destination: photos, staging: none, stagingOnThisIPhone: none,
+                           stagingPlace: .onThisIPhone(.containerUnavailable), authorisation: authorisation,
+                           fallsBackToStaging: false)
+    }
+
+    /// A keepers job's route (`keepers(_:authorisation:)`): Photos with no fallback.
+    public var isKeepers: Bool { !fallsBackToStaging }
 
     /// Into Photos, with the staging folder ready in case Photos refuses a save.
     ///
@@ -128,8 +155,24 @@ public struct ImportRoute: Sendable {
     /// back from this iPhone to iCloud Drive half-way. An import job may be staged instead (Photos access was turned
     /// off meanwhile), and staging may move from iCloud Drive to this iPhone.
     func mayChange(to next: ImportRoute) -> Bool {
+        // A keepers job takes only another keepers route (it is never staged), and no other job becomes one.
+        if fallsBackToStaging != next.fallsBackToStaging { return false }
         if purpose == .staging && next.purpose == .photos { return false }
         if !stagesInICloudDrive && next.stagesInICloudDrive { return false }
         return true
+    }
+}
+
+/// The staging folders of a keepers route (`ImportRoute.keepers(_:authorisation:)`), which has none: every commit is
+/// refused, so nothing a keepers job holds can be staged even if a path the engine takes reached for its fallback.
+struct NoFallbackDestination: ImportDestination {
+    var kind: DestinationKind { .staging }
+
+    func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult {
+        throw .rejected(detail: "a keepers job has no staging fallback")
+    }
+
+    func commitTarget(for unit: CommitUnit) -> CommitTarget {
+        .stagingFolder(place: .onThisIPhone(.containerUnavailable), folderPath: "")
     }
 }

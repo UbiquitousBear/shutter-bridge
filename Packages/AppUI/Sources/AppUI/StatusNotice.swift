@@ -84,7 +84,7 @@ public struct StatusNotice: Sendable, Hashable {
             return StatusNotice(id: id, text: text, tone: .info,
                                 systemImage: choice == .staging ? "tray.and.arrow.down" : "square.and.arrow.down",
                                 dismissesItself: true)
-        case .busyWithAnotherCamera, .busyWithAnotherMode, .stillStarting, .failed:
+        case .busyWithAnotherCamera, .busyWithAnotherMode, .busyWithKeepers, .stillStarting, .failed:
             return StatusNotice(id: id, text: text, tone: .problem, systemImage: "exclamationmark.triangle",
                                 dismissesItself: false)
         }
@@ -165,7 +165,7 @@ extension ImportWording {
             switch outcome {
             case .completed, .cancelled:
                 return StatusAnnouncement(text)
-            case .stopped, .catalogueUnavailable:
+            case .stopped, .catalogueUnavailable, .photosAccessNeeded:
                 return StatusAnnouncement(text, priority: .high)
             }
         }

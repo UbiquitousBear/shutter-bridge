@@ -119,6 +119,11 @@ struct EngineTraceWordingTests {
         #expect(line(.finished(.cancelled)) == "engine: job finished: cancelled")
         #expect(line(.finished(.stopped(.phoneStorageFull))) == "engine: job stopped: this iPhone is full")
         #expect(line(.finished(.catalogueUnavailable)) == "engine: catalogue unavailable: the job stopped")
+        // A keepers job Photos refused (I12): stopped, nothing staged, at notice (the person's setting, not a failure).
+        #expect(line(.finished(.photosAccessNeeded(.denied)))
+            == "engine: job stopped: Photos refused the save (access denied); nothing staged")
+        #expect(line(.finished(.photosAccessNeeded(.restricted)))
+            == "engine: job stopped: Photos refused the save (access restricted); nothing staged")
     }
 
     @Test func theReconnectLinesTheBenchSheetReads() {
@@ -162,7 +167,8 @@ struct EngineTraceWordingTests {
             .tick(.zero), .published(.zero), .discardedLateFile, .checkpointSaved("A.JPG", offset: 1),
             .waitingForCheckpointWrites("A.JPG"), .checkpointWritesUnsettled("A.JPG"),
             .identityChanged("A.JPG"), .finished(.completed), .finished(.cancelled), .finished(.stopped(.refused)),
-            .finished(.catalogueUnavailable), .reconnected(.usb, sinceLost: .zero, filesLeft: 0),
+            .finished(.catalogueUnavailable), .finished(.photosAccessNeeded(.denied)),
+            .reconnected(.usb, sinceLost: .zero, filesLeft: 0), .reconnected(.staging, sinceLost: nil, filesLeft: 1),
             .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero), .commitMarkerNotWritten("A.ARW"),
             .jobRecordNotWritten, .lateSessionLossIgnored(generation: 1), .partialReset("A.JPG"),
         ]

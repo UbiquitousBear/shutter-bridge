@@ -1360,7 +1360,7 @@ public final class BrowseModel {
         case .started, .appended, .nothingNew:
             selection.subtract(selected.map(\.id))
             if selection.isEmpty { isSelecting = false }
-        case .busyWithAnotherCamera, .busyWithAnotherMode, .stillStarting, .failed:
+        case .busyWithAnotherCamera, .busyWithAnotherMode, .busyWithKeepers, .stillStarting, .failed:
             break
         }
         importNoticeCount += 1

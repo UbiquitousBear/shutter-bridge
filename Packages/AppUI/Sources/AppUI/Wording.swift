@@ -24,6 +24,7 @@ public enum CamerasWording {
         case .usb(.mtp): "\(USBMode.mtp.cameraWording) or \(USBMode.remoteShoot.cameraWording)"
         case .usb(.remoteShoot): USBMode.remoteShoot.cameraWording
         case .wifi: "Wi-Fi"
+        case .staging: stagingBadge
         }
     }
 
@@ -32,10 +33,14 @@ public enum CamerasWording {
         switch mode.carrier {
         case .usb: usbBadge
         case .wifi: wifiBadge
+        case .staging: stagingBadge
         }
     }
 
     public static let wifiBadge = "Wi-Fi"
+    /// Staging read as a camera for *Import keepers* (`CameraMode.staging`): never a row on Cameras, but every switch
+    /// over the carrier names it.
+    public static let stagingBadge = "Staging"
 
     /// The lines about the device on a camera's row: its battery level and the card's free space. Only a link that can read
     /// them has any (`CameraLinkCapabilities.reportsBatteryAndFreeSpace`: Wi-Fi's can't, the whole-card session lists no
@@ -134,6 +139,8 @@ public enum BrowseWording {
                 + "end. \(USBMode.massStorage.cameraWording) reads the card much sooner."
         case .wifi:
             "This can take a while on a full card."
+        case .staging:
+            "Reading the staged files."
         }
     }
 
@@ -471,6 +478,7 @@ extension BrowseWording {
             return "Another camera's import is still running. Let it finish, or cancel it, then import from this camera."
         case .busyWithAnotherMode(.photos): return "An import is running. Stage these when it's done."
         case .busyWithAnotherMode(.staging): return "Staging is running. Import these when it's done."
+        case .busyWithKeepers: return "Keepers are being imported from Staging. Import these when it's done."
         case .stillStarting: return "The import is starting. Try again in a moment."
         case let .failed(message): return message
         }
@@ -602,7 +610,19 @@ public enum ImportWording {
         case .catalogueUnavailable:
             "Import stopped: Shutter Bridge couldn't read or update its catalogue of imported files, so it stopped "
                 + "rather than import files twice."
+        case let .photosAccessNeeded(authorisation): photosAccessNeeded(authorisation)
         }
+    }
+
+    /// A keepers job Photos refused (3311; backlog section 7.5): the rest stay in Staging, never staged again, and
+    /// nothing is removed from Staging. A denial comes with Open Settings (`ImportModel.offersPhotosSettingsLink`); a
+    /// restriction can't be changed there.
+    public static func photosAccessNeeded(_ authorisation: PhotosAuthorisation) -> String {
+        authorisation == .restricted
+            ? "Photos access needed: Photos is restricted on this iPhone, so the keepers not yet imported stay in "
+                + "Staging."
+            : "Photos access needed: Photos access is off, so the keepers not yet imported stay in Staging. Allow "
+                + "access in Settings, then import the keepers again."
     }
 
     static func stopReason(_ kind: CameraLinkFailure.Kind) -> String {
@@ -1072,6 +1092,7 @@ extension CamerasWording {
         case .usb: modeLine(mode)
         case .wifi(.cameraNetwork): "Joins the camera's Wi-Fi when opened"
         case .wifi(.otherNetwork): "On this iPhone's Wi-Fi network"
+        case .staging: "Staged files on this iPhone or in iCloud Drive"
         }
     }
 
@@ -1081,6 +1102,7 @@ extension CamerasWording {
         case .usb: "Opens the camera's card."
         case .wifi(.cameraNetwork): "Switches on the camera's Wi-Fi, joins it and opens the camera's card."
         case .wifi(.otherNetwork): "Connects to the camera and opens its card."
+        case .staging: "Opens the staged files."
         }
     }
 

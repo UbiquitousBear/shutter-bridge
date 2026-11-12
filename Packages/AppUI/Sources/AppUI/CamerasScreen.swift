@@ -189,6 +189,8 @@ struct CameraRow: View {
                     RowBadge(title: CamerasWording.usbBadge, systemImage: "cable.connector")
                 case .wifi:
                     RowBadge(title: CamerasWording.wifiBadge, systemImage: "wifi")
+                case .staging:
+                    RowBadge(title: CamerasWording.stagingBadge, systemImage: "tray.full")
                 }
                 if isNearby {
                     RowBadge(title: CamerasWording.nearbyBadge, systemImage: "dot.radiowaves.left.and.right")

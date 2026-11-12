@@ -254,6 +254,8 @@ struct LiveApp: View {
     /// The Staging screen's sheet (D5), and its model, made afresh each time it opens.
     @State private var showsStaging = false
     @State private var staging: CullModel<DecodedPreviewImage>?
+    /// *Import keepers* for the Staging screen (I12), made with its model.
+    @State private var stagingKeepers: KeepersImport?
     /// The last scene-phase change handed to the model, so a quick background-then-active is applied in order.
     @State private var phaseTask: Task<Void, Never>?
 
@@ -265,6 +267,7 @@ struct LiveApp: View {
                           showImport: { showsImport = true },
                           showStaging: {
                               staging = makeStagingModel()
+                              stagingKeepers = makeKeepersImport()
                               showsStaging = true
                           })
                 .navigationDestination(for: CameraDescriptor.self) { camera in
@@ -282,9 +285,10 @@ struct LiveApp: View {
         .sheet(isPresented: $showsStaging, onDismiss: {
             if let closing = staging { Task { await closing.closeLoupe() } }
             staging = nil
+            stagingKeepers = nil
         }) {
             if let staging {
-                StagingScreen(model: staging)
+                StagingScreen(model: staging, keepers: stagingKeepers)
             }
         }
         // The close button and swiping down do the same (HIG Sheets): a finished job is cleared once it has been
@@ -338,6 +342,13 @@ struct LiveApp: View {
         model.stagingModel(documents: URL.documentsDirectory, loader: ImageIOPreviewLoader(),
                            files: UbiquitousFileAvailability(), reader: StagedFileReaders.platform,
                            exif: { url in await Task.detached(priority: .utility) { EXIFSummary.read(from: url) }.value })
+    }
+
+    /// *Import keepers* for the Staging screen: its jobs read the staged copies coordinated (iCloud Drive) and download an
+    /// evicted keeper before the job starts.
+    private func makeKeepersImport() -> KeepersImport {
+        model.keepersImport(documents: URL.documentsDirectory, files: UbiquitousFileAvailability(),
+                            reader: StagedFileReaders.platform)
     }
 
     /// Opens the reminder's camera in Browse, if it is listed, and closes the sheets that would hide it: Settings, Staging,

@@ -214,7 +214,11 @@ public final class AppModel {
     }
 
     /// The key of the camera whose import is running (or paused, which still holds its link), if one is.
-    private var activeImportKey: CameraKey? { importer.isActive ? importer.camera?.key : nil }
+    /// A keepers job (I12) reads Staging under the staged files' key, which a connected camera may share: it holds no
+    /// camera's link.
+    private var activeImportKey: CameraKey? {
+        importer.isActive && importer.camera?.descriptor.carrier != .staging ? importer.camera?.key : nil
+    }
 
     /// A model for the Staging screen (backlog section 7.3; D5), over the app's catalogue and staging locator, made each
     /// time the screen opens so it reads the staged files as they are then. The app passes its Documents folder (On My
@@ -226,6 +230,16 @@ public final class AppModel {
                                               exif: (@Sendable (URL) async -> EXIFSummary?)? = nil) -> CullModel<Image> {
         CullModel(catalogue: catalogue, onThisIPhone: documents, locator: stagingLocator, reader: reader,
                   loader: loader, files: files, exif: exif, log: log)
+    }
+
+    /// *Import keepers* for the Staging screen (backlog sections 7.5 and 7.6; I12), over the app's catalogue, the Import
+    /// screen's model and the staging locator, made with the screen's model. The app passes its Documents folder (On My
+    /// iPhone's staging root), iCloud's file availability (evicted keepers are downloaded before the job) and the
+    /// reader its jobs copy the staged files with.
+    public func keepersImport(documents: URL, files: any StagedFileAvailability = AlwaysLocalFiles(),
+                              reader: any StagedFileReading = StagedFileReaders.platform) -> KeepersImport {
+        KeepersImport(catalogue: catalogue, importer: importer, onThisIPhone: documents, locator: stagingLocator,
+                      reader: reader, files: files, log: log)
     }
 
     /// The model for browsing `camera`, with the catalogue and the import.

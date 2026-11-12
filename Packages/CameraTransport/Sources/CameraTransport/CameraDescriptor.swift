@@ -2,6 +2,10 @@
 public enum CameraCarrier: String, Sendable, Hashable, Codable, CaseIterable {
     case usb
     case wifi
+    /// Not a camera: Staging read as one (`StagingFolderLink`), for *Import keepers* (backlog Iteration 2, section 7.2).
+    /// The files are local, so a keepers job isn't paused when the app leaves and carries on in a continued task as a
+    /// Wi-Fi job does; it has its own wording ("Importing keepers from Staging").
+    case staging
 }
 
 /// The camera's USB connection mode, as its *Select USB Connect Mode* prompt names them. Live Stream (USB
@@ -47,11 +51,15 @@ public enum WiFiRoute: String, Sendable, Hashable, Codable, CaseIterable {
 public enum CameraMode: Sendable, Hashable, Codable {
     case usb(USBMode)
     case wifi(WiFiRoute)
+    /// Staging read as a camera for *Import keepers* (`CameraCarrier.staging`). Its descriptor never makes a camera key:
+    /// each keepers job is started with the staged files' own key (backlog section 7.5).
+    case staging
 
     public var carrier: CameraCarrier {
         switch self {
         case .usb: .usb
         case .wifi: .wifi
+        case .staging: .staging
         }
     }
 }
