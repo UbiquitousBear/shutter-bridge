@@ -99,6 +99,8 @@ struct BrowseAndImportAgainstSimulatorTests {
             $0.stateText == "Imported to Photos"
         })
         #expect(bench.importer.rows.first { $0.name == "DSC00004.ARW" }?.stateText == "Skipped: no capture date")
+        // The bench line counts what was picked, not the undated still handed over with the picks.
+        #expect(bench.log.lines.contains("import: started 5 of 5 file(s) to photos"))
         await bench.expectInPhotos(importableStills)
         #expect(await bench.link.bytesCalls.sorted() == importableStills.sorted())   // each file fetched once
 
