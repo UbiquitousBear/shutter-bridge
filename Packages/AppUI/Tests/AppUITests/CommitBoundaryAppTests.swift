@@ -86,6 +86,27 @@ struct CommitBoundaryAppTests {
         await run.value
     }
 
+    /// "How many new photos" (I16) counts after the launch pass: a photo whose commit the pass finds in Photos isn't new,
+    /// as *Import new photos* won't pick it.
+    @Test func theNewPhotoCountWaitsForTheLaunchPass() async throws {
+        let committed = item("DSC00001.JPG")
+        let card = [committed, item("DSC00002.JPG", at: 5)]
+        let link = FakeLink(items: card)
+        let catalogue = InMemoryCatalogue()
+        try await leaveMarker(for: committed, of: link, in: catalogue)
+        let key = CameraKeys.key(for: link.descriptor, material: nil)
+        let listedAt = Date(timeIntervalSince1970: 1_794_000_000)
+        let entries = card.compactMap { file in
+            file.identity(camera: key, timeZone: .current).map { CardListing.Entry(identity: $0, format: file.format) }
+        }
+        await catalogue.saveListing(CardListing(camera: key, listedAt: listedAt, entries: entries))
+        let (app, _) = appModel(discovery: FakeDiscovery(link: link), catalogue: catalogue, lookup: AnsweringLookup {
+            .found($0.importedWrites(localIdentifier: "earlier"))
+        })
+        #expect(await app.newPhotoCount(cameraWith: key) == .lastKnown(1, listedAt: listedAt))
+        #expect(await catalogue.pendingCommits().isEmpty)
+    }
+
     @Test func thePossibleDuplicateWording() {
         #expect(ImportWording.possibleDuplicates(0) == nil)
         #expect(ImportWording.possibleDuplicates(1) == "1 photo from an interrupted import may now be in Photos twice.")

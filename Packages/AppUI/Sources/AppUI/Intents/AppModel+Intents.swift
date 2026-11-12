@@ -171,8 +171,11 @@ extension AppModel {
 
     /// "How many new photos" (D7 (a)): from the live card while a USB camera with this key is connected and its card
     /// listed in Browse (the badges read again first), otherwise from the catalogue's last listing with its age. Opens
-    /// nothing.
+    /// nothing. It counts after the launch pass (`runLaunchPass()`, I15), which the app starts as it launches and this
+    /// joins: an intent that launched the app after a kill between a commit and its catalogue write would otherwise
+    /// count the photo the pass is about to find in Photos as new, one more than *Import new photos* then picks.
     public func newPhotoCount(cameraWith key: CameraKey) async -> NewPhotoCountAnswer {
+        await runLaunchPass()
         for browse in cameras.liveBrowses().reversed() where browse.camera.carrier == .usb && browse.liveCardKey == key {
             await browse.refreshImportedStates()
             guard let count = browse.liveNewPhotoCount else { continue }
