@@ -213,6 +213,13 @@ struct BrowseScreen: View {
         case .gone:
             ContentUnavailableView(BrowseWording.goneTitle, systemImage: "cable.connector.slash",
                                    description: Text(BrowseWording.goneDetail))
+        case .notConnected:
+            // "Import new photos" with the camera away (W6-absent): the last-known card, with nothing that needs the camera.
+            if model.hasFiles {
+                card(readingSince: nil)
+            } else {
+                NotConnectedView(model: model)
+            }
         }
     }
 
@@ -221,7 +228,10 @@ struct BrowseScreen: View {
     @ViewBuilder private func card(readingSince: Date?) -> some View {
         if model.sections.isEmpty {
             VStack(spacing: 0) {
-                if let readingSince, let listedAt = model.lastKnownListedAt {
+                if model.phase == .notConnected, let listedAt = model.lastKnownListedAt {
+                    NotConnectedLine(model: model, listedAt: listedAt)
+                        .padding()
+                } else if let readingSince, let listedAt = model.lastKnownListedAt {
                     LastKnownLine(mode: model.camera.mode, listedAt: listedAt, readingSince: readingSince)
                         .padding()
                 }
@@ -311,6 +321,66 @@ struct LastKnownLine: View {
                 .presentationCompactAdaptation(.popover)
             }
         }
+    }
+}
+
+/// An offline Browse's line above the last-known card (W6-absent): the card as it was, that the camera isn't connected,
+/// and what to do; Connect for a Wi-Fi camera that is listed (the person's tap is the only thing that starts its join).
+struct NotConnectedLine: View {
+    let model: BrowseModel
+    let listedAt: Date
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(BrowseWording.lastKnownLine(listedAt.formatted(date: .abbreviated, time: .shortened)))
+                    Text(BrowseWording.notConnectedLine)
+                    Text(BrowseWording.notConnectedNextStep(carrier: model.camera.carrier,
+                                                            canConnect: model.canConnect))
+                }
+            } icon: {
+                Image(systemName: model.camera.carrier == .wifi ? "wifi.slash" : "cable.connector.slash")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            if model.canConnect {
+                Button(BrowseWording.connect) { model.connect() }
+                    .buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+/// An offline Browse with no card to show (W6-absent): the catalogue being read, the card never read, or a card that
+/// was empty when last read; with Connect for a Wi-Fi camera that is listed.
+struct NotConnectedView: View {
+    let model: BrowseModel
+
+    var body: some View {
+        if model.offlineCard == .looking {
+            ProgressView()
+        } else {
+            ContentUnavailableView {
+                Label(BrowseWording.notConnectedTitle,
+                      systemImage: model.camera.carrier == .wifi ? "wifi.slash" : "cable.connector.slash")
+            } description: {
+                Text(detail)
+            } actions: {
+                if model.canConnect {
+                    Button(BrowseWording.connect) { model.connect() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private var detail: String {
+        let next = BrowseWording.notConnectedNextStep(carrier: model.camera.carrier, canConnect: model.canConnect)
+        guard let listedAt = model.lastKnownListedAt else { return BrowseWording.neverReadDetail + " " + next }
+        return BrowseWording.emptyLastKnownDetail(listedAt.formatted(date: .abbreviated, time: .shortened)) + " " + next
     }
 }
 
@@ -485,7 +555,12 @@ struct CardGrid: View {
         let columns = [GridItem(.adaptive(minimum: minimum, maximum: minimum * 1.75), spacing: 2)]
         ScrollView {
             VStack(spacing: 0) {
-                if let readingSince, let listedAt = model.lastKnownListedAt {
+                if model.phase == .notConnected, let listedAt = model.lastKnownListedAt {
+                    NotConnectedLine(model: model, listedAt: listedAt)
+                        .padding(.leading)
+                        .padding(.trailing, 8)
+                        .padding(.vertical, 4)
+                } else if let readingSince, let listedAt = model.lastKnownListedAt {
                     LastKnownLine(mode: model.camera.mode, listedAt: listedAt, readingSince: readingSince)
                         .padding(.leading)
                         .padding(.trailing, 8)

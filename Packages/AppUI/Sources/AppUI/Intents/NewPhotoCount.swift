@@ -108,12 +108,14 @@ extension BrowseModel {
             // Try Again is only shown when it can do something (`canRetry`); without it nothing will read the card.
             guard canRetry else { return .failedWithNoRetry }
             return failedToReachCamera ? .couldNotReach : .listingFailed
-        case .reading, .listed, .listsNoFiles, .gone: return nil
+        // An offline Browse (W6-absent) waits for the camera, which `waitingForConnection` says instead.
+        case .reading, .listed, .listsNoFiles, .gone, .notConnected: return nil
         }
     }
 }
 
-/// What came of "Import new photos" (D7 (a)): `AppModel.importNewPhotos(cameraWith:waitingForCamera:waitingForImport:)`.
+/// What came of "Import new photos" (D7 (a)): `AppModel.importNewPhotos(cameraWith:waitingForCamera:waitingForImport:
+/// answeringBy:)`.
 public enum NewPhotosImportStart: Sendable, Hashable {
     /// Browse's *Import* for *Select all new* answered, for the remembered choice.
     case requested(ImportRequestOutcome, choice: DestinationKind)
@@ -126,8 +128,13 @@ public enum NewPhotosImportStart: Sendable, Hashable {
     case waitingForPerson(choice: DestinationKind, why: NewPhotosCardWait)
     /// The new files were picked and the import is being started (Photos access may be being asked for).
     case starting(choice: DestinationKind)
-    /// No connected camera has this key.
+    /// No connected camera has this key. (Since W6-absent the app answers a camera that isn't listed with
+    /// `waitingForConnection`, having opened its offline Browse.)
     case notConnected
+    /// No listed camera has this key (W6-absent): its offline Browse is open, showing the last-known card when
+    /// `cardRead` (otherwise saying the card hasn't been read yet), and the import starts once the camera is listed and
+    /// its card read, unless the person leaves Browse or the app first.
+    case waitingForConnection(choice: DestinationKind, cardRead: Bool)
     /// Browse couldn't hand the files over (its link went while the card was shown), or the request was dropped (the
     /// person left Browse or the app before the card was read).
     case couldNotStart
@@ -260,6 +267,12 @@ public enum NewPhotosWording {
             return choice == .staging ? "Starting to stage the new photos." : "Starting to import the new photos to Photos."
         case .notConnected:
             return "\(subject) isn't connected. Connect it, then try again."
+        case let .waitingForConnection(choice, cardRead):
+            let photos = choice == .staging ? "its new photos will be staged" : "its new photos will be imported to Photos"
+            return cardRead
+                ? "\(subject) isn't connected. Connect it while Shutter Bridge shows its card, and \(photos)."
+                : "\(subject) isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter "
+                    + "Bridge is open, and \(photos)."
         case .couldNotStart:
             return couldNotStart(subject)
         case .appNotReady:

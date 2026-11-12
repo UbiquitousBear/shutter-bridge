@@ -96,6 +96,10 @@ public final class BrowseModel {
         case failed(String)
         /// The camera went away; the Cameras screen takes over.
         case gone
+        /// The camera isn't connected (W6-absent: "Import new photos" with the camera away): an offline Browse showing the
+        /// catalogue's last-known card, if there is one, with nothing that needs the camera. It never opens a link; the
+        /// Cameras model replaces it with the live Browse once the camera is listed (`OfflineBrowse`).
+        case notConnected
     }
 
     /// The link went away under a card that is still shown (Wi-Fi): what the strip above the card says.
@@ -114,6 +118,9 @@ public final class BrowseModel {
         case noCaptureDate
         /// The card isn't read yet (the last-known card, or still reading).
         case cardNotRead
+        /// The camera isn't connected (an offline Browse, W6-absent): its last-known card is shown, and nothing on it can
+        /// be picked until the camera is.
+        case cameraNotConnected
     }
 
     public let camera: CameraDescriptor
@@ -181,6 +188,11 @@ public final class BrowseModel {
             }
         }
     }
+    /// What an offline Browse (`Phase.notConnected`) found in the catalogue: nil for a Browse on a listed camera.
+    public private(set) var offlineCard: OfflineCard?
+    /// Whether an offline Browse offers Connect: its camera is a Wi-Fi camera that is now listed, which only the person's
+    /// tap reaches (a join is never started by itself, Shamil 10 Nov). Over USB the live Browse replaces it instead.
+    public private(set) var canConnect = false
     /// The action's confirmation (goes by itself) or error (stays until closed), for the strip at the top. Numbered,
     /// so the same error twice in a row (with no work in between) is a new notice, announced again.
     public var actionNotice: StatusNotice? { StatusNotice.jpegAction(action, id: actionOutcomeCount) }
@@ -188,6 +200,10 @@ public final class BrowseModel {
     public private(set) var share: JPEGShare?
 
     @ObservationIgnored private let openLink: @Sendable () async throws(CameraLinkFailure) -> any CameraLink
+    /// The camera this offline Browse stands for; nil for a Browse on a listed camera.
+    @ObservationIgnored let offline: OfflineBrowse?
+    /// Connect on an offline Browse: the Cameras model opens the live Browse on the listed camera.
+    @ObservationIgnored var onConnect: (@MainActor () -> Void)?
     @ObservationIgnored private let services: BrowseServices
     @ObservationIgnored private let catalogue: BrowseCatalogue?
     @ObservationIgnored private weak var importer: (any BrowseImporting)?
@@ -254,6 +270,8 @@ public final class BrowseModel {
     ///     Nil, or a nil answer, shows the kind's own wording.
     ///   - openWasDeclined: Asked when opening the link failed: true when the person chose not to continue (Not Now on the
     ///     Local Network explanation), so `onDeclined` closes the screen with no notice instead of `onGone`'s.
+    ///   - offline: Makes this an offline Browse for a camera that isn't connected (`Phase.notConnected`): it shows the
+    ///     catalogue's last-known card for that key and never calls `openLink`.
     public init(
         camera: CameraDescriptor,
         openLink: @escaping @Sendable () async throws(CameraLinkFailure) -> any CameraLink,
@@ -267,8 +285,11 @@ public final class BrowseModel {
         leases: LinkLeases = LinkLeases(),
         keyTags: CameraKeyTags = .shared,
         now: @escaping @Sendable () -> Date = { Date() },
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        offline: OfflineBrowse? = nil
     ) {
+        self.offline = offline
+        offlineCard = offline == nil ? nil : .looking
         self.keyTags = keyTags
         self.camera = camera
         self.openLink = openLink
@@ -282,7 +303,8 @@ public final class BrowseModel {
         self.leases = leases
         self.now = now
         self.calendar = calendar
-        phase = camera.carrier == .wifi ? .connecting(since: now()) : .reading(since: now())
+        phase = offline != nil ? .notConnected
+            : camera.carrier == .wifi ? .connecting(since: now()) : .reading(since: now())
     }
 
     // MARK: - Lifecycle
@@ -317,6 +339,10 @@ public final class BrowseModel {
     /// until the calling task is cancelled. A second call while one runs does nothing.
     public func run() async {
         guard !isRunning, phase != .gone else { return }
+        if let offline {
+            await showOffline(offline)
+            return
+        }
         isRunning = true
         defer {
             isRunning = false
@@ -691,6 +717,7 @@ public final class BrowseModel {
         case .listsNoFiles: "lists no files"
         case .failed: "failed"
         case .gone: "gone"
+        case .notConnected: "not connected"
         }
     }
 
@@ -762,7 +789,7 @@ public final class BrowseModel {
         switch phase {
         case .connecting, .reading: return true
         case .listed: return interruption == .reconnecting
-        case .listsNoFiles, .failed, .gone: return false
+        case .listsNoFiles, .failed, .gone, .notConnected: return false
         }
     }
 
@@ -1186,10 +1213,11 @@ public final class BrowseModel {
         lastKnownListedAt = nil
     }
 
-    /// Whether the link is being reached or the card read: the last-known card may still be shown.
+    /// Whether the link is being reached or the card read, or the camera isn't connected: the last-known card may be
+    /// shown.
     private var isOpening: Bool {
         switch phase {
-        case .connecting, .reading: true
+        case .connecting, .reading, .notConnected: true
         case .listed, .listsNoFiles, .failed, .gone: false
         }
     }
@@ -1305,7 +1333,9 @@ public final class BrowseModel {
         case .other: return .notAPhoto
         case .photo: break
         }
-        guard phase == .listed, lastKnownListedAt == nil else { return .cardNotRead }
+        guard phase == .listed, lastKnownListedAt == nil else {
+            return phase == .notConnected ? .cameraNotConnected : .cardNotRead
+        }
         if item.captureDate == nil { return .noCaptureDate }
         return nil
     }
@@ -1398,7 +1428,8 @@ public final class BrowseModel {
     /// The bar's title: the camera's name, or while selecting "Select Items" and then "3 Selected" (HIG: the title
     /// reports the selection).
     public var navigationTitle: String {
-        isSelecting ? BrowseWording.selectingTitle(selectionSummary) : CamerasWording.displayName(for: camera)
+        isSelecting ? BrowseWording.selectingTitle(selectionSummary)
+            : offline?.name ?? CamerasWording.displayName(for: camera)
     }
 
     /// The bar's subtitle: the selection's size while selecting something, "Connecting to the camera…" or "Reading the
@@ -1408,6 +1439,7 @@ public final class BrowseModel {
         if isSelecting, summary.count > 0 { return ByteWording.size(summary.bytes) }
         if case .connecting = phase, lastKnownListedAt != nil { return BrowseWording.connectingSubtitle }
         if case .reading = phase, lastKnownListedAt != nil { return BrowseWording.readingSubtitle }
+        if phase == .notConnected { return BrowseWording.notConnectedSubtitle }
         return CamerasWording.modeLine(camera.mode)
     }
 
@@ -1504,6 +1536,41 @@ public final class BrowseModel {
         BrowseWording.cellAccessibilityValue(selectionBlock(for: item))
     }
 
+    // MARK: - Not connected (W6-absent)
+
+    /// The offline Browse's card: the catalogue's last listing of the camera, as the live Browse shows it while it reads
+    /// the card, with its "Showing the card as it was on <date>." line. Nothing is opened, fetched or selectable.
+    private func showOffline(_ offline: OfflineBrowse) async {
+        guard offlineCard == .looking else { return }
+        services.log.note("browse: the camera isn't connected; looking for its last-known card")
+        guard let catalogue else {
+            offlineCard = .neverRead
+            return
+        }
+        cameraKey = offline.key
+        await showLastKnown(for: offline.key, from: catalogue.store)
+        if lastKnownListedAt == nil {
+            services.log.note("browse: the camera isn't connected and its card hasn't been read yet")
+            offlineCard = .neverRead
+        } else {
+            offlineCard = .shown
+        }
+    }
+
+    /// The Cameras model says whether the offline Browse's camera (a Wi-Fi camera) is listed, so Connect can reach it.
+    func offerConnect(_ offered: Bool) {
+        guard offline != nil, canConnect != offered else { return }
+        canConnect = offered
+    }
+
+    /// Connect on an offline Browse whose Wi-Fi camera is listed: the live Browse replaces it and starts the join, as
+    /// opening the camera from Cameras does. The person's tap is the only way to it.
+    public func connect() {
+        guard canConnect else { return }
+        services.log.note("browse: Connect tapped on a camera that wasn't connected")
+        onConnect?()
+    }
+
     // MARK: - For tests
 
     /// Waits for the action in progress, if any, to finish.
@@ -1571,4 +1638,28 @@ struct ThumbnailTally: Sendable, Equatable {
         return "asked \(asked): ok \(ok), failed \(failures)\(byKind), skipped no-link \(skippedNoLink), not-listed "
             + "\(skippedNotListed), cancelled \(cancelled), undecodable \(undecodable)"
     }
+}
+
+/// The camera an offline Browse stands for (W6-absent): its catalogue key, the name its title shows and how it was last
+/// reached. Never the serial: the key is a hash of it where it comes from one (`CameraKey`).
+public struct OfflineBrowse: Sendable, Hashable {
+    public var key: CameraKey
+    public var name: String
+    public var carrier: CameraCarrier
+
+    public init(key: CameraKey, name: String, carrier: CameraCarrier) {
+        self.key = key
+        self.name = name
+        self.carrier = carrier
+    }
+}
+
+/// What an offline Browse found in the catalogue for its camera (`BrowseModel.offlineCard`).
+public enum OfflineCard: Sendable, Hashable {
+    /// The catalogue is being read.
+    case looking
+    /// The last-known card is shown (it may have had no files).
+    case shown
+    /// The catalogue has no listing of this camera's card: it hasn't been read yet.
+    case neverRead
 }

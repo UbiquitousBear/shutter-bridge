@@ -3,8 +3,9 @@ import AppIntents
 import Foundation
 
 /// "Import new photos from <camera>" (I16; backlog section 5, D7 (a)). Compiled only by CI's Xcode job; what it does
-/// is `AppModel.importNewPhotos(cameraWith:waitingForCamera:waitingForImport:)` and what it says is
-/// `NewPhotosWording.importAnswer(_:camera:)`, both tested on Linux.
+/// is `IntentHost.importNewPhotos(cameraWith:)` (the app's model, then `AppModel.importNewPhotos`, answering within
+/// `NewPhotosTiming.standard.answer`) and what it says is `NewPhotosWording.importAnswer(_:camera:)`, both tested on
+/// Linux. A camera that isn't connected gets its Browse with the last-known card (W6-absent).
 ///
 /// It opens the app before it runs (both links need the app in front: a USB import pauses away from it, and a Wi-Fi
 /// join needs it), opens Browse on the camera, and starts what *Select All New* then *Import* start there, with the
@@ -36,10 +37,8 @@ public struct ImportNewPhotosIntent: AppIntent {
     @MainActor
     public func perform() async throws -> some IntentResult & ProvidesDialog {
         let camera = self.camera
-        guard let model = await IntentHost.model() else {
-            return .result(dialog: "\(NewPhotosWording.importAnswer(.appNotReady, camera: camera.name))")
-        }
-        let start = await model.importNewPhotos(cameraWith: camera.key)
+        // Within `NewPhotosTiming.standard.answer` in all (W6-absent): the import still starts once the card is read.
+        let start = await IntentHost.importNewPhotos(cameraWith: camera.key)
         return .result(dialog: "\(NewPhotosWording.importAnswer(start, camera: camera.name))")
     }
 }

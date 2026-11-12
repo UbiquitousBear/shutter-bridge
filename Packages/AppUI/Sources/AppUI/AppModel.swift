@@ -155,6 +155,8 @@ public final class AppModel {
         cameras.onBrowseListed = { [weak self] browse in self?.browseListed(browse) }
         // ... and is dropped as soon as Browse is left, so a later visit of the person's own starts nothing.
         cameras.onPathChanged = { [weak self] path in self?.browsePathChanged(path) }
+        // ... and moves over to the live camera when an offline Browse is replaced by its live one (W6-absent).
+        cameras.onOfflineReplaced = { [weak self] offline, live in self?.offlineCameraReplaced(offline, by: live) }
         importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
         importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
         // A pass before a job's diff that wrote rows (a replay, or a waiting marker found once access returns) may have

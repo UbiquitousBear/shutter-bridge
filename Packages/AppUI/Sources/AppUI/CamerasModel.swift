@@ -105,6 +105,14 @@ public final class CamerasModel: CameraFinding {
     @ObservationIgnored private var noticeCamera: CameraDescriptor.ID?
     /// Counts the disconnect notices (`noticeStatus`'s id).
     private var noticeCount = 0
+    /// The offline Browses' cameras (W6-absent), by the descriptor pushed for each: one per camera key, kept for the
+    /// model's lifetime so the same key always gets the same descriptor.
+    @ObservationIgnored private var offlineCameras: [CameraDescriptor.ID: OfflineCamera] = [:]
+    /// Told when an offline Browse is replaced by the live Browse on the listed camera (W6-absent), before the path
+    /// changes: `AppModel` moves a waiting "Import new photos" over to the live camera, so leaving the offline Browse
+    /// for it isn't taken for leaving Browse.
+    @ObservationIgnored var onOfflineReplaced: (@MainActor (_ offline: CameraDescriptor.ID,
+                                                            _ live: CameraDescriptor) -> Void)?
 
     /// - Parameters:
     ///   - catalogue: For Browse's last-known card and badge; nil shows neither.
@@ -150,6 +158,7 @@ public final class CamerasModel: CameraFinding {
 
     /// The model for browsing `camera`. Cheap: nothing is opened until its screen runs it.
     public func browseModel(for camera: CameraDescriptor) -> BrowseModel {
+        if let offline = offlineCameras[camera.id] { return offlineBrowseModel(for: camera, offline) }
         let discovery = self.discovery
         let id = camera.id
         let model = BrowseModel(
@@ -298,9 +307,14 @@ public final class CamerasModel: CameraFinding {
             }
             let id = camera.id
             Task { [weak self] in await self?.readKnownKey(of: id) }
+            // An offline Browse shown for this camera becomes the live one (W6-absent).
+            if let shown = path.last, offlineCameras[shown.id] != nil {
+                Task { [weak self] in await self?.matchOfflineCamera() }
+            }
         case let .disappeared(id):
             cameras.removeAll { $0.id == id }
             knownKeys[id] = nil
+            withdrawOfflineConnect(from: id)
             cameraWentAway(id)
         }
     }
@@ -316,6 +330,124 @@ public final class CamerasModel: CameraFinding {
                 self.apply(event)
             }
         }
+    }
+}
+
+// MARK: - Not connected (W6-absent)
+
+/// The camera an offline Browse stands for, and the listed Wi-Fi camera its Connect would open.
+@MainActor
+struct OfflineCamera {
+    let descriptor: CameraDescriptor
+    let browse: OfflineBrowse
+    /// The listed Wi-Fi camera with this key, once there is one: Connect opens it.
+    var listed: CameraDescriptor?
+}
+
+extension CamerasModel {
+    /// The descriptor to push for an offline Browse of the camera whose catalogue key is `key` (W6-absent): a camera
+    /// "Import new photos" asked for that isn't listed. Named as the catalogue names it (`HistoryWording.cameraName`) and
+    /// reached as it was last set up for. It is never among `cameras`, and its Browse opens nothing
+    /// (`BrowseModel.offline`).
+    func offlineCamera(for key: CameraKey) async -> CameraDescriptor {
+        if let known = offlineCamera(withKey: key) { return known.descriptor }
+        var record: CameraRecord?
+        if let catalogue { record = try? await catalogue.camera(key) }
+        let name = HistoryWording.cameraName(record)
+        let carrier: CameraCarrier = record?.preferredCarrier == .wifi ? .wifi : .usb
+        // A camera asked for twice while the catalogue was read gets the first descriptor.
+        if let known = offlineCamera(withKey: key) { return known.descriptor }
+        let descriptor = CameraDescriptor(id: .init(rawValue: "offline-\(offlineCameras.count + 1)"), name: name,
+                                          mode: carrier == .wifi ? .wifi(.cameraNetwork) : .usb(.massStorage))
+        offlineCameras[descriptor.id] = OfflineCamera(descriptor: descriptor,
+                                                      browse: OfflineBrowse(key: key, name: name, carrier: carrier))
+        return descriptor
+    }
+
+    /// Whether `id` is an offline Browse's descriptor.
+    func isOffline(_ id: CameraDescriptor.ID) -> Bool { offlineCameras[id] != nil }
+
+    private func offlineCamera(withKey key: CameraKey) -> OfflineCamera? {
+        offlineCameras.values.first { $0.browse.key == key }
+    }
+
+    /// The offline Browse on screen, if any, becomes the live Browse once its camera is listed: at once over USB, where
+    /// listing opens nothing; a Wi-Fi camera's Browse offers Connect instead, since reaching it is a join, which only the
+    /// person's tap starts (Shamil, 10 Nov). A camera listed over both goes live over USB: a Wi-Fi listing offering
+    /// Connect doesn't hold back the cable. Matched by the key discovery knows for a camera (a Wi-Fi camera that has
+    /// connected before), else, over USB, by the key read from its link (nothing is opened), as
+    /// `link(forCameraWith:)` matches.
+    func matchOfflineCamera() async {
+        guard let shown = path.last, let offline = offlineCameras[shown.id] else { return }
+        var overWiFi: CameraDescriptor?
+        for camera in cameras {
+            guard await isCamera(camera, withKey: offline.browse.key) else { continue }
+            // The person may have left while discovery was asked.
+            guard path.last?.id == shown.id else { return }
+            if camera.carrier == .wifi {
+                if overWiFi == nil { overWiFi = camera }
+                continue
+            }
+            services.log.note("cameras: the camera shown as not connected is connected; opening its card")
+            replaceOffline(shown.id, with: camera)
+            return
+        }
+        guard let overWiFi, offlineCameras[shown.id]?.listed != overWiFi else { return }
+        offlineCameras[shown.id]?.listed = overWiFi
+        services.log.note("cameras: the camera shown as not connected is listed over Wi-Fi; offering Connect")
+        offerConnect(true, on: shown.id)
+    }
+
+    /// Connect on an offline Browse: the live Browse on the listed Wi-Fi camera replaces it, and starts the join.
+    func connectOffline(_ id: CameraDescriptor.ID) {
+        guard path.last?.id == id, let live = offlineCameras[id]?.listed, cameras.contains(live) else { return }
+        replaceOffline(id, with: live)
+    }
+
+    private func replaceOffline(_ id: CameraDescriptor.ID, with live: CameraDescriptor) {
+        onOfflineReplaced?(id, live)
+        path = [live]
+    }
+
+    /// A listed Wi-Fi camera went: the offline Browse that offered Connect to it no longer does.
+    private func withdrawOfflineConnect(from id: CameraDescriptor.ID) {
+        for (offlineID, offline) in offlineCameras where offline.listed?.id == id {
+            offlineCameras[offlineID]?.listed = nil
+            offerConnect(false, on: offlineID)
+        }
+    }
+
+    private func offerConnect(_ offered: Bool, on id: CameraDescriptor.ID) {
+        browsing.removeAll { $0.model == nil }
+        for entry in browsing where entry.model?.camera.id == id { entry.model?.offerConnect(offered) }
+    }
+
+    private func offlineBrowseModel(for camera: CameraDescriptor, _ offline: OfflineCamera) -> BrowseModel {
+        let model = BrowseModel(
+            camera: camera,
+            openLink: { () async throws(CameraLinkFailure) -> any CameraLink in
+                throw CameraLinkFailure(.disconnected, detail: "offline Browse")
+            },
+            services: services,
+            onGone: { _ in },
+            catalogue: catalogue.map { BrowseCatalogue(store: $0, cameraKey: cameraKey) },
+            importer: importModel,
+            leases: leases,
+            offline: offline.browse
+        )
+        model.offerConnect(offline.listed != nil)
+        model.onConnect = { [weak self] in self?.connectOffline(camera.id) }
+        browsing.removeAll { $0.model == nil }
+        browsing.append(WeakBrowse(model: model))
+        return model
+    }
+
+    /// Whether `camera` is the one whose catalogue key is `key`, opening nothing: a Wi-Fi camera with no key yet has never
+    /// connected, and asking for its link would start a join.
+    private func isCamera(_ camera: CameraDescriptor, withKey key: CameraKey) async -> Bool {
+        if let known = await discovery.knownKey(for: camera.id) { return known == key }
+        guard camera.carrier != .wifi, let link = try? await discovery.cameraLink(for: camera.id) else { return false }
+        return await cameraKey(camera, link) == key
     }
 }
 
