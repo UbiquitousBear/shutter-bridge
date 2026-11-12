@@ -90,6 +90,7 @@ public enum KeepersWording {
                 parts.append("Another import is running. Import the keepers when it's done")
             }
             if run.alreadyImported > 0 { parts.append("\(files(run.alreadyImported)) already in Photos") }
+            if run.rejectedSince > 0 { parts.append("\(files(run.rejectedSince)) rejected since, not imported") }
             if run.filesSkipped > 0 { parts.append("\(run.filesSkipped) skipped") }
             if run.filesFailed > 0 { parts.append("\(run.filesFailed) failed and stay in Staging") }
         }

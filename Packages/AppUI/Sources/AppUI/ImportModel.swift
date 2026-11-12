@@ -996,6 +996,9 @@ public struct KeepersRun: Sendable, Hashable {
     public var filesFailed = 0
     /// Keepers left out before their job because they are imported already (by content: imported separately before).
     public var alreadyImported = 0
+    /// Keepers left out because they were marked Reject after the plan (D3): never imported, and their copies stay in
+    /// Staging unless the removal's own rules (read again at removal) take them as rejects.
+    public var rejectedSince = 0
 
     public init(jobCount: Int = 0) { self.jobCount = jobCount }
 
@@ -1058,8 +1061,16 @@ extension ImportModel {
             let made = destinations.destinations(for: camera, startedAt: now(), staging: availability)
             let photos = self.photos
             let route = ImportRoute.keepers(made.photos, authorisation: { await photos.authorisation() })
-            let toDo = (try? await engine.picksToDo(.items(listed), camera: job.camera, for: route)) ?? listed
-            run.alreadyImported += listed.count - toDo.count
+            let picks = (try? await engine.picksToDo(.items(listed), camera: job.camera, for: route)) ?? listed
+            run.alreadyImported += listed.count - picks.count
+            // A keeper marked Reject since the plan (the loupe stays usable while the jobs run) is left out, as any job
+            // queued again leaves rejects out (D3, I21: `ImportSelection.requeued`); the job goes on without it.
+            let toDo = (try? await engine.picksToDo(.requeued(picks), camera: job.camera, for: route)) ?? picks
+            if toDo.count < picks.count {
+                run.rejectedSince += picks.count - toDo.count
+                log.note("import: keepers job \(i + 1) of \(jobs.count): \(picks.count - toDo.count) file(s) rejected "
+                    + "since, left out, key " + keyTags.tag(for: job.camera))
+            }
             guard !toDo.isEmpty else {
                 log.note("import: keepers job \(i + 1) of \(jobs.count): nothing new, key "
                     + keyTags.tag(for: job.camera))
@@ -1109,7 +1120,8 @@ extension ImportModel {
         loggedEnd = false
         pausedByPerson = false
         do {
-            try await engine.start(.items(items), from: link, camera: camera.key, to: route)
+            // Queued again rather than picked: a keeper rejected after the plan is left out by the engine too (D3).
+            try await engine.start(.requeued(items), from: link, camera: camera.key, to: route)
         } catch {
             starting = false
             log.note("import: keepers job didn't start: \(error)", level: .error)
