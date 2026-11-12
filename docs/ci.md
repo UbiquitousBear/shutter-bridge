@@ -177,14 +177,19 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   History" path needs a camera and waits for Iteration 5's review-build simulator mode, so no `PTPSimulator` is linked
   into the app. On a failure the step's raw lines (test, assertion, compile error) and the result bundle's failures
   are printed after it. Unsigned, the runner never started on the first run (12 Nov, #139: timed out waiting for
-  the accessibility "AX loaded" notification), hence the ad-hoc signature and the boot beforehand. On the Mac, the
+  the accessibility "AX loaded" notification), hence the ad-hoc signature and the boot beforehand. A failing UI test
+  is run once more (`-retry-tests-on-failure`): on #139 the runner's Simulator left the app's threads unscheduled for
+  about a minute, so waits timed out with the app idle; a test must still pass in one of its two runs, and the result
+  bundle (with the screenshots) is kept as the `ui-tests-xcresult` artifact when the step fails. On the Mac, the
   same tests run from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS
   Simulator through
   `AllPackages.xcworkspace` at the root, which holds the eight packages, and its shared `AllPackageTests` scheme,
   which lists their ten test targets: one `xcodebuild build-for-testing`, so each module and Apple's SDK modules are
   compiled once, then `test-without-building` twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as
-  usual. The simulator is the first iPhone on the newest iOS runtime the pinned Xcode can run (from 27.0, the
-  deployment target, up to its iOS Simulator SDK; `.github/scripts/pick-iphone-simulator.sh`). Indexing while building
+  usual. The simulator is a standard iPhone model (an "iPhone 18" before an "iPhone 18 Pro", either before a model
+  such as "iPhone Duo", which on 12 Nov showed the tabs as a side strip and stalled the UI tests) on the newest iOS
+  runtime the pinned Xcode can run (from 27.0, the deployment target, up to its iOS Simulator SDK;
+  `.github/scripts/pick-iphone-simulator.sh`, which lists every candidate in the log). Indexing while building
   is off (`COMPILER_INDEX_STORE_ENABLE=NO`; nothing on CI reads the index). Measured on 12 Nov: the packages job about
   9 minutes (#131), where testing each package one after another took about 33 and five parallel jobs that each
   compiled their packages' dependencies again took 12.6 for the slowest and five runners (#130). The label is free for

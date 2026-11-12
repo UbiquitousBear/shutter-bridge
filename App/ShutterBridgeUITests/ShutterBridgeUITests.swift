@@ -14,7 +14,8 @@ final class ShutterBridgeUITests: XCTestCase {
     private let camera = "ILCE-7CM2"
     /// Long enough for a cold Simulator launch of the Debug app on CI.
     private let launchTimeout: TimeInterval = 60
-    private let timeout: TimeInterval = 10
+    /// For each screen's elements; generous, since CI's Simulator can be starved for many seconds at a time (#139).
+    private let timeout: TimeInterval = 30
 
     override func setUpWithError() throws {
         continueAfterFailure = false

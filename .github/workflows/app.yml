@@ -143,7 +143,10 @@ jobs:
         # timed out waiting for the accessibility "AX loaded" notification). The simulator is booted and its boot
         # waited for first, since a cold one starting during the test launch is the other cause given for that
         # timeout. Each test may take at most three minutes, so a stuck screen fails its test rather than the job's
-        # limit.
+        # limit, and a failing test is run once more (-retry-tests-on-failure): on #139 the runner's Simulator left
+        # the app's threads unscheduled for about a minute (a spindump in the result bundle), so a query or the
+        # loupe's appearing timed out with the app idle. A test still has to pass in one of its two runs, and the
+        # first run's failure stays in the log and the result bundle.
         env:
           SIM: ${{ steps.sim.outputs.id }}
         run: |
@@ -154,6 +157,7 @@ jobs:
             -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIM" -only-testing:ShutterBridgeUITests \
             -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
+            -retry-tests-on-failure -test-iterations 2 \
             -resultBundlePath "$RUNNER_TEMP/UITests.xcresult" \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
             COMPILER_INDEX_STORE_ENABLE=NO \
@@ -175,7 +179,7 @@ jobs:
 
       - name: Keep the UI tests' result bundle (screenshots) when they fail
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ui-tests-xcresult
           path: ${{ runner.temp }}/UITests.xcresult
