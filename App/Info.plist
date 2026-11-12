@@ -95,5 +95,20 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<!-- Staging in iCloud Drive (Shutter Bridge in Files, with the app's icon). The key must equal the container in
+	     ShutterBridge.entitlements; it is also what turns on UbiquityStagingLocator's lookup, so it never lands
+	     without the entitlements. -->
+	<key>NSUbiquitousContainers</key>
+	<dict>
+		<key>iCloud.net.shamil.shutter-bridge</key>
+		<dict>
+			<key>NSUbiquitousContainerIsDocumentScopePublic</key>
+			<true/>
+			<key>NSUbiquitousContainerName</key>
+			<string>Shutter Bridge</string>
+			<key>NSUbiquitousContainerSupportedFolderLevels</key>
+			<string>Any</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

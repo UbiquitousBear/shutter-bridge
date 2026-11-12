@@ -8,7 +8,7 @@ documentation on this date; the claims that rest only on forum reports are marke
 | Job | Where | Trigger | Secrets |
 | --- | --- | --- | --- |
 | Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov; each job stops after 20 minutes, #105) | PRs touching `Packages/` | none |
-| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator (AppUI's one at a time, #109), split over five parallel jobs (12 Nov) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
+| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator (AppUI's one at a time, #109), built once from `AllPackages.xcworkspace` (12 Nov) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
 | Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`), kept until the spike is retired | PRs touching `Spike/` or `Packages/PTPKit` | none |
 | Archive → TestFlight (internal testing), **now**: the production app by default, or the spike | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`, "App to TestFlight") | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
 | Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
@@ -63,16 +63,16 @@ For the production app (`App/ShutterBridge.xcodeproj`, committed, so nothing is 
 - **Export compliance:** `ITSAppUsesNonExemptEncryption = false` in `App/Info.plist`.
 - **Versions:** `MARKETING_VERSION` 0.1 and `CURRENT_PROJECT_VERSION` 1 in the project; `Info.plist` reads both from
   build settings, so CI sets the build number.
-- **Entitlements (from Iteration 3, W12):** `App/ShutterBridge.entitlements` holds only Hotspot Configuration (joining
-  the camera's network). Like `Info.plist` it sits outside the synchronised `ShutterBridge/` folder, and the target
+- **Entitlements (from Iteration 3, W12; iCloud from 12 Nov):** `App/ShutterBridge.entitlements` holds Hotspot
+  Configuration (joining the camera's network) and iCloud Documents for the container `iCloud.net.shamil.shutter-bridge`
+  (staging in iCloud Drive), both ticked on the App ID. Like `Info.plist` it sits outside the synchronised `ShutterBridge/` folder, and the target
   points at it with `CODE_SIGN_ENTITLEMENTS = ShutterBridge.entitlements` in Debug and Release: the build setting, not a
   generator's entitlements key (the lesson of the spike's XcodeGen rewrite above). Two checks keep it there:
-  `app.yml` fails a PR whose app target lacks the setting in either configuration or whose file holds anything but
-  that one key (its unsigned builds can't see entitlements), and `testflight.yml` fails a production archive that
-  isn't signed with it, before anything is uploaded. Multicast Networking stays out until Apple grants it and it is
-  ticked on the App ID; adding it means ticking it first, then adding the key and updating `app.yml`'s list. iCloud
-  (staging in iCloud Drive, Shamil, 11 Nov) stays out too until the App ID has it: the change is prepared under *To do
-  once the App ID has iCloud* below, not applied.
+  `app.yml` fails a PR whose app target lacks the setting in either configuration, whose file holds anything but
+  those keys, or whose Info.plist doesn't declare the same container (its unsigned builds can't see entitlements), and
+  `testflight.yml` fails a production archive that isn't signed with them, before anything is uploaded. Multicast
+  Networking stays out until Apple grants it and it is ticked on the App ID; adding it means ticking it first, then
+  adding the key and updating `app.yml`'s list. *iCloud for staging* below records how iCloud was added.
 - **Local Network:** `NSLocalNetworkUsageDescription` in `App/Info.plist`, asked at the first connection to the
   camera over Wi-Fi. No `NSBonjourServices` (the camera advertises no `_ptp._tcp`) and no ATS exception (the SSDP
   description fetch stays off).
@@ -161,27 +161,29 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   is added to the matrix by hand (all eight are in it). Each job stops after 20 minutes: a package takes about two
   minutes, and a hung test run (a Swift Testing time limit can't end a wait that ignores cancellation) otherwise runs
   to GitHub's six-hour default (#105).
-- **`app.yml`:** on the `xcode-27` runner with `DEVELOPER_DIR` pinned as in `spike-build.yml`, it builds
-  `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and `generic/platform=iOS`
-  (Release), then runs `xcodebuild test` for every package under `Packages/`, against the first iPhone simulator on
-  the newest iOS runtime that the pinned Xcode can run (from 27.0, the deployment target, up to its iOS Simulator SDK;
-  picked at run time from `xcrun simctl list -j` by `.github/scripts/pick-iphone-simulator.sh`). Since 12 Nov the
-  packages run in five parallel jobs instead of one after another, which took about 33 minutes, nearly all of it each
-  package compiling its dependencies again on a three-core runner: the `build` job (the two app builds and PTPKit) and
-  a `packages` matrix of four (PTPSimulator; AppUI; CameraTransport and BLEKit; Catalogue, ImportEngine and
-  PhotosBridge), balanced on the times #128 measured, so a run takes about as long as its slowest job (about 8
-  minutes). The label is free for public repositories and GitHub runs up to five macOS jobs of an account at once
-  (unverified for this plan), so a second run at the same time waits for runners. A new package must be added to a
-  group: the `build` job fails until it is. `.github/scripts/test-packages-in-simulator.sh` runs each package's tests
-  and turns off indexing while building (`COMPILER_INDEX_STORE_ENABLE=NO`; nothing on CI reads the index), as the app
-  builds do. AppUI's run uses
-  `-parallel-testing-enabled NO` (#109): nearly all its tests are main-actor bound and Swift Testing starts every test
-  at once, so in the Simulator they queued for the main actor and the wait counted against each test's own time limit
-  (a passing run of about 240 tests already had a slowest of 56 s against the 60 s limits). One at a time, a limit
-  measures the test alone; the other packages stay parallel. Each job's limit is 30 minutes. This is where the code
-  behind `canImport` is compiled and tested, the wireless screens and live wiring (W16) included. The project has no remote packages, so there is no `Package.resolved` to
-  commit; the first remote dependency (none is planned: Apple frameworks only) would need one. Before building, it
-  checks the app target's entitlements wiring (see *Entitlements* above), which the unsigned builds can't.
+- **`app.yml`:** two jobs on the `xcode-27` runner with `DEVELOPER_DIR` pinned as in `spike-build.yml`. The `build`
+  job checks the app target's entitlements wiring (see *Entitlements* above), which the unsigned builds can't, then
+  builds `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and `generic/platform=iOS`
+  (Release). The `packages` job tests every package in the iOS Simulator through `AllPackages.xcworkspace` at the root,
+  which holds the eight packages, and its shared `AllPackageTests` scheme, which lists their ten test targets: one
+  `xcodebuild build-for-testing`, so each module and Apple's SDK modules are compiled once, then `test-without-building`
+  twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as usual. The simulator is the first iPhone on
+  the newest iOS runtime the pinned Xcode can run (from 27.0, the deployment target, up to its iOS Simulator SDK;
+  `.github/scripts/pick-iphone-simulator.sh`). Indexing while building is off (`COMPILER_INDEX_STORE_ENABLE=NO`;
+  nothing on CI reads the index). Measured on 12 Nov: the packages job about 9 minutes (#131), where testing each
+  package one after another took about 33 and five parallel jobs that each compiled their packages' dependencies
+  again took 12.6 for the slowest and five runners (#130). The label is free for public repositories; two jobs a run
+  leave room under GitHub's five macOS jobs at once (unverified for this plan) for a second run. A new package must be
+  added to the workspace and its test targets to the scheme (on the Mac, open the workspace and edit the scheme, or
+  add the `FileRef` and `TestableReference` by hand): `.github/scripts/check-all-packages-workspace.py` fails the
+  `packages` job until they are, and checks that AppUI's tests stay not parallelisable (#109: nearly all of them are
+  main-actor bound and Swift Testing starts every test at once, so in the Simulator they queued for the main actor and
+  the wait counted against each test's own time limit; a passing run of about 240 tests already had a slowest of 56 s
+  against the 60 s limits). Each job's limit is 30 minutes. This is where the code behind `canImport` is compiled and
+  tested, the wireless screens and live wiring (W16) included. The project has no remote packages, so there is no
+  `Package.resolved` to commit; the first remote dependency (none is planned: Apple frameworks only) would need one.
+  On the Mac, `open AllPackages.xcworkspace` gives every package in one window, and its *AllPackageTests* scheme runs
+  every package's tests.
 
 If a ruleset on `main` requires status checks by name, replace the old `ptpkit.yml` check with these jobs.
 
@@ -260,7 +262,11 @@ browser:
 3. **Internal testers.** The app → TestFlight → Internal Testing → + a group (e.g. "Bench"), add yourself, and turn
    on automatic distribution.
 
-### To do once the App ID has iCloud (staging in iCloud Drive; prepared 11 Nov, not applied)
+### iCloud for staging (prepared 11 Nov; the App ID got iCloud and the change was applied on 12 Nov)
+
+*Applied:* Shamil created the container and ticked iCloud on the App ID with it assigned (12 Nov), and the change in
+step 2 below landed as written. What follows is kept as the record of the steps and the reasons; step 3 is still to
+run.
 
 *Stage* (Shamil, 11 Nov) copies the camera's originals into the app's iCloud Drive folder (iCloud Drive › Shutter
 Bridge › Staging › camera › capture day) when iCloud Drive is available, and into On My iPhone › Shutter Bridge ›
