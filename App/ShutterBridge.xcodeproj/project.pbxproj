@@ -10,16 +10,32 @@
 		B5B5851A881B9E69BBF6DD8F /* AppUI in Frameworks */ = {isa = PBXBuildFile; productRef = AB9B7AE4E68C1A257A449537 /* AppUI */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		B7A402EE7DA09A50571F38DE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 468364B097D1883EDC4024C4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 38B98C6BCADE8D63EFC28FC8;
+			remoteInfo = ShutterBridge;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		7FCD6157D5D9F30235515E52 /* ShutterBridge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShutterBridge.entitlements; sourceTree = "<group>"; };
 		B49312DF930E4911A3E31E42 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D230263AFE714BBD93036D4B /* ShutterBridge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ShutterBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D375BB95F397056E6BE2835B /* ShutterBridgeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShutterBridgeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		537D3B297593DE02BC9D51DB /* ShutterBridge */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ShutterBridge;
+			sourceTree = "<group>";
+		};
+		A71658C47FE55B61DAEAA605 /* ShutterBridgeUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ShutterBridgeUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +49,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		2B96A584F858A6B8DBB3B410 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -40,6 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				537D3B297593DE02BC9D51DB /* ShutterBridge */,
+				A71658C47FE55B61DAEAA605 /* ShutterBridgeUITests */,
 				B49312DF930E4911A3E31E42 /* Info.plist */,
 				7FCD6157D5D9F30235515E52 /* ShutterBridge.entitlements */,
 				2CB218B38F252C9A97B97392 /* Products */,
@@ -50,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				D230263AFE714BBD93036D4B /* ShutterBridge.app */,
+				D375BB95F397056E6BE2835B /* ShutterBridgeUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,6 +105,29 @@
 			productReference = D230263AFE714BBD93036D4B /* ShutterBridge.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A61034F2CF793B5CB14AA1E6 /* ShutterBridgeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8AC4A1C8CBD97075EE556E75 /* Build configuration list for PBXNativeTarget "ShutterBridgeUITests" */;
+			buildPhases = (
+				25FF91958A874872CBD4F498 /* Sources */,
+				2B96A584F858A6B8DBB3B410 /* Frameworks */,
+				82159630285A97B79D247118 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9849A7B1C21F11F06A47B726 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A71658C47FE55B61DAEAA605 /* ShutterBridgeUITests */,
+			);
+			name = ShutterBridgeUITests;
+			packageProductDependencies = (
+			);
+			productName = ShutterBridgeUITests;
+			productReference = D375BB95F397056E6BE2835B /* ShutterBridgeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -92,6 +140,10 @@
 				TargetAttributes = {
 					38B98C6BCADE8D63EFC28FC8 = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					A61034F2CF793B5CB14AA1E6 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 38B98C6BCADE8D63EFC28FC8;
 					};
 				};
 			};
@@ -113,12 +165,20 @@
 			projectRoot = "";
 			targets = (
 				38B98C6BCADE8D63EFC28FC8 /* ShutterBridge */,
+				A61034F2CF793B5CB14AA1E6 /* ShutterBridgeUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		C890AEAD0BC692333C61F82B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		82159630285A97B79D247118 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +195,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		25FF91958A874872CBD4F498 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		9849A7B1C21F11F06A47B726 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 38B98C6BCADE8D63EFC28FC8 /* ShutterBridge */;
+			targetProxy = B7A402EE7DA09A50571F38DE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		CC56D7D8BE07D39331F22AF3 /* Debug */ = {
@@ -251,6 +326,50 @@
 			};
 			name = Release;
 		};
+		25C92F6AE0D6712696AD53B0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.shamil.shutter-bridge.UITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = ShutterBridge;
+			};
+			name = Debug;
+		};
+		B86FBEACF854A7A10AB75549 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "net.shamil.shutter-bridge.UITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = ShutterBridge;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -268,6 +387,15 @@
 			buildConfigurations = (
 				2C3568A5216D765A5DDDE404 /* Debug */,
 				299213BD076520808EED46B7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		8AC4A1C8CBD97075EE556E75 /* Build configuration list for PBXNativeTarget "ShutterBridgeUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25C92F6AE0D6712696AD53B0 /* Debug */,
+				B86FBEACF854A7A10AB75549 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

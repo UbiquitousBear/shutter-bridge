@@ -306,7 +306,7 @@ struct LiveApp: View {
                 Task { await closing.closeLoupe() }
             }
             if chosen == .history, history == nil {
-                history = model.historyModel(documents: URL.documentsDirectory)
+                history = model.historyModel(documents: LiveLaunch.documents)
             }
         }
         // However Settings closes, a diagnostics file that is ready (or being made) is removed.
@@ -361,7 +361,7 @@ struct LiveApp: View {
     /// container's, previews decoded with ImageIO and Core Image, evicted iCloud files downloaded ahead, and the EXIF line
     /// read with ImageIO off the main actor.
     private func makeStagingModel() -> CullModel<DecodedPreviewImage> {
-        model.stagingModel(documents: URL.documentsDirectory, loader: ImageIOPreviewLoader(),
+        model.stagingModel(documents: LiveLaunch.documents, loader: ImageIOPreviewLoader(),
                            files: UbiquitousFileAvailability(), reader: StagedFileReaders.platform,
                            exif: { url in await Task.detached(priority: .utility) { EXIFSummary.read(from: url) }.value })
     }
@@ -369,7 +369,7 @@ struct LiveApp: View {
     /// *Import keepers* for the Staging tab: its jobs read the staged copies coordinated (iCloud Drive) and download an
     /// evicted keeper before the job starts.
     private func makeKeepersImport() -> KeepersImport {
-        model.keepersImport(documents: URL.documentsDirectory, files: UbiquitousFileAvailability(),
+        model.keepersImport(documents: LiveLaunch.documents, files: UbiquitousFileAvailability(),
                             reader: StagedFileReaders.platform)
     }
 
@@ -477,10 +477,29 @@ public enum LiveLaunch {
     /// The app's one launcher, over `wireless`.
     @MainActor static var launcher: AppLauncher {
         if let madeLauncher { return madeLauncher }
-        let made = AppLauncher.live(wireless: wireless)
+        let made = uiTestLauncher() ?? AppLauncher.live(wireless: wireless)
         madeLauncher = made
         return made
     }
+
+    /// The UI tests' seeded app (I18; D14 (c)) in a Debug build started with `UITestFixture.launchArgument`: the app
+    /// over an `InMemoryCatalogue` seeded with job records, staged files and marks (`UITestFixture`), with no camera.
+    /// Nil otherwise, and always in a Release build, which has no fixture.
+    @MainActor private static func uiTestLauncher() -> AppLauncher? {
+        #if DEBUG
+        if UITestFixture.isRequested() { return AppLauncher.uiTestFixture() }
+        #endif
+        return nil
+    }
+
+    /// The app's Documents folder, On My iPhone's staging root, for the Staging and History tabs; the fixture's folder in
+    /// the UI tests' seeded app (Debug builds only).
+    static let documents: URL = {
+        #if DEBUG
+        if UITestFixture.isRequested() { return UITestFixture.documents }
+        #endif
+        return URL.documentsDirectory
+    }()
 
     @MainActor static func refreshTaskRan() async {
         await wireless.refreshTaskRan()
