@@ -37,14 +37,14 @@ protocol. No third-party dependencies, no Sony marks in any name or icon.
 
 ## The rules that bite
 
-- **Attribution.** Commits and pull requests are attributed to Shamil only: author and committer
-  `Shamil <claude.ai@shamil.email>`, no `Co-Authored-By`, session link or "generated with" line, no `--no-verify`.
+- **Attribution.** Commits and pull requests are attributed to Shamil only: author and committer are the identity
+  `AGENTS.md` names, with no `Co-Authored-By`, session link or "generated with" line, and no `--no-verify`.
   Run `make hooks` once per clone; `.githooks/` enforces it. Never rewrite existing history.
 - **Fixtures** (`Fixtures/a7c2/`) are bytes from the real camera: never edited by hand, and the serial and hardware ID
   are zeroed by `scripts/redact-fixtures.py` (run by `make fixtures`, checked by the pre-commit hook). Never commit
   Wi-Fi passwords, QR payloads, packet captures (`.pcap`, `.pcapng`) or MTP property lists.
 - **Docs.** British English (catalogue, colour, behaviour). `proposal.md` and `spike-plan.md` are exports: don't edit
-  them. No serials, identifiers, network names, home addresses (the camera's 192.168.122.1 is the exception),
+  them. No serials, identifiers, network names, addresses (the camera's 192.168.122.1 is the exception),
   passwords or people in docs.
 - **Say what was compiled and run where.** Linux builds and tests only what isn't behind `#if canImport(...)`; the
   app and the Apple-only code are compiled by CI. Don't write "built" for what only CI will build.
@@ -53,9 +53,10 @@ protocol. No third-party dependencies, no Sony marks in any name or icon.
 
 ## The codebase map
 
-The layer rule: `AppUI → ImportEngine → {Catalogue, PhotosBridge, CameraTransport} → PTPKit`. `PTPSimulator` depends
-on `PTPKit` only and is a test dependency everywhere. Every package builds and tests alone, on Linux too, in Swift 6
-language mode with strict concurrency; every public type is `Sendable`.
+The layer rule: `AppUI → ImportEngine → {Catalogue, PhotosBridge, CameraTransport} → PTPKit`. The `PTPSimulator`
+target depends on `PTPKit` only; its package's `SimulatedLink` target adds `CameraTransport`, and its `IntegrationTests`
+drive the real engine. Nothing that ships depends on it: it is a test dependency only. Every package builds and tests
+alone, on Linux too, in Swift 6 language mode with strict concurrency; every public type is `Sendable`.
 
 | Package | What it holds |
 | --- | --- |
@@ -126,7 +127,8 @@ Each is tested; the backlog sections named hold the evidence.
 
 ## Where things are tested
 
-- **Swift Testing** everywhere: tests sit beside each package, `Tests/<Package>Tests/`. Pure logic, models, wording and
+- **Swift Testing** everywhere: tests sit beside each package, `Tests/<Package>Tests/` (PTPSimulator's are
+  `PTPSimulatorTests`, `SimulatedLinkTests` and `IntegrationTests`). Pure logic, models, wording and
   the engine's rules run on Linux with fakes (a fake library, `FailingCatalogue`, a recording destination).
 - **The fault matrix** (`Packages/PTPSimulator/Tests/IntegrationTests/FaultMatrix*.swift`, about 230 cases in 3 s;
   `swift test --filter FaultMatrix` in that package) runs every transport case against the real engine,
