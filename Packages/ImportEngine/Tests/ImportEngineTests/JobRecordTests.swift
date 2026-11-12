@@ -77,6 +77,55 @@ struct JobRecordTests {
         await h.cleanup()
     }
 
+    /// The album the job's saves go into changes mid-job (deleted in Photos and made again): the record follows it,
+    /// written again at once, and the job ends naming the album its latest saves went into.
+    @Test func theRecordFollowsAnAlbumThatChangesMidJob() async throws {
+        let h = Harness()
+        await h.photos.fileInto(album: "ALBUM-1")
+        let card = h.singles(["A.JPG", "B.JPG"])
+        let link = h.link(card)
+        await link.script("B.JPG", .hold)
+        try await h.start(.items(card), from: link)
+        await h.trace.next(.imported("A.JPG", .photos))
+        let b = await link.nextHeldCall("B.JPG")
+        #expect(try await onlyRecord(h).albumIdentifier == "ALBUM-1")
+
+        await h.photos.fileInto(album: "ALBUM-2")
+        b.release()
+        #expect(await h.waitFinished() == .completed)
+        let record = try await onlyRecord(h)
+        #expect(record.albumIdentifier == "ALBUM-2", "the album the latest save went into")
+        #expect(record.filesImported == 2)
+        await h.cleanup()
+    }
+
+    /// The same over the real Photos destination: the album is deleted in Photos between the two saves, so the second
+    /// makes it again, and the record names the new one.
+    @Test func theRecordFollowsAnAlbumDeletedAndMadeAgainInPhotos() async throws {
+        let h = Harness()
+        let library = AlbumLibrary()
+        let store = InMemoryAlbumIdentifierStore()
+        let plan = AlbumPlan(choice: .perCamera, cameraKey: h.camera.rawValue, cameraName: "ILCE-7CM2", importID: "job",
+                             importDate: Harness.t0)
+        let destination = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan)
+        let card = h.singles(["A.JPG", "B.JPG"])
+        let link = h.link(card)
+        await link.script("B.JPG", .hold)
+        try await h.start(.items(card), from: link, to: h.photosRoute(to: destination))
+        await h.trace.next(.imported("A.JPG", .photos))
+        let b = await link.nextHeldCall("B.JPG")
+        #expect(try await onlyRecord(h).albumIdentifier == "ALBUM-1")
+
+        await library.deleteAlbum("ALBUM-1")
+        b.release()
+        #expect(await h.waitFinished() == .completed)
+        let record = try await onlyRecord(h)
+        #expect(await library.created == ["ILCE-7CM2", "ILCE-7CM2"], "made again for the second save")
+        #expect(record.albumIdentifier == "ALBUM-2")
+        #expect(await store.albumIdentifier(forKey: plan.albums[0].key) == "ALBUM-2")
+        await h.cleanup()
+    }
+
     /// End to end over the real Photos destination: the record keeps the identifier of the album the destination made
     /// and stored (its key read from the plan, so D11's keying doesn't touch this test).
     @Test func thePhotosDestinationsAlbumReachesTheRecord() async throws {
@@ -351,6 +400,9 @@ private actor AlbumLibrary: PhotoLibraryClient {
     func album(withIdentifier identifier: String) -> AlbumLookup {
         albums.contains(identifier) ? .found(canAddContent: true) : .missing
     }
+
+    /// The album deleted in Photos, as a person might mid-job.
+    func deleteAlbum(_ identifier: String) { albums.remove(identifier) }
 
     func createAlbum(titled title: String) throws(PhotoLibraryFailure) -> String {
         created.append(title)
