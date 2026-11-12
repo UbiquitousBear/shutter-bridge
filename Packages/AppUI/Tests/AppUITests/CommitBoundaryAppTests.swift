@@ -62,6 +62,37 @@ struct CommitBoundaryAppTests {
         await run.value
     }
 
+    /// A marker the launch pass couldn't look up (access not given) is found by the pass before the next job's diff; the
+    /// job imports nothing, but the open Browse shows the file as imported, not new, with no new listing.
+    @Test func aJobsPassThatWroteRowsReadsBrowsesBadgesAgain() async throws {
+        let shown = item("DSC00001.JPG")
+        let link = FakeLink(items: [shown])
+        await link.set(writesListedSize: true)
+        let catalogue = InMemoryCatalogue()
+        try await leaveMarker(for: shown, of: link, in: catalogue)
+        let accessBack = Mutex(false)
+        let (app, _) = appModel(discovery: FakeDiscovery(link: link), catalogue: catalogue,
+                                lookup: AnsweringLookup { marker in
+            accessBack.withLock { $0 } ? .found(marker.importedWrites(localIdentifier: "earlier")) : .cannotLook
+        })
+        #expect(await app.runLaunchPass() == PendingCommitReport(waiting: 1))
+        let browse = app.browseModel(for: link.descriptor)
+        let run = Task { await browse.run() }
+        #expect(await eventually { browse.phase == .listed })
+        #expect(browse.imported.isEmpty)
+
+        // Access returns: the next job's pass finds it.
+        accessBack.withLock { $0 = true }
+        browse.selectAllNew()
+        await browse.importSelected()
+        // The pass found the photo before the import's pick was checked, so nothing was left to import.
+        #expect(await eventually { browse.imported == [shown.id] })
+        #expect(!app.importer.hasJob)
+        #expect(await catalogue.pendingCommits().isEmpty)
+        run.cancel()
+        await run.value
+    }
+
     @Test func aPossibleDuplicateIsSaidInTheNextImportsOutcome() async throws {
         let first = item("DSC00001.JPG")
         let link = FakeLink(items: [first])

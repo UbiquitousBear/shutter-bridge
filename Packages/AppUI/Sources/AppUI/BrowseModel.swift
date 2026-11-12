@@ -540,6 +540,10 @@ public final class BrowseModel {
         reconnects && openFailed ? WiFiWording.failedTitle : BrowseWording.listingFailedTitle
     }
 
+    /// Whether the failed state is a Wi-Fi camera that couldn't be reached (`failedTitle`), rather than a card that
+    /// couldn't be read.
+    var failedToReachCamera: Bool { reconnects && openFailed }
+
     /// Lists the card on `link`; `relisting` lists it again under the live card shown (a reconnected link), asking the
     /// camera only about files it doesn't know when the link can (`ReusingListing`). Returns false when a relist failed,
     /// which ends the link's hold.

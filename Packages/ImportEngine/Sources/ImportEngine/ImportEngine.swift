@@ -80,6 +80,9 @@ public actor ImportEngine {
     var possibleDuplicatesUnreported = 0
     /// Runs right after a destination returns and before `finishCommit`: the bench check's Debug-only launch argument.
     var beforeFinishCommit: (@Sendable () -> Void)?
+    /// Called after a pass that wrote rows, before a job's diff (`setOnRowsRecovered(_:)`): the app reads Browse's badges
+    /// again.
+    var onRowsRecovered: (@Sendable () -> Void)?
     /// The latest write of a job record (`JobRecorder`); each waits for the one before, so they land in order.
     var jobRecordWrite: Task<Void, Never>?
     /// The `reconcilePartials()` pass running now, which a second caller awaits.

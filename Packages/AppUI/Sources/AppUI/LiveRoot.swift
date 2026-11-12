@@ -452,8 +452,8 @@ private enum AppTab: Hashable {
     case history
 }
 
-/// The Staging tab: the cull screen in its own navigation stack, with no close button (it was a sheet before the tab bar,
-/// `StagingScreen`); nothing while its model is being made.
+/// The Staging tab: the cull screen in its own navigation stack, with no close button (it was a sheet before the tab
+/// bar); nothing while its model is being made.
 private struct StagingTab: View {
     let model: CullModel<DecodedPreviewImage>?
     /// *Import keepers* (I12): the toolbar button, the day rows' menu, the strip and the one confirmation (D2).
