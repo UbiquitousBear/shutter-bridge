@@ -146,14 +146,16 @@ jobs:
         # (AppUI's PhotosLookupCheck). It needs full Photos access, granted here before the tests on the picked
         # simulator (booted first: simctl privacy works on a booted device) for the app target's bundle identifier, read
         # from the project. That the grant holds for an app not yet installed is unverified until this step's first run;
-        # the check's report says the access it read.
+        # the check's report says the access it read. The awk reads the whole listing rather than exiting at the match:
+        # the step's shell runs with -e and pipefail, so an awk that exits early can end xcodebuild with SIGPIPE and the
+        # step with status 141 and no message; xcodebuild's own errors stay on stderr.
         env:
           SIM: ${{ steps.sim.outputs.id }}
         run: |
           set -o pipefail
           bundle_id="$(xcodebuild -showBuildSettings -project App/ShutterBridge.xcodeproj -target ShutterBridge \
-            -configuration Debug -sdk iphonesimulator 2>/dev/null \
-            | awk '$1 == "PRODUCT_BUNDLE_IDENTIFIER" && $2 == "=" { print $3; exit }')"
+            -configuration Debug -sdk iphonesimulator \
+            | awk '$1 == "PRODUCT_BUNDLE_IDENTIFIER" && $2 == "=" && id == "" { id = $3 } END { print id }')"
           if [ -z "$bundle_id" ]; then
             echo "::error::no PRODUCT_BUNDLE_IDENTIFIER for the ShutterBridge target"
             exit 1
@@ -180,11 +182,15 @@ jobs:
       - name: Keep the UI tests' result bundle
         if: ${{ failure() }}
         # The .xcresult holds each failed UI test's screenshots and the app's console; download it from the run's
-        # summary and open it in Xcode. Absent when the step failed before xcodebuild wrote it.
+        # summary and open it in Xcode. Absent when the step failed before xcodebuild wrote it. Two paths, so the
+        # artifact's root is their common folder and it holds UITests.xcresult as a bundle Xcode opens, beside the raw
+        # log (one directory alone would put the bundle's contents at the root).
         uses: actions/upload-artifact@v7
         with:
           name: UITests-xcresult
-          path: ${{ runner.temp }}/UITests.xcresult
+          path: |
+            ${{ runner.temp }}/UITests.xcresult
+            ${{ runner.temp }}/uitests.log
           if-no-files-found: ignore
           retention-days: 14
 

@@ -185,9 +185,9 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   settings); that the grant holds for an app installed afterwards is unverified until the step's first run, and the
   check's report says the access it read. The saved assets and album stay in that simulator's library. On a failure
   the step's raw lines (test, assertion, compile error) are printed after it and the result bundle
-  (`UITests.xcresult`, with each failed test's screenshots) is kept as the run's `UITests-xcresult` artifact for 14
-  days; that the Simulator runs the unsigned UI-test runner is unverified until the step's first run. On the Mac, the
-  same tests run from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS Simulator through
+  (`UITests.xcresult`, with each failed test's screenshots, beside the raw log `uitests.log`) is kept as the run's
+  `UITests-xcresult` artifact for 14 days; that the Simulator runs the unsigned UI-test runner is unverified until
+  the step's first run. On the Mac, the same tests run from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS Simulator through
   `AllPackages.xcworkspace` at the root, which holds the eight packages, and its shared `AllPackageTests` scheme,
   which lists their ten test targets: one `xcodebuild build-for-testing`, so each module and Apple's SDK modules are
   compiled once, then `test-without-building` twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as
