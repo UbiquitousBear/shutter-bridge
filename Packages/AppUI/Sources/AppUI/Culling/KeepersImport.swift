@@ -174,7 +174,8 @@ public final class KeepersImport {
             let problem = summary.problem == .couldNotRead || summary.run.map { !$0.completed } == true
                 || (summary.removal?.failed ?? 0) > 0
             return StatusNotice(id: 1, text: KeepersWording.finished(summary), tone: problem ? .problem : .success,
-                                systemImage: "checkmark.circle", dismissesItself: false)
+                                systemImage: problem ? "exclamationmark.triangle" : "checkmark.circle",
+                                dismissesItself: false)
         }
     }
 

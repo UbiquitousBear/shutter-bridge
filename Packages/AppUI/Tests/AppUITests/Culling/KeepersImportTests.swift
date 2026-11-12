@@ -292,6 +292,7 @@ struct KeepersImportTests {
         let summary = try #require(rig.keepers.summary)
         #expect(summary.removal == nil && summary.plan != nil)
         #expect(rig.keepers.notice?.tone == .success)
+        #expect(rig.keepers.notice?.systemImage == "checkmark.circle")
         #expect(rig.keepers.notice?.text == KeepersWording.finished(summary))
         for file in two.all {
             #expect(rig.exists(file))
@@ -458,6 +459,7 @@ struct KeepersImportTests {
         #expect(summary.run?.end == .photosAccessNeeded(.denied) && summary.run?.jobsStarted == 0)
         #expect(rig.destinations.cameras.isEmpty)
         #expect(rig.keepers.notice?.tone == .problem)
+        #expect(rig.keepers.notice?.systemImage == "exclamationmark.triangle")
         #expect(await rig.destinations.photos.names.isEmpty)
         #expect(await rig.destinations.files.names.isEmpty)
         for file in two.all { #expect(rig.exists(file)) }
