@@ -277,14 +277,19 @@ public actor InMemoryAlbumIdentifierStore: AlbumIdentifierStore {
 /// default; one per import, dated; or both).
 public struct AlbumPlan: Sendable, Hashable {
     public struct Album: Sendable, Hashable {
-        /// The store key: "camera:<camera key>" or "import:<import id>".
+        /// The store key: "camera-name:<camera name>" (`AlbumPlan.cameraAlbumKey(named:)`) or "import:<import id>".
         public var key: String
         /// The title used when the album has to be created.
         public var title: String
+        /// Store keys earlier builds kept this album under, tried in order only when `key` has no entry or its album
+        /// is gone: the first that names an album still in the library that accepts photos is adopted (stored under
+        /// `key` too) rather than a new album made. A legacy entry is only ever read, never written or removed.
+        public var legacyKeys: [String]
 
-        public init(key: String, title: String) {
+        public init(key: String, title: String, legacyKeys: [String] = []) {
             self.key = key
             self.title = title
+            self.legacyKeys = legacyKeys
         }
     }
 
@@ -294,15 +299,26 @@ public struct AlbumPlan: Sendable, Hashable {
         self.albums = albums
     }
 
+    /// The per-camera album's store key (D11, Shamil 12 Nov: one name per body): the camera's name, so every key the
+    /// one body has (MSC, MTP, Wi-Fi) shares one album, and so do two bodies with one name (the risk accepted in D11 (a)).
+    public static func cameraAlbumKey(named name: String) -> String { "camera-name:" + name }
+
+    /// The store key builds before D11 kept a per-camera album under: the catalogue's camera key. Read only, to adopt
+    /// that album (`Album.legacyKeys`).
+    public static func legacyCameraAlbumKey(forCamera cameraKey: String) -> String { "camera:" + cameraKey }
+
     /// - Parameters:
-    ///   - cameraKey: what identifies the camera for good (its serial, or the catalogue's camera key).
-    ///   - cameraName: the per-camera album's title, e.g. the camera's name.
+    ///   - cameraKey: the catalogue's camera key. It only finds the album an earlier build stored per key
+    ///     (`legacyCameraAlbumKey(forCamera:)`), which is adopted the first time.
+    ///   - cameraName: the camera's name: the per-camera album's title and its key (`cameraAlbumKey(named:)`), used
+    ///     exactly as given.
     ///   - importID: what identifies this import, so a continued import finds its own album.
     ///   - importTitle: the per-import album's title; by default the camera's name and the import's date and time in
     ///     the phone's locale.
     public init(choice: PhotosImportOptions.Albums, cameraKey: String, cameraName: String, importID: String,
                 importDate: Date, importTitle: String? = nil) {
-        let perCamera = Album(key: "camera:" + cameraKey, title: cameraName)
+        let perCamera = Album(key: Self.cameraAlbumKey(named: cameraName), title: cameraName,
+                              legacyKeys: [Self.legacyCameraAlbumKey(forCamera: cameraKey)])
         let perImport = Album(key: "import:" + importID,
                               title: importTitle ?? "\(cameraName), \(importDate.formatted(date: .abbreviated, time: .shortened))")
         switch choice {
