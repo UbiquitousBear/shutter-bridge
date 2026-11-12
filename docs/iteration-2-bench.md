@@ -126,7 +126,7 @@ The staging branch (Browse's *Stage* choice, staged files in iCloud Drive › Sh
 
 ## The quick run
 
-Seventeen checks. The *Pass if* column is the backlog's acceptance line; *Record* is what to copy into the result. *Needs* names the work item whose build the check waits for (blank means any current build).
+Twenty checks. The *Pass if* column is the backlog's acceptance line; *Record* is what to copy into the result. *Needs* names the work item whose build the check waits for (blank means any current build).
 
 | # | Check | Pass if | Record | Needs | Result |
 | --- | --- | --- | --- | --- | --- |
