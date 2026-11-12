@@ -22,7 +22,21 @@ struct AccessibilityReviewTests {
         #expect(row(action: .resume(filesLeft: nil), staged: false).spokenDefault(isBusy: true) == nil)
         #expect(row(action: nil, staged: true).spokenDefault(isBusy: false) == .openFolder)
         #expect(row(action: nil, staged: false).spokenDefault(isBusy: false) == nil)
+        // A stage job's row busy with its Re-run still opens its folder, as a tap on the row does.
+        #expect(row(action: .rerun(failedLeft: 2), staged: true).spokenDefault(isBusy: true) == .openFolder)
         #expect(HistoryWording.busyValue == "Reading the card…")
+    }
+
+    @Test func aHistoryRowsHintSaysWhatItsDoubleTapDoes() {
+        #expect(row(action: .resume(filesLeft: 12), staged: false).spokenHint(isBusy: false)
+            == HistoryWording.resumeHint)
+        #expect(row(action: .rerun(failedLeft: 2), staged: false).spokenHint(isBusy: false) == HistoryWording.rerunHint)
+        #expect(row(action: nil, staged: true).spokenHint(isBusy: false) == HistoryWording.openStagingHint)
+        // Busy reading the card: no promise of the Resume it is already doing.
+        #expect(row(action: .resume(filesLeft: 12), staged: false).spokenHint(isBusy: true) == "")
+        #expect(row(action: .rerun(failedLeft: 2), staged: true).spokenHint(isBusy: true)
+            == HistoryWording.openStagingHint)
+        #expect(row(action: nil, staged: false).spokenHint(isBusy: false) == "")
     }
 
     @Test func theLoupeSaysWhatThePreviewIsDoingUntilItShows() {

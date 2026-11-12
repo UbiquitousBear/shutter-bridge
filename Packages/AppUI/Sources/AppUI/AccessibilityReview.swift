@@ -17,10 +17,22 @@ extension HistoryRow {
     }
 
     /// The row's default action: its Resume or Re-run Failed Files when it has one and isn't busy with it, else its
-    /// Staging folder when its files went there; nil when a double tap has nothing to do (the row is then no button).
+    /// Staging folder when its files went there (as a tap on the row opens it, busy or not); nil when a double tap has
+    /// nothing to do (the row is then no button). Never a second Resume while the first reads the card.
     public func spokenDefault(isBusy: Bool) -> SpokenDefault? {
-        if action != nil { return isBusy ? nil : .act }
+        if action != nil, !isBusy { return .act }
         return opensStagingFolder ? .openFolder : nil
+    }
+
+    /// The row's VoiceOver hint: what its double tap does (`spokenDefault(isBusy:)`), so a busy row doesn't promise
+    /// the Resume it is already doing.
+    public func spokenHint(isBusy: Bool) -> String {
+        switch spokenDefault(isBusy: isBusy) {
+        case .act?:
+            if case .rerun = action { HistoryWording.rerunHint } else { HistoryWording.resumeHint }
+        case .openFolder?: HistoryWording.openStagingHint
+        case nil: ""
+        }
     }
 }
 

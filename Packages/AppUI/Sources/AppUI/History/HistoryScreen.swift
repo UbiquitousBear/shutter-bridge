@@ -138,10 +138,6 @@ private struct HistoryRowView: View {
         if case .rerun = row.action { HistoryWording.rerun } else { HistoryWording.resume }
     }
 
-    private var actionHint: String {
-        if case .rerun = row.action { HistoryWording.rerunHint } else { HistoryWording.resumeHint }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -190,7 +186,7 @@ private struct HistoryRowView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.accessibilityLabel)
         .accessibilityValue(isBusy ? HistoryWording.busyValue : "")
-        .accessibilityHint(row.action != nil ? actionHint : row.opensStagingFolder ? HistoryWording.openStagingHint : "")
+        .accessibilityHint(row.spokenHint(isBusy: isBusy))
         .accessibilityAddTraits(row.spokenDefault(isBusy: isBusy) != nil ? .isButton : [])
         .accessibilityAction {
             switch row.spokenDefault(isBusy: isBusy) {
