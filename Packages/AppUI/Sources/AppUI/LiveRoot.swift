@@ -338,6 +338,13 @@ struct LiveApp: View {
         }) {
             ImportScreen(model: model.importer)
         }
+        // The Staging tab's loupe (D5), full screen over the whole tab view like the sheets above, rather than from
+        // inside the tab: on a wide iPhone, whose tabs and toolbar are a strip at the side, a cover put up from the
+        // tab's own screen never showed (#139). It is bound to the model's open loupe, so leaving the tab (which lets
+        // the model go) takes it down too.
+        .fullScreenCover(item: stagingLoupe) { loupe in
+            LoupeView(loupe: loupe) { staging?.dismissLoupe(loupe) }
+        }
         // The wireless screens' models (W16), each optional so a screen without one is the USB screen it was. Applied
         // outside the sheets so the Settings and Import sheets, and Browse in the stack, read them too.
         .environment(model.wifi?.status)
@@ -403,6 +410,18 @@ struct LiveApp: View {
     /// The Staging screen's model: the staged copies under the app's Documents folder (On My iPhone) or the iCloud
     /// container's, previews decoded with ImageIO and Core Image, evicted iCloud files downloaded ahead, and the EXIF line
     /// read with ImageIO off the main actor.
+    /// The Staging tab's open loupe for its cover: a dismissal closes it at once (`dismissLoupe`), so the binding reads
+    /// nil as the cover goes and it isn't put up again.
+    private var stagingLoupe: Binding<CullLoupe<DecodedPreviewImage>?> {
+        Binding(
+            get: { staging?.loupe },
+            set: { shown in
+                guard shown == nil, let staging, let open = staging.loupe else { return }
+                staging.dismissLoupe(open)
+            }
+        )
+    }
+
     private func makeStagingModel() -> CullModel<DecodedPreviewImage> {
         model.stagingModel(documents: LiveLaunch.documents, loader: ImageIOPreviewLoader(),
                            files: UbiquitousFileAvailability(), reader: StagedFileReaders.platform,

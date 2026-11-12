@@ -47,7 +47,8 @@ final class ShutterBridgeUITests: XCTestCase {
     @MainActor
     func testSettingsSaysWhereStagingGoesAndOffersTheDiagnosticsExport() throws {
         let app = launchFixture()
-        let settingsButton = app.navigationBars.buttons["Settings"]
+        // In the navigation bar on a standard iPhone; in the toolbar strip beside the tabs on a wide one.
+        let settingsButton = app.buttons["Settings"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: launchTimeout), "the Cameras screen's Settings button")
         settingsButton.tap()
 
