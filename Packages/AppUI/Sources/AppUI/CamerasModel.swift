@@ -26,6 +26,11 @@ public protocol CameraDiscovery: Actor {
     /// Whether the last `cameraLink(for:)` of this camera didn't start because the person chose not to continue (Not Now
     /// on the Local Network explanation). The screen that asked closes with no notice: the camera didn't go away.
     func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool
+    /// Whether asking for the camera's link now starts no new connection: it is attached (USB), or its link is open or
+    /// being opened (Wi-Fi). A set-up Wi-Fi camera is listed whether or not it is in reach, so for one with no open link
+    /// this is false, and `cameraLink(for:)` would join. "Import new photos" asks it, to open such a camera's offline
+    /// Browse with Connect rather than join it (Shamil, 12 Nov).
+    func isConnected(_ id: CameraDescriptor.ID) async -> Bool
 }
 
 extension CameraDiscovery {
@@ -33,6 +38,8 @@ extension CameraDiscovery {
     public func knownKey(for id: CameraDescriptor.ID) async -> CameraKey? { nil }
     public func openFailureText(for id: CameraDescriptor.ID) async -> String? { nil }
     public func openWasDeclined(for id: CameraDescriptor.ID) async -> Bool { false }
+    /// A source that lists only attached cameras (USB): opening a listed camera's link joins nothing.
+    public func isConnected(_ id: CameraDescriptor.ID) async -> Bool { true }
 }
 
 /// What Browse uses besides the link: the JPEG maker, the clipboard, the temporary folders and the bench log.

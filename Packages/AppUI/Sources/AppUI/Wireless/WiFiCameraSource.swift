@@ -191,6 +191,15 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         declined.contains(id)
     }
 
+    /// Whether `cameraLink(for:)` would start no new connection: a connection is under way (the caller would wait for
+    /// it), or the live link would be handed out again (its session still `.ready`). A camera listed but never opened, or
+    /// whose link died or was let go, isn't: opening it joins.
+    public func isConnected(_ id: CameraDescriptor.ID) async -> Bool {
+        if inFlight[id] != nil { return true }
+        guard live[id] != nil else { return false }
+        return await isReusable(id)
+    }
+
     // MARK: - Setting cameras up
 
     public func registerPairedCamera(peripheral: PeripheralID) async -> CameraDescriptor {

@@ -94,6 +94,12 @@ public actor CompositeDiscovery: CameraDiscovery {
         return await sources[index].openWasDeclined(for: id)
     }
 
+    /// From the source that listed the camera; a camera no source lists isn't connected.
+    public func isConnected(_ id: CameraDescriptor.ID) async -> Bool {
+        guard let index = routes[id] else { return false }
+        return await sources[index].isConnected(id)
+    }
+
     private func relay(_ event: CameraDiscoveryEvent, from index: Int) {
         switch event {
         case let .appeared(camera): routes[camera.id] = index

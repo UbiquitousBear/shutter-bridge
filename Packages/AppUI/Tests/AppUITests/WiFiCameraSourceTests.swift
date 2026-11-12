@@ -612,6 +612,30 @@ struct WiFiCameraConnectionTests {
         }
     }
 
+    /// "Import new photos" asks this before opening a set-up camera's Browse (Shamil, 12 Nov): true only while asking for
+    /// the link would start no new connection.
+    @Test func aCameraIsConnectedOnlyWhileItsConnectionIsUnderWayOrItsLinkWouldBeHandedOutAgain() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let first = FakeWiFiLink()
+        session.script(.success(first), .success(FakeWiFiLink()))
+        let source = h.source
+        #expect(await !source.isConnected(id))   // listed, never opened: opening it would join
+        session.holdPrepare()
+        let opening = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntilAsync { await source.isConnected(id) })   // the connection is under way
+        session.releasePrepare()
+        _ = await bounded(opening)
+        #expect(await source.isConnected(id))   // open, its session ready
+        session.set(phase: .staying)
+        #expect(await !source.isConnected(id))   // its session moved on: asking would connect again
+        session.set(phase: .ready)
+        #expect(await source.isConnected(id))
+        await first.send(.removed)
+        #expect(await waitUntilAsync { await source.isConnected(id) == false })
+        #expect(session.count("prepare") == 1)   // asking whether it is connected opened nothing
+    }
+
     @Test func aTypedLinkThatReportedItsEndIsReplaced() async throws {
         let h = Harness()
         let descriptor = await h.source.addTypedCamera(try #require(TypedCameraAddress("\(typedHost):15741")))

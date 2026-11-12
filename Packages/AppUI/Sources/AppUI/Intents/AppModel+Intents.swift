@@ -254,7 +254,9 @@ extension AppModel {
     /// A camera that isn't listed (W6-absent) gets an offline Browse at once, with its last-known card and a line saying
     /// it isn't connected, and is answered as not connected; the request waits as above, and starts once the camera is
     /// listed (over USB the live Browse replaces the offline one by itself; over Wi-Fi only the person's Connect does,
-    /// since reaching it is a join) and its card read.
+    /// since reaching it is a join) and its card read. A set-up Wi-Fi camera is always listed, so one with no connection
+    /// open or under way (`CameraDiscovery.isConnected(_:)`) gets the same offline Browse, with Connect offered at once
+    /// (Shamil, 12 Nov): the intent never starts a join.
     ///
     /// Every wait ends by `deadline` when there is one (the intent passes `NewPhotosTiming.answer` from its call,
     /// `IntentHost.importNewPhotos`), so the answer comes in time whatever the camera does; without one, each wait is
@@ -269,6 +271,15 @@ extension AppModel {
         let choice = importer.importChoice
         guard let camera = await listedCamera(withKey: key, waitingUpTo: min(waitingForCamera, Self.left(until: deadline)))
         else {
+            return await showNotConnected(cameraWith: key, choice: choice, waitingForImport: waitingForImport,
+                                          answeringBy: deadline)
+        }
+        // A set-up Wi-Fi camera is listed whether or not it is in reach, and its live Browse would join it. With no link
+        // open or being opened, its offline Browse opens instead and offers Connect: nothing joins until the person taps
+        // it, as nothing opens over USB until the cable is in (Shamil, 12 Nov). A Browse already on screen for it stays:
+        // its own Reconnect or Try Again is that tap.
+        if camera.carrier == .wifi, cameras.path.last != camera, !(await discovery.isConnected(camera.id)) {
+            log.note("intents: import new photos: the Wi-Fi camera has no open connection; offering Connect, not joining")
             return await showNotConnected(cameraWith: key, choice: choice, waitingForImport: waitingForImport,
                                           answeringBy: deadline)
         }
@@ -338,12 +349,18 @@ extension AppModel {
         log.note("intents: import new photos: the camera is connected; waiting for the card")
     }
 
-    /// The listed camera whose catalogue key is `key`, waiting up to `limit` for it to be listed.
+    /// The listed camera whose catalogue key is `key`, waiting up to `limit` for it to be listed. A camera listed over
+    /// both is the USB one, as an offline Browse goes live over USB (`CamerasModel.matchOfflineCamera()`).
     private func listedCamera(withKey key: CameraKey, waitingUpTo limit: Duration) async -> CameraDescriptor? {
         let deadline = ContinuousClock.now.advanced(by: limit)
         while true {
             let shown = cameras.cameras
-            for camera in shown where await isCamera(camera, withKey: key) { return camera }
+            var overWiFi: CameraDescriptor?
+            for camera in shown where await isCamera(camera, withKey: key) {
+                if camera.carrier != .wifi { return camera }
+                if overWiFi == nil { overWiFi = camera }
+            }
+            if let overWiFi { return overWiFi }
             let left = ContinuousClock.now.duration(to: deadline)
             guard left > .zero else { return nil }
             let cameras = self.cameras
