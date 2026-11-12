@@ -80,7 +80,7 @@ Thirteen checks: eleven from the plan's section 4, and two added after bench run
 
 ## Staging checks (from 11 Nov)
 
-*Stage* beside *Import to Photos* (Shamil, 11 Nov; [decision-pack.md](decision-pack.md), *Choices decided by Shamil on 11 Nov*). Part A runs on any build from the staging change on: every build stages on this iPhone until the App ID has iCloud ([ci.md](ci.md), *To do once the App ID has iCloud*). Part B waits for the first TestFlight build with the iCloud entitlements. The bench log writes `import: staged NAME … → Staging` for each file staged and `import: job ended …: N imported, M staged`, and Browse's `browse: badges refreshed …` line counts the staged files.
+*Stage* beside *Import to Photos* (Shamil, 11 Nov; [decision-pack.md](decision-pack.md), *Choices decided by Shamil on 11 Nov*). Part A runs on any build from the staging change on: builds before 12 Nov stage on this iPhone, since the iCloud entitlements came then ([ci.md](ci.md), *iCloud for staging*). Part B needs the first TestFlight build with the iCloud entitlements. The bench log writes `import: staged NAME … → Staging` for each file staged and `import: job ended …: N imported, M staged`, and Browse's `browse: badges refreshed …` line counts the staged files.
 
 **Part A: staging on this iPhone (now)**
 
