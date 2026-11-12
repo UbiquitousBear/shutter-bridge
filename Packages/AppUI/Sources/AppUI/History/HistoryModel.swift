@@ -68,8 +68,11 @@ public final class HistoryModel {
     public private(set) var phase: Phase = .loading
     /// The jobs of the camera filtered for (all of them when `cameraFilter` is nil), by day, newest first.
     public private(set) var sections: [HistorySection] = []
-    /// The cameras with jobs, by name, for the filter and *Forget imports*.
+    /// The cameras with jobs, by name, for the filter.
     public private(set) var cameras: [HistoryCamera] = []
+    /// Every camera the catalogue knows, by name, for *Forget imports*: those with jobs and those without (imports made
+    /// before job records were written, Catalogue V4, have none, and must still be forgettable).
+    public private(set) var forgettableCameras: [HistoryCamera] = []
     /// The camera name shown, or nil for every camera.
     public var cameraFilter: String? {
         didSet { if cameraFilter != oldValue { rebuild() } }
@@ -136,7 +139,9 @@ public final class HistoryModel {
         let rows: [CameraRecord]
         do {
             read = try await catalogue.jobs(camera: nil)
-            rows = (try? await catalogue.cameras()) ?? []
+            // Not optional: without the names every camera would read as "Camera", one entry whose *Forget imports*
+            // would forget every camera's imports.
+            rows = try await catalogue.cameras()
         } catch {
             guard load == loads else { return }
             phase = .failed
@@ -155,13 +160,19 @@ public final class HistoryModel {
         self.names = names
         self.actions = actions
         runningJob = running
-        let byName = Dictionary(grouping: read.map(\.camera), by: { name(of: $0) })
-        cameras = byName.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { name in
-            HistoryCamera(name: name, keys: Array(Set(byName[name] ?? [])).sorted { $0.rawValue < $1.rawValue })
-        }
+        cameras = grouped(read.map(\.camera))
+        forgettableCameras = grouped(read.map(\.camera) + rows.map(\.key))
         if let filter = cameraFilter, !cameras.contains(where: { $0.name == filter }) { cameraFilter = nil }
         phase = .loaded
         rebuild()
+    }
+
+    /// `keys` by display name (D11), names in the person's order, each name's keys once.
+    private func grouped(_ keys: [CameraKey]) -> [HistoryCamera] {
+        let byName = Dictionary(grouping: keys, by: { name(of: $0) })
+        return byName.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.map { name in
+            HistoryCamera(name: name, keys: Array(Set(byName[name] ?? [])).sorted { $0.rawValue < $1.rawValue })
+        }
     }
 
     /// Whether there is nothing to list for the filter.

@@ -277,6 +277,20 @@ struct HistoryGroupingTests {
         #expect(rig.row(2)?.outcome == "Stopped early")
     }
 
+    @Test func unreadableCameraNamesFailTheLoadRatherThanMergeEveryCameraIntoOne() async {
+        // Without the names every key would read as "Camera": one entry whose Forget Imports reached both cameras.
+        let catalogue = NamelessCatalogue(jobs: [job(1, camera: camA, startedAt: at(day: 11, hour: 9), imported: 1),
+                                                 job(2, camera: camB, startedAt: at(day: 11, hour: 10), imported: 1)])
+        let model = HistoryModel(catalogue: catalogue, importer: nil, finder: nil, leases: LinkLeases(),
+                                 onThisIPhone: FileManager.default.temporaryDirectory,
+                                 locator: FakeStagingLocator(.unavailable(.containerUnavailable)))
+        await model.load()
+        #expect(model.phase == .failed)
+        #expect(model.cameras.isEmpty)
+        #expect(model.forgettableCameras.isEmpty)
+        #expect(await catalogue.forgotten.isEmpty)
+    }
+
     @Test func anUnreadableCatalogueSaysSo() async {
         let model = HistoryModel(catalogue: UnreadableJobsCatalogue(), importer: nil, finder: nil, leases: LinkLeases(),
                                  onThisIPhone: FileManager.default.temporaryDirectory,
@@ -284,6 +298,32 @@ struct HistoryGroupingTests {
         await model.load()
         #expect(model.phase == .failed)
         #expect(model.isEmpty)
+    }
+}
+
+/// A catalogue that lists its jobs but can't read the cameras' rows; it counts the cameras whose imports it was asked to
+/// forget.
+private actor NamelessCatalogue: CatalogueStore {
+    struct Broken: Error {}
+    let listed: [JobRecord]
+    private(set) var forgotten: [CameraKey] = []
+    init(jobs: [JobRecord]) { listed = jobs }
+    func record(for identity: ObjectIdentity) throws -> CatalogueRecord? { nil }
+    func states(of identities: [ObjectIdentity]) throws -> [ObjectIdentity: ObjectState] { [:] }
+    func upsert(_ record: CatalogueRecord) throws {}
+    func saveListing(_ listing: CardListing) throws {}
+    func lastListing(for camera: CameraKey) throws -> CardListing? { nil }
+    func markPartial(_ identity: ObjectIdentity, format: PTPMediaKind, tempURL: URL, offset: UInt64) throws {}
+    func markStaged(_ identity: ObjectIdentity, format: PTPMediaKind, at location: StagedLocation) throws {}
+    func clearStaged(_ identity: ObjectIdentity) throws {}
+    func stagedStates(of identities: [ObjectIdentity]) throws -> Set<ObjectIdentity> { [] }
+    func camera(_ key: CameraKey) throws -> CameraRecord? { throw Broken() }
+    func cameras() throws -> [CameraRecord] { throw Broken() }
+    func upsertCamera(_ record: CameraRecord) throws {}
+    func jobs(camera: CameraKey?) throws -> [JobRecord] { listed.filter { camera == nil || $0.camera == camera } }
+    func forgetImports(camera: CameraKey) throws -> Int {
+        forgotten.append(camera)
+        return 0
     }
 }
 
@@ -585,6 +625,27 @@ struct HistoryForgetTests {
         // History keeps the jobs.
         #expect(rig.model.sections.flatMap(\.rows).count == 3)
         #expect(rig.log.lines.contains("history: forgot 2 imported file(s) of one camera"))
+    }
+
+    @Test func aCameraWithImportsButNoJobRecordsCanStillBeForgotten() async throws {
+        // Imports made before Catalogue V4 have no job records: the camera has no History rows, but its imports are
+        // still forgettable (D6), and the filter doesn't offer a camera with nothing to show.
+        let rig = Rig()
+        await rig.camera(camA, name: "ILCE-7CM2")
+        await rig.camera(camB, name: "ZV-E1", model: "ZV-E1")
+        let one = item("DSC00001.ARW", at: 0)
+        let other = item("DSC00009.ARW", at: 90)
+        try await rig.imported(one, camera: camA)
+        try await rig.imported(other, camera: camB)
+        try await rig.record(job(1, camera: camA, startedAt: at(day: 11, hour: 9), imported: 1))
+        await rig.model.load()
+        #expect(rig.model.cameras.map(\.name) == ["ILCE-7CM2"])
+        #expect(rig.model.forgettableCameras.map(\.name) == ["ILCE-7CM2", "ZV-E1"])
+        await rig.model.forgetImports(of: try #require(rig.model.forgettableCameras.last))
+        #expect(rig.model.notice?.text == "Forgot 1 import from ZV-E1.")
+        let states = await rig.catalogue.states(of: [identity(one), identity(other, camera: camB)])
+        #expect(states[identity(one)] == .imported)
+        #expect(states[identity(other, camera: camB)] != .imported)
     }
 
     @Test func aStagedFileStaysStagedAfterItsImportIsForgotten() async throws {

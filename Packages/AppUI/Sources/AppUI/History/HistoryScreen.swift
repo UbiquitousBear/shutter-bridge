@@ -23,17 +23,19 @@ struct HistoryScreen: View {
             content
                 .navigationTitle(HistoryWording.title)
                 .toolbar {
-                    if !model.cameras.isEmpty {
+                    if !model.forgettableCameras.isEmpty {
                         ToolbarItem(placement: .topBarTrailing) {
                             Menu {
-                                Picker(HistoryWording.filterMenu, selection: $model.cameraFilter) {
-                                    Text(HistoryWording.allCameras).tag(String?.none)
-                                    ForEach(model.cameras) { camera in
-                                        Text(camera.name).tag(String?.some(camera.name))
+                                if !model.cameras.isEmpty {
+                                    Picker(HistoryWording.filterMenu, selection: $model.cameraFilter) {
+                                        Text(HistoryWording.allCameras).tag(String?.none)
+                                        ForEach(model.cameras) { camera in
+                                            Text(camera.name).tag(String?.some(camera.name))
+                                        }
                                     }
                                 }
                                 Menu(HistoryWording.forgetImportsAction) {
-                                    ForEach(model.cameras) { camera in
+                                    ForEach(model.forgettableCameras) { camera in
                                         Button(camera.name, role: .destructive) { forgetting = camera }
                                     }
                                 }
