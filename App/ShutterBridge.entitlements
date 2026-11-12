@@ -5,8 +5,10 @@
   copied into the app as a resource; the project points at it with CODE_SIGN_ENTITLEMENTS in Debug and Release.
 
   Every key here must also be ticked on the App ID (net.shamil.shutter-bridge) before the build that signs with it:
-  cloud signing at export won't add a capability (docs/ci.md). app.yml checks this file holds exactly the keys below,
-  and testflight.yml checks the archived app is signed with Hotspot Configuration.
+  cloud signing at export won't add a capability (docs/ci.md). Hotspot Configuration and iCloud (iCloud Documents, with
+  the container iCloud.net.shamil.shutter-bridge assigned; Shamil, 12 Nov) are ticked on it. app.yml checks this file
+  holds exactly the keys below and that the Info.plist declares the same container; testflight.yml checks the archived
+  app is signed with both.
 
   Multicast Networking (com.apple.developer.networking.multicast) stays out until Apple grants request 7BDQ7FRVM8 and
   the capability is on the App ID; the app sends no M-SEARCH until then (backlog section 5).
@@ -16,5 +18,18 @@
 	<!-- Joining the camera's own network with the name and password read over Bluetooth (NEHotspotJoiner, Iteration 3). -->
 	<key>com.apple.developer.networking.HotspotConfiguration</key>
 	<true/>
+	<!-- The app's iCloud Drive folder for staging (iCloud Documents, no CloudKit; Shamil, 11 Nov). -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.net.shamil.shutter-bridge</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudDocuments</string>
+	</array>
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.net.shamil.shutter-bridge</string>
+	</array>
 </dict>
 </plist>
