@@ -115,9 +115,11 @@ struct SettingsTests {
         let again = UserDefaultsAlbumIdentifierStore(defaults: suite.defaults)
         #expect(await again.albumIdentifier(forKey: "camera:a") == "album-1")
         #expect(await again.albumIdentifier(forKey: "import:b") == "album-2")
+        #expect(Set(await again.storedKeys()) == ["camera:a", "import:b"])
         await again.setAlbumIdentifier(nil, forKey: "camera:a")
         #expect(await store.albumIdentifier(forKey: "camera:a") == nil)
         #expect(await store.albumIdentifier(forKey: "import:b") == "album-2")
+        #expect(await store.storedKeys() == ["import:b"])
     }
 }
 
