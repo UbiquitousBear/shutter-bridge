@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:Packages/AppUI">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/BLEKit">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/CameraTransport">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/Catalogue">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/ImportEngine">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/PhotosBridge">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/PTPKit">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/PTPSimulator">
+   </FileRef>
+</Workspace>

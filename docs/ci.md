@@ -8,7 +8,7 @@ documentation on this date; the claims that rest only on forum reports are marke
 | Job | Where | Trigger | Secrets |
 | --- | --- | --- | --- |
 | Every package's `swift build` and `swift test` on Linux | GitHub Actions, `ubuntu-latest` in `swift:6.4-noble` (`.github/workflows/packages-linux.yml`, one matrix job per package; replaced `ptpkit.yml` on 8 Nov; each job stops after 20 minutes, #105) | PRs touching `Packages/` | none |
-| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator (AppUI's one at a time, #109), split over five parallel jobs (12 Nov) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
+| App build (unsigned, iOS Simulator and device) + every package's tests in the iOS Simulator (AppUI's one at a time, #109), built once from `AllPackages.xcworkspace` (12 Nov) | GitHub Actions, `xcode-27` runner (`.github/workflows/app.yml`) | PRs touching `Packages/` or `App/` | none |
 | Spike compile check + PTPKit tests on macOS | GitHub Actions, `xcode-27` runner (`.github/workflows/spike-build.yml`), kept until the spike is retired | PRs touching `Spike/` or `Packages/PTPKit` | none |
 | Archive → TestFlight (internal testing), **now**: the production app by default, or the spike | GitHub Actions, `xcode-27` runner (`.github/workflows/testflight.yml`, "App to TestFlight") | manual only, approved by Shamil per run | App Store Connect API key, in the `testflight` environment only |
 | Archive → TestFlight (internal testing), **later** | **Xcode Cloud** | manual, or pushes to a branch you choose | none in the repo; Apple manages signing |
@@ -161,27 +161,29 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   is added to the matrix by hand (all eight are in it). Each job stops after 20 minutes: a package takes about two
   minutes, and a hung test run (a Swift Testing time limit can't end a wait that ignores cancellation) otherwise runs
   to GitHub's six-hour default (#105).
-- **`app.yml`:** on the `xcode-27` runner with `DEVELOPER_DIR` pinned as in `spike-build.yml`, it builds
-  `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and `generic/platform=iOS`
-  (Release), then runs `xcodebuild test` for every package under `Packages/`, against the first iPhone simulator on
-  the newest iOS runtime that the pinned Xcode can run (from 27.0, the deployment target, up to its iOS Simulator SDK;
-  picked at run time from `xcrun simctl list -j` by `.github/scripts/pick-iphone-simulator.sh`). Since 12 Nov the
-  packages run in five parallel jobs instead of one after another, which took about 33 minutes, nearly all of it each
-  package compiling its dependencies again on a three-core runner: the `build` job (the two app builds and PTPKit) and
-  a `packages` matrix of four (PTPSimulator; AppUI; CameraTransport and BLEKit; Catalogue, ImportEngine and
-  PhotosBridge), balanced on the times #128 measured, so a run takes about as long as its slowest job (about 8
-  minutes). The label is free for public repositories and GitHub runs up to five macOS jobs of an account at once
-  (unverified for this plan), so a second run at the same time waits for runners. A new package must be added to a
-  group: the `build` job fails until it is. `.github/scripts/test-packages-in-simulator.sh` runs each package's tests
-  and turns off indexing while building (`COMPILER_INDEX_STORE_ENABLE=NO`; nothing on CI reads the index), as the app
-  builds do. AppUI's run uses
-  `-parallel-testing-enabled NO` (#109): nearly all its tests are main-actor bound and Swift Testing starts every test
-  at once, so in the Simulator they queued for the main actor and the wait counted against each test's own time limit
-  (a passing run of about 240 tests already had a slowest of 56 s against the 60 s limits). One at a time, a limit
-  measures the test alone; the other packages stay parallel. Each job's limit is 30 minutes. This is where the code
-  behind `canImport` is compiled and tested, the wireless screens and live wiring (W16) included. The project has no remote packages, so there is no `Package.resolved` to
-  commit; the first remote dependency (none is planned: Apple frameworks only) would need one. Before building, it
-  checks the app target's entitlements wiring (see *Entitlements* above), which the unsigned builds can't.
+- **`app.yml`:** two jobs on the `xcode-27` runner with `DEVELOPER_DIR` pinned as in `spike-build.yml`. The `build`
+  job checks the app target's entitlements wiring (see *Entitlements* above), which the unsigned builds can't, then
+  builds `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and `generic/platform=iOS`
+  (Release). The `packages` job tests every package in the iOS Simulator through `AllPackages.xcworkspace` at the root,
+  which holds the eight packages, and its shared `AllPackageTests` scheme, which lists their ten test targets: one
+  `xcodebuild build-for-testing`, so each module and Apple's SDK modules are compiled once, then `test-without-building`
+  twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as usual. The simulator is the first iPhone on
+  the newest iOS runtime the pinned Xcode can run (from 27.0, the deployment target, up to its iOS Simulator SDK;
+  `.github/scripts/pick-iphone-simulator.sh`). Indexing while building is off (`COMPILER_INDEX_STORE_ENABLE=NO`;
+  nothing on CI reads the index). Measured on 12 Nov: the packages job about 9 minutes (#131), where testing each
+  package one after another took about 33 and five parallel jobs that each compiled their packages' dependencies
+  again took 12.6 for the slowest and five runners (#130). The label is free for public repositories; two jobs a run
+  leave room under GitHub's five macOS jobs at once (unverified for this plan) for a second run. A new package must be
+  added to the workspace and its test targets to the scheme (on the Mac, open the workspace and edit the scheme, or
+  add the `FileRef` and `TestableReference` by hand): `.github/scripts/check-all-packages-workspace.py` fails the
+  `packages` job until they are, and checks that AppUI's tests stay not parallelisable (#109: nearly all of them are
+  main-actor bound and Swift Testing starts every test at once, so in the Simulator they queued for the main actor and
+  the wait counted against each test's own time limit; a passing run of about 240 tests already had a slowest of 56 s
+  against the 60 s limits). Each job's limit is 30 minutes. This is where the code behind `canImport` is compiled and
+  tested, the wireless screens and live wiring (W16) included. The project has no remote packages, so there is no
+  `Package.resolved` to commit; the first remote dependency (none is planned: Apple frameworks only) would need one.
+  On the Mac, `open AllPackages.xcworkspace` gives every package in one window, and its *AllPackageTests* scheme runs
+  every package's tests.
 
 If a ruleset on `main` requires status checks by name, replace the old `ptpkit.yml` check with these jobs.
 
