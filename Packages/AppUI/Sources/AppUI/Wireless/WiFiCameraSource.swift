@@ -191,6 +191,31 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         declined.contains(id)
     }
 
+    /// Whether `cameraLink(for:)` would start nothing that can join:
+    /// - a connection the source began is under way (the caller would wait for it);
+    /// - the camera's session is preparing by itself (handing off, joining, waiting for the front, opening its session):
+    ///   the Wi-Fi recovery reopens through the session, past the source, and `WirelessSession.prepareImport` shares a
+    ///   preparation under way;
+    /// - or the live link would be handed out again (its session `.ready`; a typed-address camera has no session).
+    ///
+    /// A camera listed but never opened, left, paused, or whose link died or was let go, isn't: opening it joins. Nor is
+    /// one in the stay after an import: the phone is still on its network and a reopen usually needs no join, but if the
+    /// camera has gone (its Wi-Fi switched off, the phone off its network) the reopen falls back to Bluetooth and the join
+    /// after `WiFiRecoveryTiming.waitBeforeBluetooth`, which only the person's tap may start (Shamil, 12 Nov). Their
+    /// Connect reopens it with no join while the camera is still there.
+    public func isConnected(_ id: CameraDescriptor.ID) async -> Bool {
+        if inFlight[id] != nil { return true }
+        guard let session = sessions[id] else { return live[id] != nil }
+        switch await session.phase {
+        case .handingOff, .joining, .awaitingFront, .openingSession:
+            return true
+        case .ready:
+            return live[id] != nil
+        case .idle, .staying, .leaving, .paused:
+            return false
+        }
+    }
+
     // MARK: - Setting cameras up
 
     public func registerPairedCamera(peripheral: PeripheralID) async -> CameraDescriptor {

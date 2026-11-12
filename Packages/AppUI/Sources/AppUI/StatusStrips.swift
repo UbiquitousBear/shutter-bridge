@@ -1,8 +1,8 @@
 #if canImport(SwiftUI) && canImport(UIKit) && os(iOS)
 import SwiftUI
 
-// The strips at the top of Cameras and Browse: a message, the running import, and (Browse) Copy or Share as JPEG
-// in progress. They sit in a `safeAreaBar(edge: .top)`, so they take part in the scroll edge effect like the glass
+// The strips at the top of Cameras and Browse: a message, the Wi-Fi connection's step, and (Browse) Copy or Share as
+// JPEG in progress. (The running import is the tab bar's bottom accessory, `LiveApp`.) They sit in a `safeAreaBar(edge: .top)`, so they take part in the scroll edge effect like the glass
 // bar above them, and are drawn as Liquid Glass in one `GlassEffectContainer` rather than as material cards (HIG
 // Materials > Liquid Glass). At the accessibility text sizes each is held to a few lines, so together they never
 // fill the screen (HIG Dynamic Type), and in compact height (an iPhone in landscape) to one line with tighter
@@ -87,38 +87,6 @@ struct NoticeStrip: View {
             guard (try? await Task.sleep(for: delay)) != nil else { return }
             dismiss()
         }
-    }
-}
-
-/// While a job exists: its state in one line; tapping it opens the Import screen. The same strip on Cameras and on
-/// Browse, so one job looks the same wherever it is seen (HIG Consistency).
-struct ImportStatusStrip: View {
-    let importer: ImportModel
-    let action: @MainActor () -> Void
-
-    var body: some View {
-        Button {
-            action()
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "square.and.arrow.down")
-                    .accessibilityHidden(true)
-                Text(importer.statusLine ?? ImportWording.title)
-                    .stripLineLimit()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .contentShape(stripShape)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: stripShape)
-        .accessibilityHint(BrowseWording.importStripHint)
     }
 }
 #endif

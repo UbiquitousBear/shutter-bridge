@@ -13,7 +13,7 @@ struct ImportWordingTests {
         var lines = [
             SettingsWording.stagingFooter, ImportWording.screenOnNote, ImportWording.couldNotStart,
             ImportWording.couldNotAdd, BrowseWording.lastKnownLine("8 Nov 2026 at 14:05"),
-            BrowseWording.noMatchesDetail, AppWording.catalogueFailedDetail, BrowseWording.importStripHint,
+            BrowseWording.noMatchesDetail, AppWording.catalogueFailedDetail, HistoryWording.accessoryHint,
         ]
         lines += StagingReason.allCases.compactMap(SettingsWording.forcedStaging)
         let places = [StagingPlace.iCloudDrive] + StagingFallbackReason.allCases.map(StagingPlace.onThisIPhone)

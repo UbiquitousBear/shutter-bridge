@@ -151,6 +151,23 @@ struct CompositeDiscoveryTests {
         #expect(await composite.openFailureText(for: usbCamera.id) == nil)
     }
 
+    @Test func whetherACameraIsConnectedIsTheOwningSourcesAndNoSourceMeansNot() async throws {
+        let a = ScriptedDiscovery()
+        let b = ScriptedDiscovery()
+        await b.set(connected: false, for: wifiCamera.id)
+        let composite = CompositeDiscovery(sources: [a, b])
+        let events = Collector(composite.discoveries)
+        try await composite.start()
+        #expect(await !composite.isConnected(usbCamera.id))   // no source lists it yet
+        await b.send(.appeared(wifiCamera))
+        await a.send(.appeared(usbCamera))
+        #expect(await events.wait(for: 2))
+        #expect(await composite.isConnected(usbCamera.id))
+        #expect(await !composite.isConnected(wifiCamera.id))
+        await b.set(connected: true, for: wifiCamera.id)
+        #expect(await composite.isConnected(wifiCamera.id))
+    }
+
     @Test func aSourceThatFailsDoesNotStopTheOthersAndTheFirstFailureIsThrown() async {
         let denied = CameraLinkFailure(.notAuthorised, detail: "usb")
         let other = CameraLinkFailure(.noAnswer, detail: "wifi")

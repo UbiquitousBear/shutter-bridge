@@ -612,6 +612,52 @@ struct WiFiCameraConnectionTests {
         }
     }
 
+    /// "Import new photos" asks this before opening a set-up camera's Browse (Shamil, 12 Nov): true only while asking for
+    /// the link would start nothing that can join.
+    @Test func aCameraIsConnectedOnlyWhileOpeningItCouldStartNoJoin() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let first = FakeWiFiLink()
+        session.script(.success(first), .success(FakeWiFiLink()))
+        let source = h.source
+        #expect(await !source.isConnected(id))   // listed, never opened: opening it would join
+        session.holdPrepare()
+        let opening = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntilAsync { await source.isConnected(id) })   // the connection is under way
+        session.releasePrepare()
+        _ = await bounded(opening)
+        #expect(await source.isConnected(id))   // open, its session ready
+        // The stay: the reopen falls back to Bluetooth and the join if the camera has gone; leaving, left, or paused:
+        // opening it would join again.
+        for phase in [WirelessPhase.staying, .leaving, .idle, .paused(.needsJoin), .paused(.bluetoothOff)] {
+            session.set(phase: phase)
+            #expect(await !source.isConnected(id))
+        }
+        session.set(phase: .ready)
+        #expect(await source.isConnected(id))
+        await first.send(.removed)
+        // Ready, but its link died: asking would prepare again, which may need the join.
+        #expect(await waitUntilAsync { await source.isConnected(id) == false })
+        // A preparation run on the session itself, as the Wi-Fi recovery's is, past the source: asking would share it.
+        for phase in [WirelessPhase.handingOff, .joining, .awaitingFront, .openingSession] {
+            session.set(phase: phase)
+            #expect(await source.isConnected(id))
+        }
+        #expect(session.count("prepare") == 1)   // asking whether it is connected opened nothing
+    }
+
+    @Test func aTypedCameraIsConnectedOnlyWhileItsLinkIsLive() async throws {
+        let h = Harness()
+        let descriptor = await h.source.addTypedCamera(try #require(TypedCameraAddress("\(typedHost):15741")))
+        let link = FakeWiFiLink()
+        h.connecting.scriptTyped(.success(link))
+        #expect(await !h.source.isConnected(descriptor.id))
+        _ = try await h.source.cameraLink(for: descriptor.id)
+        #expect(await h.source.isConnected(descriptor.id))
+        await link.send(.removed)
+        #expect(await waitUntilAsync { await h.source.isConnected(descriptor.id) == false })
+    }
+
     @Test func aTypedLinkThatReportedItsEndIsReplaced() async throws {
         let h = Harness()
         let descriptor = await h.source.addTypedCamera(try #require(TypedCameraAddress("\(typedHost):15741")))

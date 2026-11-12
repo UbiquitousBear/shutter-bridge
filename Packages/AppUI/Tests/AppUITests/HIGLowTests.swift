@@ -149,7 +149,7 @@ struct StripLayoutTests {
         #expect(StripLayout.lineLimit(isAccessibilitySize: true, isCompactHeight: false, isProblem: true) == nil)
         #expect(StripLayout.lineLimit(isAccessibilitySize: false, isCompactHeight: true, isProblem: true) == 3)
         #expect(StripLayout.lineLimit(isAccessibilitySize: true, isCompactHeight: true, isProblem: true) == nil)
-        // Confirmations and the import strip still collapse.
+        // Confirmations still collapse.
         #expect(StripLayout.lineLimit(isAccessibilitySize: false, isCompactHeight: true, isProblem: false) == 1)
     }
 }

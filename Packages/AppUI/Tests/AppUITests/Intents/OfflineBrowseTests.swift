@@ -13,19 +13,24 @@ import Testing
 // fakes; the screen's part (making Browse's model when the path changes) is played by the test, as `LiveApp` plays it.
 
 /// A discovery that knows a camera's key without a link (as `WiFiCameraSource` knows a Wi-Fi camera that has connected
-/// before) and counts the links asked for: over Wi-Fi a link is a join.
+/// before) and counts the links asked for: over Wi-Fi a link is a join. `connected` is what `isConnected(_:)` says: false
+/// for a set-up camera with no link open or being opened, which `WiFiCameraSource` lists all the same.
 actor KeyedDiscovery: CameraDiscovery {
     nonisolated let discoveries: AsyncStream<CameraDiscoveryEvent>
     private let sink: AsyncStream<CameraDiscoveryEvent>.Continuation
     let link: FakeLink
     let key: CameraKey
+    private let connected: Bool
     private(set) var linksAsked = 0
 
-    init(link: FakeLink, key: CameraKey) {
+    init(link: FakeLink, key: CameraKey, connected: Bool = true) {
         self.link = link
         self.key = key
+        self.connected = connected
         (discoveries, sink) = AsyncStream.makeStream()
     }
+
+    func isConnected(_ id: CameraDescriptor.ID) -> Bool { connected }
 
     func send(_ event: CameraDiscoveryEvent) { sink.yield(event) }
     func start() throws(CameraLinkFailure) {}
@@ -40,20 +45,26 @@ actor KeyedDiscovery: CameraDiscovery {
 
 /// A discovery with several cameras: each link by its camera's id, a key known without a link for some (as
 /// `WiFiCameraSource` knows a Wi-Fi camera that has connected before), the links asked for counted by camera (over
-/// Wi-Fi a link is a join), and the next few asks failing when scripted (a USB camera not ready yet).
+/// Wi-Fi a link is a join), the next few asks failing when scripted (a USB camera not ready yet), and the cameras
+/// `isConnected(_:)` says aren't (a set-up Wi-Fi camera with no connection).
 actor MultiCameraDiscovery: CameraDiscovery {
     nonisolated let discoveries: AsyncStream<CameraDiscoveryEvent>
     private let sink: AsyncStream<CameraDiscoveryEvent>.Continuation
     private let links: [CameraDescriptor.ID: FakeLink]
     private let keys: [CameraDescriptor.ID: CameraKey]
+    private let notConnected: Set<CameraDescriptor.ID>
     private(set) var linksAsked: [CameraDescriptor.ID: Int] = [:]
     private var failuresLeft = 0
 
-    init(links: [FakeLink], knownKeys: [CameraDescriptor.ID: CameraKey] = [:]) {
+    init(links: [FakeLink], knownKeys: [CameraDescriptor.ID: CameraKey] = [:],
+         notConnected: Set<CameraDescriptor.ID> = []) {
         self.links = Dictionary(uniqueKeysWithValues: links.map { ($0.descriptor.id, $0) })
         keys = knownKeys
+        self.notConnected = notConnected
         (discoveries, sink) = AsyncStream.makeStream()
     }
+
+    func isConnected(_ id: CameraDescriptor.ID) -> Bool { !notConnected.contains(id) }
 
     func send(_ event: CameraDiscoveryEvent) { sink.yield(event) }
     func failNextLinks(_ count: Int) { failuresLeft = count }
@@ -323,6 +334,84 @@ struct OfflineBrowseTests {
         await finish(app, run)
     }
 
+    /// A Wi-Fi camera set up before, listed (as `WiFiCameraSource` lists it, in reach or not), with its card in the
+    /// catalogue; `connected` as `isConnected(_:)` says.
+    func listedWiFiRig(connected: Bool) async throws -> (app: AppModel, link: FakeLink, discovery: KeyedDiscovery,
+                                                           key: CameraKey, log: RecordingLog) {
+        let link = FakeLink(items: card, mode: .wifi(.cameraNetwork), id: "wifi-camera", name: "ILCE-7CM2")
+        await link.set(writesListedSize: true)
+        let key = CameraKey(rawValue: "wifi-key")
+        let discovery = KeyedDiscovery(link: link, key: key, connected: connected)
+        let catalogue = InMemoryCatalogue()
+        let log = RecordingLog()
+        await catalogue.upsertCamera(CameraRecord(key: key, model: "ILCE-7CM2", friendlyName: "ILCE-7CM2",
+                                                  lastSeen: listedAt, preferredCarrier: .wifi))
+        await catalogue.saveListing(listing(for: key))
+        let app = AppModel(discovery: discovery, services: services(log: log), catalogue: catalogue,
+                           engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
+                           settingsStore: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(),
+                           destinations: FakeDestinations(), cameraKey: CameraKeys.fromDescriptor)
+        await app.scenePhaseChanged(.active)
+        await discovery.send(.appeared(link.descriptor))
+        #expect(await eventually { app.cameras.cameras == [link.descriptor] })
+        return (app, link, discovery, key, log)
+    }
+
+    /// Shamil, 12 Nov: a set-up Wi-Fi camera that is switched off (or simply not connected) gets the offline Browse with
+    /// Connect, though it is listed; nothing joins until Connect is tapped, as over USB.
+    @Test func aListedWiFiCameraWithNoConnectionOpensOfflineWithConnectAndJoinsNothing() async throws {
+        let r = try await listedWiFiRig(connected: false)
+        let start = await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero)
+        #expect(start == .waitingForConnection(choice: .photos, cardRead: true))
+        let shown = try #require(r.app.cameras.path.last)
+        #expect(r.app.cameras.isOffline(shown.id))
+        #expect(shown.carrier == .wifi)
+        #expect(r.log.lines.contains(
+            "intents: import new photos: the Wi-Fi camera has no open connection; offering Connect, not joining"))
+        let (browse, run) = try #require(pushBrowse(r.app))
+        #expect(await eventually { browse.offlineCard == .shown })
+        #expect(browse.canConnect)
+        #expect(await r.discovery.linksAsked == 0)
+        // Connect: the live Browse replaces it and the waiting import moves over; its screen's model opens the link.
+        browse.connect()
+        #expect(r.app.cameras.path == [r.link.descriptor])
+        #expect(r.app.intents.pending?.camera == r.link.descriptor.id)
+        let (live, liveRun) = try #require(pushBrowse(r.app))
+        #expect(live.offline == nil)
+        #expect(await eventually { r.app.importer.hasJob })
+        #expect(await eventually { r.log.lines.contains { $0.hasPrefix("intents: import new photos: started with") } })
+        #expect(await r.discovery.linksAsked >= 1)
+        await finish(r.app, run, liveRun)
+    }
+
+    @Test func aListedWiFiCameraWithAnOpenConnectionGoesStraightToItsLiveBrowse() async throws {
+        let r = try await listedWiFiRig(connected: true)
+        let asked = Task { await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero) }
+        #expect(await eventually { r.app.cameras.path == [r.link.descriptor] })
+        let (browse, run) = try #require(pushBrowse(r.app))
+        #expect(browse.offline == nil)
+        let answer = await asked.value
+        guard case .requested(.started, choice: .photos) = answer else {
+            Issue.record("answered \(answer)")
+            return
+        }
+        #expect(!r.log.lines.contains(
+            "intents: import new photos: the Wi-Fi camera has no open connection; offering Connect, not joining"))
+        await finish(r.app, run)
+    }
+
+    @Test func aWiFiCameraBrowseAlreadyOnScreenIsKeptForItsOwnTryAgain() async throws {
+        let r = try await listedWiFiRig(connected: false)
+        r.app.cameras.path = [r.link.descriptor]
+        let (browse, run) = try #require(pushBrowse(r.app))
+        let asked = Task { await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero) }
+        #expect(await eventually { r.app.importer.hasJob })
+        #expect(r.app.cameras.path == [r.link.descriptor])
+        #expect(browse.offline == nil)
+        _ = await asked.value
+        await finish(r.app, run)
+    }
+
     @Test func aWiFiCameraThatGoesWithdrawsConnect() async throws {
         let link = FakeLink(items: card, mode: .wifi(.cameraNetwork), id: "wifi-camera", name: "ILCE-7CM2")
         let key = CameraKey(rawValue: "wifi-key")
@@ -345,13 +434,15 @@ struct OfflineBrowseTests {
     }
 
     /// A USB camera and a Wi-Fi camera with the offline Browse's key, sharing it (the same camera on both links).
-    func twoLinkRig() async -> (app: AppModel, usb: FakeLink, wifi: FakeLink, discovery: MultiCameraDiscovery,
-                                key: CameraKey, log: RecordingLog) {
+    func twoLinkRig(wifiConnected: Bool = true) async -> (app: AppModel, usb: FakeLink, wifi: FakeLink,
+                                                          discovery: MultiCameraDiscovery, key: CameraKey,
+                                                          log: RecordingLog) {
         let usb = FakeLink(items: card)
         await usb.set(writesListedSize: true)
         let wifi = FakeLink(items: card, mode: .wifi(.cameraNetwork), id: "wifi-camera", name: "ILCE-7CM2")
         let key = CameraKeys.key(for: usb.descriptor, material: nil)
-        let discovery = MultiCameraDiscovery(links: [usb, wifi], knownKeys: [wifi.descriptor.id: key])
+        let discovery = MultiCameraDiscovery(links: [usb, wifi], knownKeys: [wifi.descriptor.id: key],
+                                             notConnected: wifiConnected ? [] : [wifi.descriptor.id])
         let catalogue = InMemoryCatalogue()
         let log = RecordingLog()
         await catalogue.upsertCamera(CameraRecord(key: key, model: "ILCE-7CM2", friendlyName: "ILCE-7CM2",
@@ -380,6 +471,44 @@ struct OfflineBrowseTests {
         // Nothing joined the Wi-Fi camera.
         #expect(await r.discovery.linksAsked[r.wifi.descriptor.id] == nil)
         await finish(r.app, run)
+    }
+
+    /// A cold launch with the cable in: the Wi-Fi listing (from the catalogue) comes first and ends the camera wait, and
+    /// the USB listing a moment later turns the offline Browse live; the answer waits the rest of the camera wait for it,
+    /// so the cabled camera isn't said to be not connected, and nothing joins the Wi-Fi camera.
+    @Test func aCabledCameraListedOverUSBJustAfterItsWiFiListingIsAnsweredAsListed() async throws {
+        let r = await twoLinkRig(wifiConnected: false)
+        await r.discovery.send(.appeared(r.wifi.descriptor))
+        #expect(await eventually { r.app.cameras.cameras == [r.wifi.descriptor] })
+        let asked = Task { await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .seconds(20)) }
+        #expect(await eventually { r.app.cameras.path.last.map { r.app.cameras.isOffline($0.id) } == true })
+        await r.discovery.send(.appeared(r.usb.descriptor))
+        #expect(await eventually { r.app.cameras.path == [r.usb.descriptor] })
+        let (live, run) = try #require(pushBrowse(r.app))
+        #expect(live.offline == nil)
+        let answer = await asked.value
+        if case .requested(.started, choice: .photos) = answer {} else { Issue.record("answered \(answer)") }
+        #expect(await r.discovery.linksAsked[r.wifi.descriptor.id] == nil)
+        await finish(r.app, run)
+    }
+
+    /// A Wi-Fi camera with no connection and no USB listing is still answered within the camera wait.
+    @Test func aWiFiCameraWithNoConnectionIsAnsweredOnceTheCameraWaitEnds() async throws {
+        let r = try await listedWiFiRig(connected: false)
+        let started = ContinuousClock.now
+        let start = await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .milliseconds(300))
+        #expect(start == .waitingForConnection(choice: .photos, cardRead: true))
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(await r.discovery.linksAsked == 0)
+    }
+
+    /// The Wi-Fi recovery reaching the running job's camera by itself counts as connected; paused for a join or given up
+    /// doesn't, since those wait for the person and a live Browse would start the join itself.
+    @Test func theWiFiRecoveryCountsAsConnectedOnlyWhileItIsReachingTheCamera() {
+        let reaching: [WiFiRecoveryPlan.Phase] = [.reopening, .waitingForCard, .relisting]
+        let waiting: [WiFiRecoveryPlan.Phase] = [.idle, .pausedForJoin, .gaveUp]
+        for phase in reaching { #expect(AppModel.recoveryReachesItsCamera(phase)) }
+        for phase in waiting { #expect(!AppModel.recoveryReachesItsCamera(phase)) }
     }
 
     @Test func aCameraFoundAsTheOfflineBrowseOpensIsAnsweredAsBeingRead() async throws {

@@ -290,12 +290,10 @@ struct LiveApp: View {
         TabView(selection: $tab) {
             Tab(CamerasWording.title, systemImage: "camera", value: AppTab.cameras) {
                 NavigationStack(path: $cameras.path) {
-                    CamerasScreen(model: cameras, importer: model.importer,
-                                  showSettings: { showsSettings = true },
-                                  showImport: { showsImport = true })
+                    CamerasScreen(model: cameras, showSettings: { showsSettings = true })
                         .navigationDestination(for: CameraDescriptor.self) { camera in
-                            BrowseScreen(model: model.browseModel(for: camera), importer: model.importer,
-                                         isImportShown: showsImport, showImport: { showsImport = true })
+                            BrowseScreen(model: model.browseModel(for: camera), isImportShown: showsImport,
+                                         showImport: { showsImport = true })
                         }
                 }
             }
@@ -308,7 +306,8 @@ struct LiveApp: View {
                 }
             }
         }
-        // The running import above the tab bar, wherever the person is; its tap opens the Import screen.
+        // The running import above the tab bar, wherever the person is, and only there (Shamil, 12 Nov: no strip on
+        // Cameras or Browse as well); its tap opens the Import screen.
         .tabViewBottomAccessory(isEnabled: model.importer.hasJob) {
             ImportAccessory(model: model.importer) { showsImport = true }
         }

@@ -483,9 +483,6 @@ extension BrowseWording {
     /// The date filter's switch, and what it says when no file on the card has a capture date.
     public static let limitDates = AppText.string("Only These Dates")
     public static let noDatedFiles = AppText.string("No file on the card has a capture date.")
-    /// The import status strip's VoiceOver hint (on Cameras and Browse); tapping it opens the Import screen. A hint
-    /// describes the result (HIG Accessibility).
-    public static let importStripHint = AppText.string("Opens the import.")
 
     /// The grid cell's VoiceOver label: name, date, type and, for a still, Imported, Staged, both ("Imported,
     /// staged": the cell shows only Imported) or New; a rejected still that isn't imported says Rejected (and staged,

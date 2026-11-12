@@ -388,6 +388,8 @@ actor ScriptedDiscovery: CameraDiscovery {
     private var links: [CameraDescriptor.ID: any CameraLink] = [:]
     private var failureTexts: [CameraDescriptor.ID: String] = [:]
     private var declinedIDs: Set<CameraDescriptor.ID> = []
+    /// The cameras `isConnected(_:)` says aren't (a set-up Wi-Fi camera with no link open); every other is.
+    private var notConnectedIDs: Set<CameraDescriptor.ID> = []
     private(set) var linkRequests: [CameraDescriptor.ID] = []
 
     init(startFailure: CameraLinkFailure? = nil) {
@@ -402,6 +404,9 @@ actor ScriptedDiscovery: CameraDiscovery {
     func set(failureText: String?, for id: CameraDescriptor.ID) { failureTexts[id] = failureText }
     func set(declined: Bool, for id: CameraDescriptor.ID) {
         if declined { declinedIDs.insert(id) } else { declinedIDs.remove(id) }
+    }
+    func set(connected: Bool, for id: CameraDescriptor.ID) {
+        if connected { notConnectedIDs.remove(id) } else { notConnectedIDs.insert(id) }
     }
 
     func start() throws(CameraLinkFailure) {
@@ -418,6 +423,7 @@ actor ScriptedDiscovery: CameraDiscovery {
     func knownKey(for id: CameraDescriptor.ID) -> CameraKey? { keys[id] }
     func openFailureText(for id: CameraDescriptor.ID) -> String? { failureTexts[id] }
     func openWasDeclined(for id: CameraDescriptor.ID) -> Bool { declinedIDs.contains(id) }
+    func isConnected(_ id: CameraDescriptor.ID) -> Bool { !notConnectedIDs.contains(id) }
 }
 
 /// `eventually` with a limit that suits a loaded CI runner (the iOS Simulator with every suite in parallel): it returns as

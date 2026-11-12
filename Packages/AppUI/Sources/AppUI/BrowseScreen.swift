@@ -13,7 +13,6 @@ import UIKit
 /// haptics).
 struct BrowseScreen: View {
     @State private var model: BrowseModel
-    private let importer: ImportModel?
     private let showImport: @MainActor () -> Void
     /// Whether the Import sheet is up, so VoiceOver's focus can go back to the cell it was on when it closes.
     private let isImportShown: Bool
@@ -26,10 +25,9 @@ struct BrowseScreen: View {
     /// explanation before the first connection, which begins as Browse opens a Wi-Fi camera.
     @Environment(WiFiImportModel.self) private var wifiStatus: WiFiImportModel?
 
-    init(model: @autoclosure () -> BrowseModel, importer: ImportModel? = nil, isImportShown: Bool = false,
+    init(model: @autoclosure () -> BrowseModel, isImportShown: Bool = false,
          showImport: @escaping @MainActor () -> Void = {}) {
         _model = State(initialValue: model())
-        self.importer = importer
         self.isImportShown = isImportShown
         self.showImport = showImport
     }
@@ -58,16 +56,12 @@ struct BrowseScreen: View {
                             if model.importStatus == notice { model.dismissImportNotice() }
                         }
                     }
-                    if let importer, importer.hasJob {
-                        ImportStatusStrip(importer: importer, action: showImport)
-                    }
                 }
             }
             .animation(.default, value: model.action)
             .animation(.default, value: model.interruption)
             .animation(.default, value: model.importStatus)
             .animation(.default, value: model.isSelecting)
-            .animation(.default, value: importer?.hasJob)
             .animation(.default, value: wifiStatus?.activityLine)
             .animation(.default, value: wifiStatus?.notes)
             .localNetworkExplanation(model.camera.carrier == .wifi ? wifiStatus : nil)
