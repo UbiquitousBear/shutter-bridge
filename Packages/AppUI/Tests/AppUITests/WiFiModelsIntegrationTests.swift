@@ -381,6 +381,31 @@ struct WiFiAppModelTests {
         #expect(session.count("prepare") == 1)
     }
 
+    /// Bench 22.1: the camera was off, Browse began the join, and the person went back to Cameras; the join carried on and
+    /// its line stayed there. Now closing Browse stops the connection: the session leaves, so nothing joins behind the
+    /// screen the person has left.
+    @Test func closingBrowseWhileTheCameraConnectsStopsTheConnection() async throws {
+        let b = bench()
+        let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)
+        let session = b.connecting.session(for: WiFiCameraEntry(
+            descriptor: descriptor, key: nil, peripheral: peripheral, guid: UUID())) as! FakeSession
+        session.script(.success(FakeWiFiLink()))
+        session.set(phase: .handingOff)   // reaching the camera, which is off
+        session.holdPrepare()
+        await b.app.scenePhaseChanged(.active)
+        #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
+        let browse = b.app.browseModel(for: descriptor)
+        let run = Task { await browse.run() }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        run.cancel()
+        #expect(await bounded(run) != nil)   // Browse lets go at once, not when the join is over
+        // Told to leave from the stop, and again if the held preparation opened as it was stopped.
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !b.source.isConnecting(descriptor.id) })
+        #expect(await b.source.stoppedConnections == 1)
+        #expect(await !b.source.hasLiveLink(for: descriptor.id))
+    }
+
     @Test func theSceneReachesTheSessionsAfterTheImportsOwnRule() async throws {
         let b = bench()
         let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)

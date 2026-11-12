@@ -393,8 +393,17 @@ struct SourceAdoptingRecoverySession: WiFiRecoverySession {
     let id: CameraDescriptor.ID
 
     func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
-        let link = try await base.prepareImport(bluetoothSwitchOnWhenAway: bluetoothSwitchOnWhenAway)
+        // While it reopens, a connection a Browse left that shares this preparation isn't stopped (bench 22.1's stop).
+        await source.recoveryReopening(id, true)
+        let link: any CameraLink
+        do throws(WirelessFailure) {
+            link = try await base.prepareImport(bluetoothSwitchOnWhenAway: bluetoothSwitchOnWhenAway)
+        } catch {
+            await source.recoveryReopening(id, false)
+            throw error
+        }
         await source.adoptRecovered(link, for: id)
+        await source.recoveryReopening(id, false)
         return link
     }
 

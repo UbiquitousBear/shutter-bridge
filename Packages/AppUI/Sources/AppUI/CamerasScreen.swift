@@ -121,6 +121,8 @@ struct CamerasScreen: View {
                     }
                 }
             }
+            // The strips' margin, so a strip above lines up with the rows (bench 22.1).
+            .contentMargins(.horizontal, CGFloat(StripLayout.horizontalMargin), for: .scrollContent)
         }
     }
 }
