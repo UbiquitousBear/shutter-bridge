@@ -21,32 +21,32 @@ import PTPKit
 /// The folders are under the temporary directory and emptied each time the fixture is seeded, so every launch starts
 /// from the same state. Plain Foundation, tested on Linux (`UITestFixtureTests`); the app's half (the generated images
 /// and the composition) is `UITestFixture+Live.swift`.
-public enum UITestFixture {
+enum UITestFixture {
     /// The launch argument that asks for the fixture.
-    public static let launchArgument = "-UITestFixture"
+    static let launchArgument = "-UITestFixture"
 
     /// Whether `arguments` (the process's, by default) ask for the fixture.
-    public static func isRequested(in arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
+    static func isRequested(in arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
         arguments.contains(launchArgument)
     }
 
     /// The fixture's folder, emptied each time it is seeded.
-    public static var folder: URL {
+    static var folder: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("UITestFixture", isDirectory: true)
     }
 
     /// The Documents folder the fixture's app reads Staging from (On My iPhone's staging root).
-    public static var documents: URL { folder.appendingPathComponent("Documents", isDirectory: true) }
+    static var documents: URL { folder.appendingPathComponent("Documents", isDirectory: true) }
 
     /// The engine's work folder in the fixture's app.
-    public static var workFolder: URL { folder.appendingPathComponent("Work", isDirectory: true) }
+    static var workFolder: URL { folder.appendingPathComponent("Work", isDirectory: true) }
 
     /// The one camera, by its display name (D11): its row's friendly name and its Staging folder.
-    public static let cameraName = "ILCE-7CM2"
-    public static let cameraKey = CameraKey(rawValue: "ui-test-camera")
+    static let cameraName = "ILCE-7CM2"
+    static let cameraKey = CameraKey(rawValue: "ui-test-camera")
 
     /// The staged files, in shooting order, and the day they were taken (the camera's wall clock).
-    public static let stagedNames = ["DSC00001.JPG", "DSC00002.JPG", "DSC00003.JPG", "DSC00004.JPG"]
+    static let stagedNames = ["DSC00001.JPG", "DSC00002.JPG", "DSC00003.JPG", "DSC00004.JPG"]
     static let stagedDay = "20261108"
     static let cardFolder = "100MSDCF"
 
@@ -54,9 +54,9 @@ public enum UITestFixture {
     static let failedNames = ["DSC00101.ARW", "DSC00102.ARW"]
 
     /// The job records' identifiers, newest first as History lists them.
-    public static let stoppedJob = UUID(uuidString: "00000000-0000-4000-8000-000000000003")!
-    public static let stageJob = UUID(uuidString: "00000000-0000-4000-8000-000000000002")!
-    public static let finishedJob = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+    static let stoppedJob = UUID(uuidString: "00000000-0000-4000-8000-000000000003")!
+    static let stageJob = UUID(uuidString: "00000000-0000-4000-8000-000000000002")!
+    static let finishedJob = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
 
     /// A fresh catalogue holding the fixture, with the staged files written under `documents` (emptied first).
     ///
@@ -64,7 +64,7 @@ public enum UITestFixture {
     ///   - now: When History's jobs are dated from: the stopped job an hour before, the finished import three hours
     ///     before, and the stage job a day before.
     ///   - image: The bytes of the staged file at each index of `stagedNames`: a JPEG in the app, anything in tests.
-    public static func makeCatalogue(documents: URL, now: Date,
+    static func makeCatalogue(documents: URL, now: Date,
                                      image: (Int) -> Data) async throws -> InMemoryCatalogue {
         let catalogue = InMemoryCatalogue()
         try await seed(catalogue, documents: documents, now: now, image: image)
@@ -73,7 +73,7 @@ public enum UITestFixture {
 
     /// Seeds `catalogue` with the fixture (see the type's comment) and writes the staged files under `documents`, which
     /// is emptied first.
-    public static func seed(_ catalogue: any CatalogueStore, documents: URL, now: Date,
+    static func seed(_ catalogue: any CatalogueStore, documents: URL, now: Date,
                             image: (Int) -> Data) async throws {
         let fm = FileManager.default
         try? fm.removeItem(at: documents)

@@ -80,9 +80,9 @@ struct UITestFixtureTests {
     }
 
     @Test func historyListsTheThreeJobsAndOffersReRunOnTheStoppedOne() async throws {
+        let now = self.now
         let catalogue = try await UITestFixture.makeCatalogue(documents: documents, now: now, image: Self.bytes)
         defer { try? FileManager.default.removeItem(at: documents) }
-        let now = self.now
         let model = HistoryModel(catalogue: catalogue, importer: nil, finder: nil, leases: LinkLeases(),
                                  onThisIPhone: documents, locator: FakeStagingLocator(.unavailable(.iCloudDriveOff)),
                                  now: { now })
