@@ -153,6 +153,8 @@ public final class AppModel {
         }
         // "Import new photos" (I16) starts once Browse has read the camera's card.
         cameras.onBrowseListed = { [weak self] browse in self?.browseListed(browse) }
+        // ... and is dropped as soon as Browse is left, so a later visit of the person's own starts nothing.
+        cameras.onPathChanged = { [weak self] path in self?.browsePathChanged(path) }
         importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
         importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
         if let wireless {
@@ -277,7 +279,11 @@ public final class AppModel {
         // The reminder's request as it stood when the app left, so one made while this runs (Import Now) isn't dropped.
         let requestOnLeaving = phase == .background ? wireless?.reminders.cameraToOpen : nil
         // Browse hears the way to the background before its link is let go, so it doesn't take the end for one in front.
-        if phase == .background { cameras.browseScenePhaseChanged(.background) }
+        if phase == .background {
+            cameras.browseScenePhaseChanged(.background)
+            // An "Import new photos" still waiting for its card doesn't outlive the app leaving the foreground (I16).
+            dropPendingNewPhotosImport(because: "the app is in the background")
+        }
         if phase == .active {
             wifi?.status.start()
             await cameras.becameActive()

@@ -37,7 +37,7 @@ struct IntentsAppModelTests {
 
     func rig(catalogue: InMemoryCatalogue = InMemoryCatalogue(), listed: Bool = true,
              mode: CameraMode = .usb(.massStorage), name: String = "Untitled",
-             choice: DestinationKind = .photos) async throws -> Rig {
+             choice: DestinationKind = .photos, photos: FakePhotosAccess = FakePhotosAccess()) async throws -> Rig {
         let link = FakeLink(items: card, mode: mode, name: name)
         await link.set(writesListedSize: true)
         let discovery = FakeDiscovery(link: link)
@@ -46,7 +46,7 @@ struct IntentsAppModelTests {
         if choice == .staging { settings.save(DestinationSetting(preferred: .staging)) }
         let app = AppModel(discovery: discovery, services: services(log: log), catalogue: catalogue,
                            engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
-                           settingsStore: settings, photos: FakePhotosAccess(), destinations: FakeDestinations(),
+                           settingsStore: settings, photos: photos, destinations: FakeDestinations(),
                            cameraKey: CameraKeys.fromDescriptor)
         let key = CameraKeys.key(for: link.descriptor, material: nil)
         let rejected = card[2].identity(camera: key, timeZone: .current)!.contentKey
@@ -114,6 +114,22 @@ struct IntentsAppModelTests {
             return
         }
         #expect(await asked.value == .requested(.started(2), choice: .staging))
+        await finish(r, run)
+    }
+
+    @Test func withPhotosAccessOffItSaysTheFilesAreStaged() async throws {
+        // The remembered choice is Photos, but with access off the import stages (decision 9): the answer says so.
+        let r = try await rig(photos: FakePhotosAccess(.denied))
+        #expect(r.app.importer.importChoice == .photos)
+        let asked = Task { await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .seconds(30)) }
+        guard let (_, run) = await pushBrowse(r) else {
+            Issue.record("Browse wasn't opened")
+            return
+        }
+        let start = await asked.value
+        #expect(start == .requested(.started(2), choice: .staging))
+        #expect(NewPhotosWording.importAnswer(start, camera: "ILCE-7CM2") == "Staging 2 new photos.")
+        #expect(r.log.lines.contains("intents: import new photos: started with 2 files to stage"))
         await finish(r, run)
     }
 
@@ -201,10 +217,57 @@ struct IntentsAppModelTests {
         #expect(await asked.value == .waitingForCard(choice: .photos))
         r.app.cameras.path = []
         await r.link.set(listHangs: false)
-        #expect(await eventually { r.app.intents.pending == nil })
-        #expect(browse.showsLiveCard)
+        #expect(r.app.intents.pending == nil)
+        // The Browse still running finishes its listing, which starts nothing.
+        #expect(await eventually { await r.catalogue.lastListing(for: r.key) != nil && browse.showsLiveCard })
+        await browse.refreshImportedStates()
         #expect(!r.app.importer.hasJob)
         #expect(r.log.lines.contains("intents: import new photos dropped: Browse was left"))
+        await finish(r, run)
+    }
+
+    @Test func leavingBrowseDropsTheImportAtOnceSoComingBackStartsNothing() async throws {
+        let r = try await rig()
+        await r.link.set(listHangs: true)
+        let asked = Task { await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .zero) }
+        guard let (_, first) = await pushBrowse(r) else {
+            Issue.record("Browse wasn't opened")
+            return
+        }
+        #expect(await asked.value == .waitingForCard(choice: .photos))
+        // The person goes back to Cameras before the card is read: the request goes then, not at the next listing.
+        r.app.cameras.path = []
+        #expect(r.app.intents.pending == nil)
+        #expect(r.log.lines.contains("intents: import new photos dropped: Browse was left"))
+        // Its screen goes: the listing in flight ends cancelled, and tells no one.
+        first.cancel()
+        await r.link.set(listHangs: false)
+        await first.value
+        // ... so opening the camera again later is the person's own visit, and imports nothing.
+        r.app.cameras.path = [r.descriptor]
+        let again = r.app.browseModel(for: r.descriptor)
+        let second = Task { await again.run() }
+        #expect(await eventually { await r.catalogue.lastListing(for: r.key) != nil && again.showsLiveCard })
+        await again.refreshImportedStates()
+        #expect(!r.app.importer.hasJob)
+        #expect(!r.log.lines.contains { $0.hasPrefix("intents: import new photos: started") })
+        await finish(r, second)
+    }
+
+    @Test func leavingTheAppDropsTheImportAtOnce() async throws {
+        let r = try await rig()
+        await r.link.set(listHangs: true)
+        let asked = Task { await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .zero) }
+        guard let (_, run) = await pushBrowse(r) else {
+            Issue.record("Browse wasn't opened")
+            return
+        }
+        #expect(await asked.value == .waitingForCard(choice: .photos))
+        await r.app.scenePhaseChanged(.background)
+        #expect(r.app.intents.pending == nil)
+        #expect(r.log.lines.contains("intents: import new photos dropped: the app is in the background"))
+        await r.app.scenePhaseChanged(.active)
+        await r.link.set(listHangs: false)
         await finish(r, run)
     }
 

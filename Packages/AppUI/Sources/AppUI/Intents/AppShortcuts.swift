@@ -8,7 +8,7 @@ import AppIntents
 // provider declared in a package rather than the app target reaches Siri is `unverified` (bench check 16).
 
 /// Siri's and Spotlight's phrases for "Import new photos" and "How many new photos".
-public struct ShutterBridgeShortcuts: AppShortcutsProvider {
+public struct ShutterBridgeShortcuts: AppShortcutsProvider, Sendable {
     public static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: ImportNewPhotosIntent(),
@@ -35,5 +35,5 @@ public struct ShutterBridgeShortcuts: AppShortcutsProvider {
 
 /// AppUI's App Intents (the two intents, the camera entity and its query, the shortcuts), listed by the app target's
 /// package so the system finds them in this package.
-public struct AppUIIntentsPackage: AppIntentsPackage {}
+public struct AppUIIntentsPackage: AppIntentsPackage, Sendable {}
 #endif

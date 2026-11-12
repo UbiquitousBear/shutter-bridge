@@ -241,6 +241,21 @@ extension AppModel {
         }
     }
 
+    /// The navigation stack changed: a waiting "Import new photos" whose camera is no longer shown is dropped now, not
+    /// at the next listing, so coming back to the camera later is the person's own visit and starts nothing.
+    func browsePathChanged(_ path: [CameraDescriptor]) {
+        guard let request = intents.pending, path.last?.id != request.camera else { return }
+        dropPendingNewPhotosImport(because: "Browse was left")
+    }
+
+    /// Drops the waiting "Import new photos", if any: its answer is that it couldn't start.
+    func dropPendingNewPhotosImport(because reason: String) {
+        guard let request = intents.pending else { return }
+        intents.pending = nil
+        log.note("intents: import new photos dropped: \(reason)")
+        request.finish(.couldNotStart)
+    }
+
     /// A Browse model listed its camera's live card (`CamerasModel.onBrowseListed`): the waiting "Import new photos"
     /// for that camera starts, if it still applies.
     func browseListed(_ browse: BrowseModel) {
@@ -263,16 +278,35 @@ extension AppModel {
         }
         request.isStarting = true
         Task { @MainActor [weak self] in
-            let choice = self?.importer.importChoice ?? request.choice
+            let remembered = self?.importer.importChoice ?? request.choice
             let outcome = await browse.importAllNew()
-            let result: NewPhotosImportStart = outcome.map { .requested($0, choice: choice) } ?? .couldNotStart
+            guard let self else {
+                request.finish(outcome.map { .requested($0, choice: remembered) } ?? .couldNotStart)
+                return
+            }
+            let result: NewPhotosImportStart = outcome.map {
+                .requested($0, choice: self.destinationUsed(by: $0, remembered: remembered))
+            } ?? .couldNotStart
             request.finish(result)
-            guard let self else { return }
             self.log.note("intents: import new photos: \(Self.logWords(for: result))")
             switch outcome {
             case .started?, .appended?: intents.navigate(showsImport: true)
             default: break
             }
+        }
+    }
+
+    /// Where the files of an import request actually go, for the answer: an *Import to Photos* stages when Photos access
+    /// is off (decision 9), and then it says "Staging", not "to Photos".
+    private func destinationUsed(by outcome: ImportRequestOutcome, remembered: DestinationKind) -> DestinationKind {
+        switch outcome {
+        case .started, .appended:
+            if case .staging? = importer.progress.destination { return .staging }
+            return remembered
+        case let .nothingNew(staging):
+            return staging ? .staging : remembered
+        case .busyWithAnotherCamera, .busyWithAnotherMode, .busyWithKeepers, .stillStarting, .failed:
+            return remembered
         }
     }
 
