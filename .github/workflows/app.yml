@@ -11,12 +11,14 @@ on:
       - "Packages/**"
       - "App/**"
       - ".github/workflows/app.yml"
+      - ".github/scripts/**"
   push:
     branches: [main]
     paths:
       - "Packages/**"
       - "App/**"
       - ".github/workflows/app.yml"
+      - ".github/scripts/**"
   workflow_dispatch:
 
 permissions:
@@ -29,10 +31,12 @@ concurrency:
 jobs:
   build:
     runs-on: xcode-27
-    timeout-minutes: 60
+    # About 6 minutes: the two app builds and PTPKit's tests. The limit ends a hung test run early.
+    timeout-minutes: 30
     env:
       # 27.1 is the image default and a public release; switch to Xcode_27.2 once the image has the release
-      # build (it currently symlinks the 27.2 release candidate there). Keep in step with spike-build.yml.
+      # build (it currently symlinks the 27.2 release candidate there). Keep in step with spike-build.yml and the
+      # packages job below.
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     defaults:
       run:
@@ -84,39 +88,13 @@ jobs:
           sys.exit(1 if problems else 0)
           EOF
 
-      - name: Pick an iPhone simulator
-        id: sim
-        # The first available iPhone on the newest iOS runtime this Xcode can run: no newer than its iOS Simulator
-        # SDK (the image can hold runtimes from other Xcode versions) and no older than the deployment target, 27.0.
-        # From simctl's JSON, with the python3 that ships with the image.
-        run: |
-          set -o pipefail
-          sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
-          echo "iOS Simulator SDK: $sdk"
-          id="$(xcrun simctl list devices available -j | python3 -c '
-          import json, re, sys
-          sdk = tuple(int(x) for x in sys.argv[1].split(".")[:2])
-          floor = (27, 0)
-          devices = json.load(sys.stdin)["devices"]
-          def version(runtime):
-              m = re.search(r"\.iOS-(\d+)-(\d+)", runtime)
-              return tuple(map(int, m.groups())) if m else None
-          usable = [r for r in devices if version(r) and floor <= version(r) <= sdk]
-          for r in sorted(usable, key=version, reverse=True):
-              for d in devices[r]:
-                  if d.get("isAvailable", True) and d["name"].startswith("iPhone"):
-                      print(d["udid"]); print(r, d["name"], file=sys.stderr); sys.exit(0)
-          sys.exit(f"no available iPhone simulator on an iOS runtime from 27.0 to {sys.argv[1]}")
-          ' "$sdk")"
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-
       - name: Build the app for the iOS Simulator (unsigned)
         run: |
           set -o pipefail
           xcodebuild build \
             -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify --renderer github-actions
 
       - name: Build the app for iPhone (unsigned)
@@ -125,48 +103,77 @@ jobs:
           xcodebuild build \
             -project App/ShutterBridge.xcodeproj -scheme ShutterBridge -configuration Release \
             -destination 'generic/platform=iOS' \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify --renderer github-actions
 
-      - name: Package tests in the iOS Simulator
-        # Every folder under Packages/ with a Package.swift, so a new package (BLEKit) is picked up when it lands.
-        # Xcode names a single-product package's scheme after the product and adds "<Package>-Package" when there
-        # are several; the -Package scheme is preferred because it holds every test target.
-        env:
-          SIM: ${{ steps.sim.outputs.id }}
+      - name: Every package is tested in the iOS Simulator
+        # The packages are split between this job (PTPKit) and the matrix below, grouped by how long each took (about
+        # 2 to 8 minutes, mostly compiling its dependencies), so the slowest job sets the time. A new folder under
+        # Packages/ must be added to one of them; this fails the run until it is.
         run: |
-          set -o pipefail
-          failed=()
-          for dir in Packages/*/; do
-            [ -f "$dir/Package.swift" ] || continue
-            pkg="$(basename "$dir")"
-            echo "::group::$pkg"
-            # Tolerant probe: xcodebuild can print package-resolution lines before the JSON, and under bash -e a
-            # failing substitution would end the step, so parse from the first "{" and fall back to the folder name.
-            schemes="$(cd "$dir" && xcodebuild -list -json 2>/dev/null | python3 -c 'import json, sys; s = sys.stdin.read(); i = s.find("{"); d = json.loads(s[i:]) if i >= 0 else {}; print("\n".join((d.get("workspace") or d.get("project") or {}).get("schemes", [])))' || true)"
-            if grep -qx "$pkg-Package" <<<"$schemes"; then scheme="$pkg-Package"; else scheme="$pkg"; fi
-            echo "scheme: $scheme"
-            raw="$RUNNER_TEMP/$pkg-test.log"
-            # AppUI's tests run one at a time. Nearly all of them are main-actor bound, and Swift Testing starts every
-            # test at once, so in the Simulator they queue for the main actor and the wait counts against each test's
-            # own time limit: with about 240 tests a passing run already had a median of 45 s and a slowest of 56 s
-            # against the 60 s limits, and larger suites went over. One at a time, a limit measures only the test.
-            # The other packages' tests aren't main-actor bound and stay parallel.
-            parallel=()
-            if [ "$pkg" = AppUI ]; then parallel=(-parallel-testing-enabled NO); fi
-            if ! (cd "$dir" && xcodebuild test -scheme "$scheme" -destination "platform=iOS Simulator,id=$SIM" \
-                    "${parallel[@]}" | tee "$raw" | xcbeautify --renderer github-actions); then
-              failed+=("$pkg")
-              # xcbeautify shortens Swift Testing failures to "Recorded an issue" and drops compiler crashes, so
-              # print the raw lines that name the test and the expectation that failed, any compile error, and a
-              # crashed compiler's stack dump (which names the file and declaration it was type-checking).
-              echo "--- $pkg: failures from the raw xcodebuild output ---"
-              grep -E 'recorded an issue|Expectation failed|failed after|error:' "$raw" | head -n 80 || true
-              grep -E -A 12 'Stack dump:|Please submit a bug report|Assertion failed|Segmentation fault|While (evaluating|type-checking|emitting|SILGen)' "$raw" | head -n 120 || true
-            fi
-            echo "::endgroup::"
-          done
-          if [ "${#failed[@]}" -gt 0 ]; then
-            echo "::error::Package tests failed in the iOS Simulator: ${failed[*]}"
-            exit 1
-          fi
+          python3 - <<'EOF'
+          import pathlib, re, sys
+          workflow = pathlib.Path(".github/workflows/app.yml").read_text(encoding="utf-8")
+          listed = set()
+          for line in re.findall(r"^\s+packages: (.+)$", workflow, re.M):
+              listed.update(line.strip().strip('"').split())
+          listed.add("PTPKit")  # tested in this job
+          present = {p.parent.name for p in pathlib.Path("Packages").glob("*/Package.swift")}
+          missing, unknown = sorted(present - listed), sorted(listed - present)
+          for name in missing:
+              print(f"::error::Packages/{name} isn't tested in the iOS Simulator: add it to a group in app.yml")
+          for name in unknown:
+              print(f"::error::app.yml tests {name}, which has no Packages/{name}/Package.swift")
+          sys.exit(1 if missing or unknown else 0)
+          EOF
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          id="$(.github/scripts/pick-iphone-simulator.sh)"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: PTPKit's tests in the iOS Simulator
+        run: .github/scripts/test-packages-in-simulator.sh "${{ steps.sim.outputs.id }}" PTPKit
+
+  packages:
+    # The other packages' tests, in parallel with the job above. The xcode-27 label is free for public repositories,
+    # and GitHub runs up to five macOS jobs of an account at once, so the five jobs of one run start together (a
+    # second run at the same time waits for free runners). Each job compiles its packages' dependencies itself; the
+    # groups are balanced on the times measured on 11 Nov (#128: PTPSimulator 7.7 min, AppUI 5.7, Catalogue 3.2,
+    # ImportEngine 2.8, PhotosBridge 1.8, CameraTransport 3.5, BLEKit 2.9).
+    name: Package tests (${{ matrix.name }})
+    runs-on: xcode-27
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: PTPSimulator
+            packages: PTPSimulator
+          - name: AppUI
+            packages: AppUI
+          - name: CameraTransport, BLEKit
+            packages: CameraTransport BLEKit
+          - name: Catalogue, ImportEngine, PhotosBridge
+            packages: Catalogue ImportEngine PhotosBridge
+    env:
+      # As the build job's: keep the two in step.
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          xcodebuild -version
+          id="$(.github/scripts/pick-iphone-simulator.sh)"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Tests in the iOS Simulator
+        run: .github/scripts/test-packages-in-simulator.sh "${{ steps.sim.outputs.id }}" ${{ matrix.packages }}
