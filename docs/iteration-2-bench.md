@@ -68,6 +68,21 @@ Existing lines come from `OSLogBenchLog` (category `browse` for the import and B
 | `browse: badges refreshed …: … imported, … staged, <n> rejected, key …` | Browse's *Rejected* badges: the rejected count is written only when the card shown has rejected files, so the line reads as before otherwise. After check 13's removal from Staging, the rejects should still count here. | 13 |
 | `browse: lifted a reject (<n> files)`, `browse: the reject wasn't lifted: catalogue error (<type>)`, `browse: rejected badges not refreshed: catalogue error (<type>)` | A tap on the *Rejected* badge clearing the mark (2 files for a RAW+JPEG pair), and the catalogue refusing it or the read. | 13 |
 
+**Built by I12** (*Import keepers* and the removal from Staging; category `browse`). Counts only: no line names a staged file, a path or a camera's folder; a key is its per-launch tag.
+
+| Line | What it records | Checks |
+| --- | --- | --- |
+| `keepers: downloading … evicted keeper file(s) before the import` | Evicted iCloud keepers fetched before the first job starts, so a long download can't stall the job (notice; a `keepers: an evicted keeper didn't download first (…)` line is error level, and the job's reader tries again). | 11, 13 |
+| `import: keepers job <i> of <n> ended <outcome>, key k<n>`, `import: keepers job <i> of <n>: nothing new, key k<n>` | Each staged camera key's job: one per key, in sequence (notice). | 13 |
+| `import: keepers not started, Photos access denied \| restricted` | Photos access off before the first job: no job starts (notice). | 13 |
+| `engine: job stopped: Photos refused the save (access denied \| restricted); nothing staged` | A keepers job Photos refused (3311): it stops, nothing is staged again and no later job starts (notice: the person's setting, not a failure). | 13 |
+| `import: keepers done: … of … job(s), … imported, … already imported, … skipped, … failed` | The keepers' totals over every job (notice). | 13 |
+| `keepers: removal offered for … file(s): keepers …, rejects …, held keepers …, held rejects …, unmarked …`, `keepers: the staged copies were kept` | The one confirmation's plan (D2), in units but the file count, and the person keeping the copies (notice). | 13 |
+| `keepers: … staged file(s) kept, their marks changed since the confirmation was offered` | Removal re-reads the marks: copies whose mark changed while the confirmation waited stay (notice). | 13 |
+| `keepers: couldn't read the marks`, `keepers: couldn't read the catalogue for the removal (…)`, `import: keepers job didn't start: …` | The flow stopped before importing or before offering the removal: nothing is removed (**error level**; the bracket is an error's type or the engine's refusal, never a name). | 13 |
+| `staging: a removed copy's row couldn't be cleared (…)` | The copy is gone but its row still says staged until the catalogue takes the change (**error level**). | 13 |
+| `staging: removed … staged file(s), … not removed, … skipped, … day folder(s)` | What the removal did: removed, left staged (gone, busy, an iCloud error, not the recorded file), skipped (an unknown or out-of-Staging path, never touched), and emptied day folders removed (notice). Each copy not removed also writes `staging: a staged copy wasn't removed (<why>)` (**error level**). | 13 |
+
 **Not written yet (until each lands, record by stopwatch and screen and mark the line column *no line yet*).** The wording is the intent; the work item's final wording replaces it, and this sheet is updated to match when it merges.
 
 | Line (intended) | What it records | Checks |

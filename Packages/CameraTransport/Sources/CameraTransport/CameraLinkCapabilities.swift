@@ -68,6 +68,7 @@ public struct CameraLinkCapabilities: Sendable, Hashable {
         switch carrier {
         case .usb: .usb
         case .wifi: .wifi
+        case .staging: .staging
         }
     }
 }

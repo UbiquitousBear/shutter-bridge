@@ -76,8 +76,8 @@ extension CameraLinkCapabilities {
 ///   changed, is `itemNotFound` (the engine skips it); the keeper stays in Staging.
 /// - **No resume, no checkpoints, no thumbnails, no events**; `close()` releases nothing. Thumbnails come from the cull
 ///   screen's own reader.
-/// - The descriptor is the caller's. It never makes a camera key: each keepers job is started with the staged files'
-///   own key (backlog section 7.5). I12 gives it its own carrier.
+/// - The descriptor is the caller's, in `CameraMode.staging` (`StagingFolderLink.descriptor(named:)`). It never makes a
+///   camera key: each keepers job is started with the staged files' own key (backlog section 7.5).
 public actor StagingFolderLink: CameraLink {
     public nonisolated let descriptor: CameraDescriptor
     public nonisolated var capabilities: CameraLinkCapabilities { .staging }
@@ -108,6 +108,12 @@ public actor StagingFolderLink: CameraLink {
             items.append(item)
             itemsByID[id] = item
         }
+    }
+
+    /// A descriptor for Staging read as a camera: `CameraMode.staging`, named for the staged camera (its folder under
+    /// Staging, D11), which names the job's album and its wording. Its ID names nothing private.
+    public static func descriptor(named name: String) -> CameraDescriptor {
+        CameraDescriptor(id: .init(rawValue: "staging"), name: name, mode: .staging)
     }
 
     // MARK: - CameraLink

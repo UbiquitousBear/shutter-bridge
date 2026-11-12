@@ -258,8 +258,19 @@ struct CameraLinkCapabilitiesTests {
 
     @Test func everyCarrierHasABaselineAndTheyDiffer() {
         let baselines = CameraCarrier.allCases.map(CameraLinkCapabilities.defaults(for:))
-        #expect(baselines.count == 2)
+        #expect(baselines.count == 3)
         #expect(Set(baselines).count == baselines.count)
+    }
+
+    @Test func stagingIsACarrierOfItsOwnThatNeverDeletes() {
+        let staging = CameraLinkCapabilities.defaults(for: .staging)
+        #expect(staging == .staging)
+        #expect(CameraMode.staging.carrier == .staging)
+        #expect(!staging.deletes)                     // no path from the engine removes a staged file
+        #expect(!staging.resumesPartialFiles)
+        #expect(staging.maxDownloadsInFlight == 2)    // a local copy
+        let descriptor = StagingFolderLink.descriptor(named: "ILCE-7CM2")
+        #expect(descriptor.mode == .staging && descriptor.carrier == .staging && descriptor.name == "ILCE-7CM2")
     }
 
     @Test func modesFollowTheirCarrier() {

@@ -48,6 +48,9 @@ public enum CameraKeys {
         // The route is how the phone reaches the camera, not which camera it is: both routes key alike. Without the
         // serial this is only the fallback (see the type's documentation).
         case .wifi(.cameraNetwork), .wifi(.otherNetwork): mode = "wifi"
+        // Staging read as a camera (*Import keepers*) never keys a camera: each keepers job is started with the staged
+        // files' own key (backlog section 7.5). A key made from its descriptor names no camera's rows.
+        case .staging: mode = "staging"
         }
         return CameraKey(rawValue: mode + "-name:" + SHA256Digest.hex(of: Data(descriptor.name.utf8)))
     }
