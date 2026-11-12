@@ -167,7 +167,8 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   builds `App/ShutterBridge.xcodeproj` unsigned for `generic/platform=iOS Simulator` (Debug) and
   `generic/platform=iOS` (Release). Then it runs the app's UI tests in the iOS Simulator (I18, decision D14 (c)):
   `xcodebuild test -scheme ShutterBridge -only-testing:ShutterBridgeUITests` on the simulator
-  `pick-iphone-simulator.sh` picks, unsigned like the builds, with each test limited to three minutes
+  `pick-iphone-simulator.sh` picks, booted and waited for first, signed to run locally (ad hoc, no team or
+  profile) rather than unsigned like the builds, with each test limited to three minutes
   (`-default-test-execution-time-allowance 180`) and the job's limit raised to 45 minutes for it. The
   `ShutterBridgeUITests` target (`App/ShutterBridgeUITests/`, a synchronised folder, in the shared scheme's
   TestAction) launches the Debug app with `-UITestFixture`, which composes it over an in-memory catalogue seeded with
@@ -181,19 +182,25 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   library through the app's Photos destination, one also into an album it creates, then runs
   `SystemPhotoLibrary.findAsset` with the engine's query for each (found), for a name never saved and for the right
   name outside the ±1 s window (not found), and the test reads every outcome from one report. Before the tests the
-  step boots the picked simulator (`xcrun simctl bootstatus -b`) and grants the app full Photos access
+  step boots the picked simulator (`xcrun simctl boot`, then `bootstatus -b`) and grants the app full Photos access
   (`xcrun simctl privacy <udid> grant photos <bundle id>`, the bundle identifier read from the app target's build
   settings); that the grant holds for an app installed afterwards is unverified until the step's first run, and the
-  check's report says the access it read. The saved assets and album stay in that simulator's library. On a failure
-  the step's raw lines (test, assertion, compile error) are printed after it and the result bundle
+  check's report says the access it read. The saved assets and album stay in that simulator's library. Unsigned, the
+  runner never started on the first run (12 Nov, #139: timed out waiting for the accessibility "AX loaded"
+  notification), hence the ad-hoc signature and the boot beforehand. A failing UI test is run once more
+  (`-retry-tests-on-failure`): on #139 the runner's Simulator left the app's threads unscheduled for about a minute, so
+  waits timed out with the app idle; a test must still pass in one of its two runs. On a failure the step's raw lines
+  (test, assertion, compile error) and the result bundle's failures are printed after it, and the result bundle
   (`UITests.xcresult`, with each failed test's screenshots, beside the raw log `uitests.log`) is kept as the run's
-  `UITests-xcresult` artifact for 14 days; that the Simulator runs the unsigned UI-test runner is unverified until
-  the step's first run. On the Mac, the same tests run from the ShutterBridge scheme's Test action. The `packages` job tests every package in the iOS Simulator through
+  `UITests-xcresult` artifact for 14 days. On the Mac, the same tests run from the ShutterBridge scheme's Test action.
+  The `packages` job tests every package in the iOS Simulator through
   `AllPackages.xcworkspace` at the root, which holds the eight packages, and its shared `AllPackageTests` scheme,
   which lists their ten test targets: one `xcodebuild build-for-testing`, so each module and Apple's SDK modules are
   compiled once, then `test-without-building` twice, AppUI's tests with `-parallel-testing-enabled NO` and the rest as
-  usual. The simulator is the first iPhone on the newest iOS runtime the pinned Xcode can run (from 27.0, the
-  deployment target, up to its iOS Simulator SDK; `.github/scripts/pick-iphone-simulator.sh`). Indexing while building
+  usual. The simulator is a standard iPhone model (an "iPhone 18" before an "iPhone 18 Pro", either before a model
+  such as "iPhone Duo", which on 12 Nov showed the tabs as a side strip and stalled the UI tests) on the newest iOS
+  runtime the pinned Xcode can run (from 27.0, the deployment target, up to its iOS Simulator SDK;
+  `.github/scripts/pick-iphone-simulator.sh`, which lists every candidate in the log). Indexing while building
   is off (`COMPILER_INDEX_STORE_ENABLE=NO`; nothing on CI reads the index). Measured on 12 Nov: the packages job about
   9 minutes (#131), where testing each package one after another took about 33 and five parallel jobs that each
   compiled their packages' dependencies again took 12.6 for the slowest and five runners (#130). The label is free for
