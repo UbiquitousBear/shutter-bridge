@@ -4241,17 +4241,6 @@
         }
       }
     },
-    "Shows the staged files, to keep or reject them with no camera connected." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en-GB" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows the staged files, to keep or reject them with no camera connected."
-          }
-        }
-      }
-    },
     "Shows this job's folder in Staging." : {
       "extractionState" : "manual",
       "localizations" : {

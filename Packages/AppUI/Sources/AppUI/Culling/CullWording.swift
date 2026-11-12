@@ -7,10 +7,6 @@ public enum CullWording {
     // MARK: The Staging screen
 
     public static let title = AppText.string("Staging")
-    /// The Cameras screen's button that opens Staging, until the tab bar gives it a tab (I10).
-    public static let openStaging = AppText.string("Staging")
-    public static let openStagingHint = AppText.string("Shows the staged files, to keep or reject them with no camera "
-        + "connected.")
 
     public static let loading = AppText.string("Reading Staging")
     public static let emptyTitle = AppText.string("Nothing Staged")
