@@ -7,7 +7,10 @@
 # Xcode names a single-product package's scheme after the product and adds "<Package>-Package" when there are
 # several; the -Package scheme is preferred because it holds every test target. Indexing while building is off
 # (COMPILER_INDEX_STORE_ENABLE=NO): nothing on CI reads the index, and it costs compile time.
-set -uo pipefail
+#
+# No `set -u`: macOS runs this with its /bin/bash 3.2, where expanding an empty array ("${parallel[@]}" for every
+# package but AppUI) under -u is an "unbound variable" error.
+set -o pipefail
 sim="$1"
 shift
 failed=()
