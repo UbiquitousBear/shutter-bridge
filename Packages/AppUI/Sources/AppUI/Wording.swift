@@ -329,8 +329,8 @@ extension BrowseWording {
     /// A photo rejected in Staging (D3, Shamil, 11 Nov): *Select All New* and New Only leave it out, even once its
     /// staged copy has gone. Imported takes its place on the cell when both apply; it takes Staged's.
     public static let rejectedBadge = "Rejected"
-    /// The Rejected badge's action (a tap on it, the press-and-hold menu, VoiceOver's actions): clears the mark, so
-    /// the photo is new again.
+    /// The Rejected badge's action (a tap on it, the press-and-hold menu, the badge as a VoiceOver button): clears the
+    /// mark, so the photo is new again.
     public static let liftReject = "Lift Reject"
     /// What lifting does, for the badge's VoiceOver hint.
     public static let liftRejectHint = "Makes this photo new again, so Select All New picks it."
