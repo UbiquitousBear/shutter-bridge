@@ -26,8 +26,10 @@ public enum AlbumLookup: Sendable, Hashable {
     /// No album has this identifier (the person deleted it, or it was never made in this library).
     case missing
     /// Found; `canAddContent` is `canPerform(.addContent)`. Adding to an album that says no raises an exception, so
-    /// it is checked first.
-    case found(canAddContent: Bool)
+    /// it is checked first. `title` is the album's title as Photos shows it now (`localizedTitle`), nil when it has
+    /// none or the library doesn't say: an album an earlier build made is adopted only when its title is the name it
+    /// would be made with (`AlbumPlan.Album.legacyKeys`), so a client that leaves it nil never adopts one.
+    case found(canAddContent: Bool, title: String? = nil)
 }
 
 /// An error from the Photos library, by domain and code, so the mapping can be tested without the framework.
@@ -258,6 +260,9 @@ public struct NoMetadataReader: PhotoMetadataReader {
 public protocol AlbumIdentifierStore: Sendable {
     func albumIdentifier(forKey key: String) async -> String?
     func setAlbumIdentifier(_ identifier: String?, forKey key: String) async
+    /// Every key that has an entry, in no particular order: adoption looks through the per-key entries earlier builds
+    /// made (`AlbumPlan.Album.legacyKeyPrefix`).
+    func storedKeys() async -> [String]
 }
 
 /// An album store that lives in memory: for tests, and until the app layer stores them.
@@ -270,6 +275,7 @@ public actor InMemoryAlbumIdentifierStore: AlbumIdentifierStore {
 
     public func albumIdentifier(forKey key: String) -> String? { identifiers[key] }
     public func setAlbumIdentifier(_ identifier: String?, forKey key: String) { identifiers[key] = identifier }
+    public func storedKeys() -> [String] { Array(identifiers.keys) }
     public var all: [String: String] { identifiers }
 }
 
@@ -282,15 +288,27 @@ public struct AlbumPlan: Sendable, Hashable {
         /// The title used when the album has to be created.
         public var title: String
         /// Store keys earlier builds kept this album under, tried in order only when `key` has no entry or its album
-        /// is gone: the first that names an album still in the library that accepts photos, and that no other key has
+        /// is gone, then every other stored key that starts with `legacyKeyPrefix`, in key order: the first that
+        /// names an album still in the library that accepts photos, whose title is `title`, and that no other key has
         /// adopted (`AlbumPlan.adoptionKey(forLegacy:)`), is adopted (stored under `key` too) rather than a new album
         /// made. A legacy entry is only ever read, never written or removed.
+        ///
+        /// The title has to match because builds before D11 named a camera's album by the key it was imported under:
+        /// the model in MTP, but "Camera" in MSC and over Wi-Fi. Adopting the job's own key's album whatever its title
+        /// would carry a "Camera" album on as the model's for good, the first time a camera was imported in MSC or
+        /// over Wi-Fi, and leave the MTP album with the model's name unused. An album the person renamed isn't
+        /// adopted either: a new one with the name is made, and theirs is left as it is.
         public var legacyKeys: [String]
+        /// The prefix of the store keys earlier builds kept per-camera albums under
+        /// (`AlbumPlan.legacyCameraAlbumPrefix`), so an album another of the body's keys made (its MTP key's, when this
+        /// job is in MSC or over Wi-Fi) can be adopted; nil to try `legacyKeys` only.
+        public var legacyKeyPrefix: String?
 
-        public init(key: String, title: String, legacyKeys: [String] = []) {
+        public init(key: String, title: String, legacyKeys: [String] = [], legacyKeyPrefix: String? = nil) {
             self.key = key
             self.title = title
             self.legacyKeys = legacyKeys
+            self.legacyKeyPrefix = legacyKeyPrefix
         }
     }
 
@@ -310,16 +328,22 @@ public struct AlbumPlan: Sendable, Hashable {
 
     /// The store key builds before D11 kept a per-camera album under: the catalogue's camera key. Read only, to adopt
     /// that album (`Album.legacyKeys`).
-    public static func legacyCameraAlbumKey(forCamera cameraKey: String) -> String { "camera:" + cameraKey }
+    public static func legacyCameraAlbumKey(forCamera cameraKey: String) -> String {
+        legacyCameraAlbumPrefix + cameraKey
+    }
+
+    /// What every key `legacyCameraAlbumKey(forCamera:)` makes starts with, and no other key the store holds
+    /// ("camera-name:", "import:" and "adopted:" don't).
+    public static let legacyCameraAlbumPrefix = "camera:"
 
     /// The store key recording which album key adopted a legacy key's album: its value is that album's key, not an
-    /// album identifier. A legacy album is adopted by one key only, so a camera key seen under two names doesn't give
-    /// its old album to both.
+    /// album identifier. A legacy album is adopted by one key only, so an adopted album renamed in Photos to another
+    /// camera's name isn't adopted by that name as well.
     public static func adoptionKey(forLegacy legacyKey: String) -> String { "adopted:" + legacyKey }
 
     /// - Parameters:
     ///   - cameraKey: the catalogue's camera key. It only finds the album an earlier build stored per key
-    ///     (`legacyCameraAlbumKey(forCamera:)`), which is adopted the first time.
+    ///     (`legacyCameraAlbumKey(forCamera:)`), tried first when the album is adopted (`Album.legacyKeys`).
     ///   - cameraName: the camera's name: the per-camera album's title and its key (`cameraAlbumKey(named:)`), used
     ///     exactly as given.
     ///   - importID: what identifies this import, so a continued import finds its own album.
@@ -328,7 +352,8 @@ public struct AlbumPlan: Sendable, Hashable {
     public init(choice: PhotosImportOptions.Albums, cameraKey: String, cameraName: String, importID: String,
                 importDate: Date, importTitle: String? = nil) {
         let perCamera = Album(key: Self.cameraAlbumKey(named: cameraName), title: cameraName,
-                              legacyKeys: [Self.legacyCameraAlbumKey(forCamera: cameraKey)])
+                              legacyKeys: [Self.legacyCameraAlbumKey(forCamera: cameraKey)],
+                              legacyKeyPrefix: Self.legacyCameraAlbumPrefix)
         let perImport = Album(key: "import:" + importID,
                               title: importTitle ?? "\(cameraName), \(importDate.formatted(date: .abbreviated, time: .shortened))")
         switch choice {

@@ -73,6 +73,10 @@ public final class UserDefaultsAlbumIdentifierStore: AlbumIdentifierStore, @unch
         }
     }
 
+    public func storedKeys() async -> [String] {
+        lock.withLock { Array(stored().keys) }
+    }
+
     private func stored() -> [String: String] {
         (defaults.dictionary(forKey: Self.key) as? [String: String]) ?? [:]
     }

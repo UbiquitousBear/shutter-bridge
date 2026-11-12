@@ -22,7 +22,7 @@ public struct SystemPhotoLibrary: PhotoLibraryClient {
     public func album(withIdentifier identifier: String) async -> AlbumLookup {
         let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [identifier], options: nil)
         guard let album = result.firstObject else { return .missing }
-        return .found(canAddContent: album.canPerform(.addContent))
+        return .found(canAddContent: album.canPerform(.addContent), title: album.localizedTitle)
     }
 
     public func createAlbum(titled title: String) async throws(PhotoLibraryFailure) -> String {

@@ -144,8 +144,8 @@ public enum HistoryWording {
     /// (`ImportDestination.filedAlbumIdentifier()`), so it is that album's title in the plan the person's album choice
     /// makes. One per camera, or both: the camera's name (D11). One per import: the camera's name and the job's start
     /// ("ILCE-7CM2, 12 Nov 2026 at 14:05"), worked out again from the record, so it can read a minute later than the
-    /// title when the job started on a minute's turn. An album renamed in Photos, or made under an earlier name, still
-    /// reads by this one.
+    /// title when the job started on a minute's turn. An album renamed in Photos after it was made still reads by this
+    /// one (an album an earlier build made is only adopted when its title is the camera's name, `AlbumPlan.Album`).
     public static func albumTitle(_ job: JobRecord, camera: String, albums: PhotosImportOptions.Albums) -> String {
         AlbumPlan(choice: albums, cameraKey: job.camera.rawValue, cameraName: camera, importID: job.id.uuidString,
                   importDate: job.startedAt).albums.first?.title ?? camera
