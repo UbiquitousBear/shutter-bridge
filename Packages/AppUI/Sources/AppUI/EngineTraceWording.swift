@@ -47,7 +47,8 @@ public enum EngineTraceWording {
              .linkEvent, .paused, .resumed, .idle, .tick,
              .published, .discardedLateFile, .checkpointSaved, .waitingForCheckpointWrites, .checkpointWritesUnsettled,
              .identityChanged, .reconnected, .firstByteAfterReconnect, .jobRecordNotWritten, .lateSessionLossIgnored,
-             .partialReset, .rejectedLeftOut:
+             .partialReset, .rejectedLeftOut,
+             .pendingCommitResolved:
             return .notice
         }
     }
@@ -129,6 +130,8 @@ public enum EngineTraceWording {
             return "engine: ignored a late loss of session \(generation), which the reconnect replaced"
         case let .partialReset(name):
             return "engine: the partial copy of \(file(name)) is gone; it will be copied from its start"
+        case let .pendingCommitResolved(name, resolution):
+            return "engine: interrupted commit of \(file(name)): \(resolutionWord(resolution))"
         }
     }
 
@@ -141,6 +144,19 @@ public enum EngineTraceWording {
             scalar.properties.generalCategory == .control ? "?" : Character(scalar)
         })
         return cleaned.count > 64 ? String(cleaned.prefix(64)) + "…" : cleaned
+    }
+
+    /// How a pending commit left behind was resolved (backlog section 3.1, I15).
+    static func resolutionWord(_ resolution: PendingCommitResolution) -> String {
+        switch resolution {
+        case .replayed: "its row was written from memory"
+        case .foundInPhotos: "found in Photos, marked imported"
+        case .foundInStaging: "found in Staging, marked staged"
+        case .notFound: "not found, so it reads as not imported"
+        case .possibleDuplicate: "not found with Limited Access, so it may be imported twice"
+        case .waiting: "can't be checked yet; kept for the next pass"
+        case .forgotten: "its camera's imports were forgotten, so it reads as not imported"
+        }
     }
 
     static func skipWord(_ reason: ImportSkipReason) -> String {

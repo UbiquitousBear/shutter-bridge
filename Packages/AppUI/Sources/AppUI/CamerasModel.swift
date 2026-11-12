@@ -171,6 +171,15 @@ public final class CamerasModel: CameraFinding {
         return model
     }
 
+    /// Reads the Imported and Staged badges again in every Browse model still alive, after the catalogue's rows changed
+    /// outside a job (the launch pass resolving pending commits, I15).
+    public func refreshBrowseBadges() async {
+        browsing.removeAll { $0.model == nil }
+        for entry in browsing {
+            await entry.model?.refreshImportedStates()
+        }
+    }
+
     /// The scene changed: every Browse model still alive is told, so a Wi-Fi Browse knows whether a lost session happened
     /// in front (`BrowseModel.scenePhaseChanged(_:)`).
     public func browseScenePhaseChanged(_ scene: AppScenePhase) {

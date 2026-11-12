@@ -15,6 +15,10 @@ public protocol PhotoLibraryClient: Sendable {
     /// Saves one asset in one change block, adds it to the albums given by identifier that accept new content, and
     /// returns the asset's `localIdentifier`.
     func save(_ asset: AssetCreation, toAlbums albumIdentifiers: [String]) async throws(PhotoLibraryFailure) -> String
+    /// Looks for an asset the app saved (backlog section 3.1, I15): library-wide by the date it was given, then by its
+    /// original file names, role for role (`AssetQuery.matches(_:)`); the album is never consulted. Reads access,
+    /// never asks for it. The default answers `.cannotSearch`, so a library that can't look leaves markers waiting.
+    func findAsset(_ query: AssetQuery) async -> AssetSearch
 }
 
 /// The result of looking an album up by identifier.

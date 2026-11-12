@@ -37,7 +37,7 @@ final class Harness {
     ///     that very step).
     init(catalogue: any CatalogueStore = InMemoryCatalogue(), downloadsInFlight: Int = 1,
          policy: ImportPolicy = .standard, root existing: URL? = nil, workFolder: String = "staging",
-         onTrace: (@Sendable (EngineTrace) -> Void)? = nil) {
+         onTrace: (@Sendable (EngineTrace) -> Void)? = nil, commitLookup: any CommitLookup = NoCommitLookup()) {
         root = existing ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("ImportEngineTests-\(UUID().uuidString)", isDirectory: true)
         staging = root.appendingPathComponent(workFolder, isDirectory: true)
@@ -55,7 +55,8 @@ final class Harness {
             trace: { event in
                 onTrace?(event)
                 recorder.record(event)
-            }
+            },
+            commitLookup: commitLookup
         )
     }
 
