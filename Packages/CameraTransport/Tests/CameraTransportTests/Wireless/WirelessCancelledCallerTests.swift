@@ -83,4 +83,63 @@ struct WirelessCancelledCallerTests {
         #expect(joiner.applyTimes.count == 1, "no second join")
         #expect(await session.phase == .idle)
     }
+
+    /// Fourth review: the app stops a connection during its hand-off (the person left Browse), and while that preparation
+    /// is still letting go the Wi-Fi recovery's Try Again asks for the camera. It gets a preparation of its own, not the
+    /// stopped one's `.cancelled`.
+    @Test func aCallerArrivingWhileALeaveStopsThePreparationGetsAFreshOne() async throws {
+        let clock = VirtualClock()
+        let journal = Journal()
+        let peripheral = PeripheralID(UUID())
+        let connector = ScriptedConnector(clock: clock, [
+            .success(FakeGATTLink(clock: clock, initialStatus: 2, peripheral: peripheral)),
+            .success(FakeGATTLink(clock: clock, initialStatus: 2, peripheral: peripheral)),
+        ])
+        let joiner = FakeJoiner(clock: clock, journal: journal)
+        let base = FakeHandoff(clock: clock, journal: journal,
+                               steps: [FakeHandoff.Step(delay: .seconds(20)), FakeHandoff.Step()])
+        let handoff = SlowReleaseHandoff(base: base)
+        let opener = LinkOpener(clock: clock, journal: journal)
+        let session = WirelessSession(
+            camera: WirelessCamera(peripheral: peripheral),
+            connector: connector, joiner: joiner, path: FakePath(clock: clock), foreground: FakeForeground(),
+            openLink: { (reopening: Bool) async throws(CameraLinkFailure) -> any CameraLink in
+                try await opener.open(reopening: reopening)
+            },
+            clock: clock, handoff: handoff)
+        let phases = PhaseLog(session.phases)
+        // The app's connection, as WiFiCameraSource.open(_:) makes it, stopped during its hand-off.
+        let stopped = Task { () -> Result<any CameraLink, WirelessFailure> in
+            await withTaskCancellationHandler {
+                do throws(WirelessFailure) {
+                    return .success(try await session.prepareImport())
+                } catch {
+                    return .failure(error)
+                }
+            } onCancel: {
+                Task { await session.leave() }
+            }
+        }
+        await phases.waitFor(.handingOff)
+        stopped.cancel()
+        for _ in 0 ..< 400 where handoff.releases == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(handoff.releases == 1, "the stopped preparation is letting go")
+        // The recovery's reopen arrives while it does.
+        let recovery = Task { () -> Result<any CameraLink, WirelessFailure> in
+            do throws(WirelessFailure) {
+                return .success(try await session.prepareImport(bluetoothSwitchOnWhenAway: true))
+            } catch {
+                return .failure(error)
+            }
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        handoff.gate.open()
+        let first = await drive(clock) { await stopped.value }
+        let second = await drive(clock) { await recovery.value }
+
+        if case .failure(.cancelled) = first {} else { Issue.record("the stopped preparation: \(first)") }
+        #expect(opened(second) != nil, "the recovery got \(second)")
+        #expect(connector.count == 2, "a fresh Bluetooth connection for the recovery")
+        #expect(base.kinds.count == 2)
+    }
 }

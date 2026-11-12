@@ -1024,6 +1024,40 @@ struct WiFiCameraConnectionTests {
         #expect(session.preparesStarted == 0)   // stopped before the session
     }
 
+    /// Fourth review: a recovery reopen that begins while a stop is under way waits for it to end before it reaches the
+    /// session, and a caller that gives up while waiting out a stop returns at once.
+    @Test func aStopUnderWayIsWaitedOutByTheRecoveryAndLeftByACancelledCaller() async throws {
+        let gate = ContinuationGate()
+        let connecting = FakeConnecting()
+        let source = WiFiCameraSource(catalogue: InMemoryCatalogue(), connecting: connecting,
+                                      beforeFirstConnection: { await gate.wait(); return true }, now: { fixedNow })
+        let descriptor = await source.registerPairedCamera(peripheral: peripheral)
+        let id = descriptor.id
+        let session = connecting.session(for: WiFiCameraEntry(descriptor: descriptor, key: nil, peripheral: nil,
+                                                              guid: UUID())) as! FakeSession
+        session.script(.success(FakeWiFiLink()))
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { gate.waiting == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await waitUntilAsync { await source.stoppedConnections == 1 })
+        // Browse is opened again and left again while the stop is still under way: that caller doesn't wait behind it.
+        let again = Task { () -> CameraLinkFailure.Kind? in
+            do throws(CameraLinkFailure) { _ = try await source.cameraLink(for: id); return nil } catch { return error.kind }
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        again.cancel()
+        #expect(await bounded(again) == .some(.disconnected))
+        // The recovery begins a reopen meanwhile: it waits for the stop to end.
+        let reopen = Task { await source.recoveryReopening(id, true); return true }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await source.isConnecting(id))
+        gate.open()
+        #expect(await bounded(reopen) == .some(true))
+        #expect(await !source.isConnecting(id))
+        await source.recoveryReopening(id, false)
+    }
+
     @Test func whichPhasesAreStillReachingTheCamera() {
         for phase in [WirelessPhase?.none, .idle, .handingOff, .joining, .awaitingFront, .leaving, .paused(.needsJoin)] {
             #expect(WiFiCameraSource.stillReaching(phase))

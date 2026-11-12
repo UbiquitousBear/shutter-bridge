@@ -162,7 +162,11 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             if let now = live[id], Self.same(now, cached) { live[id] = nil }
         }
         // A connection being stopped, or let go, because its callers left is let end; this caller then connects afresh.
-        while stopping.contains(id) || lettingGo.contains(id), let dying = inFlight[id] { _ = await dying.value }
+        // Its own cancellation ends the wait (a Browse left again meanwhile isn't kept behind the stop).
+        while stopping.contains(id) || lettingGo.contains(id), let dying = inFlight[id] {
+            await Self.waitOut(dying)
+            if Task.isCancelled { break }
+        }
         // A caller that has gone already (its screen closed while it got here) starts and joins nothing.
         if Task.isCancelled { throw CameraLinkFailure(.disconnected, detail: "wifi: the caller left") }
         // No suspension between this check and the task being stored, so two callers never both start a connection.
@@ -247,12 +251,32 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// The Wi-Fi recovery (W14) began (`true`) or ended (`false`) a reopen of the camera through its session, past this
     /// source (`SourceAdoptingRecoverySession`): while one is under way, a connection a Browse left is never stopped,
     /// since it shares the recovery's preparation.
-    public func recoveryReopening(_ id: CameraDescriptor.ID, _ began: Bool) {
+    public func recoveryReopening(_ id: CameraDescriptor.ID, _ began: Bool) async {
         let count = recoveryReopens[id, default: 0] + (began ? 1 : -1)
         recoveryReopens[id] = count > 0 ? count : nil
+        guard began else { return }
         // Wanted again: a connection a Browse left, finishing for nobody, shares the recovery's preparation from here on,
         // so it is neither let go nor stopped; its link becomes the one the recovery adopts.
-        if began { unwanted.remove(id) }
+        unwanted.remove(id)
+        // A connection already being stopped (or let go) is let end first, so the recovery's reopen doesn't share the
+        // preparation the stop is cancelling, or get a link the stop then closes.
+        while stopping.contains(id) || lettingGo.contains(id), let dying = inFlight[id] { _ = await dying.value }
+    }
+
+    /// Waits for `task` to end, or for the caller's cancellation, whichever comes first.
+    private static func waitOut(_ task: Task<Result<any CameraLink, CameraLinkFailure>, Never>) async {
+        let ended = OneAnswer<Bool>()
+        _ = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                ended.wait(continuation)
+                Task {
+                    _ = await task.value
+                    ended.give(true)
+                }
+            }
+        } onCancel: {
+            ended.give(false)
+        }
     }
 
     /// The one connection for a camera: the explanation if one is due, the open, the identity check, the saving.

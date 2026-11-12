@@ -281,8 +281,9 @@ public actor WirelessSession {
     // MARK: - Public calls
 
     /// Gives an open link to the camera for an import: reopened with no join inside the stay, else after the join. A second
-    /// call while one is preparing waits for the same result. Throws `WirelessFailure`, holding nothing afterwards; a
-    /// caller already cancelled when its preparation would begin gets `.cancelled` and starts none.
+    /// call while one is preparing waits for the same result, except one that a leave is stopping, which it lets end and
+    /// then prepares afresh. Throws `WirelessFailure`, holding nothing afterwards; a caller already cancelled when its
+    /// preparation would begin gets `.cancelled` and starts none.
     public func prepareImport() async throws(WirelessFailure) -> any CameraLink {
         try await prepareImport(bluetoothSwitchOnWhenAway: false)
     }
@@ -295,7 +296,21 @@ public actor WirelessSession {
     /// `.needsJoin`. Never `apply`s from the background. Only a call that starts a preparation sets this; a second call
     /// meanwhile waits for the same result.
     public func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
-        if let leaveTask { await leaveTask.value }
+        // A leave under way ends first. So does a preparation a leave is stopping (only `leave()` cancels one): it ends
+        // as cancelled, and a caller that isn't the one stopped (the Wi-Fi recovery's Try Again, say) lets it and the
+        // leave that follows end, then prepares afresh rather than sharing its `.cancelled`.
+        while true {
+            if let leaveTask {
+                await leaveTask.value
+                continue
+            }
+            if let operation, operation.isCancelled {
+                _ = await operation.value
+                await Task.yield()
+                continue
+            }
+            break
+        }
         let task: Task<Result<any CameraLink, WirelessFailure>, Never>
         if let operation {
             task = operation
