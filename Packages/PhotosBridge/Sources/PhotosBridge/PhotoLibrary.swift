@@ -337,8 +337,8 @@ public struct AlbumPlan: Sendable, Hashable {
     public static let legacyCameraAlbumPrefix = "camera:"
 
     /// The store key recording which album key adopted a legacy key's album: its value is that album's key, not an
-    /// album identifier. A legacy album is adopted by one key only, so a camera key seen under two names doesn't give
-    /// its old album to both.
+    /// album identifier. A legacy album is adopted by one key only, so an adopted album renamed in Photos to another
+    /// camera's name isn't adopted by that name as well.
     public static func adoptionKey(forLegacy legacyKey: String) -> String { "adopted:" + legacyKey }
 
     /// - Parameters:

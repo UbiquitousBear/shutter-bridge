@@ -324,7 +324,9 @@ struct PhotosLibraryDestinationTests {
         _ = try await byModel.commit(.single(try s.stage("A.JPG")))
         #expect(await store.albumIdentifier(forKey: "camera-name:ILCE-7CM2") == "OLD")
         #expect(await store.albumIdentifier(forKey: "adopted:camera:serial-1") == "camera-name:ILCE-7CM2")
-        // The same MSC key named "Camera" once a second body is attached: the old album isn't taken a second time.
+        // The same MSC key named "Camera" once a second body is attached: the old album isn't taken a second time,
+        // even renamed "Camera" in Photos (the title check alone would let it through; only the record stops it).
+        await library.renameAlbum("OLD", to: "Camera")
         let shared = AlbumPlan(choice: .perCamera, cameraKey: "serial-1", cameraName: "Camera", importID: "job-2",
                                importDate: date)
         let byShared = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: shared)
@@ -335,7 +337,8 @@ struct PhotosLibraryDestinationTests {
         #expect(await library.createdAlbumTitles == ["Camera"])
         #expect(await library.albums["OLD"]?.assets.count == 1)
         #expect(await store.albumIdentifier(forKey: "camera:serial-1") == "OLD")
-        // The name that adopted it may adopt it again once its own album is gone.
+        // The name that adopted it may adopt it again once its own album is gone (with its title back).
+        await library.renameAlbum("OLD", to: "ILCE-7CM2")
         await library.deleteAlbum(created)
         await store.setAlbumIdentifier("GONE", forKey: "camera-name:ILCE-7CM2")
         let again = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())

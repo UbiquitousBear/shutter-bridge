@@ -159,9 +159,10 @@ public actor PhotosLibraryDestination: ImportDestination {
     /// body's MTP key made with the model's name (`AlbumPlan.Album.legacyKeys` says why the title has to match). A
     /// legacy entry is never written or removed. Each adoption is recorded under
     /// `adoptionKey(forLegacy:)`, naming the key that took it, and a legacy key another key has taken is passed over:
-    /// one camera key's old album is adopted by one name only. Otherwise a key seen under two names (the MSC key's
-    /// "ILCE-7CM2" and, once another body is attached, the shared "Camera") would give its old album to both, and a
-    /// second body's photos would be filed into the first body's album.
+    /// one camera key's old album is adopted by one name only. The title check already keeps two names from adopting
+    /// one album at once (each name's album has that name as its title); this keeps an adopted album the person later
+    /// renames to another camera's name ("Camera" renamed "ILCE-7CM2") from being adopted by that name as well, which
+    /// would file both names' photos into one album.
     private static func adoptLegacy(_ album: AlbumPlan.Album, library: any PhotoLibraryClient,
                                     store: any AlbumIdentifierStore) async -> AlbumResolution? {
         var candidates = album.legacyKeys
