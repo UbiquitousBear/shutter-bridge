@@ -397,7 +397,9 @@ struct WiFiAppModelTests {
         #expect(await waitUntil { session.preparesStarted == 1 })
         run.cancel()
         #expect(await bounded(run) != nil)   // Browse lets go at once, not when the join is over
-        #expect(await waitUntil { session.count("leave") == 1 })
+        // Told to leave from the stop, and again if the held preparation opened as it was stopped.
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !b.source.isConnecting(descriptor.id) })
         #expect(await b.source.stoppedConnections == 1)
         #expect(await !b.source.hasLiveLink(for: descriptor.id))
     }

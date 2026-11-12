@@ -124,6 +124,8 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     /// `leave()` came while a preparation was held: it ends as cancelled, as the real session's does.
     private var stoppedWhileHeld = false
     private var started = 0
+    /// Preparations waiting on the hold now.
+    private var holding = 0
     let phases: AsyncStream<WirelessPhase>
     private let phaseSink: AsyncStream<WirelessPhase>.Continuation
 
@@ -161,6 +163,7 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     func prepareImport() async throws(WirelessFailure) -> any CameraLink {
         let held: AsyncStream<Void>? = lock.withLock {
             started += 1
+            if gate != nil { holding += 1 }
             return gate
         }
         if let held {
@@ -168,6 +171,7 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
             _ = await iterator.next()
         }
         let stopped: Bool = lock.withLock {
+            if held != nil { holding -= 1 }
             defer { stoppedWhileHeld = false }
             if stoppedWhileHeld { recorded.append("prepare stopped") }
             return stoppedWhileHeld
@@ -196,7 +200,7 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     func leave() async {
         let held: AsyncStream<Void>.Continuation? = lock.withLock {
             recorded.append("leave")
-            guard gate != nil, let release else { return nil }
+            guard holding > 0, let release else { return nil }
             stoppedWhileHeld = true
             return release
         }
