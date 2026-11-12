@@ -192,10 +192,11 @@ The workspace (backlog section 0) brought two workflows, both without secrets:
   tests stay not parallelisable (#109: nearly all of them are main-actor bound and Swift Testing starts every test at
   once, so in the Simulator they queued for the main actor and the wait counted against each test's own time limit; a
   passing run of about 240 tests already had a slowest of 56 s against the 60 s limits). The `packages` job's limit
-  is 30 minutes, the `build` job's 45. This is where the code behind `canImport` is compiled and tested, the wireless screens and live wiring
-  (W16) included. The project has no remote packages, so there is no `Package.resolved` to commit; the first remote
-  dependency (none is planned: Apple frameworks only) would need one. On the Mac, `open AllPackages.xcworkspace` gives
-  every package in one window, and its *AllPackageTests* scheme runs every package's tests.
+  is 30 minutes, the `build` job's 45. This is where the code behind `canImport` is compiled and tested, the wireless
+  screens and live wiring (W16) included. The project has no remote packages, so there is no `Package.resolved` to
+  commit; the first remote dependency (none is planned: Apple frameworks only) would need one. On the Mac,
+  `open AllPackages.xcworkspace` gives every package in one window, and its *AllPackageTests* scheme runs every
+  package's tests.
 
 If a ruleset on `main` requires status checks by name, replace the old `ptpkit.yml` check with these jobs.
 
