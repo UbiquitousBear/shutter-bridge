@@ -1,0 +1,131 @@
+# Experiment (12 Nov): does compiling every package once, in one Xcode workspace, beat app.yml's five parallel jobs,
+# where each job compiles its packages' dependencies again? AllPackages.xcworkspace at the root holds the eight
+# packages, and its shared AllPackageTests scheme lists their ten test targets (AppUI's not parallelisable, as #109).
+# Two ways are timed, each from a cold DerivedData:
+#   A. One `build-for-testing` of AllPackageTests, then `test-without-building`: AppUI one test at a time, the rest
+#      as usual. Every module is compiled once.
+#   B. `xcodebuild test` per package, each with that package's own scheme in the same workspace and one shared
+#      DerivedData, so a package's dependencies are compiled only the first time.
+# The times go to the job summary. Nothing here gates a merge; app.yml stays the check until this is decided.
+name: App single-build experiment (Xcode 27)
+
+on:
+  pull_request:
+    paths:
+      - "AllPackages.xcworkspace/**"
+      - ".github/workflows/app-single-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-single-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  single-build:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          xcodebuild -version
+          id="$(.github/scripts/pick-iphone-simulator.sh)"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Schemes in the workspace
+        run: xcodebuild -list -workspace AllPackages.xcworkspace
+
+      - name: "A: one build-for-testing, then test-without-building"
+        id: a
+        env:
+          SIM: ${{ steps.sim.outputs.id }}
+        run: |
+          set -o pipefail
+          dd="$RUNNER_TEMP/dd-a"
+          common=(-workspace AllPackages.xcworkspace -scheme AllPackageTests
+                  -destination "platform=iOS Simulator,id=$SIM" -derivedDataPath "$dd")
+          t0=$(date +%s)
+          xcodebuild build-for-testing "${common[@]}" COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee "$RUNNER_TEMP/a-build.log" | xcbeautify --renderer github-actions
+          t1=$(date +%s)
+          echo "build=$((t1 - t0))" >> "$GITHUB_OUTPUT"
+          status=0
+          xcodebuild test-without-building "${common[@]}" -only-testing:AppUITests -parallel-testing-enabled NO \
+            | tee "$RUNNER_TEMP/a-appui.log" | xcbeautify --renderer github-actions || status=1
+          t2=$(date +%s)
+          xcodebuild test-without-building "${common[@]}" -skip-testing:AppUITests \
+            | tee "$RUNNER_TEMP/a-rest.log" | xcbeautify --renderer github-actions || status=1
+          t3=$(date +%s)
+          echo "appui=$((t2 - t1))" >> "$GITHUB_OUTPUT"
+          echo "rest=$((t3 - t2))" >> "$GITHUB_OUTPUT"
+          echo "total=$((t3 - t0))" >> "$GITHUB_OUTPUT"
+          if [ "$status" -ne 0 ]; then
+            grep -hE 'recorded an issue|Expectation failed|failed after|error:' "$RUNNER_TEMP"/a-*.log | head -n 80 || true
+          fi
+          exit "$status"
+
+      - name: "B: xcodebuild test per package, one shared DerivedData"
+        id: b
+        if: always()
+        env:
+          SIM: ${{ steps.sim.outputs.id }}
+        run: |
+          set -o pipefail
+          dd="$RUNNER_TEMP/dd-b"
+          schemes="$(xcodebuild -list -json -workspace AllPackages.xcworkspace 2>/dev/null | python3 -c 'import json, sys; s = sys.stdin.read(); i = s.find("{"); d = json.loads(s[i:]) if i >= 0 else {}; print("\n".join((d.get("workspace") or {}).get("schemes", [])))' || true)"
+          failed=()
+          t0=$(date +%s)
+          # Dependencies first, so each later package finds its dependencies already built.
+          for pkg in PTPKit BLEKit CameraTransport Catalogue PhotosBridge ImportEngine PTPSimulator AppUI; do
+            if grep -qx "$pkg-Package" <<<"$schemes"; then scheme="$pkg-Package"; else scheme="$pkg"; fi
+            parallel=()
+            if [ "$pkg" = AppUI ]; then parallel=(-parallel-testing-enabled NO); fi
+            s0=$(date +%s)
+            echo "::group::$pkg ($scheme)"
+            xcodebuild test -workspace AllPackages.xcworkspace -scheme "$scheme" \
+                -destination "platform=iOS Simulator,id=$SIM" -derivedDataPath "$dd" "${parallel[@]}" \
+                COMPILER_INDEX_STORE_ENABLE=NO \
+              | tee "$RUNNER_TEMP/b-$pkg.log" | xcbeautify --renderer github-actions || failed+=("$pkg")
+            echo "::endgroup::"
+            echo "$pkg=$(( $(date +%s) - s0 ))" >> "$GITHUB_OUTPUT"
+          done
+          echo "total=$(( $(date +%s) - t0 ))" >> "$GITHUB_OUTPUT"
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Failed in B: ${failed[*]}"
+            exit 1
+          fi
+
+      - name: Times
+        if: always()
+        run: |
+          {
+            echo "### Single-build experiment"
+            echo
+            echo "| Way | Step | Seconds |"
+            echo "| --- | --- | --- |"
+            echo "| A | build-for-testing (all ten test targets) | ${{ steps.a.outputs.build }} |"
+            echo "| A | AppUI tests, one at a time | ${{ steps.a.outputs.appui }} |"
+            echo "| A | the other nine test targets | ${{ steps.a.outputs.rest }} |"
+            echo "| A | **total** | ${{ steps.a.outputs.total }} |"
+            echo "| B | PTPKit | ${{ steps.b.outputs.PTPKit }} |"
+            echo "| B | BLEKit | ${{ steps.b.outputs.BLEKit }} |"
+            echo "| B | CameraTransport | ${{ steps.b.outputs.CameraTransport }} |"
+            echo "| B | Catalogue | ${{ steps.b.outputs.Catalogue }} |"
+            echo "| B | PhotosBridge | ${{ steps.b.outputs.PhotosBridge }} |"
+            echo "| B | ImportEngine | ${{ steps.b.outputs.ImportEngine }} |"
+            echo "| B | PTPSimulator | ${{ steps.b.outputs.PTPSimulator }} |"
+            echo "| B | AppUI | ${{ steps.b.outputs.AppUI }} |"
+            echo "| B | **total** | ${{ steps.b.outputs.total }} |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
