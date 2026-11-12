@@ -95,10 +95,10 @@ extension ImportSelection {
 }
 
 /// The Reject rule (D3, Shamil, 11 Nov): which files a selection leaves out because the catalogue holds a Reject mark
-/// for their content.
-enum RejectRule {
+/// for their content. Public so History counts and queues a job again as the engine would run it (I10).
+public enum RejectRule {
     /// The content keys whose mark in `marks` is a Reject.
-    static func rejected(in marks: [ObjectIdentity.ContentKey: MarkRecord]) -> Set<ObjectIdentity.ContentKey> {
+    public static func rejected(in marks: [ObjectIdentity.ContentKey: MarkRecord]) -> Set<ObjectIdentity.ContentKey> {
         Set(marks.compactMap { $0.value.decision == .reject ? $0.key : nil })
     }
 }

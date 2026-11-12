@@ -391,6 +391,39 @@ struct HistoryResumableTests {
         #expect(rig.row(1)?.outcome == "Stopped: the camera was disconnected")
     }
 
+    /// A file rejected since the job stopped isn't left (D3, I21): the row doesn't count it, and Resume leaves it out
+    /// as the engine leaves rejects out of a job queued again, even of a stored explicit pick (which the import would
+    /// otherwise take as an explicit pick, rejects and all).
+    @Test func aFileRejectedSinceIsNeitherCountedNorQueuedByResume() async throws {
+        let rig = Rig()
+        rig.finder.links[camA] = FakeLink(items: [a, b, c])
+        try await rig.record(job(1, selection: .picked([key(a), key(b), key(c)]), startedAt: at(day: 11, hour: 9),
+                                 outcome: nil, total: 3, imported: 1))
+        try await rig.imported(a)
+        try await rig.catalogue.setMark(.reject, for: [key(c)])
+        await rig.model.load()
+        #expect(rig.row(1)?.action == .resume(filesLeft: 1))
+        #expect(await rig.model.act(on: try #require(rig.row(1)?.id)))
+        #expect(rig.importer.calls.first?.items.map(\.name) == ["DSC00002.ARW"])
+        // Once the last one is rejected too, nothing is left, so the row isn't Resumable any more.
+        try await rig.catalogue.setMark(.reject, for: [key(b)])
+        await rig.model.load()
+        #expect(rig.row(1)?.action == nil)
+    }
+
+    @Test func anAllNewJobLeavesRejectedFilesOutOfWhatIsLeft() async throws {
+        let rig = Rig()
+        try await rig.record(job(1, startedAt: at(day: 11, hour: 9), outcome: .stopped(reason: "disconnected"),
+                                 total: 3))
+        await rig.catalogue.saveListing(CardListing(camera: camA, listedAt: at(day: 11, hour: 8), entries: [
+            .init(identity: identity(a), format: .raw), .init(identity: identity(b), format: .raw),
+            .init(identity: identity(c), format: .raw),
+        ]))
+        try await rig.catalogue.setMark(.reject, for: [key(b)])
+        await rig.model.load()
+        #expect(rig.row(1)?.action == .resume(filesLeft: 2))
+    }
+
     @Test func aJobKilledBeforeItsCardWasListedIsResumableWithNoCount() async throws {
         let rig = Rig()
         try await rig.record(job(1, startedAt: at(day: 11, hour: 9), outcome: nil))
@@ -572,6 +605,24 @@ struct HistoryRerunTests {
         #expect(rig.importer.asked.first?.choice == .photos)
         #expect(rig.model.notice?.text == "1 failed file is no longer on the card.")
         #expect(rig.log.lines.contains("history: queued 1 file(s) to re-run a job, 1 no longer on the card"))
+    }
+
+    /// A failed file rejected since (D3, I21) isn't offered, queued or said to be gone from the card.
+    @Test func aFailedFileRejectedSinceIsNeitherOfferedNorQueuedNorMissing() async throws {
+        let rig = Rig()
+        rig.finder.links[camA] = FakeLink(items: [skipped, failedStill, unrelated])
+        try await rig.record(job(1, startedAt: at(day: 11, hour: 9), total: 3, failed: 3,
+                                 failedFiles: [key(skipped), key(failedStill), key(failedGone)]))
+        try await rig.catalogue.setMark(.reject, for: [key(skipped), key(failedGone)])
+        await rig.model.load()
+        #expect(rig.row(1)?.action == .rerun(failedLeft: 1))
+        #expect(await rig.model.act(on: try #require(rig.row(1)?.id)))
+        #expect(rig.importer.calls.first?.items.map(\.name) == ["DSC00004.ARW"])
+        #expect(rig.model.notice == nil)
+        #expect(rig.log.lines.contains("history: queued 1 file(s) to re-run a job, 0 no longer on the card"))
+        try await rig.catalogue.setMark(.reject, for: [key(failedStill)])
+        await rig.model.load()
+        #expect(rig.row(1)?.action == nil)
     }
 
     @Test func aStageJobsReRunLeavesOutFilesStagedSinceButNotImportedOnes() async throws {

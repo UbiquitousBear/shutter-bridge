@@ -193,7 +193,7 @@ public final class HistoryModel {
     /// The job's files the catalogue says aren't done: its picks by content key, or, for *all new* and a date range,
     /// the camera's last-known card (Browse's listing); nil when there is neither or the catalogue can't say.
     private func filesLeft(of job: JobRecord, purpose: DestinationKind) async -> Int? {
-        let identities: [ObjectIdentity]
+        var identities: [ObjectIdentity]
         let newOnly = HistoryRules.newOnly(job.selection)
         switch job.selection {
         case let .picked(keys), let .pickedNew(keys):
@@ -211,6 +211,10 @@ public final class HistoryModel {
             }
         }
         guard !identities.isEmpty else { return 0 }
+        // Rejected files aren't left: a job queued again leaves them out (D3, I21).
+        guard let rejected = await rejected(identities.map(\.contentKey)) else { return nil }
+        identities.removeAll { rejected.contains($0.contentKey) }
+        guard !identities.isEmpty else { return 0 }
         guard let (states, staged) = await facts(of: identities, purpose: purpose) else { return nil }
         let wholeCard = !job.selection.isPick
         return identities.count(where: { identity in
@@ -224,8 +228,21 @@ public final class HistoryModel {
     /// How many of the job's failed files the catalogue says aren't done yet; 0 when it can't say (nothing is offered
     /// that may be wrong).
     private func failedLeft(of job: JobRecord, purpose: DestinationKind) async -> Int {
-        let keys = Array(Set(job.failedFiles))
+        // A failed file rejected since isn't offered again (D3, I21).
+        guard let rejected = await rejected(job.failedFiles) else { return 0 }
+        let keys = Array(Set(job.failedFiles).subtracting(rejected))
         return await done(keys, camera: job.camera, purpose: purpose).map { keys.count - $0.count } ?? 0
+    }
+
+    /// Which of `keys` have a Reject mark in the catalogue (`RejectRule`, D3): History leaves them out of what it counts
+    /// and queues, as the engine leaves them out of every job but an explicit pick; nil when the catalogue can't say.
+    private func rejected(_ keys: [ObjectIdentity.ContentKey]) async -> Set<ObjectIdentity.ContentKey>? {
+        guard !keys.isEmpty else { return [] }
+        do {
+            return RejectRule.rejected(in: try await catalogue.marks(of: Array(Set(keys))))
+        } catch {
+            return nil
+        }
     }
 
     /// Which of `keys` are done for `purpose` (an explicit pick: a stage job's file is done once staged), by content;
@@ -333,17 +350,23 @@ public final class HistoryModel {
         let keyed = identities.compactMap(\.self)
         let states: [ObjectIdentity: ObjectState]
         let staged: Set<ObjectIdentity>
+        let rejected: Set<ObjectIdentity.ContentKey>
         do {
             states = keyed.isEmpty ? [:] : try await catalogue.states(of: keyed)
             staged = choice == .staging && !keyed.isEmpty ? try await catalogue.stagedStates(of: keyed) : []
+            // Files rejected since are left out of what Resume and Re-run queue, as the engine leaves them out of a
+            // job queued again (D3, I21); the import takes the queue as an explicit pick, which wouldn't.
+            let keys = Array(Set(keyed.map(\.contentKey) + job.failedFiles))
+            rejected = keys.isEmpty ? [] : RejectRule.rejected(in: try await catalogue.marks(of: keys))
         } catch {
             await leases.release(link)
             show(HistoryWording.catalogueFailed, tone: .problem)
             return false
         }
-        let listing = zip(listed, identities).map { item, identity in
-            HistoryRules.Listed(item: item, identity: identity, state: identity.flatMap { states[$0] } ?? .new,
-                                staged: identity.map { staged.contains($0) } ?? false)
+        let listing = zip(listed, identities).compactMap { item, identity -> HistoryRules.Listed? in
+            if let identity, rejected.contains(identity.contentKey) { return nil }
+            return HistoryRules.Listed(item: item, identity: identity, state: identity.flatMap { states[$0] } ?? .new,
+                                       staged: identity.map { staged.contains($0) } ?? false)
         }
         let queue: [CameraItem]
         var missing = 0
@@ -355,13 +378,13 @@ public final class HistoryModel {
             newOnly = HistoryRules.newOnly(job.selection)
             kind = "resume"
         case .rerun:
-            let failed = Array(Set(job.failedFiles))
+            let failed = Array(Set(job.failedFiles).subtracting(rejected))
             guard let done = await done(failed, camera: job.camera, purpose: choice) else {
                 await leases.release(link)
                 show(HistoryWording.catalogueFailed, tone: .problem)
                 return false
             }
-            let rerun = HistoryRules.rerunQueue(failed: job.failedFiles, done: done, listing: listing)
+            let rerun = HistoryRules.rerunQueue(failed: failed, done: done, listing: listing)
             queue = rerun.queue
             missing = rerun.missing.count
             newOnly = false
