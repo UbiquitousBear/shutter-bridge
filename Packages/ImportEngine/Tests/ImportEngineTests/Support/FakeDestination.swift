@@ -25,6 +25,8 @@ actor FakeDestination: ImportDestination {
     private var deniesFrom: Int?
     /// From this attempt number on, every commit fails with `.stagingUnavailable` (iCloud Drive gone).
     private var unavailableFrom: Int?
+    /// The album its saves go into (Photos only), named once a commit has succeeded, as the real destination does.
+    private var album: String?
 
     init(kind: DestinationKind, folder: URL, place: StagingPlace = Harness.onThisIPhone) {
         self.kind = kind
@@ -35,6 +37,9 @@ actor FakeDestination: ImportDestination {
     func fail(attempt: Int, with failure: ImportDestinationFailure) { failures[attempt] = failure }
     func deny(from attempt: Int) { deniesFrom = attempt }
     func becomeUnavailable(from attempt: Int) { unavailableFrom = attempt }
+    func fileInto(album: String?) { self.album = album }
+
+    func filedAlbumIdentifier() async -> String? { kind == .photos && !commits.isEmpty ? album : nil }
 
     var committedNames: [String] { commits.flatMap { $0.files.map(\.filename) } }
 

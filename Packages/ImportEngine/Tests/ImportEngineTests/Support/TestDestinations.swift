@@ -19,11 +19,16 @@ actor HoldingDestination: ImportDestination {
     private var releaseFailure: ImportDestinationFailure?
     private var held: CheckedContinuation<Void, Never>?
     private var arrivedWaiter: CheckedContinuation<Void, Never>?
+    /// The album its saves go into, named once a commit has succeeded.
+    private let album: String?
 
-    init(failsIfCancelled: Bool = false, failsIfFileMissing: Bool = false) {
+    init(failsIfCancelled: Bool = false, failsIfFileMissing: Bool = false, filedAlbum: String? = nil) {
         self.failsIfCancelled = failsIfCancelled
         self.failsIfFileMissing = failsIfFileMissing
+        album = filedAlbum
     }
+
+    func filedAlbumIdentifier() async -> String? { commits.isEmpty ? nil : album }
 
     func commit(_ unit: CommitUnit) async throws(ImportDestinationFailure) -> ImportResult {
         let name = unit.files[0].filename

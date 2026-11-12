@@ -93,6 +93,7 @@ public final class HistoryModel {
     @ObservationIgnored private let calendar: Calendar
     @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let log: any BenchLog
+    @ObservationIgnored private let albums: PhotosImportOptions.Albums
     @ObservationIgnored private var jobs: [JobRecord] = []
     @ObservationIgnored private var names: [CameraKey: String] = [:]
     @ObservationIgnored private var actions: [UUID: HistoryRules.Action] = [:]
@@ -109,11 +110,15 @@ public final class HistoryModel {
     ///   - activeCamera: The key of the camera whose job is running or paused now, if any: its newest record with no
     ///     end is that job, not one that stopped early.
     ///   - calendar: Days and times are in its time zone.
+    ///   - albums: The album choice the app's Photos destinations use (`StandardImportDestinations`' options), so a
+    ///     Photos job's row names its album by the title it was given (`HistoryWording.albumTitle`). The default, as
+    ///     the app's: Settings offers no album choice yet. When it does, the choice a job used must be kept with it.
     public init(catalogue: any CatalogueStore, importer: (any BrowseImporting)?, finder: (any CameraFinding)?,
                 leases: LinkLeases, onThisIPhone: URL, locator: any StagingLocator,
                 activeCamera: @escaping @MainActor () -> CameraKey? = { nil },
                 now: @escaping @Sendable () -> Date = { Date() }, calendar: Calendar = .autoupdatingCurrent,
-                locale: Locale = .autoupdatingCurrent, log: any BenchLog = SilentBenchLog()) {
+                locale: Locale = .autoupdatingCurrent, log: any BenchLog = SilentBenchLog(),
+                albums: PhotosImportOptions.Albums = PhotosImportOptions().albums) {
         self.catalogue = catalogue
         self.importer = importer
         self.finder = finder
@@ -125,6 +130,7 @@ public final class HistoryModel {
         self.calendar = calendar
         self.locale = locale
         self.log = log
+        self.albums = albums
     }
 
     // MARK: - Reading
@@ -299,7 +305,7 @@ public final class HistoryModel {
         let outcome = HistoryWording.outcome(job.outcome, running: job.id == runningJob)
         let counts = HistoryWording.counts(job)
         let bytes = HistoryWording.bytes(job, locale: locale)
-        let place = HistoryWording.place(job, camera: camera)
+        let place = HistoryWording.place(job, camera: camera, albums: albums)
         let action = actions[job.id]
         let actionLine: String? = switch action {
         case let .resume(left): HistoryWording.resumable(filesLeft: left)

@@ -126,4 +126,14 @@ public protocol ImportDestination: Sendable {
     /// it calls `commit(_:)` (backlog section 3.1). Synchronous and nonisolated, with no side effect; a folder
     /// destination computes it with the same function its commit uses, so the two can't drift.
     func commitTarget(for unit: CommitUnit) -> CommitTarget
+
+    /// The Photos album this destination's saves have gone into, for the job's History record (backlog section 4): its
+    /// `localIdentifier`, or nil while no save has gone into one. Always nil for a staging folder. Read by the engine
+    /// after each successful commit; it never creates, fetches or asks for anything.
+    func filedAlbumIdentifier() async -> String?
+}
+
+extension ImportDestination {
+    /// No album: the staging folders, and destinations that don't file into one.
+    public func filedAlbumIdentifier() async -> String? { nil }
 }

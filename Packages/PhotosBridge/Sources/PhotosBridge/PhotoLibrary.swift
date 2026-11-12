@@ -294,6 +294,10 @@ public struct AlbumPlan: Sendable, Hashable {
         }
     }
 
+    /// The albums in the order they are resolved. The first is the album a job's record names
+    /// (`ImportDestination.filedAlbumIdentifier()`), and History works out its title from the plan the same choice
+    /// makes (`HistoryWording.albumTitle`): keep the per-camera album first for `.both` (`AlbumPlanTests.choices`,
+    /// `StatusAndNamingTests.newAlbumsAndFoldersAreNamedWithIt`).
     public var albums: [Album]
 
     public init(albums: [Album]) {

@@ -227,6 +227,10 @@ final class Job {
     /// What the job was started for (`ImportRoute.purpose` then), for its record: an import job staged instead part-way
     /// is still an import job.
     let startPurpose: DestinationKind
+    /// The Photos album the job's saves went into (`ImportDestination.filedAlbumIdentifier()`), for its record: nil
+    /// until a save into one has resolved; the latest wins (an album deleted and made again mid-job). Kept when the job
+    /// is staged instead part-way: the files saved before the switch are in it.
+    var albumIdentifier: String?
     var phase: JobPhase = .listing
     var pauses: Set<PauseReason> = []
     var stallResumeAt: Duration?

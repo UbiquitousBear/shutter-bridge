@@ -4,8 +4,9 @@ import Foundation
 import PhotosBridge
 
 // Every job leaves one record for History (backlog section 4; I9): written when it starts, at each pause, on a
-// reconnect (the same record carries on over the new link) and when it ends, and again when a commit still in flight at
-// the end resolves its files on the ended job. Each write is the whole record as the job stands, its counts the job's
+// reconnect (the same record carries on over the new link), when the Photos album its saves go into is first known (or
+// changes: an album deleted and made again), and when it ends, and again when a commit still in flight at the end
+// resolves its files on the ended job. Each write is the whole record as the job stands, its counts the job's
 // `ImportProgress` at that moment (the Import screen's numbers), so the last write matches the last progress. A job the
 // app's end interrupts keeps its last record, with no end time: History reads it as *Stopped early*.
 
@@ -42,7 +43,7 @@ extension ImportEngine {
             id: job.id, camera: job.camera,
             purpose: job.route.isKeepers ? .keepers : JobRecord.Purpose(job.startPurpose),
             destination: job.route.decision.kind.map(JobRecord.Destination.init),
-            carrier: JobRecord.Carrier(job.link.descriptor.carrier),
+            carrier: JobRecord.Carrier(job.link.descriptor.carrier), albumIdentifier: job.albumIdentifier,
             selection: Self.recordedSelection(job.selection, camera: job.camera, timeZone: job.timeZone),
             startedAt: job.startedAt, finishedAt: job.finished == nil ? nil : job.finishedAt,
             outcome: job.finished.map(JobRecord.Outcome.init), filesTotal: progress.filesTotal,
