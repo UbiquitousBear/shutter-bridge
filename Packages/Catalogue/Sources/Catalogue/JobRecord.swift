@@ -62,7 +62,11 @@ public struct JobRecord: Sendable, Hashable {
     /// Nil until the job knows (Photos access asked, for example).
     public var destination: Destination?
     public var carrier: Carrier?
-    /// The Photos album's local identifier, when the job had one; kept for when iOS offers a way to open it.
+    /// The `localIdentifier` of the Photos album the job's saves went into (the engine's
+    /// `ImportDestination.filedAlbumIdentifier()`: the album plan's first album), written as soon as the first save
+    /// into it has resolved; nil when no save went into an album (none yet, the album refused content or couldn't be
+    /// made, the plan had none, or a stage job). History names the album by the title its plan gave it, without asking
+    /// Photos; the identifier is kept for when iOS offers a way to open it.
     public var albumIdentifier: String?
     public var selection: Selection
     public var startedAt: Date

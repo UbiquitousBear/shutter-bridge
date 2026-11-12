@@ -479,11 +479,11 @@ struct PairTests {
                                                  checkpointWrites: CheckpointWrites()))
         }
         let result = await h.engine.commitAndRecord(files, token: UUID(), of: UUID(), route: h.stageRoute)
-        guard case let .committed(outcomes, kind, written) = result else {
+        guard case let .committed(outcomes, kind, written, album) = result else {
             Issue.record("not committed: \(result)")
             return
         }
-        #expect(kind == .staging && written)
+        #expect(kind == .staging && written && album == nil)
         #expect(Self.pairs(await h.files.commits) == [[raw.name, jpeg.name]])
         let paths = outcomes.map { outcome -> String? in
             if case let .staged(location) = outcome { location?.relativePath } else { nil }

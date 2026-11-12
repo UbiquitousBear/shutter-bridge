@@ -60,6 +60,7 @@ struct KeepersJobTests {
 
     @Test func aKeepersJobImportsFromStagingIntoPhotosAndIsRecordedAsOne() async throws {
         let h = Harness()
+        await h.photos.fileInto(album: "ALBUM-K")
         let (entries, urls, bytes) = try staged(h)
         let job = try await h.start(.allNew, from: link(entries), to: keepersRoute(h))
         #expect(await h.waitFinished() == .completed)
@@ -78,6 +79,7 @@ struct KeepersJobTests {
         await h.engine.settleJobRecords()
         let record = try #require(await h.catalogue.job(job.rawValue))
         #expect(record.purpose == .keepers && record.destination == .photos && record.carrier == .staging)
+        #expect(record.albumIdentifier == "ALBUM-K", "the album its saves went into")
         #expect(record.camera == h.camera && record.outcome == .completed && record.filesImported == 3)
         await h.cleanup()
     }

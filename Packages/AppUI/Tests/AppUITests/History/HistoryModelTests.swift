@@ -144,6 +144,23 @@ struct HistoryWordingTests {
         #expect(HistoryWording.place(job(1, destination: nil, startedAt: now), camera: "A") == nil)
     }
 
+    /// The album is named by the title the person's album choice gave it: the camera's name for one per camera or both
+    /// (the record keeps the per-camera one), the camera's name and the job's start for one per import.
+    @Test func theAlbumIsNamedByTheTitleItsChoiceGaveIt() {
+        var withAlbum = job(1, startedAt: now)
+        withAlbum.albumIdentifier = "album-local-id"
+        #expect(HistoryWording.place(withAlbum, camera: "ILCE-7CM2", albums: .perCamera) == "Photos, album “ILCE-7CM2”")
+        #expect(HistoryWording.place(withAlbum, camera: "ILCE-7CM2", albums: .both) == "Photos, album “ILCE-7CM2”")
+        let perImport = AlbumPlan(choice: .perImport, cameraKey: camA.rawValue, cameraName: "ILCE-7CM2",
+                                  importID: "any", importDate: now).albums[0].title
+        #expect(perImport.hasPrefix("ILCE-7CM2, "))
+        #expect(HistoryWording.place(withAlbum, camera: "ILCE-7CM2", albums: .perImport)
+            == "Photos, album “\(perImport)”")
+        // A job with no album (album off, the album refused content or couldn't be made) says "Photos" whatever the
+        // choice.
+        #expect(HistoryWording.place(job(1, startedAt: now), camera: "ILCE-7CM2", albums: .perImport) == "Photos")
+    }
+
     @Test func theTitleSaysWhatTheJobWasWithTheCamerasName() {
         #expect(HistoryWording.title(.import, camera: "ILCE-7CM2") == "Import from ILCE-7CM2")
         #expect(HistoryWording.title(.stage, camera: "ILCE-7CM2") == "Stage from ILCE-7CM2")
@@ -263,6 +280,57 @@ struct HistoryGroupingTests {
         #expect(rig.row(1)?.opensStagingFolder == true)
         #expect(rig.row(2)?.title == "Keepers from ILCE-7CM2 to Photos")
         #expect(rig.row(2)?.opensStagingFolder == false)
+    }
+
+    /// A Photos job's row names the album its saves went into once the engine recorded it; one with none says
+    /// "Photos", and an import staged instead part-way says so whatever album its first saves had.
+    @Test func aPhotosJobsRowNamesItsAlbum() async throws {
+        let rig = Rig()
+        await rig.camera(camA, name: "ILCE-7CM2")
+        var filed = job(1, startedAt: at(day: 11, hour: 9), imported: 2)
+        filed.albumIdentifier = "ALBUM-1"
+        var stagedInstead = job(3, destination: .staging, startedAt: at(day: 11, hour: 11), imported: 1, staged: 1)
+        stagedInstead.albumIdentifier = "ALBUM-1"
+        var keepers = job(4, purpose: .keepers, carrier: .staging, startedAt: at(day: 11, hour: 12), imported: 1)
+        keepers.albumIdentifier = "ALBUM-1"
+        try await rig.record(filed, job(2, startedAt: at(day: 11, hour: 10), imported: 1), stagedInstead, keepers)
+        await rig.model.load()
+        #expect(rig.row(1)?.place == "Photos, album “ILCE-7CM2”")
+        #expect(rig.row(1)?.accessibilityLabel.contains("Photos, album “ILCE-7CM2”.") == true)
+        #expect(rig.row(2)?.place == "Photos")
+        #expect(rig.row(3)?.place == "Staging instead of Photos")
+        #expect(rig.row(4)?.place == "Photos, album “ILCE-7CM2”")
+    }
+
+    /// The name comes from the camera's catalogue row. A row with no name (a USB camera's, until D11 writes the display
+    /// name to it) reads "Camera": right for Image Transfer (MSC), whose album is called "Camera", not yet for MTP,
+    /// whose album has the model's name.
+    @Test func aCameraRowWithNoNameNamesTheAlbumCamera() async throws {
+        let rig = Rig()
+        await rig.camera(camB, name: "", model: "")
+        var filed = job(1, camera: camB, startedAt: at(day: 11, hour: 9), imported: 1)
+        filed.albumIdentifier = "ALBUM-2"
+        try await rig.record(filed)
+        await rig.model.load()
+        #expect(rig.row(1)?.place == "Photos, album “Camera”")
+    }
+
+    /// With one album per import, the row names the import's own album by its title.
+    @Test func withOneAlbumPerImportTheRowNamesTheImportsAlbum() async throws {
+        let catalogue = InMemoryCatalogue()
+        await catalogue.upsertCamera(CameraRecord(key: camA, model: "ILCE-7CM2", friendlyName: "ILCE-7CM2"))
+        var filed = job(1, startedAt: at(day: 11, hour: 9), imported: 1)
+        filed.albumIdentifier = "ALBUM-3"
+        await catalogue.recordJob(filed)
+        let model = HistoryModel(catalogue: catalogue, importer: nil, finder: nil, leases: LinkLeases(),
+                                 onThisIPhone: FileManager.default.temporaryDirectory,
+                                 locator: FakeStagingLocator(.unavailable(.containerUnavailable)),
+                                 now: { now }, calendar: londonCalendar(), locale: britishEnglish, albums: .perImport)
+        await model.load()
+        let title = AlbumPlan(choice: .perImport, cameraKey: camA.rawValue, cameraName: "ILCE-7CM2", importID: "any",
+                              importDate: filed.startedAt).albums[0].title
+        let row = try #require(model.sections.first?.rows.first)
+        #expect(row.place == "Photos, album “\(title)”")
     }
 
     @Test func theRunningJobIsInProgressAndAnotherWithNoEndStoppedEarly() async throws {
