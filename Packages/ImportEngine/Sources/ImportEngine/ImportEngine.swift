@@ -208,8 +208,10 @@ public actor ImportEngine {
     /// already have done for the route's purpose (`DoneRule`, by content, as the first listing's diff reads it), each
     /// file once. Picks without a capture date are kept: the job shows them as skipped rows. So the app can start a
     /// job with these and say how many it holds, and start none when nothing is left (Photos access denied makes an
-    /// *Import to Photos* a stage job, which also leaves out staged files). The job's own diff applies the same rule
-    /// again when the card is listed. `.allNew` and `.dateRange` need the card's listing, so they come back empty.
+    /// *Import to Photos* a stage job, which also leaves out staged files). Files with a Reject mark are left out too,
+    /// unless the selection is an explicit pick (`ImportSelection.leavesOutRejects`, D3). The job's own diff applies
+    /// the same rules again when the card is listed. `.allNew` and `.dateRange` need the card's listing, so they come
+    /// back empty.
     ///
     /// - Parameter camera: The catalogue's key for the camera, as `start(_:from:camera:to:)` takes it.
     /// - Throws: `.catalogueUnavailable` when the catalogue can't be read.
@@ -217,7 +219,7 @@ public actor ImportEngine {
         throws(ImportEngineError) -> [CameraItem] {
         let picked: [CameraItem]
         switch selection {
-        case let .items(items), let .newItems(items): picked = items
+        case let .items(items), let .newItems(items), let .requeued(items): picked = items
         case .allNew, .dateRange: return []
         }
         let zone = TimeZone(identifier: timeZone.identifier) ?? timeZone
@@ -228,9 +230,12 @@ public actor ImportEngine {
         await settleCommits(ofJobsOtherThan: UUID())
         let states: [ObjectIdentity: ObjectState]
         let staged: Set<ObjectIdentity>
+        let rejected: Set<ObjectIdentity.ContentKey>
         do {
             states = keyed.isEmpty ? [:] : try await catalogue.states(of: keyed)
             staged = purpose == .staging && !keyed.isEmpty ? try await catalogue.stagedStates(of: keyed) : []
+            rejected = selection.leavesOutRejects && !keyed.isEmpty
+                ? RejectRule.rejected(in: try await catalogue.marks(of: keyed.map(\.contentKey))) : []
         } catch {
             throw .catalogueUnavailable
         }
@@ -243,7 +248,8 @@ public actor ImportEngine {
             }
             guard DoneRule.isWanted(state: states[identity] ?? .new, staged: staged.contains(identity),
                                     purpose: purpose, newOnly: selection.newOnly, wholeCard: false),
-                  seen.insert(identity.contentKey).inserted else { continue }
+                  seen.insert(identity.contentKey).inserted,
+                  !rejected.contains(identity.contentKey) else { continue }
             out.append(item)
         }
         return out
@@ -257,7 +263,9 @@ public actor ImportEngine {
     /// ignores staging; a stage job leaves out staged files, and imported ones too when `newOnly` is set.
     ///
     /// - Parameter newOnly: The files come from *Select all new* rather than an explicit pick, so a stage job leaves
-    ///   out imported files as well as staged ones. An explicit pick of an imported file may still be staged.
+    ///   out imported files as well as staged ones, and any job leaves out files with a Reject mark (D3, counted in
+    ///   `ImportProgress.rejectsLeftOut`). An explicit pick of an imported file may still be staged, and of a
+    ///   rejected one imported.
     @discardableResult
     public func append(_ items: [CameraItem], newOnly: Bool = false) async throws(ImportEngineError) -> Int {
         guard let job else { throw .noJob }
@@ -275,7 +283,7 @@ public actor ImportEngine {
         await settleCommits(ofJobsOtherThan: id)
         let facts: DoneFacts?
         do {
-            facts = try await doneFacts(of: candidates.map(\.identity), job: id)
+            facts = try await doneFacts(of: candidates.map(\.identity), job: id, readingRejects: newOnly)
         } catch {
             throw .catalogueUnavailable
         }
@@ -286,6 +294,13 @@ public actor ImportEngine {
             guard DoneRule.isWanted(state: facts.states[c.identity] ?? .new, staged: staged, purpose: facts.purpose,
                                     newOnly: newOnly, wholeCard: false) else {
                 if staged && facts.purpose == .staging { trace(.alreadyStaged(c.item.name)) }
+                continue
+            }
+            // *Select all new* leaves out rejects (D3); an explicit pick still imports one.
+            guard !facts.rejected.contains(c.identity.contentKey) else {
+                if current.rejectsLeftOut.insert(c.identity.contentKey).inserted {
+                    trace(.rejectedLeftOut(c.item.name))
+                }
                 continue
             }
             wanted.append(c)
@@ -778,7 +793,8 @@ public actor ImportEngine {
             bytesTotal: bytesTotal, bytesPerSecond: job.rate.bytesPerSecond, state: job.state,
             destination: job.route.decision, filesSkipped: skipped, filesFailed: failed, filesStaged: staged,
             runningCarrier: job.runningCarrier,
-            stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled)
+            stallWaitsForPerson: job.finished == nil && job.stallHold && job.pauses.contains(.stalled),
+            rejectsLeftOut: job.rejectsLeftOut.count
         )
     }
 

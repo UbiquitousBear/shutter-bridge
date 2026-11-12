@@ -9,6 +9,10 @@ import PhotosBridge
 /// files already imported and ignores staging; a stage job leaves out files already staged and, where only new files
 /// were asked for (`allNew`, `dateRange`, `newItems`), files already imported too. An explicit pick (`items`) of an
 /// imported file may still be staged.
+///
+/// Files with a Reject mark in the catalogue (`CatalogueStore.marks(of:)`, by content key; D3, Shamil, 11 Nov) are
+/// left out of every selection but an explicit pick (`leavesOutRejects`): a reject whose staged copy was removed isn't
+/// offered again, and an explicit pick of it still imports it.
 public enum ImportSelection: Sendable, Hashable {
     /// Everything that is new for the job's purpose: the default.
     case allNew
@@ -20,11 +24,16 @@ public enum ImportSelection: Sendable, Hashable {
     /// Files picked by Browse's *Select all new*: matched like `items`, but only new ones are copied, so a stage
     /// job also leaves out those already imported.
     case newItems([CameraItem])
+    /// Files a History row queues again (D6): a *Resumable* job's stored pick, or a *Re-run* of a job's failed
+    /// files, matched against the card's listing (`init(requeueing:from:camera:timeZone:)`,
+    /// `rerun(_:from:camera:timeZone:)`). Matched and done like `items` (an imported file may still be staged), but
+    /// files with a Reject mark are left out (D3): the person picked them before, not now.
+    case requeued([CameraItem])
 
     /// True only for an explicit pick of nothing.
     public var isEmpty: Bool {
         switch self {
-        case let .items(items), let .newItems(items): items.isEmpty
+        case let .items(items), let .newItems(items), let .requeued(items): items.isEmpty
         case .allNew, .dateRange: false
         }
     }
@@ -32,7 +41,65 @@ public enum ImportSelection: Sendable, Hashable {
     /// Whether only new files were asked for, rather than an explicit pick: a stage job then leaves out imported
     /// files too.
     var newOnly: Bool {
+        switch self {
+        case .items, .requeued: false
+        case .allNew, .dateRange, .newItems: true
+        }
+    }
+
+    /// Whether files with a Reject mark are left out (D3): everything but an explicit pick, which still imports a
+    /// rejected file.
+    public var leavesOutRejects: Bool {
         if case .items = self { false } else { true }
+    }
+}
+
+extension ImportSelection {
+    /// A History row's stored selection, queued again (*Resumable*, D6): *all new* again, the stored date range, or the
+    /// stored picks matched by content key against `listed` (in the stored order; a key not on the card is left out).
+    /// A stored explicit pick comes back as `requeued`, so files rejected since are left out too (D3); a stored
+    /// *Select all new* pick as `newItems`.
+    ///
+    /// - Parameters:
+    ///   - listed: The card as the app listed it just now.
+    ///   - camera: The catalogue's key for the camera, as `ImportEngine.start(_:from:camera:to:)` takes it.
+    ///   - timeZone: The zone the capture times are read in (the engine's).
+    public init(requeueing stored: JobRecord.Selection, from listed: [CameraItem], camera: CameraKey,
+                timeZone: TimeZone) {
+        switch stored {
+        case .allNew: self = .allNew
+        case let .dateRange(range): self = .dateRange(range)
+        case let .picked(keys): self = .requeued(Self.matching(keys, in: listed, camera: camera, timeZone: timeZone))
+        case let .pickedNew(keys):
+            self = .newItems(Self.matching(keys, in: listed, camera: camera, timeZone: timeZone))
+        }
+    }
+
+    /// A *Re-run* of a job's failed files (`JobRecord.failedFiles`, D6), matched by content key against `listed`; a
+    /// file no longer on the card is left out. Files rejected since are left out of the job (D3).
+    public static func rerun(_ failed: [ObjectIdentity.ContentKey], from listed: [CameraItem], camera: CameraKey,
+                             timeZone: TimeZone) -> ImportSelection {
+        .requeued(matching(failed, in: listed, camera: camera, timeZone: timeZone))
+    }
+
+    /// The files of `listed` whose content is one of `keys`, in the order of `keys`, each once.
+    static func matching(_ keys: [ObjectIdentity.ContentKey], in listed: [CameraItem], camera: CameraKey,
+                         timeZone: TimeZone) -> [CameraItem] {
+        let onCard = ImportEngine.byContent(listed, camera: camera, timeZone: timeZone)
+        var seen = Set<ObjectIdentity.ContentKey>()
+        return keys.compactMap { key in
+            guard seen.insert(key).inserted else { return nil }
+            return onCard[key]
+        }
+    }
+}
+
+/// The Reject rule (D3, Shamil, 11 Nov): which files a selection leaves out because the catalogue holds a Reject mark
+/// for their content.
+enum RejectRule {
+    /// The content keys whose mark in `marks` is a Reject.
+    static func rejected(in marks: [ObjectIdentity.ContentKey: MarkRecord]) -> Set<ObjectIdentity.ContentKey> {
+        Set(marks.compactMap { $0.value.decision == .reject ? $0.key : nil })
     }
 }
 
