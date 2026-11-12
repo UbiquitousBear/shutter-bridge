@@ -745,8 +745,10 @@ public actor SimulatedCameraLink: CameraLink {
     }
 
     private func item(for object: ScriptedCard.Object) -> CameraItem {
-        CameraItem(id: itemID(for: object.handle), folder: object.folder, name: object.filename, size: object.size,
-                   captureDate: PTPDateTime.parse(object.captureDateRaw, defaultTimeZone: timeZone))
+        // As the real links do: the date keeps the zone it was made in (backlog Iteration 2, section 1).
+        let capture = CameraItem.captureTime(ptpDateTime: object.captureDateRaw, defaultTimeZone: timeZone)
+        return CameraItem(id: itemID(for: object.handle), folder: object.folder, name: object.filename,
+                          size: object.size, captureDate: capture?.date, captureTimeZone: capture?.zone)
     }
 
     /// What one `bytes` call keeps from the session it began in.

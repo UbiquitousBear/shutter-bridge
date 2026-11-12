@@ -55,10 +55,12 @@ enum IPListing {
     static func item(handle: PTPObjectHandle, info: PTPObjectInfo, folders: [PTPObjectHandle: Folder],
                      timeZone: TimeZone) -> CameraItem? {
         guard !info.isFolder, isSafeFileName(info.filename) else { return nil }
+        // The date keeps the zone it was made in, so an item `list(reusing:)` keeps from before a time-zone change
+        // still reads back as the camera's own time.
+        let capture = CameraItem.captureTime(ptpDateTime: info.captureDateRaw, defaultTimeZone: timeZone)
         return CameraItem(id: IPItemID.id(for: handle), folder: folderPath(of: info.parentObject, in: folders),
                           name: info.filename, size: UInt64(info.objectCompressedSize),
-                          captureDate: PTPDateTime.parse(info.captureDateRaw, defaultTimeZone: timeZone),
-                          format: info.mediaKind)
+                          captureDate: capture?.date, format: info.mediaKind, captureTimeZone: capture?.zone)
     }
 
     /// What a relist can take from items it listed before (`IPLink.list(reusing:)`): handles were stable across

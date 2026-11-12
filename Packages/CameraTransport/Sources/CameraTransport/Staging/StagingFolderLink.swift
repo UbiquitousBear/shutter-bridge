@@ -10,25 +10,31 @@ public struct StagedEntry: Sendable, Hashable {
     /// The camera's file name, such as "DSC04512.ARW". The copy keeps it.
     public var name: String
     public var captureDate: Date?
+    /// The zone the caller made `captureDate` in from the catalogue's wall-clock capture date, passed on as the item's
+    /// `captureTimeZone` so the keeper's identity is the row's to the second; nil when the caller doesn't say.
+    public var captureTimeZone: TimeZone?
     /// The size in bytes of the original and of the staged copy, which are the same file.
     public var size: UInt64
     public var format: PTPMediaKind
     /// Where the staged copy is.
     public var url: URL
 
-    public init(folder: String, name: String, captureDate: Date?, size: UInt64, format: PTPMediaKind, url: URL) {
+    public init(folder: String, name: String, captureDate: Date?, size: UInt64, format: PTPMediaKind, url: URL,
+                captureTimeZone: TimeZone? = nil) {
         self.folder = folder
         self.name = name
         self.captureDate = captureDate
+        self.captureTimeZone = captureTimeZone
         self.size = size
         self.format = format
         self.url = url
     }
 
     /// An entry whose format follows from its file name, as `CameraItem` does.
-    public init(folder: String, name: String, captureDate: Date?, size: UInt64, url: URL) {
+    public init(folder: String, name: String, captureDate: Date?, size: UInt64, url: URL,
+                captureTimeZone: TimeZone? = nil) {
         self.init(folder: folder, name: name, captureDate: captureDate, size: size,
-                  format: CameraItem.format(ofFilename: name), url: url)
+                  format: CameraItem.format(ofFilename: name), url: url, captureTimeZone: captureTimeZone)
     }
 
     /// The catalogue's identity of the file (folder, name, capture date, size), which decides when two entries are
@@ -98,7 +104,7 @@ public actor StagingFolderLink: CameraLink {
             entries[id] = entry
             let item = CameraItem(
                 id: id, folder: entry.folder, name: entry.name, size: entry.size, captureDate: entry.captureDate,
-                format: entry.format)
+                format: entry.format, captureTimeZone: entry.captureTimeZone)
             items.append(item)
             itemsByID[id] = item
         }

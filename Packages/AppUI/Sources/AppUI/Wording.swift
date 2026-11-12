@@ -664,6 +664,17 @@ public enum ImportWording {
         return line + "."
     }
 
+    /// Why files were left out for having no capture date (D10: skip them and say how many): "1 file was left out
+    /// because it has no capture date, so Shutter Bridge can't tell whether it was imported before."; nil for none.
+    public static func undatedLeftOut(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1
+            ? "1 file was left out because it has no capture date, so Shutter Bridge can't tell whether it was "
+                + "imported before."
+            : "\(count) files were left out because they have no capture date, so Shutter Bridge can't tell whether "
+                + "they were imported before."
+    }
+
     /// Where the files go (backlog section 5, *It says so*): Photos, or the staging folder with the camera's folder
     /// ("Staging to iCloud Drive › Shutter Bridge › Staging › ILCE-7CM2."). `imported` is how many files the job has
     /// imported or staged (as `importedCount` works it out); a finished job that did neither has no destination line,

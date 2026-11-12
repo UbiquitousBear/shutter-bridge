@@ -39,12 +39,15 @@ public struct ImportProgress: Sendable, Hashable {
     /// Files the job left out for their Reject mark in the catalogue (D3): not part of `filesTotal` or any count above,
     /// so the outcome can say how many rejected files weren't imported. An explicit pick never leaves one out.
     public var rejectsLeftOut: Int
+    /// Files left out because they have no capture date (part of `filesSkipped`): without one a file has no identity,
+    /// so nothing could stop it being imported twice (D10, Shamil, 11 Nov). The Import screen says how many and why.
+    public var filesUndated: Int
 
     public init(
         filesDone: Int, filesTotal: Int, bytesDone: UInt64, bytesTotal: UInt64, bytesPerSecond: Double? = nil,
         state: ImportJobState = .idle, destination: DestinationDecision? = nil, filesSkipped: Int = 0,
         filesFailed: Int = 0, filesStaged: Int = 0, runningCarrier: CameraCarrier? = nil,
-        stallWaitsForPerson: Bool = false, rejectsLeftOut: Int = 0
+        stallWaitsForPerson: Bool = false, rejectsLeftOut: Int = 0, filesUndated: Int = 0
     ) {
         self.filesDone = filesDone
         self.filesTotal = filesTotal
@@ -59,6 +62,7 @@ public struct ImportProgress: Sendable, Hashable {
         self.runningCarrier = runningCarrier
         self.stallWaitsForPerson = stallWaitsForPerson
         self.rejectsLeftOut = rejectsLeftOut
+        self.filesUndated = filesUndated
     }
 
     /// Whether an import over `carrier` is running (`runningCarrier`).

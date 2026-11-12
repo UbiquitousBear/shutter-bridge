@@ -68,14 +68,16 @@ struct ImportJobTests {
         }
         #expect(h.stagedFiles == 0)
 
+        // The undated still is left out and counted (D10); the video is left out unsaid, as Browse never offers it.
         let p = await h.engine.currentProgress
-        let total = frames.reduce(UInt64(0)) { $0 + $1.size }
-        #expect(p.filesDone == 4)
-        #expect(p.filesTotal == 4)
+        let total = frames.reduce(UInt64(0)) { $0 + $1.size } + undated.size
+        #expect(p.filesDone == 5)
+        #expect(p.filesTotal == 5)
         #expect(p.bytesDone == total)
         #expect(p.bytesTotal == total)
         #expect(p.filesFailed == 0)
-        #expect(p.filesSkipped == 0)
+        #expect(p.filesSkipped == 1)
+        #expect(p.filesUndated == 1)
         #expect(p.filesStaged == (kind == .photos ? 0 : 4))
         #expect(p.filesImported == (kind == .photos ? 4 : 0))
         #expect(p.state == .finished(.completed))
