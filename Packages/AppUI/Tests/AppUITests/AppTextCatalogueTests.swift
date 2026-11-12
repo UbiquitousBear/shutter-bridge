@@ -12,15 +12,15 @@ import Testing
 struct AppTextCatalogueTests {
     // MARK: The catalogue and the code
 
-    /// Entries Xcode extracts by itself from a SwiftUI `Text` literal (no `manual` extraction state) are left alone:
-    /// they aren't `AppText`'s, and a local build may add them.
+    /// Entries Xcode extracts by itself from a SwiftUI `Text` literal (the `extracted_with_value` extraction state) are
+    /// left alone: they aren't `AppText`'s, and a local build may add them.
     @Test("The catalogue is British English, with a translated en-GB value for every entry AppText keeps")
     func catalogueShape() throws {
         let catalogue = try Catalogue.load()
         #expect(catalogue.sourceLanguage == "en-GB")
         #expect(catalogue.version == "1.0")
         #expect(!catalogue.entries.isEmpty)
-        for (key, entry) in catalogue.entries where entry.isManual {
+        for (key, entry) in catalogue.entries where entry.isAppText {
             switch entry.value {
             case let .string(unit):
                 #expect(unit.state == "translated", "\(key)")
@@ -43,8 +43,10 @@ struct AppTextCatalogueTests {
                 Issue.record("\(use.file): \"\(use.key)\" isn't in Localizable.xcstrings")
                 continue
             }
-            // Xcode marks a string it can't find in the code as stale unless it is managed by hand.
-            #expect(entry.isManual, "\(use.file): \"\(use.key)\" needs the manual extraction state")
+            // Never "manual": since Xcode 26 a manual entry gets a generated Swift symbol from its key, and these keys
+            // (English sentences) can't all become one, which fails the build (#143). A local build may mark the
+            // entry "stale", as Xcode can't see AppText's keys in the code; a stale entry is still built into the app.
+            #expect(entry.extractionState != "manual", "\(use.file): \"\(use.key)\" mustn't be marked manual")
             switch (use.kind, entry.value) {
             case (.string, .string(let unit)?), (.format, .string(let unit)?):
                 #expect(unit.value == use.key, "\(use.file): \"\(use.key)\" reads \"\(unit.value)\" in the catalogue")
@@ -62,7 +64,7 @@ struct AppTextCatalogueTests {
         let catalogue = try Catalogue.load()
         let uses = try SourceKeys.scan()
         let used = Set(uses.map(\.key))
-        for (key, entry) in catalogue.entries where entry.isManual && !used.contains(key) {
+        for (key, entry) in catalogue.entries where entry.isAppText && !used.contains(key) {
             Issue.record("\"\(key)\" is in Localizable.xcstrings but no AppText call uses it")
         }
         let byKey = Dictionary(grouping: uses, by: \.key)
@@ -184,8 +186,8 @@ private struct Catalogue {
         var extractionState: String?
         var value: Value?
 
-        /// Kept by `AppText` (and `scripts/update-string-catalogue.py`), not extracted by Xcode.
-        var isManual: Bool { extractionState == "manual" }
+        /// Kept by `AppText` (and `scripts/update-string-catalogue.py`): every entry but those Xcode extracted by itself.
+        var isAppText: Bool { extractionState != "extracted_with_value" }
     }
 
     var sourceLanguage: String

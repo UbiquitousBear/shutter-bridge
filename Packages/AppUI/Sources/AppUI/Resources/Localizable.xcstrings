@@ -2,7 +2,6 @@
   "sourceLanguage" : "en-GB",
   "strings" : {
     "%@ %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -13,7 +12,6 @@
       }
     },
     "%@ Nothing was removed from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -24,7 +22,6 @@
       }
     },
     "%@ added. Tap it to open its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -35,7 +32,6 @@
       }
     },
     "%@ already in Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -46,7 +42,6 @@
       }
     },
     "%@ and its RAW" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -57,7 +52,6 @@
       }
     },
     "%@ couldn't be removed and stay staged; try again from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -68,7 +62,6 @@
       }
     },
     "%@ free" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -79,7 +72,6 @@
       }
     },
     "%@ has no new photos to import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -90,7 +82,6 @@
       }
     },
     "%@ has no new photos to stage." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -101,7 +92,6 @@
       }
     },
     "%@ imported" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -112,7 +102,6 @@
       }
     },
     "%@ imported to Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -123,7 +112,6 @@
       }
     },
     "%@ imported, %@ staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -134,7 +122,6 @@
       }
     },
     "%@ is disconnected. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -145,7 +132,6 @@
       }
     },
     "%@ is disconnected. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -156,7 +142,6 @@
       }
     },
     "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be imported to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -167,7 +152,6 @@
       }
     },
     "%@ isn't connected, and Shutter Bridge hasn't read its card yet. Connect it while Shutter Bridge is open, and its new photos will be staged." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -178,7 +162,6 @@
       }
     },
     "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be imported to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -189,7 +172,6 @@
       }
     },
     "%@ isn't connected. Connect it while Shutter Bridge shows its card, and its new photos will be staged." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -200,7 +182,6 @@
       }
     },
     "%@ isn't connected. Connect it, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -211,7 +192,6 @@
       }
     },
     "%@ of %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -222,7 +202,6 @@
       }
     },
     "%@ of %@ done" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -233,7 +212,6 @@
       }
     },
     "%@ or %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -244,7 +222,6 @@
       }
     },
     "%@ per second" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -255,7 +232,6 @@
       }
     },
     "%@ percent" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -266,7 +242,6 @@
       }
     },
     "%@ rejected since, not imported" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -277,7 +252,6 @@
       }
     },
     "%@ removed from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -288,7 +262,6 @@
       }
     },
     "%@ staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -299,7 +272,6 @@
       }
     },
     "%@ was disconnected. Connect it again to see its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -310,7 +282,6 @@
       }
     },
     "%@ · %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -321,7 +292,6 @@
       }
     },
     "%@, %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -332,7 +302,6 @@
       }
     },
     "%@, %@. %@. %@. %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -343,7 +312,6 @@
       }
     },
     "%@/s" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -354,7 +322,6 @@
       }
     },
     "%@: %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -365,7 +332,6 @@
       }
     },
     "%lld Selected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -388,7 +354,6 @@
       }
     },
     "%lld Stars" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -411,7 +376,6 @@
       }
     },
     "%lld failed" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -434,7 +398,6 @@
       }
     },
     "%lld failed and stay in Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -457,7 +420,6 @@
       }
     },
     "%lld failed files are no longer on the card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -480,7 +442,6 @@
       }
     },
     "%lld failed files not imported yet" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -503,7 +464,6 @@
       }
     },
     "%lld failed files not staged yet" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -526,7 +486,6 @@
       }
     },
     "%lld files" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -549,7 +508,6 @@
       }
     },
     "%lld files were left out because they have no capture date, so Shutter Bridge can't tell whether they were imported before." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -572,7 +530,6 @@
       }
     },
     "%lld imported" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -595,7 +552,6 @@
       }
     },
     "%lld imports" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -618,7 +574,6 @@
       }
     },
     "%lld keepers are in Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -641,7 +596,6 @@
       }
     },
     "%lld keepers aren't in Photos, so they stay in Staging with their marks" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -664,7 +618,6 @@
       }
     },
     "%lld kept" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -687,7 +640,6 @@
       }
     },
     "%lld new photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -710,7 +662,6 @@
       }
     },
     "%lld photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -733,7 +684,6 @@
       }
     },
     "%lld photos from an interrupted import may now be in Photos twice." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -756,7 +706,6 @@
       }
     },
     "%lld rejected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -779,7 +728,6 @@
       }
     },
     "%lld rejected files left out. Pick them in Browse to import them anyway." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -802,7 +750,6 @@
       }
     },
     "%lld rejects will be deleted from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -825,7 +772,6 @@
       }
     },
     "%lld skipped" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -848,7 +794,6 @@
       }
     },
     "%lld staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -871,7 +816,6 @@
       }
     },
     "%lld staged files are in iCloud Drive, which isn't available to Shutter Bridge now." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -894,7 +838,6 @@
       }
     },
     "%lld staged files are no longer in Staging as they were staged." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -917,7 +860,6 @@
       }
     },
     "%lld staged files can't be shown: Shutter Bridge doesn't know where their copies are." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -940,7 +882,6 @@
       }
     },
     "%lld stars" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -963,7 +904,6 @@
       }
     },
     "A name can only have letters, numbers, hyphens and dots." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -974,7 +914,6 @@
       }
     },
     "A photo also imported from another camera stays imported." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -985,7 +924,6 @@
       }
     },
     "A reminder says your camera is nearby, once, and not again for 4 hours." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -996,7 +934,6 @@
       }
     },
     "About %@ left" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1007,7 +944,6 @@
       }
     },
     "Accept the pairing request on this iPhone, then confirm on the camera. Keep the camera's Pairing screen open. This can take about 15 seconds." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1018,7 +954,6 @@
       }
     },
     "Add Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1029,7 +964,6 @@
       }
     },
     "Add Wi-Fi Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1040,7 +974,6 @@
       }
     },
     "Add a camera on this iPhone's Wi-Fi network by its address." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1051,7 +984,6 @@
       }
     },
     "Added %@ to staging." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1062,7 +994,6 @@
       }
     },
     "Added %@ to the import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1073,7 +1004,6 @@
       }
     },
     "Address" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1084,7 +1014,6 @@
       }
     },
     "Adds the camera to the list. Tap it there to connect." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1095,7 +1024,6 @@
       }
     },
     "All Cameras" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1106,7 +1034,6 @@
       }
     },
     "Allow Local Network Access" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1117,7 +1044,6 @@
       }
     },
     "Allow Shutter Bridge to use Bluetooth in Settings, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1128,7 +1054,6 @@
       }
     },
     "Already Paired" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1139,7 +1064,6 @@
       }
     },
     "An address has four numbers from 0 to 255 with dots between them, such as 10.0.0.12." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1150,7 +1074,6 @@
       }
     },
     "An import is running. Stage these when it's done." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1161,7 +1084,6 @@
       }
     },
     "Another camera's import is still running. Let it finish, or cancel it, then import from this camera." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1172,7 +1094,6 @@
       }
     },
     "Another import is running. Import the keepers when it's done" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1183,7 +1104,6 @@
       }
     },
     "Any Date" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1194,7 +1114,6 @@
       }
     },
     "Battery %@%%" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1205,7 +1124,6 @@
       }
     },
     "Bluetooth Access Is Off" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1216,7 +1134,6 @@
       }
     },
     "Bluetooth Function and Bluetooth Rmt Ctrl" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1227,7 +1144,6 @@
       }
     },
     "Bluetooth Is Off" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1238,7 +1154,6 @@
       }
     },
     "Bluetooth access is off for Shutter Bridge. Allow it in Settings, then open the camera again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1249,7 +1164,6 @@
       }
     },
     "Bluetooth is off. Turn it on to reach the camera, then open it again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1260,7 +1174,6 @@
       }
     },
     "Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1271,7 +1184,6 @@
       }
     },
     "Camera Access Is Off" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1282,7 +1194,6 @@
       }
     },
     "Camera Address" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1293,7 +1204,6 @@
       }
     },
     "Camera Disconnected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1304,7 +1214,6 @@
       }
     },
     "Camera Nearby" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1315,7 +1224,6 @@
       }
     },
     "Camera Not Connected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1326,7 +1234,6 @@
       }
     },
     "Camera Paired" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1337,7 +1244,6 @@
       }
     },
     "Camera added. Tap it to open its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1348,7 +1254,6 @@
       }
     },
     "Cameras" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1359,7 +1264,6 @@
       }
     },
     "Can't Look for Cameras" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1370,7 +1274,6 @@
       }
     },
     "Can't Pair With This Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1381,7 +1284,6 @@
       }
     },
     "Cancel" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1392,7 +1294,6 @@
       }
     },
     "Cancel Import" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1403,7 +1304,6 @@
       }
     },
     "Cancel this import?" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1414,7 +1314,6 @@
       }
     },
     "Cancelled" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1425,7 +1324,6 @@
       }
     },
     "Cancelling…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1436,7 +1334,6 @@
       }
     },
     "Check that %@ are on." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1447,7 +1344,6 @@
       }
     },
     "Check that the camera is on and close to this iPhone with Bluetooth Function on, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1458,7 +1354,6 @@
       }
     },
     "Clear Filters" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1469,7 +1364,6 @@
       }
     },
     "Clear Mark" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1480,7 +1374,6 @@
       }
     },
     "Close" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1491,7 +1384,6 @@
       }
     },
     "Closes pairing. The camera is in the list." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1502,7 +1394,6 @@
       }
     },
     "Come back to Shutter Bridge to finish joining the camera's Wi-Fi." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1513,7 +1404,6 @@
       }
     },
     "Connect" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1524,7 +1414,6 @@
       }
     },
     "Connect %@ with its USB-C cable, then tap here again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1535,7 +1424,6 @@
       }
     },
     "Connect it with its cable to read its card and import new photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1546,7 +1434,6 @@
       }
     },
     "Connect the camera again to see its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1557,7 +1444,6 @@
       }
     },
     "Connect the camera to select this file." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1568,7 +1454,6 @@
       }
     },
     "Connect the camera with a USB-C data cable and switch it on. When it asks, choose %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1579,7 +1464,6 @@
       }
     },
     "Connecting to the Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1590,7 +1474,6 @@
       }
     },
     "Connecting to the camera…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1601,7 +1484,6 @@
       }
     },
     "Connection Lost" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1612,7 +1494,6 @@
       }
     },
     "Connects to the camera and opens its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1623,7 +1504,6 @@
       }
     },
     "Continue" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1634,7 +1514,6 @@
       }
     },
     "Copied %@ as a JPEG." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1645,7 +1524,6 @@
       }
     },
     "Copied the camera's preview: this RAW couldn't be decoded on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1656,7 +1534,6 @@
       }
     },
     "Copy as JPEG" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1667,7 +1544,6 @@
       }
     },
     "Copying from the camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1678,7 +1554,6 @@
       }
     },
     "Couldn't Connect to the Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1689,7 +1564,6 @@
       }
     },
     "Couldn't Find the Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1700,7 +1574,6 @@
       }
     },
     "Couldn't Read History" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1711,7 +1584,6 @@
       }
     },
     "Couldn't Read Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1722,7 +1594,6 @@
       }
     },
     "Couldn't Read the Card" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1733,7 +1604,6 @@
       }
     },
     "Couldn't Show This Photo" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1744,7 +1614,6 @@
       }
     },
     "Couldn't read Staging again, so this list may be out of date." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1755,7 +1624,6 @@
       }
     },
     "Couldn't read the marks, so nothing was imported or removed." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1766,7 +1634,6 @@
       }
     },
     "Couldn't save the mark, so it's back as it was." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1777,7 +1644,6 @@
       }
     },
     "Date" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1788,7 +1654,6 @@
       }
     },
     "Deselect All" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1799,7 +1664,6 @@
       }
     },
     "Disconnected from the camera's Wi-Fi." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1810,7 +1674,6 @@
       }
     },
     "Doesn't connect to the camera now." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1821,7 +1684,6 @@
       }
     },
     "Done" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1832,7 +1694,6 @@
       }
     },
     "Downloading %@ from iCloud Drive before the import (%@ of %@)…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1843,7 +1704,6 @@
       }
     },
     "Downloading from iCloud Drive, %@ percent" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1854,7 +1714,6 @@
       }
     },
     "Downloading from iCloud Drive…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1865,7 +1724,6 @@
       }
     },
     "Export Diagnostics…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1876,7 +1734,6 @@
       }
     },
     "Exports a text file of this app's own log: what it did, when, and how it went, with network names, serial numbers, identifiers and addresses removed. It is made on this iPhone and sent nowhere until you choose where to share it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1887,7 +1744,6 @@
       }
     },
     "Failed: %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1898,7 +1754,6 @@
       }
     },
     "Fetching %@ from the camera…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1909,7 +1764,6 @@
       }
     },
     "Files already imported are kept. The rest stay on the card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1920,7 +1774,6 @@
       }
     },
     "Files you stage from a camera's card appear here by camera and day, to keep or reject with no camera connected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1931,7 +1784,6 @@
       }
     },
     "Filters" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1942,7 +1794,6 @@
       }
     },
     "Finished" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1953,7 +1804,6 @@
       }
     },
     "First photo of the day." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1964,7 +1814,6 @@
       }
     },
     "Fit to Screen" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1975,7 +1824,6 @@
       }
     },
     "Forget Imports" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1986,7 +1834,6 @@
       }
     },
     "Forget Imports from %@?" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -1997,7 +1844,6 @@
       }
     },
     "Forgot %@ from %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2008,7 +1854,6 @@
       }
     },
     "Four numbers with dots, such as 10.0.0.12, or a name. Add :port only if the camera uses a port other than 15740." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2019,7 +1864,6 @@
       }
     },
     "From" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2030,7 +1874,6 @@
       }
     },
     "Getting ready…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2041,7 +1884,6 @@
       }
     },
     "HEIF" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2052,7 +1894,6 @@
       }
     },
     "Hides these notes." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2063,7 +1904,6 @@
       }
     },
     "History" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2074,7 +1914,6 @@
       }
     },
     "If the camera doesn't ask, unplug the cable and plug it in again, or change the USB connection mode in the camera's menu." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2085,7 +1924,6 @@
       }
     },
     "If you swipe Shutter Bridge away in the app switcher, reminders stop until you next open it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2096,7 +1934,6 @@
       }
     },
     "Import" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2107,7 +1944,6 @@
       }
     },
     "Import Keepers" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2118,7 +1954,6 @@
       }
     },
     "Import Keepers of %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2129,7 +1964,6 @@
       }
     },
     "Import Keepers of This Day" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2140,7 +1974,6 @@
       }
     },
     "Import Now" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2151,7 +1984,6 @@
       }
     },
     "Import cancelled." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2162,7 +1994,6 @@
       }
     },
     "Import finished." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2173,7 +2004,6 @@
       }
     },
     "Import from %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2184,7 +2014,6 @@
       }
     },
     "Import paused. Open Shutter Bridge to continue." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2195,7 +2024,6 @@
       }
     },
     "Import stopped: %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2206,7 +2034,6 @@
       }
     },
     "Import stopped: Shutter Bridge couldn't read or update its catalogue of imported files, so it stopped rather than import files twice." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2217,7 +2044,6 @@
       }
     },
     "Import to Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2228,7 +2054,6 @@
       }
     },
     "Imported" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2239,7 +2064,6 @@
       }
     },
     "Imported to Files" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2250,7 +2074,6 @@
       }
     },
     "Imported to Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2261,7 +2084,6 @@
       }
     },
     "Imported to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2272,7 +2094,6 @@
       }
     },
     "Importing %@ to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2283,7 +2104,6 @@
       }
     },
     "Importing %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2294,7 +2114,6 @@
       }
     },
     "Importing keepers from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2305,7 +2124,6 @@
       }
     },
     "Importing keepers to Photos…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2316,7 +2134,6 @@
       }
     },
     "Importing photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2327,7 +2144,6 @@
       }
     },
     "Importing to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2338,7 +2154,6 @@
       }
     },
     "Imports and staging from your cameras are listed here, newest first." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2349,7 +2164,6 @@
       }
     },
     "Imports the photos you kept to Photos, then offers to remove the staged copies." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2360,7 +2174,6 @@
       }
     },
     "In %@ it takes longer, about 65–123 seconds, and the photos all appear at the end. %@ reads the card much sooner." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2371,7 +2184,6 @@
       }
     },
     "In %@ the camera shares no photos over USB, so choose one of the Image Transfer modes." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2382,7 +2194,6 @@
       }
     },
     "In %@ this takes about 7–12 seconds." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2393,7 +2204,6 @@
       }
     },
     "In This Import" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2404,7 +2214,6 @@
       }
     },
     "In progress" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2415,7 +2224,6 @@
       }
     },
     "It couldn't open its catalogue of imported files, so it can't tell which photos are already imported. Free some space on this iPhone, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2426,7 +2234,6 @@
       }
     },
     "Its card will be read once Shutter Bridge can reach it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2437,7 +2244,6 @@
       }
     },
     "JPEG" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2448,7 +2254,6 @@
       }
     },
     "Joining the camera's Wi-Fi. Tap Join if iOS asks." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2459,7 +2264,6 @@
       }
     },
     "Joins the camera's Wi-Fi again and reads its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2470,7 +2274,6 @@
       }
     },
     "Joins the camera's Wi-Fi when opened" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2481,7 +2284,6 @@
       }
     },
     "Keep" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2492,7 +2294,6 @@
       }
     },
     "Keep Importing" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2503,7 +2304,6 @@
       }
     },
     "Keep Shutter Bridge open until the JPEG is ready." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2514,7 +2314,6 @@
       }
     },
     "Keep Shutter Bridge open while it imports over USB: the import pauses within a couple of seconds of leaving the app, and carries on when you come back. The screen stays on meanwhile." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2525,7 +2324,6 @@
       }
     },
     "Keep in Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2536,7 +2334,6 @@
       }
     },
     "Keepers are being imported from Staging. Import these when it's done." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2547,7 +2344,6 @@
       }
     },
     "Keepers from %@ to Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2558,7 +2354,6 @@
       }
     },
     "Keepers, %@ of %@ cameras" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2569,7 +2364,6 @@
       }
     },
     "Kept" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2580,7 +2374,6 @@
       }
     },
     "Kept." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2591,7 +2384,6 @@
       }
     },
     "Last photo of the day." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2602,7 +2394,6 @@
       }
     },
     "Leave out http:// and anything after the address." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2613,7 +2404,6 @@
       }
     },
     "Leaves the camera's Wi-Fi in" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2624,7 +2414,6 @@
       }
     },
     "Leaving the camera's Wi-Fi…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2635,7 +2424,6 @@
       }
     },
     "Lift Reject" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2646,7 +2434,6 @@
       }
     },
     "Loading the preview" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2657,7 +2444,6 @@
       }
     },
     "Looking for a camera on the USB-C port." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2668,7 +2454,6 @@
       }
     },
     "Looks for the camera over Bluetooth again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2679,7 +2464,6 @@
       }
     },
     "Low Power Mode may stop reminders." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2690,7 +2474,6 @@
       }
     },
     "MENU › Network › Bluetooth › Pairing" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2701,7 +2484,6 @@
       }
     },
     "Makes a text file of the app's log and opens the share sheet. Nothing is sent until you choose where to share it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2712,7 +2494,6 @@
       }
     },
     "Makes this photo new again, so Select All New picks it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2723,7 +2504,6 @@
       }
     },
     "Making a JPEG from the HEIF…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2734,7 +2514,6 @@
       }
     },
     "Making a JPEG from the RAW…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2745,7 +2524,6 @@
       }
     },
     "Mark cleared." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2756,7 +2534,6 @@
       }
     },
     "Mark undone. %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2767,7 +2544,6 @@
       }
     },
     "Nearby" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2778,7 +2554,6 @@
       }
     },
     "New" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2789,7 +2564,6 @@
       }
     },
     "New Only" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2800,7 +2574,6 @@
       }
     },
     "Next Photo" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2811,7 +2584,6 @@
       }
     },
     "No Camera Connected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2822,7 +2594,6 @@
       }
     },
     "No Date" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2833,7 +2604,6 @@
       }
     },
     "No Files over USB" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2844,7 +2614,6 @@
       }
     },
     "No Imports Yet" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2855,7 +2624,6 @@
       }
     },
     "No Matching Files" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2866,7 +2634,6 @@
       }
     },
     "No Photos on the Card" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2877,7 +2644,6 @@
       }
     },
     "No Stars" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2888,7 +2654,6 @@
       }
     },
     "No capture date, so it can't be imported yet." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2899,7 +2664,6 @@
       }
     },
     "No file on the card has a capture date." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2910,7 +2674,6 @@
       }
     },
     "No files on the card match these filters." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2921,7 +2684,6 @@
       }
     },
     "No files selected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2932,7 +2694,6 @@
       }
     },
     "No keepers or rejects to import or remove." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2943,7 +2704,6 @@
       }
     },
     "No mark" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2954,7 +2714,6 @@
       }
     },
     "No new photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2965,7 +2724,6 @@
       }
     },
     "No quiet hours." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2976,7 +2734,6 @@
       }
     },
     "No reminders from %@ to %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2987,7 +2744,6 @@
       }
     },
     "No stars" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -2998,7 +2754,6 @@
       }
     },
     "None" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3009,7 +2764,6 @@
       }
     },
     "Not Now" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3020,7 +2774,6 @@
       }
     },
     "Not Paired Yet" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3031,7 +2784,6 @@
       }
     },
     "Not a photo" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3042,7 +2794,6 @@
       }
     },
     "Not added to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3053,7 +2804,6 @@
       }
     },
     "Not added to Photos. iCloud Drive uploads the files in the background." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3064,7 +2814,6 @@
       }
     },
     "Not connected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3075,7 +2824,6 @@
       }
     },
     "Not imported: still in Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3086,7 +2834,6 @@
       }
     },
     "Not imported: still on the card" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3097,7 +2844,6 @@
       }
     },
     "Nothing Staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3108,7 +2854,6 @@
       }
     },
     "Nothing imported" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3119,7 +2864,6 @@
       }
     },
     "Nothing left to import: those files are imported already." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3130,7 +2874,6 @@
       }
     },
     "Nothing left to stage: those files are staged already." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3141,7 +2884,6 @@
       }
     },
     "Nothing staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3152,7 +2894,6 @@
       }
     },
     "Nothing to Import" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3163,7 +2904,6 @@
       }
     },
     "Nothing to undo." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3174,7 +2914,6 @@
       }
     },
     "Nothing was removed from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3185,7 +2924,6 @@
       }
     },
     "Notifications are off for Shutter Bridge. Turn them on in Settings to get reminders." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3196,7 +2934,6 @@
       }
     },
     "Off" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3207,7 +2944,6 @@
       }
     },
     "On" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3218,7 +2954,6 @@
       }
     },
     "On the camera, open %@ and leave that screen open." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3229,7 +2964,6 @@
       }
     },
     "On the camera, turn on Bluetooth Function and Remote Power ON/OFF so it can be noticed nearby while it's off." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3240,7 +2974,6 @@
       }
     },
     "On this iPhone's Wi-Fi network" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3251,7 +2984,6 @@
       }
     },
     "Only These Dates" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3262,7 +2994,6 @@
       }
     },
     "Open %@ in Cameras to connect over Wi-Fi, then tap here again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3273,7 +3004,6 @@
       }
     },
     "Open Settings" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3284,7 +3014,6 @@
       }
     },
     "Open Shutter Bridge to join the camera's Wi-Fi." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3295,7 +3024,6 @@
       }
     },
     "Opening Shutter Bridge…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3306,7 +3034,6 @@
       }
     },
     "Opening the camera…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3317,7 +3044,6 @@
       }
     },
     "Opens Import with the files this job didn't finish, when the camera is connected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3328,7 +3054,6 @@
       }
     },
     "Opens Import with this job's failed files that still aren't imported, when the camera is connected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3339,7 +3064,6 @@
       }
     },
     "Opens Shutter Bridge's page in Settings." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3350,7 +3074,6 @@
       }
     },
     "Opens the camera's card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3361,7 +3084,6 @@
       }
     },
     "Opens the import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3372,7 +3094,6 @@
       }
     },
     "Opens the photos of this day, at the first one with no mark." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3383,7 +3104,6 @@
       }
     },
     "Opens the settings for the reminder when your camera is nearby." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3394,7 +3114,6 @@
       }
     },
     "Opens the staged files." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3405,7 +3124,6 @@
       }
     },
     "Or set up a camera over Wi-Fi." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3416,7 +3134,6 @@
       }
     },
     "Other" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3427,7 +3144,6 @@
       }
     },
     "Pair Over Bluetooth" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3438,7 +3154,6 @@
       }
     },
     "Pair Your Camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3449,7 +3164,6 @@
       }
     },
     "Pair a camera over Bluetooth, or add one on this iPhone's Wi-Fi network by its address." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3460,7 +3174,6 @@
       }
     },
     "Pause" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3471,7 +3184,6 @@
       }
     },
     "Paused while Shutter Bridge was in the background. Tap Continue to resume." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3482,7 +3194,6 @@
       }
     },
     "Paused. Tap Continue to resume." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3493,7 +3204,6 @@
       }
     },
     "Paused: Shutter Bridge couldn't join the camera's Wi-Fi. Tap Try Again, then tap Join if iOS asks." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3504,7 +3214,6 @@
       }
     },
     "Paused: open Shutter Bridge to continue." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3515,7 +3224,6 @@
       }
     },
     "Paused: open Shutter Bridge to join the camera's Wi-Fi, then the import carries on." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3526,7 +3234,6 @@
       }
     },
     "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3537,7 +3244,6 @@
       }
     },
     "Paused: the camera can't be reached. Move closer and check its Wi-Fi is on; the import resumes when it's back in reach." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3548,7 +3254,6 @@
       }
     },
     "Paused: the camera isn't offering its card. Check that the card is in the camera, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3559,7 +3264,6 @@
       }
     },
     "Paused: the camera isn't offering its card. Check that the card is in the camera; the import resumes by itself." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3570,7 +3274,6 @@
       }
     },
     "Paused: the camera stopped sending. Check the cable and the camera, then tap Continue." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3581,7 +3284,6 @@
       }
     },
     "Paused: the camera was disconnected. Connect it again and the import carries on." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3592,7 +3294,6 @@
       }
     },
     "Paused: the camera was disconnected. Connect it again in %@ and the import carries on." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3603,7 +3304,6 @@
       }
     },
     "Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3614,7 +3314,6 @@
       }
     },
     "Photos access is off" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3625,7 +3324,6 @@
       }
     },
     "Photos access is off, so Import to Photos stages the photos instead." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3636,7 +3334,6 @@
       }
     },
     "Photos access is off, so photos are being staged instead. Allow access in Settings to import to Photos next time." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3647,7 +3344,6 @@
       }
     },
     "Photos access needed: Photos access is off, so the keepers not yet imported stay in Staging. Allow access in Settings, then import the keepers again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3658,7 +3354,6 @@
       }
     },
     "Photos access needed: Photos is restricted on this iPhone, so the keepers not yet imported stay in Staging." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3669,7 +3364,6 @@
       }
     },
     "Photos is restricted on this iPhone, by Screen Time or device management, so photos are being staged instead." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3680,7 +3374,6 @@
       }
     },
     "Photos is restricted on this iPhone, so Import to Photos stages the photos instead." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3691,7 +3384,6 @@
       }
     },
     "Photos, album “%@”" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3702,7 +3394,6 @@
       }
     },
     "Preparing the JPEG…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3713,7 +3404,6 @@
       }
     },
     "Preparing the file…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3724,7 +3414,6 @@
       }
     },
     "Previous Photo" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3735,7 +3424,6 @@
       }
     },
     "Quiet Hours" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3746,7 +3434,6 @@
       }
     },
     "RAW" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3757,7 +3444,6 @@
       }
     },
     "RAW+%@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3768,7 +3454,6 @@
       }
     },
     "RAW+HEIF" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3779,7 +3464,6 @@
       }
     },
     "RAW+JPEG" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3790,7 +3474,6 @@
       }
     },
     "Re-run Failed Files" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3801,7 +3484,6 @@
       }
     },
     "Reaching %@. Its new photos will be imported to Photos once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3812,7 +3494,6 @@
       }
     },
     "Reaching %@. Its new photos will be staged once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3823,7 +3504,6 @@
       }
     },
     "Reaching the camera again…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3834,7 +3514,6 @@
       }
     },
     "Reading History…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3845,7 +3524,6 @@
       }
     },
     "Reading Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3856,7 +3534,6 @@
       }
     },
     "Reading Times" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3867,7 +3544,6 @@
       }
     },
     "Reading the Card" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3878,7 +3554,6 @@
       }
     },
     "Reading the card in %@. Its new photos will be imported to Photos once it's read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3889,7 +3564,6 @@
       }
     },
     "Reading the card in %@. Its new photos will be staged once it's read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3900,7 +3574,6 @@
       }
     },
     "Reading the card…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3911,7 +3584,6 @@
       }
     },
     "Reading the keepers…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3922,7 +3594,6 @@
       }
     },
     "Reading the staged files." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3933,7 +3604,6 @@
       }
     },
     "Reconnect" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3944,7 +3614,6 @@
       }
     },
     "Reconnecting to the camera…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3955,7 +3624,6 @@
       }
     },
     "Reject" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3966,7 +3634,6 @@
       }
     },
     "Rejected" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3977,7 +3644,6 @@
       }
     },
     "Rejected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3988,7 +3654,6 @@
       }
     },
     "Remind Me About" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -3999,7 +3664,6 @@
       }
     },
     "Remind Me When My Camera Is Nearby" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4010,7 +3674,6 @@
       }
     },
     "Reminders" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4021,7 +3684,6 @@
       }
     },
     "Remove" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4032,7 +3694,6 @@
       }
     },
     "Remove %lld Staged Files?" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -4055,7 +3716,6 @@
       }
     },
     "Removing staged copies…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4066,7 +3726,6 @@
       }
     },
     "Resumable" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4077,7 +3736,6 @@
       }
     },
     "Resumable: %@ left" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4088,7 +3746,6 @@
       }
     },
     "Resume" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4099,7 +3756,6 @@
       }
     },
     "Saving to Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4110,7 +3766,6 @@
       }
     },
     "Saving to Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4121,7 +3776,6 @@
       }
     },
     "Select" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4132,7 +3786,6 @@
       }
     },
     "Select All New" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4143,7 +3796,6 @@
       }
     },
     "Select Items" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4154,7 +3806,6 @@
       }
     },
     "Select photos on a camera's card and tap Import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4165,7 +3816,6 @@
       }
     },
     "Settings" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4176,7 +3826,6 @@
       }
     },
     "Share as JPEG…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4187,7 +3836,6 @@
       }
     },
     "Sharing the camera's preview: this RAW couldn't be decoded on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4198,7 +3846,6 @@
       }
     },
     "Show in Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4209,7 +3856,6 @@
       }
     },
     "Showing the camera's preview: this RAW couldn't be decoded on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4220,7 +3866,6 @@
       }
     },
     "Showing the card as it was on %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4231,7 +3876,6 @@
       }
     },
     "Shows iOS's Local Network prompt next." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4242,7 +3886,6 @@
       }
     },
     "Shows this job's folder in Staging." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4253,7 +3896,6 @@
       }
     },
     "Shutter Bridge Couldn't Start" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4264,7 +3906,6 @@
       }
     },
     "Shutter Bridge asks to send notifications so it can tell you if an import pauses." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4275,7 +3916,6 @@
       }
     },
     "Shutter Bridge can now switch on the camera's Wi-Fi and join it for you." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4286,7 +3926,6 @@
       }
     },
     "Shutter Bridge couldn't find the camera. Check that it is on and close to this iPhone with Bluetooth on, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4297,7 +3936,6 @@
       }
     },
     "Shutter Bridge couldn't open its catalogue. Open the app to see why." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4308,7 +3946,6 @@
       }
     },
     "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4319,7 +3956,6 @@
       }
     },
     "Shutter Bridge couldn't reach %@. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4330,7 +3966,6 @@
       }
     },
     "Shutter Bridge couldn't read its catalogue. Try again in a moment." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4341,7 +3976,6 @@
       }
     },
     "Shutter Bridge couldn't read its list of staged files." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4352,7 +3986,6 @@
       }
     },
     "Shutter Bridge couldn't read the card in %@, so its new photos won't be imported to Photos. Open Browse to see why." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4363,7 +3996,6 @@
       }
     },
     "Shutter Bridge couldn't read the card in %@, so its new photos won't be staged. Open Browse to see why." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4374,7 +4006,6 @@
       }
     },
     "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be imported to Photos once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4385,7 +4016,6 @@
       }
     },
     "Shutter Bridge couldn't read the card in %@. Open Browse and tap %@. Its new photos will be staged once the card is read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4396,7 +4026,6 @@
       }
     },
     "Shutter Bridge couldn't read the card in %@. Try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4407,7 +4036,6 @@
       }
     },
     "Shutter Bridge couldn't start looking for a camera on the USB-C port. Tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4418,7 +4046,6 @@
       }
     },
     "Shutter Bridge has to be open to join the camera's Wi-Fi. Try again, and stay in Shutter Bridge until iOS asks to join." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4429,7 +4056,6 @@
       }
     },
     "Shutter Bridge hasn't read this camera's card yet." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4440,7 +4066,6 @@
       }
     },
     "Shutter Bridge is reaching the camera over Bluetooth and its Wi-Fi." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4451,7 +4076,6 @@
       }
     },
     "Shutter Bridge isn't allowed to read from a connected camera. Check Shutter Bridge's Camera setting in Settings. If Screen Time or a profile restricts it on this iPhone, it can't be changed here." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4462,7 +4086,6 @@
       }
     },
     "Shutter Bridge isn't allowed to read from the camera." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4473,7 +4096,6 @@
       }
     },
     "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Open the camera again and choose Join when iOS asks." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4484,7 +4106,6 @@
       }
     },
     "Shutter Bridge wasn't allowed to join the camera's Wi-Fi. Try again, and choose Join when iOS asks." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4495,7 +4116,6 @@
       }
     },
     "Shutter Bridge will forget which photos it imported from %@, so they show as new on its card and could be imported again. The photos stay in Photos, staged copies stay in Staging, and nothing on the camera changes." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4506,7 +4126,6 @@
       }
     },
     "Skipped: %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4517,7 +4136,6 @@
       }
     },
     "Snooze 1 Hour" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4528,7 +4146,6 @@
       }
     },
     "Stage" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4539,7 +4156,6 @@
       }
     },
     "Stage copies the camera's originals into this folder, in a folder for each camera and capture day, and leaves Photos alone. Choose Import to Photos or Stage from the Import button each time you import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4550,7 +4166,6 @@
       }
     },
     "Stage from %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4561,7 +4176,6 @@
       }
     },
     "Stage in iCloud Drive" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4572,7 +4186,6 @@
       }
     },
     "Stage on iPhone" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4583,7 +4196,6 @@
       }
     },
     "Staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4594,7 +4206,6 @@
       }
     },
     "Staged files on this iPhone or in iCloud Drive" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4605,7 +4216,6 @@
       }
     },
     "Staged in %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4616,7 +4226,6 @@
       }
     },
     "Staged in iCloud Drive" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4627,7 +4236,6 @@
       }
     },
     "Staged on this iPhone" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4638,7 +4246,6 @@
       }
     },
     "Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4649,7 +4256,6 @@
       }
     },
     "Staging %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4660,7 +4266,6 @@
       }
     },
     "Staging folder, %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4671,7 +4276,6 @@
       }
     },
     "Staging instead of Photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4682,7 +4286,6 @@
       }
     },
     "Staging is running. Import these when it's done." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4693,7 +4296,6 @@
       }
     },
     "Staging paused. Open Shutter Bridge to continue." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4704,7 +4306,6 @@
       }
     },
     "Staging photos" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4715,7 +4316,6 @@
       }
     },
     "Staging to %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4726,7 +4326,6 @@
       }
     },
     "Stars" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4737,7 +4336,6 @@
       }
     },
     "Start Pairing" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4748,7 +4346,6 @@
       }
     },
     "Starting to import the new photos to Photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4759,7 +4356,6 @@
       }
     },
     "Starting to stage the new photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4770,7 +4366,6 @@
       }
     },
     "Starts looking for the camera over Bluetooth." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4781,7 +4376,6 @@
       }
     },
     "Step %@ of %@. %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4792,7 +4386,6 @@
       }
     },
     "Still joined to the camera's Wi-Fi, so a second import starts at once." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4803,7 +4396,6 @@
       }
     },
     "Still waiting. If you didn't see a prompt, turn on Local Network for Shutter Bridge in Settings, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4814,7 +4406,6 @@
       }
     },
     "Stopped" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4825,7 +4416,6 @@
       }
     },
     "Stopped early" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4836,7 +4426,6 @@
       }
     },
     "Stopped: %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4847,7 +4436,6 @@
       }
     },
     "Stopped: Photos access needed" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4858,7 +4446,6 @@
       }
     },
     "Stopped: Shutter Bridge couldn't read or update its catalogue" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4869,7 +4456,6 @@
       }
     },
     "Stops pairing and goes back to the steps." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4880,7 +4466,6 @@
       }
     },
     "Swipe up or down with one finger for the next or previous photo. Keep, Reject, the stars, Undo and zoom are in the actions." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4891,7 +4476,6 @@
       }
     },
     "Switch a camera off to stop reminders about it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4902,7 +4486,6 @@
       }
     },
     "Switches on the camera's Wi-Fi over Bluetooth if needed, joins it and carries on with the import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4913,7 +4496,6 @@
       }
     },
     "Switches on the camera's Wi-Fi, joins it and opens the camera's card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4924,7 +4506,6 @@
       }
     },
     "Switching on the camera's Wi-Fi…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4935,7 +4516,6 @@
       }
     },
     "Tap Connect to reach it over Wi-Fi and read its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4946,7 +4526,6 @@
       }
     },
     "Tap Start Pairing. Two prompts follow: first iOS asks to pair this iPhone with the camera over Bluetooth, then %@. Accept both." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4957,7 +4536,6 @@
       }
     },
     "That address can't be a camera. Check the numbers, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4968,7 +4546,6 @@
       }
     },
     "That is the camera's own network. Set the camera up with Bluetooth instead: Shutter Bridge joins that network for you." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4979,7 +4556,6 @@
       }
     },
     "That isn't an address Shutter Bridge can use. Check it, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -4990,7 +4566,6 @@
       }
     },
     "The Bluetooth connection to the camera dropped twice. Open %@ on the camera again and move closer, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5001,7 +4576,6 @@
       }
     },
     "The Bluetooth connection to the camera failed. Move closer to the camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5012,7 +4586,6 @@
       }
     },
     "The JPEG couldn't be copied. Try again, or use Share as JPEG." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5023,7 +4596,6 @@
       }
     },
     "The JPEG couldn't be prepared. Check that this iPhone has free space, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5034,7 +4606,6 @@
       }
     },
     "The camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5045,7 +4616,6 @@
       }
     },
     "The camera couldn't read its card. Check the card in the camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5056,7 +4626,6 @@
       }
     },
     "The camera couldn't read this file. Check the card in the camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5067,7 +4636,6 @@
       }
     },
     "The camera didn't accept the pairing. On the camera, open %@ and leave that screen open, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5078,7 +4646,6 @@
       }
     },
     "The camera didn't answer. Check that it is on and its Wi-Fi is on, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5089,7 +4656,6 @@
       }
     },
     "The camera didn't answer. Check the cable and that the camera is on, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5100,7 +4666,6 @@
       }
     },
     "The camera didn't answer. Try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5111,7 +4676,6 @@
       }
     },
     "The camera didn't switch its Wi-Fi on. Check that it is on with Bluetooth Function on, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5122,7 +4686,6 @@
       }
     },
     "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Check that its firmware is up to date, or import over USB-C instead." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5133,7 +4696,6 @@
       }
     },
     "The camera doesn't offer the Bluetooth service Shutter Bridge needs. Import over USB-C instead." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5144,7 +4706,6 @@
       }
     },
     "The camera is sharing no files over USB. Reconnect it and choose %@ or %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5155,7 +4716,6 @@
       }
     },
     "The camera isn't connected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5166,7 +4726,6 @@
       }
     },
     "The camera isn't offering its card right now. Check that the card is in the camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5177,7 +4736,6 @@
       }
     },
     "The camera isn't offering its card right now. Try again in a moment." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5188,7 +4746,6 @@
       }
     },
     "The camera isn't paired with this iPhone. Open %@ on the camera, then open the camera here again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5199,7 +4756,6 @@
       }
     },
     "The camera refused the connection. Check its network settings, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5210,7 +4766,6 @@
       }
     },
     "The camera refused the connection. Close any other app connected to it, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5221,7 +4776,6 @@
       }
     },
     "The camera stopped sending, so the file is being copied again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5232,7 +4786,6 @@
       }
     },
     "The camera was disconnected. Connect it again, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5243,7 +4796,6 @@
       }
     },
     "The camera's Wi-Fi didn't answer after joining. Move closer to the camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5254,7 +4806,6 @@
       }
     },
     "The camera's Wi-Fi may stay on for a while. Switching the camera off ends it." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5265,7 +4816,6 @@
       }
     },
     "The camera's Wi-Fi switched itself off before iOS joined it. Try again, and tap Join as soon as iOS asks." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5276,7 +4826,6 @@
       }
     },
     "The camera's Wi-Fi switched itself off while joining. Try again, and tap Join as soon as iOS asks." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5287,7 +4836,6 @@
       }
     },
     "The card had no files when it was last read, on %@." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5298,7 +4846,6 @@
       }
     },
     "The diagnostics file couldn't be made. Try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5309,7 +4856,6 @@
       }
     },
     "The import couldn't start. Check the camera is still connected, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5320,7 +4866,6 @@
       }
     },
     "The import from %@ didn't start. Open Browse and tap Import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5331,7 +4876,6 @@
       }
     },
     "The import is starting. Try again in a moment." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5342,7 +4886,6 @@
       }
     },
     "The import stopped, so nothing was removed from Staging" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5353,7 +4896,6 @@
       }
     },
     "The port must be a number from 1 to 65535. Leave it out to use 15740." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5364,7 +4906,6 @@
       }
     },
     "The reject couldn't be lifted. Try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5375,7 +4916,6 @@
       }
     },
     "The share sheet couldn't be shown. Try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5386,7 +4926,6 @@
       }
     },
     "The staged file couldn't be read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5397,7 +4936,6 @@
       }
     },
     "There are no files on the card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5408,7 +4946,6 @@
       }
     },
     "There were no imports from %@ to forget." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5419,7 +4956,6 @@
       }
     },
     "There's no preview for this file." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5430,7 +4966,6 @@
       }
     },
     "These files are already imported or in the import." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5441,7 +4976,6 @@
       }
     },
     "These files are already staged or being staged." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5452,7 +4986,6 @@
       }
     },
     "These files couldn't be added to the import. Try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5463,7 +4996,6 @@
       }
     },
     "This can take a while on a full card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5474,7 +5006,6 @@
       }
     },
     "This file can't be made into a JPEG. Import it to keep the original." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5485,7 +5016,6 @@
       }
     },
     "This file is no longer on the card. Go back to Cameras and open the camera again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5496,7 +5026,6 @@
       }
     },
     "This iPhone is already paired with the camera, so there was nothing to confirm. Shutter Bridge can switch on the camera's Wi-Fi and join it for you." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5507,7 +5036,6 @@
       }
     },
     "This iPhone is out of space. Free some space, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5518,7 +5046,6 @@
       }
     },
     "This isn't the camera that was connected before. Connect that camera again, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5529,7 +5056,6 @@
       }
     },
     "This isn't the camera that was connected before. Connect to the same camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5540,7 +5066,6 @@
       }
     },
     "This kind of file can't be imported." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5551,7 +5076,6 @@
       }
     },
     "This photo couldn't be made into a JPEG on this iPhone. Import it to keep the original." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5562,7 +5086,6 @@
       }
     },
     "To" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5573,7 +5096,6 @@
       }
     },
     "To talk to the camera over Wi-Fi, iOS asks whether Shutter Bridge may find devices on your local network. Tap Allow. Without it the camera can't be reached over Wi-Fi." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5584,7 +5106,6 @@
       }
     },
     "Today" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5595,7 +5116,6 @@
       }
     },
     "Try Again" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5606,7 +5126,6 @@
       }
     },
     "Trying again" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5617,7 +5136,6 @@
       }
     },
     "Turn on Bluetooth in Control Centre or Settings, then tap Try Again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5628,7 +5146,6 @@
       }
     },
     "Type" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5639,7 +5156,6 @@
       }
     },
     "Type an Address" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5650,7 +5166,6 @@
       }
     },
     "USB-C" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5661,7 +5176,6 @@
       }
     },
     "Undo" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5672,7 +5186,6 @@
       }
     },
     "Unmarked files stay." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5683,7 +5196,6 @@
       }
     },
     "Use an IPv4 address (four numbers with dots) or a name. IPv6 isn't supported." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5694,7 +5206,6 @@
       }
     },
     "Use this when the camera and this iPhone are on the same Wi-Fi network. Find the camera's IP address in its network settings and type it here." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5705,7 +5216,6 @@
       }
     },
     "Uses the last choice. Import to Photos and Stage are in its menu." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5716,7 +5226,6 @@
       }
     },
     "Video" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5727,7 +5236,6 @@
       }
     },
     "Video: from 1.1" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5738,7 +5246,6 @@
       }
     },
     "Videos can't be imported yet." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5749,7 +5256,6 @@
       }
     },
     "Wait for the import from %@ to finish, then forget its imports." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5760,7 +5266,6 @@
       }
     },
     "Wait until the card has been read." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5771,7 +5276,6 @@
       }
     },
     "Waiting" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5782,7 +5286,6 @@
       }
     },
     "Waiting for Local Network access. Tap Allow in the iOS prompt." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5793,7 +5296,6 @@
       }
     },
     "Waiting for You" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5804,7 +5306,6 @@
       }
     },
     "Waiting for your answer about Photos access…" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5815,7 +5316,6 @@
       }
     },
     "When the camera asks you to Select USB Connect Mode, choose %@: it shows your photos soonest. %@ works too, but reads the card more slowly." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5826,7 +5326,6 @@
       }
     },
     "Which USB Mode?" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5837,7 +5336,6 @@
       }
     },
     "While this iPhone is joined to the camera's Wi-Fi, its internet uses mobile data." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5848,7 +5346,6 @@
       }
     },
     "Wi-Fi" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5859,7 +5356,6 @@
       }
     },
     "Yesterday" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5870,7 +5366,6 @@
       }
     },
     "Your camera is nearby. %@ not yet imported when you last connected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5881,7 +5376,6 @@
       }
     },
     "Your camera is nearby. Open Shutter Bridge to import your photos." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5892,7 +5386,6 @@
       }
     },
     "Zoom In" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5903,7 +5396,6 @@
       }
     },
     "Zoom to Actual Size" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5914,7 +5406,6 @@
       }
     },
     "a different camera answered." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5925,7 +5416,6 @@
       }
     },
     "already staged" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5936,7 +5426,6 @@
       }
     },
     "and so do %lld rejects of the same days" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "variations" : {
@@ -5959,7 +5448,6 @@
       }
     },
     "iCloud Drive became unavailable, so staging is on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5970,7 +5458,6 @@
       }
     },
     "iCloud Drive became unavailable, so the rest are staged on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5981,7 +5468,6 @@
       }
     },
     "iCloud Drive is off or you're not signed in to iCloud, so staging is on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -5992,7 +5478,6 @@
       }
     },
     "iCloud Drive is off or you're not signed in to iCloud, so they stay on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6003,7 +5488,6 @@
       }
     },
     "iCloud Drive isn't available" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6014,7 +5498,6 @@
       }
     },
     "iCloud Drive isn't available to Shutter Bridge, so staging is on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6025,7 +5508,6 @@
       }
     },
     "iCloud Drive isn't available to Shutter Bridge, so they stay on this iPhone." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6036,7 +5518,6 @@
       }
     },
     "iOS also asks whether Shutter Bridge may use Bluetooth." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6047,7 +5528,6 @@
       }
     },
     "iOS couldn't join the camera's Wi-Fi. Move closer to the camera, then try again." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6058,7 +5538,6 @@
       }
     },
     "iOS couldn't use the camera's network details. Try again; if it keeps happening, switch the camera off and on." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6069,7 +5548,6 @@
       }
     },
     "in %@" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6080,7 +5558,6 @@
       }
     },
     "it couldn't be saved" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6091,7 +5568,6 @@
       }
     },
     "no capture date" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6102,7 +5578,6 @@
       }
     },
     "no longer on the card" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6113,7 +5588,6 @@
       }
     },
     "not a photo" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6124,7 +5598,6 @@
       }
     },
     "so far" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6135,7 +5608,6 @@
       }
     },
     "the camera" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6146,7 +5618,6 @@
       }
     },
     "the camera asks you to confirm" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6157,7 +5628,6 @@
       }
     },
     "the camera asks ‘%@’" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6168,7 +5638,6 @@
       }
     },
     "the camera couldn't read it" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6179,7 +5648,6 @@
       }
     },
     "the camera couldn't read its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6190,7 +5658,6 @@
       }
     },
     "the camera couldn't send it" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6201,7 +5668,6 @@
       }
     },
     "the camera is in %@, which shares no files over USB." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6212,7 +5678,6 @@
       }
     },
     "the camera refused the connection." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6223,7 +5688,6 @@
       }
     },
     "the camera stopped answering." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6234,7 +5698,6 @@
       }
     },
     "the camera stopped offering its card." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6245,7 +5708,6 @@
       }
     },
     "the camera was disconnected." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6256,7 +5718,6 @@
       }
     },
     "the copy didn't match the size the camera gave" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6267,7 +5728,6 @@
       }
     },
     "the copy went missing before it was saved" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6278,7 +5738,6 @@
       }
     },
     "this iPhone is out of space" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6289,7 +5748,6 @@
       }
     },
     "this iPhone is out of space." : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6300,7 +5758,6 @@
       }
     },
     "this kind of file can't be imported" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
@@ -6311,7 +5768,6 @@
       }
     },
     "videos can't be imported yet" : {
-      "extractionState" : "manual",
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {

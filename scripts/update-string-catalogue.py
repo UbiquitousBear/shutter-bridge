@@ -6,8 +6,14 @@ British English text: `AppText.string("…")`, `AppText.format("…", …)` and 
 This script finds those calls in Packages/AppUI/Sources/AppUI, adds every key the catalogue lacks with its en-GB
 value (the plural variants for a counted phrase), and removes the entries no call uses any more. Entries that are
 kept are left as they are, translations included, and so are entries Xcode extracted by itself from a SwiftUI `Text`
-literal (those without the "manual" extraction state). `AppTextCatalogueTests` checks the same thing on every test run,
+literal (the "extracted_with_value" extraction state). `AppTextCatalogueTests` checks the same thing on every test run,
 so run this after adding or changing a string, then `make test`.
+
+No entry is marked "manual": since Xcode 26 a manual entry gets a generated Swift symbol made from its key, and keys
+that are English sentences either can't become one ("%@ %@.") or collide ("Kept" and "Kept.", "Reading the card…" and
+"Reading the Card"), which failed the app's build (#143). Entries are written with no extraction state; a local Xcode
+build may mark them "stale", since it can't see AppText's keys in the code, and stale entries are still built into the
+app. An entry whose English is unchanged is kept with whatever state Xcode gave it, so that doesn't fail --check.
 
     python3 scripts/update-string-catalogue.py          # rewrite the catalogue
     python3 scripts/update-string-catalogue.py --check  # exit 1 if it is out of step
@@ -21,6 +27,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "Packages" / "AppUI" / "Sources" / "AppUI"
 CATALOGUE = SOURCES / "Resources" / "Localizable.xcstrings"
 LANGUAGE = "en-GB"
+# The extraction state Xcode gives a string it extracted by itself from the code (a SwiftUI `Text` literal).
+XCODE_EXTRACTED = "extracted_with_value"
 
 
 def parse_literal(src, i):
@@ -142,7 +150,7 @@ def entry(kind, key, one):
         localization = {"variations": {"plural": {"one": unit(one), "other": unit(key)}}}
     else:
         localization = unit(key)
-    return {"extractionState": "manual", "localizations": {LANGUAGE: localization}}
+    return {"localizations": {LANGUAGE: localization}}
 
 
 def main():
@@ -160,11 +168,11 @@ def main():
             updated[key] = current
         else:
             merged = dict(current or {})
-            merged["extractionState"] = "manual"
+            merged.pop("extractionState", None)
             merged.setdefault("localizations", {})[LANGUAGE] = wanted["localizations"][LANGUAGE]
             updated[key] = merged
     for key, current in strings.items():
-        if key not in updated and current.get("extractionState") != "manual":
+        if key not in updated and current.get("extractionState") == XCODE_EXTRACTED:
             updated[key] = current
     catalogue["strings"] = updated
     text = json.dumps(catalogue, indent=2, ensure_ascii=False, sort_keys=True, separators=(",", " : ")) + "\n"
