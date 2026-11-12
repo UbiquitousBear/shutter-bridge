@@ -523,9 +523,12 @@ extension USBLink: CardFreeSpaceReading {
         return await CardFreeSpace.read { [self] command in try await self.passThrough(command) }
     }
 
-    /// One PTP request through `requestSendPTPCommand`, with the two values it completes with, as they came.
+    /// One PTP request through `requestSendPTPCommand`, with the two values it completes with, as they came. Asked
+    /// again before each request: a download may have started while the one before was answered.
     private func passThrough(_ command: PTPContainer) async throws -> (first: Data, second: Data) {
         try requireOpen(.storageInfo)
+        guard CardFreeSpace.mayAsk(mode: mode, catalogueComplete: catalogueComplete, downloadsInFlight: downloads.count)
+        else { throw CameraLinkFailure(.busy, detail: "storage info: a download is in flight") }
         let device = self.device
         let encoded = command.encode()
         let outcome = await request(.storageInfo, timeout: CardFreeSpace.requestLimit) { _, done in
