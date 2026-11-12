@@ -58,8 +58,9 @@ jobs:
         # The unsigned builds below can't see entitlements (CODE_SIGNING_ALLOWED=NO drops them), so a lost
         # CODE_SIGN_ENTITLEMENTS or a lost key would only show at TestFlight time, or on the bench as every join
         # refused. Both of the app target's configurations must point at App/ShutterBridge.entitlements, and the file
-        # must hold exactly the keys ticked on the App ID: today Hotspot Configuration only (docs/ci.md). Adding a key
-        # (Multicast Networking, once Apple grants it) means ticking it on the App ID first, then updating this list.
+        # must hold exactly the keys ticked on the App ID: Hotspot Configuration and iCloud with the app's container
+        # (docs/ci.md), and the Info.plist must declare that container for Files. Adding a key (Multicast Networking,
+        # once Apple grants it) means ticking it on the App ID first, then updating this list.
         run: |
           python3 - <<'EOF'
           import plistlib, re, sys
@@ -76,7 +77,13 @@ jobs:
                   problems.append(f"no {name} configuration of the app target found in project.pbxproj")
               elif configs[name] != "ShutterBridge.entitlements":
                   problems.append(f"{name}: CODE_SIGN_ENTITLEMENTS is {configs[name]!r}, expected 'ShutterBridge.entitlements'")
-          expected = {"com.apple.developer.networking.HotspotConfiguration": True}
+          container = "iCloud.net.shamil.shutter-bridge"
+          expected = {
+              "com.apple.developer.networking.HotspotConfiguration": True,
+              "com.apple.developer.icloud-container-identifiers": [container],
+              "com.apple.developer.icloud-services": ["CloudDocuments"],
+              "com.apple.developer.ubiquity-container-identifiers": [container],
+          }
           try:
               with open("App/ShutterBridge.entitlements", "rb") as f:
                   entitlements = plistlib.load(f)
@@ -85,6 +92,17 @@ jobs:
           else:
               if entitlements != expected:
                   problems.append(f"App/ShutterBridge.entitlements holds {entitlements!r}, expected {expected!r}")
+          try:
+              with open("App/Info.plist", "rb") as f:
+                  info = plistlib.load(f)
+          except Exception as error:
+              problems.append(f"App/Info.plist can't be read as a property list: {error}")
+          else:
+              entry = info.get("NSUbiquitousContainers", {}).get(container)
+              if entry != {"NSUbiquitousContainerIsDocumentScopePublic": True,
+                           "NSUbiquitousContainerName": "Shutter Bridge",
+                           "NSUbiquitousContainerSupportedFolderLevels": "Any"}:
+                  problems.append(f"App/Info.plist: NSUbiquitousContainers[{container}] is {entry!r}")
           for problem in problems:
               print(f"::error::{problem}")
           sys.exit(1 if problems else 0)

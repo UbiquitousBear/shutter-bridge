@@ -70,7 +70,7 @@ Existing lines come from `OSLogBenchLog` (category `browse` for the import and B
 
 ## Staging and iCloud
 
-The staging branch (Browse's *Stage* choice, staged files in iCloud Drive › Shutter Bridge › Staging, or On My iPhone when iCloud isn't available) lists what only a device can show. **The iCloud rows wait for the iCloud entitlement follow-up** (the container and the capability on the App ID, which are Shamil's, before the first build that signs with iCloud; the staging research's list below is the source). They are written now so the sheet is ready, and are marked *Waiting* in the Result column until that build exists. The on-iPhone rows and the staging rows that don't need iCloud can run on any build with staging merged.
+The staging branch (Browse's *Stage* choice, staged files in iCloud Drive › Shutter Bridge › Staging, or On My iPhone when iCloud isn't available) lists what only a device can show. **The iCloud rows need the first TestFlight build signed with iCloud**: the container and the capability are on the App ID (Shamil, 12 Nov) and the entitlements are in the app from the same day ([ci.md](ci.md), *iCloud for staging*); the staging research's list below is the source. They stay marked *Waiting* in the Result column until that build is on the bench iPhone. The on-iPhone rows and the staging rows that don't need iCloud can run on any build with staging merged.
 
 | # | Check | Pass if | Record | Needs | Result |
 | --- | --- | --- | --- | --- | --- |
