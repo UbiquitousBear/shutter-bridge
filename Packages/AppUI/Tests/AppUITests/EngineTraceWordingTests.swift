@@ -159,6 +159,8 @@ struct EngineTraceWordingTests {
             == "engine: interrupted commit of DSC00001.ARW: not found with Limited Access, so it may be imported twice")
         #expect(line(.pendingCommitResolved("DSC00001.ARW", .waiting))
             == "engine: interrupted commit of DSC00001.ARW: can't be checked yet; kept for the next pass")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .forgotten))
+            == "engine: interrupted commit of DSC00001.ARW: its camera's imports were forgotten, so it reads as not imported")
         for resolution in PendingCommitResolution.allCases {
             #expect(EngineTraceWording.level(for: .pendingCommitResolved("A.JPG", resolution)) == .notice)
         }

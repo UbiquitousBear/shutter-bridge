@@ -39,7 +39,8 @@ public struct PendingCommitReport: Sendable, Hashable {
     public var foundInStaging: Int
     /// Of the two above, this launch's own commits whose `finishCommit` had failed, written from memory with no lookup.
     public var replayed: Int
-    /// Commits not found: the marker removed, the files read as their rows say.
+    /// Commits not found: the marker removed, the files read as their rows say. Also this launch's own whose camera's
+    /// imports were forgotten since, so their imported rows weren't written (`PendingCommitResolution.forgotten`).
     public var notFound: Int
     /// Of `notFound`, those not found under Limited Access (or by the fallback): possibly in Photos twice now.
     public var possibleDuplicates: Int
@@ -74,6 +75,9 @@ public enum PendingCommitResolution: String, Sendable, Hashable, CaseIterable {
     case possibleDuplicate
     /// Kept for a later pass: the lookup can't look yet, or the catalogue refused the write.
     case waiting
+    /// This launch's own commit, whose rows were kept in memory, but its camera's imports were forgotten since (the
+    /// marker went with them, `forgetImports(camera:)`): its imported rows aren't written, so it reads as not imported.
+    case forgotten
 }
 
 extension PendingCommit {

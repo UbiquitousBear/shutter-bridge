@@ -8,7 +8,7 @@ import PhotosBridge
 // anything reads the catalogue to decide what to copy, the engine resolves them:
 //
 // - this launch's own commits whose rows couldn't be written (`unrecordedCommits`) are written from memory, with no
-//   lookup;
+//   lookup (all but their imported rows when the camera's imports were forgotten since, which took the marker);
 // - every other marker, unless its commit is still in flight in this process, is looked up (`CommitLookup`): found
 //   writes the rows and removes the marker in one save (`finishCommit`); not found removes the marker
 //   (`abandonCommit`) and the files read as their rows say; can't look keeps it for the next pass.
@@ -80,8 +80,24 @@ extension ImportEngine {
 
         // This launch's own: the rows are known, so they are written as they are, with no lookup.
         var replayed = Set<UUID>()
-        for (token, writes) in unrecordedCommits.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
-            let name = named[token]?.files.first?.identity.filename ?? Self.firstName(of: writes)
+        for (token, kept) in unrecordedCommits.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            let name = named[token]?.files.first?.identity.filename ?? Self.firstName(of: kept)
+            var writes = kept
+            // A marker gone from the store went with its camera's imports (`forgetImports(camera:)` removes them "so
+            // a later pass can't mark the forgotten files imported again"): the rows are written only as far as the
+            // forget would have left them had they landed first, so no imported row and every staged copy. Read
+            // again before deciding, since the listing above may predate a commit that has failed since; a store that
+            // can't answer counts as the marker still being there (writing is then right, as the photo was saved).
+            if named[token] == nil,
+               let now = try? await catalogue.pendingCommits(), !now.contains(where: { $0.id == token }) {
+                writes = Self.afterForget(writes)
+                guard !writes.isEmpty else {
+                    unrecordedCommits[token] = nil
+                    report.notFound += 1
+                    trace(.pendingCommitResolved(name, .forgotten))
+                    continue
+                }
+            }
             guard await writeRow({ try await self.catalogue.finishCommit(token, writing: writes) }) else {
                 report.waiting += 1
                 trace(.pendingCommitResolved(name, .waiting))
@@ -146,6 +162,12 @@ extension ImportEngine {
     /// returned, so a marker that isn't there now can't be written again by this process.
     func isLeftOver(_ id: UUID) -> Bool {
         commitsInFlight[id] == nil && unrecordedCommits[id] == nil
+    }
+
+    /// What *Forget imports* leaves of a commit's writes had they landed before it (`CatalogueStore.forgetImports`):
+    /// an imported row is forgotten, a staged copy is kept.
+    static func afterForget(_ writes: [CommitWrite]) -> [CommitWrite] {
+        writes.filter { if case .staged = $0 { true } else { false } }
     }
 
     /// The camera file name of a commit's first write, for the trace.

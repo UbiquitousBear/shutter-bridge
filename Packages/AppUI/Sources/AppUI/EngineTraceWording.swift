@@ -155,6 +155,7 @@ public enum EngineTraceWording {
         case .notFound: "not found, so it reads as not imported"
         case .possibleDuplicate: "not found with Limited Access, so it may be imported twice"
         case .waiting: "can't be checked yet; kept for the next pass"
+        case .forgotten: "its camera's imports were forgotten, so it reads as not imported"
         }
     }
 

@@ -8,15 +8,20 @@ import Synchronization
 /// An `InMemoryCatalogue` seen through a launch the app is killed in between a commit's save and its row: every call
 /// goes through to the store, except `finishCommit`, which never lands (it throws, and the engine that made it is
 /// then dropped, so what it kept in memory goes with it). A second engine over `inner` is the next launch. It runs on
-/// `inner`'s executor, so it calls the store synchronously, as one actor call, like the store itself.
+/// `inner`'s executor, so it calls the store synchronously, as one actor call, like the store itself. With
+/// `refusesFinish` turned off it is a store that failed every try and then recovered, in the same launch.
 actor KilledAtFinishCatalogue: CatalogueStore {
     struct Killed: Error {}
     let inner: InMemoryCatalogue
     nonisolated var unownedExecutor: UnownedSerialExecutor { inner.unownedExecutor }
     /// `finishCommit` calls refused.
     private(set) var finishCalls = 0
+    /// Whether `finishCommit` is refused (the default); off, it goes through to the store.
+    private(set) var refusesFinish = true
 
     init(_ inner: InMemoryCatalogue) { self.inner = inner }
+
+    func setRefusesFinish(_ on: Bool) { refusesFinish = on }
 
     private func store<T: Sendable>(_ call: (isolated InMemoryCatalogue) throws -> T) rethrows -> T {
         try inner.assumeIsolated(call)
@@ -58,6 +63,7 @@ actor KilledAtFinishCatalogue: CatalogueStore {
     func forgetImports(camera: CameraKey) throws -> Int { store { $0.forgetImports(camera: camera) } }
     func beginCommit(_ pending: PendingCommit) throws { try store { try $0.beginCommit(pending) } }
     func finishCommit(_ id: UUID, writing writes: [CommitWrite]) throws {
+        guard refusesFinish else { return store { $0.finishCommit(id, writing: writes) } }
         finishCalls += 1
         throw Killed()
     }

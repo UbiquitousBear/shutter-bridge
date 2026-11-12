@@ -264,6 +264,49 @@ struct CommitBoundaryTests {
         await h.cleanup()
     }
 
+    /// *Forget imports* between a finish that failed every try and the next job: the camera key's markers went with
+    /// its rows (`forgetImports(camera:)`, "so a later pass can't mark the forgotten files imported again"), so the
+    /// rows kept in memory are written only as far as the forget would have left them had they landed first: an
+    /// imported row isn't written (the file is offered again, as forgetting asks), a staged copy is (forgetting keeps
+    /// staged copies), and no lookup is asked either way.
+    @Test(arguments: [DestinationKind.photos, .staging])
+    func aForgetBeforeTheReplayIsHonoured(_ kind: DestinationKind) async throws {
+        let store = InMemoryCatalogue()
+        let catalogue = KilledAtFinishCatalogue(store)
+        let lookup = CountingLookup(answer: .notFound(underLimitedAccess: false))
+        let h = Harness(catalogue: catalogue, commitLookup: lookup)
+        let a = h.item("DSC00001.ARW", size: 4016)
+        let link = h.link([a])
+        try await h.start(.allNew, from: link, to: h.route(kind))
+        #expect(await h.waitFinished() == .catalogueUnavailable)
+        await h.engine.settleCommits(ofJobsOtherThan: UUID())
+        #expect(await h.engine.unrecordedCommits.count == 1)
+        await store.forgetImports(camera: h.camera)
+        #expect(await store.pendingCommits().isEmpty, "the forget took the marker")
+
+        await catalogue.setRefusesFinish(false)
+        let mark = h.trace.count
+        try await h.start(.allNew, from: link, to: h.route(kind))
+        #expect(await h.waitFinished(after: mark) == .completed)
+        #expect(lookup.asked.isEmpty)
+        #expect(await h.engine.unrecordedCommits.isEmpty)
+        #expect(await store.pendingCommits().isEmpty)
+        let row = try #require(await h.record(for: a))
+        if kind == .photos {
+            #expect(h.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", .forgotten)))
+            #expect(!h.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", .replayed)))
+            // Offered again and imported again, as forgetting asks.
+            #expect(await h.photos.committedNames == ["DSC00001.ARW", "DSC00001.ARW"])
+            #expect(row.state == .imported)
+        } else {
+            #expect(h.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", .replayed)))
+            // The staged copy is recorded, so the stage job leaves the file out: staged once.
+            #expect(await h.files.committedNames == ["DSC00001.ARW"])
+            #expect(row.staged != nil)
+        }
+        await h.cleanup()
+    }
+
     // MARK: A commit still in flight
 
     /// A pass run from `append` while a commit is with its destination leaves that commit's marker alone: no lookup,
