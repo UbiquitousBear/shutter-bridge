@@ -7,7 +7,7 @@ import UIKit
 /// wording, the empty state, a clear message when ImageCaptureCore's access is off, and another with Try Again when
 /// discovery couldn't start at all (so it isn't taken for "No Camera Connected"). Its toolbar opens Settings (Staging
 /// has a tab of its own, I10).
-/// While a job exists, the same import strip as on Browse sits at the top and opens the Import screen.
+/// A running import shows as the tab bar's bottom accessory (`LiveApp`), not on this screen (Shamil, 12 Nov).
 ///
 /// Wi-Fi (wireless plan W16), from the models the app puts in the environment, each optional so a build without them is
 /// the USB screen it was:
@@ -20,9 +20,7 @@ import UIKit
 /// A Wi-Fi camera's row has a Wi-Fi badge and its route instead of a USB mode, and never a battery level or free space.
 struct CamerasScreen: View {
     let model: CamerasModel
-    var importer: ImportModel?
     var showSettings: @MainActor () -> Void = {}
-    var showImport: @MainActor () -> Void = {}
     @Environment(\.openURL) private var openURL
     @Environment(WirelessSetupModel.self) private var setup: WirelessSetupModel?
     @Environment(WiFiImportModel.self) private var wifiStatus: WiFiImportModel?
@@ -63,16 +61,12 @@ struct CamerasScreen: View {
                     if let wifiStatus, wifiStatus.hasStatus(for: wifiStatus.camera) {
                         JoinStatusView(status: wifiStatus, cameraName: wifiCameraName(wifiStatus.camera))
                     }
-                    if let importer, importer.hasJob {
-                        ImportStatusStrip(importer: importer, action: showImport)
-                    }
                 }
             }
             .animation(.default, value: model.noticeStatus)
             .animation(.default, value: setup?.addedNotice)
             .animation(.default, value: wifiStatus?.activityLine)
             .animation(.default, value: wifiStatus?.notes)
-            .animation(.default, value: importer?.hasJob)
             .onChange(of: model.noticeStatus) { _, notice in notice?.announcement.post() }
             .onChange(of: setup?.addedNotice) { _, notice in notice?.announcement.post() }
             .modifier(WirelessSetupSheets(setup: setup))

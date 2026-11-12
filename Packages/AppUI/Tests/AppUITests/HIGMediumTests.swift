@@ -108,7 +108,7 @@ struct BrowseBarWordingTests {
     }
 
     @Test func hintsDescribeTheResult() {
-        #expect(BrowseWording.importStripHint == "Opens the import.")
+        #expect(HistoryWording.accessoryHint == "Opens the import.")
         #expect(BrowseWording.close == "Close")
     }
 
