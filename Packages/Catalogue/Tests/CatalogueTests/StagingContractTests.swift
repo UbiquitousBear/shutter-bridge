@@ -119,6 +119,50 @@ struct StagingContractTests {
         #expect(record.staged == iCloud)
     }
 
+    // MARK: Clearing only while the copy is the one found gone (staging PR 7's reconcile)
+
+    @Test(arguments: StoreKind.available)
+    func clearingIfAtLeavesACopyStagedAgainAlone(_ kind: StoreKind) async throws {
+        let imported = CatalogueRecord(identity: first, format: .raw, state: .imported,
+                                       location: .photosAsset(localIdentifier: "A/L0/001"))
+        let s = try await kind.make(records: [imported])
+        try await s.store.markStaged(first, format: .raw, at: iCloud)
+        // Staged again, elsewhere, after the caller read the iCloud copy.
+        try await s.store.markStaged(first, format: .raw, at: local)
+        #expect(try await s.store.clearStaged(first, ifAt: iCloud) == false)
+        #expect(try await s.store.record(for: first)?.staged == local)
+
+        #expect(try await s.store.clearStaged(first, ifAt: local) == true)
+        let row = try #require(try await s.store.record(for: first))
+        #expect(row.staged == nil)
+        #expect(row.state == .imported)
+        #expect(row.location == .photosAsset(localIdentifier: "A/L0/001"))
+        #expect(try await s.store.stagedStates(of: [first]).isEmpty)
+        // A row with no staged copy any more isn't cleared again.
+        #expect(try await s.store.clearStaged(first, ifAt: local) == false)
+    }
+
+    @Test(arguments: StoreKind.available)
+    func clearingIfAtComparesTheStagedTime(_ kind: StoreKind) async throws {
+        let s = try await kind.make()
+        try await s.store.markStaged(first, format: .raw, at: iCloud)
+        var sameFolderLater = iCloud
+        sameFolderLater.stagedAt = iCloud.stagedAt?.addingTimeInterval(60)
+        #expect(try await s.store.clearStaged(first, ifAt: sameFolderLater) == false)
+        #expect(try await s.store.record(for: first)?.staged == iCloud)
+        var noTime = iCloud
+        noTime.stagedAt = nil
+        #expect(try await s.store.clearStaged(first, ifAt: noTime) == false)
+        #expect(try await s.store.stagedStates(of: [first]) == [first])
+    }
+
+    @Test(arguments: StoreKind.available)
+    func clearingIfAtWithNoRowDoesNothing(_ kind: StoreKind) async throws {
+        let s = try await kind.make()
+        #expect(try await s.store.clearStaged(first, ifAt: iCloud) == false)
+        #expect(try await s.rows().isEmpty, "nothing is inserted")
+    }
+
     @Test(arguments: StoreKind.available)
     func clearingForgetsOnlyTheStagedCopy(_ kind: StoreKind) async throws {
         let imported = CatalogueRecord(identity: first, format: .raw, state: .imported,
