@@ -19,7 +19,9 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
 - **Stops and starts.** Pull the cable, switch the camera off or walk out of Wi-Fi range mid-import: the import pauses
   and carries on when the camera is back, without duplicates or missing photos. An import cut short by closing the app
   shows as *Stopped early* in History, ready to resume. An import paused by a pulled cable also carries on when the
-  camera comes back in the other USB mode.
+  camera comes back in the other USB mode, with the app open, as long as every photo it still has to copy is on the
+  card. The card is read first, which takes a minute or two in *Image Transfer (MTP)*, and until then the import
+  still asks for the mode it started in.
 - **History tab.** Every import, staging and *Import Keepers* job, newest first, with its counts, size, time and where
   the files went, with the album's name for photos saved to Photos. *Resume* and *Re-run Failed Files* queue what is
   left; *Forget Imports* (in the menu) makes a camera's photos new again without touching Photos.
@@ -30,15 +32,18 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
   badge to lift it.
 - **One name per camera.** The camera's album in Photos, its Staging folder, its row on the Cameras screen and
   Browse's title all use the model name the camera reports. *Image Transfer (MSC)* reports no name, so it takes that
-  name once the app has seen the camera in *Image Transfer (MTP)* or over Wi-Fi. An album an earlier build made for
-  the camera keeps being used.
-- **Shortcuts and Siri.** *Import New Photos* and *How Many New Photos* in the Shortcuts app. With a Wi-Fi camera
-  that's switched off, *Import New Photos* opens its last card and offers *Connect*: nothing joins the camera's Wi-Fi
-  until you tap it.
-- **Leaving a connection.** Going back from Browse while a Wi-Fi camera is still connecting stops the connection, and
-  no request to join its Wi-Fi comes afterwards.
+  name once the app has seen the camera in *Image Transfer (MTP)* or over Wi-Fi. An album an earlier build made with
+  the model's name keeps being used; the albums earlier builds called *Camera* are left as they are.
+- **Shortcuts and Siri.** *Import New Photos* and *How Many New Photos* in the Shortcuts app. *Import New Photos*
+  never joins a Wi-Fi camera's network by itself, even when the camera is on: unless Browse is already showing the
+  camera or an import from it is running, it opens the card as last read (or says it hasn't been read yet) and offers
+  *Connect*. Tap it within five minutes and the import starts once the card has been read.
+- **Leaving a connection.** Going back from Browse while the app is still switching on a Wi-Fi camera's Wi-Fi or
+  joining it stops the connection, and no request to join comes afterwards. Going back once it says *Opening the
+  camera…* lets the connection finish, and the phone stays joined to the camera's Wi-Fi as it does after an import.
+  While a paused Wi-Fi import of that camera is reconnecting, the connection carries on for the import.
 - **The running import shows above the tab bar** only; the line at the top of Cameras and Browse is gone. The status
-  lines that remain there line up with the list.
+  lines that remain on Cameras line up with the camera rows.
 - **Export Diagnostics…** in Settings makes a text file of the app's own log, with serial numbers, network names and
   addresses removed, and opens the share sheet. Nothing is sent unless you share it.
 - **Card free space** on the Cameras screen, under a camera connected in *Image Transfer (MTP)*, once its card has been
@@ -67,16 +72,17 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
 9. Pull the cable halfway through an import in *Image Transfer (MTP)*, switch the camera to *Image Transfer (MSC)* and
    plug it back in with the app open: the import should carry on by itself, with no duplicates.
 10. With a Wi-Fi camera switched off, run *Import New Photos*: the app should offer *Connect* and not join until you
-    tap it. Then open the camera from the Cameras screen and go back while it connects: the connecting line should go
-    within a few seconds.
+    tap it. Then open the camera from the Cameras screen and go back while it is still switching on the camera's
+    Wi-Fi or joining it: the connecting line should go within a few seconds, with no request to join afterwards.
 
 **Known limits**
 
 - Over USB the app has to stay in front: an import pauses a few seconds after you leave it and carries on when you come
   back. Over Wi-Fi it keeps going in the background for a while.
 - Videos are shown but not imported yet.
-- With two or more cameras set up, *Image Transfer (MSC)* imports go into an album called *Camera*: that mode can't
-  tell the cameras apart.
+- *Image Transfer (MSC)* can't tell cameras apart: it takes the one model name the app has seen in
+  *Image Transfer (MTP)* or over Wi-Fi, whichever camera is plugged in, and once the app has seen two or more models,
+  its imports go into an album called *Camera*. Two cameras of the same model share one album and Staging folder.
 - Battery level isn't shown yet, and free space is shown only in *Image Transfer (MTP)*.
 - Deleting a whole day's folder (or the Staging folder) in iCloud Drive leaves those photos marked *Staged*; delete the
   photos inside it instead.
