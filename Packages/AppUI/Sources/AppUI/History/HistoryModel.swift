@@ -308,13 +308,14 @@ public final class HistoryModel {
     public func act(on id: UUID) async -> Bool {
         guard busyJob == nil, let job = jobs.first(where: { $0.id == id }), let action = actions[id],
               let choice = HistoryRules.choice(for: job.purpose), let importer else { return false }
+        // Busy from the first suspension, so a second tap while the camera is looked for doesn't queue the job twice.
+        busyJob = id
+        defer { busyJob = nil }
         let camera = name(of: job.camera)
         guard let link = await finder?.link(forCameraWith: job.camera) else {
             show(HistoryWording.connectCamera(camera, carrier: job.carrier), tone: .info)
             return false
         }
-        busyJob = id
-        defer { busyJob = nil }
         // Held while the card is read and the files handed over; the import holds it for its job from then.
         leases.acquire(link)
         let listed: [CameraItem]

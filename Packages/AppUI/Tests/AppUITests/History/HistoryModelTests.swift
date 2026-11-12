@@ -498,6 +498,36 @@ struct HistoryResumableTests {
         #expect(rig.model.busyJob == nil)
     }
 
+    @Test func aSecondTapWhileTheCameraIsLookedForQueuesNothing() async throws {
+        let catalogue = InMemoryCatalogue()
+        let importer = FakeImporter()
+        let finder = GatedFinder()
+        finder.found = FakeLink(items: [a])
+        let model = HistoryModel(catalogue: catalogue, importer: importer, finder: finder, leases: LinkLeases(),
+                                 onThisIPhone: FileManager.default.temporaryDirectory,
+                                 locator: FakeStagingLocator(.unavailable(.containerUnavailable)),
+                                 now: { now }, calendar: londonCalendar(), locale: britishEnglish)
+        await catalogue.recordJob(job(1, selection: .picked([key(a)]), startedAt: at(day: 11, hour: 9), outcome: nil,
+                                      total: 1))
+        await model.load()
+        let id = try #require(model.sections.first?.rows.first?.id)
+        let first = Task { await model.act(on: id) }
+        #expect(await eventually { finder.asked == 1 })
+        var secondEnded = false
+        let second = Task {
+            let took = await model.act(on: id)
+            secondEnded = true
+            return took
+        }
+        // The second tap either gives up at once (busy) or waits on the finder too; neither can hang the test.
+        #expect(await eventually { secondEnded || finder.asked == 2 })
+        finder.answer()
+        #expect(await first.value)
+        #expect(await second.value == false)
+        #expect(finder.asked == 1)
+        #expect(importer.calls.count == 1)
+    }
+
     @Test func theImportsRefusalIsPassedOn() async throws {
         let rig = Rig()
         rig.finder.links[camA] = FakeLink(items: [a])
@@ -735,6 +765,26 @@ struct HistoryCameraFinderTests {
         #expect(await finder.link(forCameraWith: CameraKey(rawValue: "key-usb")) === usb)
         #expect(await finder.link(forCameraWith: CameraKey(rawValue: "key-wifi")) == nil)
         #expect(!asked.ids.contains("wifi"))
+    }
+}
+
+/// A finder that waits until the test lets it answer, and counts how often it was asked.
+@MainActor
+private final class GatedFinder: CameraFinding {
+    var found: (any CameraLink)?
+    private(set) var asked = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func link(forCameraWith key: CameraKey) async -> (any CameraLink)? {
+        asked += 1
+        await withCheckedContinuation { waiting.append($0) }
+        return found
+    }
+
+    func answer() {
+        let resumed = waiting
+        waiting = []
+        for continuation in resumed { continuation.resume() }
     }
 }
 
