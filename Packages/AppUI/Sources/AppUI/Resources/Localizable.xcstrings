@@ -859,6 +859,28 @@
         }
       }
     },
+    "%lld staged files are waiting to upload to iCloud Drive." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged file is waiting to upload to iCloud Drive."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged files are waiting to upload to iCloud Drive."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld staged files can't be shown: Shutter Bridge doesn't know where their copies are." : {
       "localizations" : {
         "en-GB" : {
@@ -874,6 +896,28 @@
                 "stringUnit" : {
                   "state" : "translated",
                   "value" : "%lld staged files can't be shown: Shutter Bridge doesn't know where their copies are."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld staged files couldn't upload to iCloud Drive yet. They stay on this iPhone, and iCloud Drive will try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged file couldn't upload to iCloud Drive yet. It stays on this iPhone, and iCloud Drive will try again."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld staged files couldn't upload to iCloud Drive yet. They stay on this iPhone, and iCloud Drive will try again."
                 }
               }
             }
@@ -5025,6 +5069,26 @@
         }
       }
     },
+    "This iPhone has %@ free. Importing these files needs %@, plus %@ kept spare, so nothing was imported. Free at least %@ more, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone has %@ free. Importing these files needs %@, plus %@ kept spare, so nothing was imported. Free at least %@ more, then try again."
+          }
+        }
+      }
+    },
+    "This iPhone has %@ free. Staging these files needs %@, plus %@ kept spare, so nothing was staged. Free at least %@ more, then try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone has %@ free. Staging these files needs %@, plus %@ kept spare, so nothing was staged. Free at least %@ more, then try again."
+          }
+        }
+      }
+    },
     "This iPhone is already paired with the camera, so there was nothing to confirm. Shutter Bridge can switch on the camera's Wi-Fi and join it for you." : {
       "localizations" : {
         "en-GB" : {
@@ -5381,6 +5445,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Your camera is nearby. Open Shutter Bridge to import your photos."
+          }
+        }
+      }
+    },
+    "Your iCloud storage is full, so %lld staged files haven't uploaded to iCloud Drive. They stay on this iPhone; free up iCloud storage and they'll upload." : {
+      "localizations" : {
+        "en-GB" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Your iCloud storage is full, so %lld staged file hasn't uploaded to iCloud Drive. It stays on this iPhone; free up iCloud storage and it will upload."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Your iCloud storage is full, so %lld staged files haven't uploaded to iCloud Drive. They stay on this iPhone; free up iCloud storage and they'll upload."
+                }
+              }
+            }
           }
         }
       }

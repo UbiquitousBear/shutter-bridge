@@ -14,6 +14,12 @@ import PhotosBridge
 /// (`DestinationDecision.resolve(choice:authorisation:staging:)`); nothing here changes them. It is reached from the
 /// Cameras screen's toolbar.
 ///
+/// The Staging section also says when staged files haven't uploaded to iCloud Drive, the full iCloud quota first
+/// (`uploadProblemLine`), or else how many are waiting to (`uploadWaitingLine`), from the app's `StagedUploadMonitor`
+/// (staging PR 7). The screen reads it again when it appears (`refreshUploads()`); the app reads it when it comes to
+/// the front and when a job starts and ends. `refresh()` doesn't read it, because the app awaits `refresh()` at each
+/// activation and the upload read mustn't hold that up.
+///
 /// **Export Diagnostics…** (I8) makes the plain-text archive through `DiagnosticsExporting` and hands its file to the share
 /// sheet, which the screen presents; the file's folder is removed once the sheet has closed, however it closed, and if the
 /// person leaves Settings first. Nothing is sent anywhere.
@@ -41,6 +47,7 @@ public final class SettingsModel {
     @ObservationIgnored private let photos: (any PhotosAuthorising)?
     @ObservationIgnored private let staging: (any StagingLocator)?
     @ObservationIgnored private let diagnostics: (any DiagnosticsExporting)?
+    @ObservationIgnored private let uploads: StagedUploadMonitor?
     /// Counts the times the person left Settings, so an export that finishes after that is discarded, not shown.
     @ObservationIgnored private var exportEpoch = 0
 
@@ -49,11 +56,14 @@ public final class SettingsModel {
     ///   - staging: Finds where staging goes (the app's `ImportDestinationMaking`); without it the screen says
     ///     nothing about staging.
     ///   - diagnostics: Makes the diagnostics export; without it the screen has no export row.
+    ///   - uploads: Whether staged files in iCloud Drive have uploaded; without it the screen says nothing about
+    ///     uploads.
     public init(photos: (any PhotosAuthorising)? = nil, staging: (any StagingLocator)? = nil,
-                diagnostics: (any DiagnosticsExporting)? = nil) {
+                diagnostics: (any DiagnosticsExporting)? = nil, uploads: StagedUploadMonitor? = nil) {
         self.photos = photos
         self.staging = staging
         self.diagnostics = diagnostics
+        self.uploads = uploads
     }
 
     // MARK: Diagnostics export
@@ -144,4 +154,14 @@ public final class SettingsModel {
 
     /// Open Settings beside that line: for a denial only (a restriction can't be changed there).
     public var offersPhotosSettingsLink: Bool { forcedStagingReason?.offersSettingsLink == true }
+
+    /// Staged files that haven't uploaded to iCloud Drive, and why: "Your iCloud storage is full, so 2 staged files
+    /// haven't uploaded to iCloud Drive…"; nil when there is no problem, or nothing to say.
+    public var uploadProblemLine: String? { uploads?.problemLine }
+
+    /// "3 staged files are waiting to upload to iCloud Drive.", when there is no problem line.
+    public var uploadWaitingLine: String? { uploads?.waitingLine }
+
+    /// Reads the staged files' upload states again (the screen, when it appears).
+    public func refreshUploads() async { await uploads?.refresh() }
 }

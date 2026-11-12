@@ -106,7 +106,8 @@ struct ImportScreen: View {
                     }
                 }
             }
-            if model.destinationLine != nil || model.stagingReasonLine != nil || model.offersPhotosSettingsLink {
+            if model.destinationLine != nil || model.stagingReasonLine != nil || model.uploadLine != nil
+                || model.offersPhotosSettingsLink {
                 Section {
                     destination
                 }
@@ -134,6 +135,10 @@ struct ImportScreen: View {
             Text(reason)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+        if let line = model.uploadLine {
+            Label(line, systemImage: "exclamationmark.icloud")
+                .font(.subheadline)
         }
         if model.offersPhotosSettingsLink {
             Button(ImportWording.openSettings) {

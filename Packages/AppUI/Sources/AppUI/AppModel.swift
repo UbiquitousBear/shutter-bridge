@@ -13,6 +13,10 @@ import PhotosBridge
 ///   closes a link a job uses.
 /// - The Cameras model finds a camera by key for the import, and tells it when a camera is connected.
 /// - Browse models come from `browseModel(for:)` with the catalogue (last-known card, badge) and the import.
+/// - Staging's upkeep (staging PR 7): on the first activation and each time the app comes back from the background,
+///   staged files deleted in Files are reconciled (`StagedCopyReconciler`, then every open Browse reads its badges
+///   again) and the iCloud upload status is read (`uploads`, shown in Settings and on the Import screen). Before each
+///   job, the import checks the free space (`ImportModel`, through `freeSpace`).
 @MainActor
 @Observable
 public final class AppModel {
@@ -48,6 +52,18 @@ public final class AppModel {
     /// For the Staging screen (`stagingModel`): the staged files and their marks, and where staging's iCloud folder is.
     @ObservationIgnored let catalogue: any CatalogueStore
     @ObservationIgnored private let stagingLocator: any StagingLocator
+    /// Whether staged files in iCloud Drive have uploaded (staging PR 7), when the app reads it; Settings and the
+    /// Import screen say what it found.
+    public let uploads: StagedUploadMonitor?
+    /// Clears the staged fact of files deleted from Staging in Files (staging PR 7), when the app has a staging root.
+    @ObservationIgnored let reconciler: StagedCopyReconciler?
+    /// The upkeep pass running (the reconcile, then the upload read), if one is; nil otherwise.
+    @ObservationIgnored private var stagingUpkeep: Task<Void, Never>?
+    /// Another upkeep pass was asked for while one ran: it runs once more after it, rather than queueing one per ask.
+    @ObservationIgnored private var upkeepAgain = false
+    /// The next activation runs the upkeep: true at launch and once the app has been in the background, so a pull of
+    /// Control Centre, Face ID or a permission prompt (inactive, then active again) doesn't.
+    @ObservationIgnored private var upkeepDue = true
 
     public init(
         discovery: any CameraDiscovery,
@@ -64,11 +80,23 @@ public final class AppModel {
         background: any ImportBackgroundRun = NoImportBackgroundRun(),
         wifi: WiFiSupport? = nil,
         wireless: WirelessRuntime? = nil,
-        diagnostics: (any DiagnosticsExporting)? = nil
+        diagnostics: (any DiagnosticsExporting)? = nil,
+        stagingDocuments: URL? = nil,
+        folderListing: any StagingFolderListing = PlainStagingFolderListing(),
+        uploadReader: (any StagedUploadReading)? = nil,
+        freeSpace: any FreeSpaceReading = UnknownFreeSpace()
     ) {
         self.notifier = notifier
         self.catalogue = catalogue
         stagingLocator = destinations
+        reconciler = stagingDocuments.map {
+            StagedCopyReconciler(catalogue: catalogue, onThisIPhone: $0, locator: destinations, listing: folderListing,
+                                 log: services.log)
+        }
+        let uploads = uploadReader.map {
+            StagedUploadMonitor(catalogue: catalogue, locator: destinations, reader: $0, log: services.log)
+        }
+        self.uploads = uploads
         self.wifi = wifi
         self.wireless = wireless
         self.discovery = discovery
@@ -103,7 +131,8 @@ public final class AppModel {
                                    leases: leases, log: services.log, now: now,
                                    background: WiFiOnlyBackgroundRun(background, carrier: { jobShown.carrier }),
                                    notifier: notifier, notificationAsks: notificationAsks,
-                                   abortTransfer: { link in await TransferAbort.abort(link) })
+                                   abortTransfer: { link in await TransferAbort.abort(link) }, freeSpace: freeSpace)
+        importer.uploads = uploads
         self.importer = importer
         jobShown.importer = importer
         if let wifi {
@@ -118,7 +147,7 @@ public final class AppModel {
             wifiRecovery = nil
             wirelessSetup = nil
         }
-        settings = SettingsModel(photos: photos, staging: destinations, diagnostics: diagnostics)
+        settings = SettingsModel(photos: photos, staging: destinations, diagnostics: diagnostics, uploads: uploads)
         cameras.importModel = importer
         importer.cameraFinder = cameras
         // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).
@@ -180,6 +209,7 @@ public final class AppModel {
             recovery.session = wifi?.recoverySession?(camera.descriptor.id)
         }
         queueReminder { await $0.begin(.importing, camera: camera.key) }
+        uploads?.refreshSoon()
     }
 
     /// The job ended: the recovery lets the session go (the job's end has already reset it), and the camera's reminders
@@ -187,6 +217,42 @@ public final class AppModel {
     private func jobEnded(_ camera: ImportCamera) {
         if camera.descriptor.carrier == .wifi { wifiRecovery?.session = nil }
         queueReminder { $0.end(.importing, camera: camera.key) }
+        uploads?.refreshSoon()
+    }
+
+    /// One reconcile pass over the staged files (`StagedCopyReconciler`): rows whose staged copy was deleted from
+    /// Staging in Files lose their staged fact, and when any did every open Browse reads its badges again, so the files
+    /// lose their Staged badge and *Select All New* offers them again (unless they are imported or rejected, D3). Nil
+    /// when the app has no staging root to reconcile (`stagingDocuments`).
+    @discardableResult
+    public func reconcileStagedCopies() async -> StagedReconcileReport? {
+        guard let reconciler else { return nil }
+        let report = await reconciler.reconcile()
+        if report.changedRows { await cameras.refreshBrowseBadges() }
+        return report
+    }
+
+    /// Starts staging's upkeep without waiting for it: the reconcile, then the upload read. One pass at a time; asked
+    /// for while one runs, it runs once more after it.
+    private func startStagingUpkeep() {
+        guard reconciler != nil || uploads != nil else { return }
+        upkeepAgain = true
+        guard stagingUpkeep == nil else { return }
+        stagingUpkeep = Task { [weak self] in await self?.runStagingUpkeep() }
+    }
+
+    private func runStagingUpkeep() async {
+        while upkeepAgain {
+            upkeepAgain = false
+            await reconcileStagedCopies()
+            await uploads?.refresh()
+        }
+        stagingUpkeep = nil
+    }
+
+    /// Waits until staging's upkeep has finished, follow-up passes included (for tests).
+    func stagingUpkeepSettled() async {
+        while let stagingUpkeep { await stagingUpkeep.value }
     }
 
     /// Hands `step` to the reminder after the steps handed over before it.
@@ -282,7 +348,9 @@ public final class AppModel {
     /// The scene's phase: discovery starts (again) when the app is active, Settings reads Photos access again (the
     /// person may have changed it in Settings), and a USB import pauses when the app leaves the foreground and
     /// carries on when it is back (decision 1). The notification permission is read again too, and the notification
-    /// categories are registered at the first activation (W13).
+    /// categories are registered at the first activation (W13). On the first activation and each time the app comes
+    /// back from the background (not after a mere inactive spell), staged files deleted in Files are reconciled and the
+    /// iCloud upload status is read, in the background, after everything else (staging PR 7).
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
         // First, so the Wi-Fi sessions reading the scene and the reminder's rules see it before anything acts on it (W16).
         wireless?.sceneChanged(phase)
@@ -321,7 +389,13 @@ public final class AppModel {
             cameras.browseScenePhaseChanged(.active)
             // After the import's rule and the sessions, so a paused USB import carries on as soon as it did before (W16).
             await wireless?.becameActive()
+            // Last, and not awaited: the person may have deleted staged files in Files while away (staging PR 7).
+            if upkeepDue {
+                upkeepDue = false
+                startStagingUpkeep()
+            }
         case .background:
+            upkeepDue = true
             // A reminder's camera that never showed up isn't opened the next time the person happens to open the app.
             if let reminders = wireless?.reminders, let asked = requestOnLeaving, reminders.cameraToOpen == asked {
                 _ = reminders.takeCameraToOpen()

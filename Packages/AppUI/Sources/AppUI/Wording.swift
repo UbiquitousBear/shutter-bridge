@@ -1342,3 +1342,48 @@ extension TypedAddressWording {
     public static let fieldPrompt = "10.0.0.12"
     public static let connectHint = AppText.string("Adds the camera to the list. Tap it there to connect.")
 }
+
+extension ImportWording {
+    /// A job that doesn't fit in the free space isn't started (staging PR 7, bench S4): the free space, what the files
+    /// need, the spare kept (`FreeSpaceCheck.spare`) and how much more to free (`FreeSpaceCheck.shortfall`, rounded
+    /// up), so the line never reads as if the job fits. `needed` is the job's own bytes, without the spare.
+    public static func notEnoughSpace(free: UInt64, needed: UInt64, spare: UInt64, staging: Bool,
+                                      locale: Locale = .autoupdatingCurrent) -> String {
+        let (total, overflow) = needed.addingReportingOverflow(spare)
+        let short = FreeSpaceCheck.shortfall(available: free, needed: overflow ? .max : total)
+        let sizes = [free, needed, spare, short].map { ByteWording.size($0, locale: locale) }
+        return staging
+            ? AppText.format("This iPhone has %@ free. Staging these files needs %@, plus %@ kept spare, so nothing was "
+                + "staged. Free at least %@ more, then try again.", sizes[0], sizes[1], sizes[2], sizes[3])
+            : AppText.format("This iPhone has %@ free. Importing these files needs %@, plus %@ kept spare, so nothing "
+                + "was imported. Free at least %@ more, then try again.", sizes[0], sizes[1], sizes[2], sizes[3])
+    }
+}
+
+/// Staged files in iCloud Drive that haven't uploaded (staging PR 7, bench S10): Settings' Staging section and the
+/// Import screen, while its job stages to iCloud Drive.
+public enum StagingWording {
+    /// The iCloud quota is full (error 4354).
+    public static func uploadQuotaFull(_ count: Int) -> String {
+        AppText.counted(count,
+                        one: "Your iCloud storage is full, so %lld staged file hasn't uploaded to iCloud Drive. It "
+                            + "stays on this iPhone; free up iCloud storage and it will upload.",
+                        other: "Your iCloud storage is full, so %lld staged files haven't uploaded to iCloud Drive. "
+                            + "They stay on this iPhone; free up iCloud storage and they'll upload.")
+    }
+
+    /// Any other upload error.
+    public static func uploadFailed(_ count: Int) -> String {
+        AppText.counted(count,
+                        one: "%lld staged file couldn't upload to iCloud Drive yet. It stays on this iPhone, and "
+                            + "iCloud Drive will try again.",
+                        other: "%lld staged files couldn't upload to iCloud Drive yet. They stay on this iPhone, and "
+                            + "iCloud Drive will try again.")
+    }
+
+    /// Waiting or uploading, with no problem.
+    public static func uploadWaiting(_ count: Int) -> String {
+        AppText.counted(count, one: "%lld staged file is waiting to upload to iCloud Drive.",
+                        other: "%lld staged files are waiting to upload to iCloud Drive.")
+    }
+}
