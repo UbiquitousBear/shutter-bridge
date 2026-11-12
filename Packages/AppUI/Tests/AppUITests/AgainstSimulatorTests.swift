@@ -276,7 +276,11 @@ struct SceneAndCableAgainstSimulatorTests {
         #expect(refetched.first == "DSC00002.ARW")   // the interrupted file again, from its start
         #expect(Set(refetched) == ["DSC00002.ARW", "DSC00001.ARW", "DSC00001.JPG"])
         #expect(refetched.count == 3)
-        #expect(await again.openCount == 1)
+        // The camera's key is a name hash (no key material), so the import lists its card first to check the job's
+        // files are on it (D11) and hands that listing to the engine: the card is listed once. (The engine's own open of
+        // the link it was handed is the second; a USB link already open answers it at once.)
+        #expect(await again.listCount == 1)
+        #expect(await again.openCount == 2)
         for name in importableStills {
             let item = try #require(await again.item(named: name))
             // Staged, not imported (Shamil, 11 Nov).

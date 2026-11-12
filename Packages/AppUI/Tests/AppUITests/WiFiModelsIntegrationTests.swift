@@ -355,7 +355,8 @@ struct WiFiAppModelTests {
         let key = try #require(await b.source.knownKey(for: descriptor.id))
         let asked = Task { await b.app.importNewPhotos(cameraWith: key, waitingForCamera: .zero,
                                                        waitingForImport: .milliseconds(200)) }
-        #expect(await eventuallyLong { b.app.cameras.path == [descriptor] })
+        // By ID: the camera is listed again named by its model since its connection (D11).
+        #expect(await eventuallyLong { b.app.cameras.path.map(\.id) == [descriptor.id] })
         _ = await asked.value
         #expect(session.count("prepare") == 1)
         b.app.cameras.path = []

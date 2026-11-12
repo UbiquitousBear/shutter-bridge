@@ -44,7 +44,8 @@ public protocol PairedCameraRegistering: Sendable {
 ///   closed, the session left, and the open fails as `identityChanged`. The raw serial is never kept anywhere (not in
 ///   the catalogue, not in a log); only its key is compared.
 /// - **The catalogue row** is written at each connection with the model name, the initiator GUID, the peripheral, the
-///   network's name (for removing the configuration) and the time. The password is never stored.
+///   network's name (for removing the configuration) and the time. The password is never stored. A camera listed as
+///   "Camera" (never connected) is listed again named by its model (D11), with the same ID.
 ///
 /// **Ending.** When the last holder lets the link go (`LinkLeases`, `AppModel`), `linkClosed(_:)` tells the camera's session
 /// the import has finished, which starts the stay in front or leaves in the background (`WirelessSession.importFinished`).
@@ -650,7 +651,13 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         var entry = entry
         let id = entry.id
         if let serial { entry.key = CameraKeys.key(for: entry.descriptor, material: serial) }
+        // One name per body (D11): a camera listed as "Camera" is named by the model it reports from now on, and listed
+        // again under it (same ID), so its row, Browse and its album and folder say "ILCE-7CM2" as its MTP imports do.
+        let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let renamed = !trimmedModel.isEmpty && entry.descriptor.name == WiFiCameraEntry.defaultName
+        if renamed { entry.descriptor.name = trimmedModel }
         entries[id] = entry
+        if renamed { discoverySink.yield(.appeared(entry.descriptor)) }
         guard let key = entry.key else {
             log.note("wifi: the camera reports no serial, so it stays unsaved")
             return

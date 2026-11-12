@@ -32,6 +32,8 @@ actor FakeLink: CameraLink {
     /// Write the listed size (for the engine, which checks it) rather than the item's name.
     var writesListedSize = false
     private(set) var fetched: [CameraItem.ID] = []
+    /// How many times the card was listed.
+    private(set) var listCount = 0
     private(set) var bytesStarted = 0
     private(set) var isOpen = false
     private(set) var closed = false
@@ -60,6 +62,7 @@ actor FakeLink: CameraLink {
     func open() throws(CameraLinkFailure) { isOpen = true }
 
     func list() async throws(CameraLinkFailure) -> [CameraItem] {
+        listCount += 1
         if listHangs, !closed {
             await withCheckedContinuation { continuation in listWaiter = continuation }
         }
@@ -385,11 +388,19 @@ final class FakeDestinations: ImportDestinationMaking, @unchecked Sendable {
 @MainActor
 final class FakeFinder: CameraFinding {
     var links: [CameraKey: any CameraLink] = [:]
+    /// The attached USB cameras `otherUSBCameras(than:)` gives, those with the key asked about left out (D11).
+    var others: [AttachedCamera] = []
     /// Every key a link was asked for, in order.
     private(set) var asked: [CameraKey] = []
+    /// How many times the other cameras were asked for.
+    private(set) var othersAsked = 0
     func link(forCameraWith key: CameraKey) async -> (any CameraLink)? {
         asked.append(key)
         return links[key]
+    }
+    func otherUSBCameras(than key: CameraKey) async -> [AttachedCamera] {
+        othersAsked += 1
+        return others.filter { $0.key != key }
     }
 }
 

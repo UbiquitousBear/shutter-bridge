@@ -280,7 +280,7 @@ extension AppModel {
         // until the person taps it, as nothing opens over USB until the cable is in (Shamil, 12 Nov). A Browse already on
         // screen for it stays: its own Reconnect or Try Again is that tap. The rest of the camera wait still lets a USB
         // listing of the same camera turn it live and be answered as listed.
-        if camera.carrier == .wifi, cameras.path.last != camera, !(await opensWithoutJoining(camera)) {
+        if camera.carrier == .wifi, cameras.path.last?.id != camera.id, !(await opensWithoutJoining(camera)) {
             log.note("intents: import new photos: the Wi-Fi camera has no open connection; offering Connect, not joining")
             return await showNotConnected(cameraWith: key, choice: choice, waitingForImport: waitingForImport,
                                           waitingForUSBUntil: cameraWait, answeringBy: deadline)
@@ -288,7 +288,8 @@ extension AppModel {
         let request = PendingNewPhotosImport(camera: camera.id, choice: choice,
                                              expires: .now.advanced(by: Self.newPhotosImportLifetime))
         waitWith(request)
-        let shown = cameras.path.last == camera
+        // By ID: a Wi-Fi camera's descriptor is renamed by its model at its first connection (D11).
+        let shown = cameras.path.last?.id == camera.id
         if !shown { cameras.path = [camera] }
         intents.navigate(showsImport: false)
         // Browse already shows the live card: nothing more will be listed, so the import starts now.
