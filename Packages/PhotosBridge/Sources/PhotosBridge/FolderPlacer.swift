@@ -189,6 +189,17 @@ struct FolderPlacer: Sendable {
     }
 }
 
+/// What a Staging folder's listing holds, as the placer reads it, so the reconcile step (staging PR 7) and the placer
+/// agree on what is in a folder.
+public enum StagingFolderNames {
+    /// The names a folder's entries take, lower-cased: each entry's own name, and for an iCloud placeholder
+    /// ".NAME.icloud" (a file iOS evicted from the phone after uploading it) also "name". A dataless file on iOS 17
+    /// and later is an ordinary directory entry under its own name.
+    public static func present(in entries: [String]) -> Set<String> {
+        FolderPlacer.takenNames(entries)
+    }
+}
+
 /// Safe names for folders and files the app writes: no path separators, no hidden names, no control characters.
 public enum FilesFolderNaming {
     /// The longest folder name kept, in characters; a camera's name is far shorter.
