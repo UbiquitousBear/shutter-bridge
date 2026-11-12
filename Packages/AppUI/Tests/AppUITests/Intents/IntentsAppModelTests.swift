@@ -231,6 +231,29 @@ struct IntentsAppModelTests {
         await finish(r, run)
     }
 
+    /// A USB camera that couldn't be opened: Browse's failed state has no Try Again, so the answer doesn't send the person
+    /// to one, nor promise an import that nothing will start.
+    @Test func aCameraThatCouldNotBeOpenedIsSaidWithNothingToTap() async throws {
+        let link = FakeLink(items: card)
+        let browse = BrowseModel(
+            camera: link.descriptor,
+            openLink: { () async throws(CameraLinkFailure) -> any CameraLink in throw CameraLinkFailure(.noAnswer) },
+            services: services(),
+            onGone: { _ in }
+        )
+        let run = Task { await browse.run() }
+        #expect(await eventually { if case .failed = browse.phase { true } else { false } })
+        // Over USB a failed open ends the run: nothing will open the link again, and Browse shows no Try Again.
+        #expect(!browse.canRetry)
+        #expect(browse.newPhotosCardWait == .failedWithNoRetry)
+        #expect(NewPhotosWording.importAnswer(.waitingForPerson(choice: .photos, why: .failedWithNoRetry),
+                                              camera: "ILCE-7CM2")
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2, so its new photos won't be imported to Photos. "
+            + "Open Browse to see why.")
+        run.cancel()
+        await run.value
+    }
+
     @Test func leavingBrowseBeforeTheCardIsReadDropsTheImport() async throws {
         let r = try await rig()
         await r.link.set(listHangs: true)

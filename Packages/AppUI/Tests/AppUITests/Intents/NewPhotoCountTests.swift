@@ -192,6 +192,12 @@ struct NewPhotosWordingTests {
         #expect(say(.waitingForPerson(choice: .photos, why: .couldNotReach), camera: CamerasWording.genericName)
             == "Shutter Bridge couldn't reach the camera. Open Browse and tap Try Again. "
             + "Its new photos will be imported to Photos once the card is read.")
+        #expect(say(.waitingForPerson(choice: .staging, why: .failedWithNoRetry))
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2, so its new photos won't be staged. "
+            + "Open Browse to see why.")
+        #expect(say(.waitingForPerson(choice: .photos, why: .failedWithNoRetry), camera: CamerasWording.genericName)
+            == "Shutter Bridge couldn't read the card in the camera, so its new photos won't be imported to Photos. "
+            + "Open Browse to see why.")
         #expect(say(.waitingForPerson(choice: .photos, why: .disconnected))
             == "ILCE-7CM2 is disconnected. Open Browse and tap Reconnect. "
             + "Its new photos will be imported to Photos once the card is read.")
@@ -214,5 +220,7 @@ struct NewPhotosWordingTests {
         #expect(AppModel.logWords(for: .notConnected) == "the camera isn't connected")
         #expect(AppModel.logWords(for: .waitingForPerson(choice: .photos, why: .listingFailed))
             == "waiting: the card couldn't be read")
+        #expect(AppModel.logWords(for: .waitingForPerson(choice: .photos, why: .failedWithNoRetry))
+            == "waiting: the card couldn't be read, with nothing to retry")
     }
 }

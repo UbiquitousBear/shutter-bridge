@@ -340,6 +340,7 @@ extension AppModel {
             case .reaching: "waiting: still reaching the camera"
             case .listingFailed: "waiting: the card couldn't be read"
             case .couldNotReach: "waiting: the camera couldn't be reached"
+            case .failedWithNoRetry: "waiting: the card couldn't be read, with nothing to retry"
             case .disconnected: "waiting: the camera is disconnected"
             }
         case .starting: return "starting"

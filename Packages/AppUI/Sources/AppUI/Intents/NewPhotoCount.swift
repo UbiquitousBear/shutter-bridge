@@ -90,6 +90,9 @@ public enum NewPhotosCardWait: Sendable, Hashable {
     case listingFailed
     /// Over Wi-Fi: the camera couldn't be reached: Browse offers Try Again.
     case couldNotReach
+    /// The card couldn't be read and Browse offers nothing to tap (a USB camera that couldn't be opened, whose failed
+    /// state has no Try Again): the import won't start from this Browse.
+    case failedWithNoRetry
     /// Over Wi-Fi: the link was lost or let go: Browse waits for the person to tap Reconnect (Shamil, 10 Nov).
     case disconnected
 }
@@ -101,7 +104,10 @@ extension BrowseModel {
         if interruption == .disconnected { return .disconnected }
         switch phase {
         case .connecting: return .reaching
-        case .failed: return failedToReachCamera ? .couldNotReach : .listingFailed
+        case .failed:
+            // Try Again is only shown when it can do something (`canRetry`); without it nothing will read the card.
+            guard canRetry else { return .failedWithNoRetry }
+            return failedToReachCamera ? .couldNotReach : .listingFailed
         case .reading, .listed, .listsNoFiles, .gone: return nil
         }
     }
@@ -115,7 +121,8 @@ public enum NewPhotosImportStart: Sendable, Hashable {
     /// the card has been read.
     case waitingForCard(choice: DestinationKind)
     /// Browse is open on the camera but isn't reading its card (`why`): the import starts once the person has dealt with
-    /// that (Try Again, Reconnect) and the card has been read, unless the person leaves Browse or the app first.
+    /// that (Try Again, Reconnect) and the card has been read, unless the person leaves Browse or the app first; with
+    /// nothing to tap (`NewPhotosCardWait.failedWithNoRetry`) it doesn't start.
     case waitingForPerson(choice: DestinationKind, why: NewPhotosCardWait)
     /// The new files were picked and the import is being started (Photos access may be being asked for).
     case starting(choice: DestinationKind)
@@ -243,6 +250,9 @@ public enum NewPhotosWording {
                 return "Shutter Bridge couldn't read the card in \(name). Open Browse and tap \(BrowseWording.tryAgain). \(then)"
             case .couldNotReach:
                 return "Shutter Bridge couldn't reach \(name). Open Browse and tap \(BrowseWording.tryAgain). \(then)"
+            case .failedWithNoRetry:
+                return "Shutter Bridge couldn't read the card in \(name), so its new photos won't be "
+                    + (choice == .staging ? "staged" : "imported to Photos") + ". Open Browse to see why."
             case .disconnected:
                 return "\(subject) is disconnected. Open Browse and tap \(BrowseWording.reconnect). \(then)"
             }
