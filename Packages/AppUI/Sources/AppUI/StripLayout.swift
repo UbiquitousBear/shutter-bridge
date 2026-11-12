@@ -11,6 +11,12 @@ public enum StripLayout {
         return isAccessibilitySize ? 3 : nil
     }
 
-    /// The space between strips and around a strip's text, in points: tighter in compact height.
+    /// The space between strips and around a strip's text, in points: tighter in compact height. The same space separates
+    /// the last strip from the content under it.
     public static func spacing(isCompactHeight: Bool) -> Double { isCompactHeight ? 4 : 8 }
+
+    /// The strips' margin from the screen's sides, in points. The Cameras list uses it for its rows too, so a strip's edges
+    /// line up with the rows' under it whatever the iPhone's width (bench 22.1: the list's own margin is wider on the
+    /// larger iPhones).
+    public static let horizontalMargin: Double = 16
 }
