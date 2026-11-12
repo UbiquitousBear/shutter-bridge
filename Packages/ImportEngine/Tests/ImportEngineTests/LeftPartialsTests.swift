@@ -55,6 +55,42 @@ struct LeftPartialsTests {
         await h.cleanup()
     }
 
+    /// A stop still ends the job when the camera goes while the engine waits on the catalogue before stopping (writing
+    /// the latest checkpoint, or forgetting the row): the lost session puts the file back in the queue meanwhile, but
+    /// the phone is still full (or the camera still another body), so the job doesn't wait for a reconnect that would
+    /// only meet the same failure. A full phone still keeps the partial copy at its latest checkpoint; another body's
+    /// stop still keeps nothing.
+    @Test(arguments: [CameraLinkFailure.Kind.phoneStorageFull, .identityChanged])
+    func aStopStillEndsTheJobWhenTheCameraGoesMeanwhile(_ kind: CameraLinkFailure.Kind) async throws {
+        let catalogue = HoldingCatalogue()
+        let executor = catalogue.executor
+        let h = Harness(catalogue: catalogue, policy: Self.policy())
+        let a = h.item("A.ARW", size: 5000)
+        let link = h.resumingLink([a])
+        await link.script("A.ARW", .holdThenFail(2400, kind))
+        try await h.start(.allNew, from: link, to: h.stageRoute)
+        await h.trace.next(where: Self.isCheckpoint("A.ARW", 2100))
+        await link.waitUntilHeld("A.ARW")
+        executor.hold()
+        await link.release("A.ARW")
+        // The stop's first catalogue call (the checkpoint, or reading the row to forget) is held there.
+        await executor.waitUntil { $0.held > 0 }
+        link.send(.sessionLost(generation: 0))
+        await h.trace.next(.paused(.cameraUnreachable))
+        executor.stopHolding()
+        executor.runHeld()
+        #expect(await h.waitFinished() == .stopped(kind))
+        let row = try #require(await h.record(for: a))
+        if kind == .phoneStorageFull {
+            #expect(row.state == .partial && row.resumeOffset == 2400)
+            #expect(partials(h) == 1)
+        } else {
+            #expect(row.state == .new && row.tempURL == nil)
+            #expect(h.stagedFiles == 0)
+        }
+        await h.cleanup()
+    }
+
     /// A stop that is the file's own (the camera is another body) keeps nothing: the copy goes and its row is new.
     @Test func anotherCamerasStopKeepsNothing() async throws {
         let h = Harness(policy: Self.policy())

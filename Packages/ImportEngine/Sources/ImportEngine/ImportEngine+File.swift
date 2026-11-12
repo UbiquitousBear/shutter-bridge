@@ -92,19 +92,24 @@ extension ImportEngine {
             refreshState()
             return false
         case .stopJob:
+            // While the engine awaits the catalogue below, the camera can go (the file is put back in the queue, its
+            // partial copy kept or not by `stopDownloads` and `end` as for any queued file), but the reason to stop
+            // holds: the job still ends, rather than waiting for a reconnect that would meet the same failure.
             if keepsPartialWhenStopped(by: failure, download: download, entry: entry) {
                 // Not the file's failure: its partial copy stays for the next job, its latest checkpoint written first
                 // (the row is what the next job continues from), as after a drop.
                 await saveLatestCheckpoint(of: entry, in: id)
-                guard stillDownloading(entry, download, in: id), let job = current(id) else { return false }
-                resolve(entry, .failed(.link(failure.kind)), keepingPartial: true)
+                guard let job = current(id) else { return false }
+                if stillDownloading(entry, download, in: id) {
+                    resolve(entry, .failed(.link(failure.kind)), keepingPartial: true)
+                }
                 end(job, .stopped(failure.kind))
                 return false
             }
             if entry.resumable != nil { // a stop that is the file's own (another camera's): its copy goes
                 await forgetPartialRow(of: entry)
-                guard stillDownloading(entry, download, in: id), let job = current(id) else { return false }
-                resolve(entry, .failed(.link(failure.kind)))
+                guard let job = current(id) else { return false }
+                if stillDownloading(entry, download, in: id) { resolve(entry, .failed(.link(failure.kind))) }
                 end(job, .stopped(failure.kind))
                 return false
             }

@@ -11,7 +11,7 @@ import Foundation
 //   pointing at a deleted file until the 7-day prune.
 // - A job stopped for a reason that isn't the file's (a full phone) keeps the file's partial copy and its row, with its
 //   latest checkpoint written first, so the next job continues it, as it would after a drop
-//   (`keepsPartialWhenStopped(by:)`).
+//   (`keepsPartialWhenStopped(by:download:entry:)`).
 extension ImportEngine {
     /// Sends the file's `.partial` row back to `.new` (`CatalogueStore.forgetPartial`) while it still names a file in
     /// the file's own partial folder, at the offset read: called just before the file is resolved skipped or failed
