@@ -75,7 +75,7 @@ struct CamerasScreen: View {
     /// The name of the Wi-Fi camera the connection status is about, when it is listed.
     private func wifiCameraName(_ id: CameraDescriptor.ID?) -> String? {
         guard let id, let camera = model.cameras.first(where: { $0.id == id }) else { return nil }
-        return CamerasWording.displayName(for: camera)
+        return model.displayName(for: camera)
     }
 
     @ViewBuilder private var content: some View {
@@ -111,11 +111,13 @@ struct CamerasScreen: View {
                         // The badge goes once the report is older than the window (`ReminderPolicy.nearbyWindow`), so
                         // the row is looked at again now and then, not only when a report comes.
                         TimelineView(.periodic(from: .now, by: 30)) { _ in
-                            CameraRow(camera: camera, isNearby: model.isNearby(camera) { reminders.isNearby($0) },
+                            CameraRow(camera: camera, name: model.displayName(for: camera),
+                                      isNearby: model.isNearby(camera) { reminders.isNearby($0) },
                                       statusLines: model.deviceStatusLines(for: camera))
                         }
                     } else {
-                        CameraRow(camera: camera, statusLines: model.deviceStatusLines(for: camera))
+                        CameraRow(camera: camera, name: model.displayName(for: camera),
+                                  statusLines: model.deviceStatusLines(for: camera))
                     }
                 }
             }
@@ -131,6 +133,8 @@ struct CamerasScreen: View {
 /// Dynamic Type). VoiceOver reads the row as one element, with a hint that says what opening it does.
 struct CameraRow: View {
     let camera: CameraDescriptor
+    /// The camera's name (`CamerasModel.displayName(for:)`, D11); nil, discovery's.
+    var name: String?
     var isNearby = false
     var statusLines: [String] = []
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -148,7 +152,7 @@ struct CameraRow: View {
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(CamerasWording.displayName(for: camera))
+                Text(name ?? CamerasWording.displayName(for: camera))
                     .font(.headline)
                 Text(CamerasWording.detailLine(camera.mode))
                     .font(.subheadline)

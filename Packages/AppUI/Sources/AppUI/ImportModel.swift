@@ -64,8 +64,9 @@ public struct ImportRow: Sendable, Hashable, Identifiable {
 /// used is remembered app-wide as the Import button's default, `importChoice`), reading where staging goes before each
 /// job and asking for Photos access at the first *Import to Photos* (never for *Stage*), adds files picked while a job
 /// runs, pauses, continues and cancels, follows the scene's phase (decision 1: pause when the app leaves the
-/// foreground over USB, carry on when it is back), reconnects after a removed cable (decision 7), and says all of it
-/// in the person's words.
+/// foreground over USB, carry on when it is back), reconnects after a removed cable (decision 7), or continues on the
+/// same body in the other Image Transfer mode when that card holds every file left (D11), names a job's camera by the
+/// one-name-per-body rule (`CameraNaming`), and says all of it in the person's words.
 ///
 /// How the app uses it:
 /// - Browse's Import calls `importItems(_:from:link:as:newOnly:)` (as `BrowseImporting`).
@@ -131,6 +132,20 @@ public final class ImportModel: BrowseImporting {
     @ObservationIgnored private var jobDestinations: ImportDestinations?
     @ObservationIgnored private var starting = false
     @ObservationIgnored private var reconnecting = false
+    /// Where a job's camera is named from (`CameraNaming`) and its name written back (its Camera row's friendly name);
+    /// nil names it as discovery does.
+    @ObservationIgnored private let catalogue: (any CatalogueStore)?
+    /// The camera keys the job shown continued on by content (D11): Browse's picks from them join the job.
+    @ObservationIgnored private var continuedKeys: Set<CameraKey> = []
+    /// Lists cameras' cards to find the paused job's files on them (`probeByContent`), off the path of
+    /// `cameraConnected()`'s callers: an MTP listing waits for ImageCaptureCore's catalogue, a minute or two.
+    @ObservationIgnored private var contentProbe: Task<Void, Never>?
+    /// `cameraConnected()` was called while it, or a probe, was busy: it runs once more when they are done.
+    @ObservationIgnored private var checkAgain = false
+    /// The cameras whose card a probe for this job found without its files, by descriptor: not listed again for it
+    /// until that camera goes away (a replug or a card swap is a disappear and an appear), so the same card isn't opened
+    /// and listed at every trigger, and Browse's shared link isn't closed under it.
+    @ObservationIgnored private var refusedProbes: (job: ImportJobID, cameras: Set<CameraDescriptor.ID>)?
     @ObservationIgnored private var refreshesStarted = 0
     @ObservationIgnored private var refreshesApplied = 0
     @ObservationIgnored private var importedSoFar = 0
@@ -192,9 +207,11 @@ public final class ImportModel: BrowseImporting {
         background: any ImportBackgroundRun = NoImportBackgroundRun(),
         notifier: any LocalNotifier = SilentNotifier(),
         notificationAsks: any NotificationAskRecord = InMemoryNotificationAskRecord(),
-        abortTransfer: @escaping @Sendable (any CameraLink) async -> Void = { _ in }
+        abortTransfer: @escaping @Sendable (any CameraLink) async -> Void = { _ in },
+        catalogue: (any CatalogueStore)? = nil
     ) {
         self.keyTags = keyTags
+        self.catalogue = catalogue
         self.notifier = notifier
         self.abortTransfer = abortTransfer
         notificationPermission = NotificationPermissionModel(notifier: notifier, record: notificationAsks)
@@ -409,7 +426,11 @@ public final class ImportModel: BrowseImporting {
         // A keepers job's camera key is a camera's own, so a pick from that camera could otherwise join it.
         guard !runsKeepers else { return remember(.busyWithKeepers) }
         if await engine.state.isActive {
-            guard self.camera?.key == camera.key else { return remember(.busyWithAnotherCamera) }
+            // A pick from the camera the job continued on by content (D11) is the job's own: the engine makes its
+            // identity with the job's key and matches it by content.
+            guard self.camera?.key == camera.key || continuedKeys.contains(camera.key) else {
+                return remember(.busyWithAnotherCamera)
+            }
             // One job at a time, of one kind: an import job forced to staging by Photos access still takes more
             // *Import to Photos* picks (they are staged with it), but never *Stage* picks, and the other way round.
             guard choice == jobChoice else { return remember(.busyWithAnotherMode(jobChoice)) }
@@ -428,6 +449,8 @@ public final class ImportModel: BrowseImporting {
 
         starting = true
         defer { starting = false }
+        // One name per body (D11): its album and Staging folder are named from the catalogue.
+        let camera = await named(camera)
         // The new job replaces whatever finished job was shown; its camera is shown while Photos is asked for.
         let shown = (camera: self.camera, snapshot: snapshot, rows: rows, folder: stagingFolderName)
         self.camera = camera
@@ -473,6 +496,7 @@ public final class ImportModel: BrowseImporting {
         loggedStaged = []
         loggedEnd = false
         pausedByPerson = false
+        forgetContinuations()
         do {
             try await engine.start(newOnly ? .newItems(toDo) : .items(toDo), from: link, camera: camera.key,
                                    to: route)
@@ -489,6 +513,8 @@ public final class ImportModel: BrowseImporting {
         }
         rememberChoice(choice)
         await hold(link)
+        // History and the cull screen show the name the album and folder have (D11).
+        await CameraNaming.learn(camera.name, for: camera.key, in: catalogue)
         announceStart(camera)
         log.note("import: started \(toCopy) of \(picked) file(s) to \(decision)")
         // The run starts from the person's tap (iOS's rule), without holding the import up.
@@ -522,6 +548,15 @@ public final class ImportModel: BrowseImporting {
 
     /// The job shown was started as *Stage* (not an import staged because of Photos access).
     var isStageJob: Bool { camera != nil && jobChoice == .staging }
+
+    /// `camera` named by the one-name-per-body rule from the catalogue's Camera rows (`CameraNaming`); as discovery
+    /// names it when there is no catalogue.
+    private func named(_ camera: ImportCamera) async -> ImportCamera {
+        guard let catalogue else { return camera }
+        var named = camera
+        named.name = await CameraNaming.name(for: camera.descriptor, key: camera.key, catalogue: catalogue)
+        return named
+    }
 
     /// Makes `choice` the Import button's default, saved app-wide.
     private func rememberChoice(_ choice: DestinationKind) {
@@ -772,24 +807,149 @@ public final class ImportModel: BrowseImporting {
 
     /// A camera was connected (or the app is back): if the job is waiting for its camera after a removal and that
     /// camera is connected again, the job carries on through the new link (`ImportEngine.reconnect`), after reading
-    /// Photos access again.
+    /// Photos access again. Over USB, when the job's own key isn't found, or is a name hash every "Untitled" card shares,
+    /// the cameras' cards are checked for the job's files by content (`probeByContent`, D11): the job continues on the
+    /// same body in the other Image Transfer mode when that card holds every file left, and on its own name-hash key
+    /// when the card holds any. That check lists cards, which can take a minute or two in MTP, so it runs in its own
+    /// task and this returns at once; a call that comes while it runs is answered when it is done.
     public func cameraConnected() async {
         // A keepers job never carries on over a camera's link, even one with the staged files' key.
         guard !runsKeepers else { return }
-        guard !reconnecting, await engine.state == .paused(.cameraRemoved), let camera, let finder = cameraFinder
-        else { return }
-        reconnecting = true
-        defer { reconnecting = false }
-        guard let newLink = await finder.link(forCameraWith: camera.key) else { return }
-        let route = await continuingRoute()
-        do {
-            try await engine.reconnect(newLink, to: route)
-        } catch {
+        guard await engine.state == .paused(.cameraRemoved), let camera, let finder = cameraFinder else { return }
+        guard !reconnecting else {
+            checkAgain = true
             return
         }
-        log.note("import: the camera is back; reconnected")
-        await hold(newLink)
-        await refresh()
+        reconnecting = true
+        let found = await finder.link(forCameraWith: camera.key)
+        if let found, !CrossKeyContinuation.isSharedKey(camera.key) {
+            let route = await continuingRoute()
+            do {
+                try await engine.reconnect(found, to: route)
+                log.note("import: the camera is back; reconnected")
+                await hold(found)
+                await refresh()
+            } catch {}
+            reconnecting = false
+            await checkAgainIfAsked()
+            return
+        }
+        reconnecting = false
+        // Over Wi-Fi a job waits for its own key: a Wi-Fi camera's link could start a join.
+        guard camera.descriptor.carrier == .usb else { return }
+        startContentProbe(camera, sameKey: found, finder: finder)
+    }
+
+    /// A camera went away: a probe may list its card again once it is back (a replug or a card swap).
+    public func cameraDisappeared(_ id: CameraDescriptor.ID) {
+        refusedProbes?.cameras.remove(id)
+    }
+
+    /// Runs `cameraConnected()` once more when a call came while it was busy, unless a probe is still running (it does
+    /// so when it ends).
+    private func checkAgainIfAsked() async {
+        guard checkAgain, contentProbe == nil else { return }
+        checkAgain = false
+        await cameraConnected()
+    }
+
+    /// Starts the content probe, unless one is running (it is then asked to look again when it ends).
+    private func startContentProbe(_ camera: ImportCamera, sameKey: (any CameraLink)?, finder: any CameraFinding) {
+        guard contentProbe == nil else {
+            checkAgain = true
+            return
+        }
+        contentProbe = Task { [weak self] in
+            guard let self else { return }
+            let continued = await self.probeByContent(camera, sameKey: sameKey, finder: finder)
+            self.contentProbe = nil
+            if continued { self.checkAgain = false }
+            await self.checkAgainIfAsked()
+        }
+    }
+
+    /// Waits for the content probe running now, if any (for tests).
+    func contentProbeFinished() async {
+        while let probe = contentProbe { await probe.value }
+    }
+
+    /// The paused USB job's files looked for on the cameras' cards (D11). Only for a USB job paused by a removal, while
+    /// no keepers job runs, with files left to copy that are known (none before the job's first listing). The
+    /// candidates, in order: the camera with the job's own key when that key is a name hash, then the attached USB
+    /// cameras with other keys in Cameras' order (never Wi-Fi, never Remote Shoot: `CameraFinding.otherUSBCameras`),
+    /// leaving out those whose card a probe for this job has already refused. Each is leased, opened and listed; the
+    /// job carries on over the first whose card holds its files (`CrossKeyContinuation`), with that listing (the card
+    /// isn't listed twice), keeping its key, album, Staging folder and record. The others are let go. Returns whether
+    /// the job carried on.
+    private func probeByContent(_ camera: ImportCamera, sameKey: (any CameraLink)?,
+                                finder: any CameraFinding) async -> Bool {
+        guard !runsKeepers, camera.descriptor.carrier == .usb, let job = await engine.currentJobID,
+              await engine.state == .paused(.cameraRemoved),
+              !CrossKeyContinuation.filesLeft(in: await engine.currentSnapshot.files).isEmpty
+        else { return false }
+        let zone = await engine.currentJobTimeZone ?? engine.identityTimeZone
+        if refusedProbes?.job != job { refusedProbes = (job, []) }
+        var candidates: [AttachedCamera] = []
+        if let sameKey { candidates.append(AttachedCamera(descriptor: sameKey.descriptor, key: camera.key, link: sameKey)) }
+        candidates += await finder.otherUSBCameras(than: camera.key)
+        for candidate in candidates {
+            guard refusedProbes?.cameras.contains(candidate.descriptor.id) != true else { continue }
+            // The job may have carried on (its own camera came back meanwhile), been cancelled or replaced.
+            guard await isStillWaiting(job) else { return false }
+            let link = candidate.link
+            leases.acquire(link)
+            let listed: [CameraItem]
+            do {
+                try await link.open()
+                listed = try await link.list()
+            } catch {
+                await leases.release(link)
+                continue
+            }
+            // Read again: the listing can take minutes in MTP.
+            guard await isStillWaiting(job) else {
+                await leases.release(link)
+                return false
+            }
+            let ownKey = candidate.key == camera.key
+            let verdict = CrossKeyContinuation(left: CrossKeyContinuation.filesLeft(in: await engine.currentSnapshot.files),
+                                               listing: listed, camera: camera.key, timeZone: zone)
+            let carriesOn = ownKey ? verdict.holdsAny : verdict.continues
+            // Counts and key tags only: never a name, a key or a serial.
+            log.note("import: key \(keyTags.tag(for: candidate.key)) holds \(verdict.found) of \(verdict.left) file(s) left "
+                + "of key \(keyTags.tag(for: camera.key))" + (carriesOn ? "; continuing there" : "; not continuing"))
+            guard carriesOn else {
+                refusedProbes?.cameras.insert(candidate.descriptor.id)
+                await leases.release(link)
+                continue
+            }
+            let route = await continuingRoute()
+            do {
+                try await engine.reconnect(job, to: link, knownItems: listed, route: route)
+            } catch {
+                await leases.release(link)
+                return false
+            }
+            if !ownKey { continuedKeys.insert(candidate.key) }
+            // Held for the job first, so the probe letting go doesn't close it.
+            await hold(link)
+            await leases.release(link)
+            await refresh()
+            return true
+        }
+        return false
+    }
+
+    /// Whether `job` is still the engine's and still waiting for its camera after a removal.
+    private func isStillWaiting(_ job: ImportJobID) async -> Bool {
+        guard await engine.currentJobID == job else { return false }
+        return await engine.state == .paused(.cameraRemoved)
+    }
+
+    /// A new job: no camera it continued on, and no card it refused.
+    private func forgetContinuations() {
+        continuedKeys = []
+        refusedProbes = nil
     }
 
     // MARK: - Reading the engine
@@ -936,8 +1096,8 @@ public final class ImportModel: BrowseImporting {
 /// One job of *Import keepers* (backlog section 7.5; I12): the kept files of one staged camera key, which the engine
 /// writes every row under, read from Staging over a `StagingFolderLink`.
 public struct KeepersJob: Sendable, Hashable {
-    /// The staged files' own camera key: the job's, its rows' and its album's (`AlbumPlan`'s `camera:<key>`). Never the
-    /// link's descriptor's.
+    /// The staged files' own camera key: the job's and its rows'. Never the link's descriptor's. (The album is named by
+    /// `cameraName`, D11; an album an earlier build stored under this key, `camera:<key>`, is adopted.)
     public var camera: CameraKey
     /// The camera's display name, as its folder under Staging is named (D11): the job's descriptor's name, so its
     /// album and wording are the camera's.
@@ -1124,6 +1284,7 @@ extension ImportModel {
         loggedStaged = []
         loggedEnd = false
         pausedByPerson = false
+        forgetContinuations()
         do {
             // Queued again rather than picked: a keeper rejected after the plan is left out by the engine too (D3).
             try await engine.start(.requeued(items), from: link, camera: camera.key, to: route)

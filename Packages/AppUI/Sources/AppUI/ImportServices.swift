@@ -8,17 +8,19 @@ import PhotosBridge
 public struct ImportCamera: Sendable, Hashable {
     public var descriptor: CameraDescriptor
     public var key: CameraKey
+    /// The camera's name (D11, one name per body: `CameraNaming`): its staging folder's name, and its Photos album's
+    /// title and key (`camera-name:<name>`), so every mode of one body shares them. An album an earlier build stored
+    /// under the camera's key (`camera:<key>`) is found by its stored identifier and adopted the first time, keeping its
+    /// title; a folder made before stays where it is. By default discovery's name (`CamerasWording.displayName(for:)`:
+    /// "Camera" in Image Transfer (MSC), where discovery gives the card's volume name); the Import screen's model names
+    /// a job's camera from the catalogue as the job starts (`CameraNaming.name(for:key:catalogue:)`).
+    public var name: String
 
-    public init(descriptor: CameraDescriptor, key: CameraKey) {
+    public init(descriptor: CameraDescriptor, key: CameraKey, name: String? = nil) {
         self.descriptor = descriptor
         self.key = key
+        self.name = name ?? CamerasWording.displayName(for: descriptor)
     }
-
-    /// The name a new staging folder and a new album are given: the app's display name for the camera
-    /// (`CamerasWording.displayName(for:)`), so in Image Transfer (MSC), where discovery gives the card's volume name
-    /// ("Untitled"), they are called "Camera". An album made before is found by its stored identifier and keeps its
-    /// title; a folder made before stays where it is.
-    public var name: String { CamerasWording.displayName(for: descriptor) }
 }
 
 /// Reading and asking for Photos access (`.readWrite`), behind a protocol so the Import screen's model is tested on
@@ -198,6 +200,30 @@ public enum ImportRequestOutcome: Sendable, Hashable {
 public protocol CameraFinding: AnyObject {
     /// A link to the connected camera whose key is `key`, if one is connected.
     func link(forCameraWith key: CameraKey) async -> (any CameraLink)?
+
+    /// The attached USB cameras that list files (Image Transfer, MSC or MTP) whose key isn't `key`, each with its key and
+    /// an unopened link, in Cameras' order; never a Wi-Fi camera, whose link could start a join, nor Remote Shoot, which
+    /// lists nothing. For continuing a paused USB job on the same body in the other mode, by content (D11).
+    func otherUSBCameras(than key: CameraKey) async -> [AttachedCamera]
+}
+
+extension CameraFinding {
+    /// A finder that only finds by key (History's, test doubles): no other camera to continue on.
+    public func otherUSBCameras(than key: CameraKey) async -> [AttachedCamera] { [] }
+}
+
+/// An attached camera, its catalogue key and its link (not opened), as `CameraFinding.otherUSBCameras(than:)` gives
+/// them. A camera link is an actor, so it is `Sendable`.
+public struct AttachedCamera: Sendable {
+    public var descriptor: CameraDescriptor
+    public var key: CameraKey
+    public var link: any CameraLink
+
+    public init(descriptor: CameraDescriptor, key: CameraKey, link: any CameraLink) {
+        self.descriptor = descriptor
+        self.key = key
+        self.link = link
+    }
 }
 
 /// The scene's phase as the Import screen's model needs it (SwiftUI's `ScenePhase`, mapped by the app).

@@ -245,7 +245,10 @@ struct ImportEngineSurfaceTests {
         let zone = try #require(await engine.jobTimeZone())
         #expect(zone != TimeZone.autoupdatingCurrent) // an autoupdating zone equals only another autoupdating one
         #expect(zone == TimeZone(identifier: TimeZone.current.identifier))
+        // The app reads the same fixed zone to match another card against the job's files (D11).
+        #expect(await engine.currentJobTimeZone == zone)
         await engine.cancel()
+        #expect(await engine.currentJobTimeZone == nil)
         await link.shutdown()
         try? FileManager.default.removeItem(at: root)
     }

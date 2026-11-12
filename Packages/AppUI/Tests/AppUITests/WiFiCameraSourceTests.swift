@@ -86,8 +86,12 @@ struct WiFiCameraSourceTests {
             if case let .appeared(camera) = event { camera } else { nil }
         }
         #expect(listed.count == 2)   // the USB row isn't a Wi-Fi camera
-        #expect(listed.allSatisfy { $0.mode == .wifi(.cameraNetwork) && $0.name == "Camera" })
+        #expect(listed.allSatisfy { $0.mode == .wifi(.cameraNetwork) })
         #expect(listed.map(\.id).contains(WiFiCameraEntry.id(forGUID: guid)))
+        // One name per body (D11): a camera that has connected is named by the model it reported; one never connected
+        // is "Camera".
+        #expect(listed.first { $0.id == WiFiCameraEntry.id(forGUID: guid) }?.name == "ILCE-7CM2")
+        #expect(listed.first { $0.id == WiFiCameraEntry.id(forGUID: waiting.guid) }?.name == "Camera")
         #expect(await h.source.knownKey(for: WiFiCameraEntry.id(forGUID: guid)) == record.key)
         #expect(await h.source.knownKey(for: WiFiCameraEntry.id(forGUID: waiting.guid)) == nil)
         #expect(h.connecting.sessionCount == 0)   // nothing is joined to be listed
@@ -198,14 +202,18 @@ struct WiFiCameraSourceTests {
         #expect(record.lastSeen == fixedNow)
         #expect(record.lastIP == nil)
         #expect(h.pending.load().isEmpty)   // moved into the catalogue
-        // The descriptor doesn't change, so a camera being browsed isn't dropped when its key becomes known: the entry
-        // under the same ID now has the key, and no second camera was listed.
-        #expect(await h.discoveries.wait(for: 1))
+        // The descriptor's ID doesn't change, so a camera being browsed isn't dropped when its key becomes known: the
+        // entry under the same ID now has the key, and no second camera was listed. It is listed again under the same ID,
+        // named by its model (D11).
+        #expect(await h.discoveries.wait(for: 2))
         let entries = await h.source.cameras
         #expect(entries.map(\.id) == [id] && entries.first?.key == key)
+        #expect(entries.first?.descriptor.name == "ILCE-7CM2")
+        #expect(h.discoveries.all.last == .appeared(CameraDescriptor(id: id, name: "ILCE-7CM2",
+                                                                     mode: .wifi(.cameraNetwork))))
         let another = await h.source.registerPairedCamera(peripheral: anotherPeripheral)
-        #expect(await h.discoveries.wait(for: 2))
-        #expect(h.discoveries.all.count == 2 && h.discoveries.all.last == .appeared(another))
+        #expect(await h.discoveries.wait(for: 3))
+        #expect(h.discoveries.all.count == 3 && h.discoveries.all.last == .appeared(another))
     }
 
     @Test func theNextLaunchKnowsTheKeyAndTheGUID() async throws {
@@ -217,7 +225,8 @@ struct WiFiCameraSourceTests {
         let next = Harness(catalogue: h.catalogue, pendingStore: h.pending)
         try await next.source.start()
         #expect(await next.discoveries.wait(for: 1))
-        #expect(next.discoveries.all == h.discoveries.all)   // the same descriptor: the same ID
+        // The same descriptor as it was last listed (named by its model, D11): the same ID.
+        #expect(next.discoveries.all == [try #require(h.discoveries.all.last)])
         let before = await h.source.knownKey(for: id)
         let after = await next.source.knownKey(for: id)
         #expect(after == before && after != nil)
@@ -436,7 +445,9 @@ struct WiFiCameraSourceTests {
         let next = Harness(catalogue: h.catalogue, pendingStore: h.pending)
         try await next.source.start()
         #expect(await next.discoveries.wait(for: 1))
-        #expect(next.discoveries.all == [.appeared(descriptor)])
+        var named = descriptor
+        named.name = "ILCE-7CM2"   // by its model since its first connection (D11)
+        #expect(next.discoveries.all == [.appeared(named)])
     }
 
     @Test func aTypedOpenThatFailsIsAFailureOfThatLink() async throws {
