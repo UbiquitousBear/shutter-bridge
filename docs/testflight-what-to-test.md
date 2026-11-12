@@ -40,7 +40,9 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
    duplicates or gaps.
 3. Stage a day's photos, cull them in the Staging tab with VoiceOver on and off, then *Import Keepers*.
 4. Run *How Many New Photos* from Shortcuts with the camera connected, and again with it unplugged.
-5. Use the app at the largest text size (Settings › Accessibility › Display & Text Size › Larger Text).
+5. Run *Import New Photos* with the camera unplugged: the app should open its last card and say the camera isn't
+   connected. Plug it in with that screen open; the import should start once the card has been read.
+6. Use the app at the largest text size (Settings › Accessibility › Display & Text Size › Larger Text).
 
 **Known limits**
 
