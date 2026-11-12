@@ -400,6 +400,27 @@ struct OfflineBrowseTests {
         #expect(r.log.lines.contains("intents: import new photos: the camera is connected; waiting for the card"))
     }
 
+    /// The request moved over to the live Browse as the offline one opened, and that Browse's listing failed before the
+    /// answer: the answer says what to tap (W6-fixes' `waitingForPerson`), as it does for a camera listed from the start.
+    @Test func aCameraFoundAsTheOfflineBrowseOpensWhoseListingFailsIsSaidNotReadingTheCard() async throws {
+        let r = await twoLinkRig()
+        await r.discovery.send(.appeared(r.usb.descriptor))
+        #expect(await eventually { r.app.cameras.cameras == [r.usb.descriptor] })
+        await r.discovery.failNextLinks(1)
+        await r.usb.set(listFailure: CameraLinkFailure(.noAnswer))
+        let started = ContinuousClock.now
+        let asked = Task {
+            await r.app.importNewPhotos(cameraWith: r.key, waitingForCamera: .zero, waitingForImport: .seconds(30),
+                                        answeringBy: started.advanced(by: .seconds(3)))
+        }
+        #expect(await eventually { r.app.cameras.path == [r.usb.descriptor] })
+        let (browse, run) = try #require(pushBrowse(r.app))
+        #expect(await eventually { if case .failed = browse.phase { true } else { false } })
+        #expect(await asked.value == .waitingForPerson(choice: .photos, why: .listingFailed))
+        #expect(ContinuousClock.now - started < .seconds(10))
+        await finish(r.app, run)
+    }
+
     @Test func theCardWaitEndsByTheDeadlineToo() async throws {
         let r = try await rig(listed: true)
         await r.link.set(listHangs: true)
