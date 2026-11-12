@@ -281,7 +281,8 @@ public actor WirelessSession {
     // MARK: - Public calls
 
     /// Gives an open link to the camera for an import: reopened with no join inside the stay, else after the join. A second
-    /// call while one is preparing waits for the same result. Throws `WirelessFailure`, holding nothing afterwards.
+    /// call while one is preparing waits for the same result. Throws `WirelessFailure`, holding nothing afterwards; a
+    /// caller already cancelled when its preparation would begin gets `.cancelled` and starts none.
     public func prepareImport() async throws(WirelessFailure) -> any CameraLink {
         try await prepareImport(bluetoothSwitchOnWhenAway: false)
     }
@@ -299,6 +300,10 @@ public actor WirelessSession {
         if let operation {
             task = operation
         } else {
+            // A caller cancelled before its preparation began starts none: a `leave()` asked for it meanwhile (while
+            // this waited for a leave under way) found nothing to stop, and nothing would stop it afterwards (bench 22.1).
+            // No suspension between this check and the preparation being stored.
+            if Task.isCancelled { throw .cancelled }
             epoch += 1
             switchOnWhenAway = bluetoothSwitchOnWhenAway
             task = Task { await self.runPreparation() }

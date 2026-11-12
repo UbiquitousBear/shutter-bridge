@@ -730,6 +730,7 @@ struct WiFiCameraConnectionTests {
         let (id, session) = await h.pair()
         // Two links: the stopped preparation may or may not have taken the first before it ended.
         session.script(.success(FakeWiFiLink()), .success(FakeWiFiLink()))
+        session.set(phase: .handingOff)   // reaching the camera over Bluetooth
         session.holdPrepare()
         let source = h.source
         let browse = Task { () -> CameraLinkFailure.Kind? in
@@ -742,7 +743,7 @@ struct WiFiCameraConnectionTests {
         #expect(await waitUntilAsync { await !source.isConnecting(id) })
         #expect(await source.stoppedConnections == 1)
         #expect(await !source.hasLiveLink(for: id))
-        #expect(await !source.isConnected(id))
+        session.set(phase: .ready)
         // Opening the camera again connects afresh, with no hold this time.
         let opened = try #require(try await source.cameraLink(for: id) as? FakeWiFiLink)
         #expect(await !opened.closed)
@@ -809,35 +810,117 @@ struct WiFiCameraConnectionTests {
                 await source.linkClosed(got)
             } else {
                 #expect(await !source.hasLiveLink(for: id), "round \(round): a live link nobody holds")
+                // Stopped (the session told to leave) or let go (the session told the import is over): never left
+                // holding the camera with nobody to end it.
                 let calls = session.calls
                 if calls.contains("prepare") {
-                    #expect(calls.last == "leave", "round \(round): \(calls)")
+                    #expect(calls.last == "leave" || calls.last == "importFinished", "round \(round): \(calls)")
                 }
             }
         }
     }
 
-    /// An import still holds the camera (its link died and the Wi-Fi recovery may be reopening through the same session):
-    /// a Browse that joins the connection and is closed doesn't stop it.
-    @Test func aConnectionIsntStoppedWhileAnImportHoldsTheCamera() async throws {
+    /// The Wi-Fi recovery is reopening the camera through its session, past the source, and a Browse joined that
+    /// preparation: closing Browse doesn't stop it.
+    @Test func aConnectionSharingTheRecoverysReopenIsntStopped() async throws {
         let h = Harness()
         let (id, session) = await h.pair()
         let first = FakeWiFiLink()
-        let second = FakeWiFiLink()
-        session.script(.success(first), .success(second))
+        session.script(.success(first), .success(FakeWiFiLink()))
         _ = try await h.source.cameraLink(for: id)   // the import's link
         await first.send(.removed)
         #expect(await waitUntilAsync { await h.source.hasLiveLink(for: id) == false })
-        session.holdPrepare()
         let source = h.source
+        await source.recoveryReopening(id, true)
+        session.set(phase: .handingOff)
+        session.holdPrepare()
         let browse = Task { try? await source.cameraLink(for: id) }
         #expect(await waitUntil { session.preparesStarted == 2 })
         browse.cancel()
         _ = await bounded(browse)   // Browse lets go at once
         #expect(await source.stoppedConnections == 0)
         session.releasePrepare()
-        #expect(await waitUntilAsync { await source.hasLiveLink(for: id) })
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
         #expect(session.count("leave") == 0)
+        await source.recoveryReopening(id, false)
+    }
+
+    /// Review of the fix: a paused import holding its dead link isn't the recovery reopening. A Reconnect that Browse
+    /// left while it joins is stopped, and the import's own end still reaches the session.
+    @Test func aDeadImportLinkWithNoRecoveryReopeningDoesntKeepAConnectionGoing() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let first = FakeWiFiLink()
+        session.script(.success(first), .success(FakeWiFiLink()))
+        _ = try await h.source.cameraLink(for: id)   // the import's link
+        await first.send(.removed)
+        #expect(await waitUntilAsync { await h.source.hasLiveLink(for: id) == false })
+        let source = h.source
+        session.set(phase: .handingOff)
+        session.holdPrepare()
+        let reconnect = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 2 })
+        reconnect.cancel()
+        _ = await bounded(reconnect)
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(await source.stoppedConnections == 1)
+        #expect(await !source.hasLiveLink(for: id))
+        // The import is cancelled: its dead link's last holder letting go still ends it on the session.
+        await source.linkClosed(first)
+        #expect(session.count("importFinished") == 1)
+    }
+
+    /// Review of the fix: inside the stay the phone is still on the camera's network, and opening the camera reopens the
+    /// session with no join. Closing Browse during that reopen lets it finish and go back to the stay, rather than
+    /// leaving and throwing the stay away.
+    @Test func aStayReopenNobodyWaitsForFinishesAndGoesBackToTheStay() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()))
+        session.set(phase: .staying)
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await source.stoppedConnections == 0)
+        session.set(phase: .openingSession)
+        session.releasePrepare()
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(session.count("leave") == 0)
+        #expect(session.count("importFinished") == 1)   // let go: the stay starts again
+        #expect(await !source.hasLiveLink(for: id))
+    }
+
+    /// The same reopen, but the camera doesn't answer and the session falls back to Bluetooth and the join: stopped then.
+    @Test func aStayReopenNobodyWaitsForThatFallsBackToBluetoothIsStopped() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()))
+        session.set(phase: .staying)
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await source.stoppedConnections == 0)
+        session.send(.handingOff)   // the reopen gave up: back to Bluetooth
+        #expect(await waitUntilAsync { await source.stoppedConnections == 1 })
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(await !source.hasLiveLink(for: id))
+    }
+
+    @Test func whichPhasesAreStillReachingTheCamera() {
+        for phase in [WirelessPhase?.none, .idle, .handingOff, .joining, .awaitingFront, .leaving, .paused(.needsJoin)] {
+            #expect(WiFiCameraSource.stillReaching(phase))
+        }
+        for phase in [WirelessPhase.openingSession, .ready, .staying] {
+            #expect(!WiFiCameraSource.stillReaching(phase))
+        }
     }
 
     @Test func aTypedCameraWhoseOpenNobodyWaitsForIsCancelled() async throws {

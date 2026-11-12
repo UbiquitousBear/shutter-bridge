@@ -389,6 +389,7 @@ struct WiFiAppModelTests {
         let session = b.connecting.session(for: WiFiCameraEntry(
             descriptor: descriptor, key: nil, peripheral: peripheral, guid: UUID())) as! FakeSession
         session.script(.success(FakeWiFiLink()))
+        session.set(phase: .handingOff)   // reaching the camera, which is off
         session.holdPrepare()
         await b.app.scenePhaseChanged(.active)
         #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })

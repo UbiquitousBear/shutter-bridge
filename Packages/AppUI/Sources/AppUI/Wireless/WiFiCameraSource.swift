@@ -25,13 +25,17 @@ public protocol PairedCameraRegistering: Sendable {
 /// asked to prepare again). A link is live until its events say it is gone (`.removed`, `.sessionLost`, or the end of
 /// the stream), its session is no longer `.ready`, or it is let go; a link that died is never handed out again, so
 /// Continue after a pause opens a fresh one. Callers that ask while a connection is being made wait for that one
-/// connection and get its link: a camera is never opened twice at once. **A connection nobody waits for is stopped**
-/// (bench 22.1): when the last caller waiting for it is cancelled (the person leaves Browse while it joins), the
-/// connection's task is cancelled; before the session is reached that ends it, and once the session's preparation has
-/// begun the session is told to leave, which stops the preparation where it is and lets go of the Bluetooth link and
-/// the network. Not while an import still holds the camera: its Wi-Fi recovery reopens through the same session and
-/// shares the preparation. A caller that asks while a stop is under way waits for it, then connects afresh; a caller
-/// that was cancelled before it asked starts nothing. Then:
+/// connection and get its link: a camera is never opened twice at once. **A connection nobody waits for** (bench 22.1:
+/// the last caller waiting for it is cancelled, the person having left Browse) **is stopped while it is still reaching
+/// the camera** (not at the session yet, handing off over Bluetooth, joining, or waiting for the app's front; a
+/// typed-address open): its task is cancelled, which ends it before the session or, once the session's preparation has
+/// begun, makes the session leave, stopping the preparation where it is and letting go of the Bluetooth link and the
+/// network. **Once the phone is on the camera's network** (a reopen inside the stay, or opening the session after the
+/// join) it finishes and is let go as a Browse that took it and closed would let it go: the session closes it and the
+/// stay starts again; and if such a reopen falls back to Bluetooth, it is stopped then. Never while the Wi-Fi recovery is
+/// reopening the camera through the same session (`recoveryReopening(_:_:)`), whose preparation it shares. A caller that
+/// asks while a stop is under way waits for it, then connects afresh; one that asks while an unwanted connection is
+/// finishing takes it over; one that was cancelled before it asked starts nothing. Then:
 /// - **The key.** The link's serial (`CameraIdentifying`) gives the camera's catalogue key (`CameraKeys`). A camera
 ///   connecting for the first time is saved to the catalogue under it and leaves the pending list; the key is then
 ///   `knownKey(for:)`, so the camera's last-known card shows while the next join is under way. A link with no serial
@@ -93,6 +97,12 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// Cameras whose connection under way has its link and is past being stopped: it only saves the camera now, and its
     /// link goes to its callers, a late one included, which take it and let it go.
     private var opened: Set<CameraDescriptor.ID> = []
+    /// Cameras whose connection under way nobody waits for, past reaching the camera: it finishes and is let go.
+    private var unwanted: Set<CameraDescriptor.ID> = []
+    /// Cameras whose connection under way has asked the session to prepare (`open(_:)`).
+    private var atSession: Set<CameraDescriptor.ID> = []
+    /// How many Wi-Fi recovery reopens are under way for each camera (`recoveryReopening(_:_:)`).
+    private var recoveryReopens: [CameraDescriptor.ID: Int] = [:]
     private var failures: [CameraDescriptor.ID: WirelessFailure] = [:]
     private var declined: Set<CameraDescriptor.ID> = []
     private var inBackground = false
@@ -151,6 +161,8 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         // No suspension between this check and the task being stored, so two callers never both start a connection.
         if let running = inFlight[id] {
             joinedConnections += 1
+            // Wanted again: a connection finishing for nobody is handed to this caller instead of being let go.
+            unwanted.remove(id)
             return try await wait(for: running, of: id)
         }
         let task = Task { await self.connect(entry) }
@@ -180,27 +192,57 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     }
 
     /// A caller waiting for `connection` was cancelled. Decided here, on the actor, so it agrees with the connection's end
-    /// (whose `defer` clears `inFlight`): a connection that has finished already delivers its result to the caller as
-    /// before (it takes the link and lets it go, which ends it properly); one still under way answers the caller
-    /// `disconnected` now, and when no caller waits for it any more, and no import holds the camera (its Wi-Fi recovery
-    /// shares the session's preparation), it is stopped: its task is cancelled, which ends the Local Network
-    /// explanation's wait or a typed-address open, and once it has reached the session makes the session leave
-    /// (`open(_:)`). Nothing is left half-joined behind a screen the person has left.
+    /// (whose `defer` clears `inFlight`): a connection that has its link already delivers it to the caller as before (it
+    /// takes the link and lets it go, which ends it properly); one still under way answers the caller `disconnected` now.
+    /// When no caller waits for it any more, and the Wi-Fi recovery isn't reopening the camera through the session (whose
+    /// preparation it shares), it is unwanted: stopped if it is still reaching the camera (`stillReaching(_:)`), else
+    /// left to finish and be let go (`connect(_:)`).
     private func callerGaveUp(_ token: Int, on id: CameraDescriptor.ID,
                               connection: Task<Result<any CameraLink, CameraLinkFailure>, Never>,
-                              answer: OneAnswer<Result<any CameraLink, CameraLinkFailure>>) {
+                              answer: OneAnswer<Result<any CameraLink, CameraLinkFailure>>) async {
         waiting[id]?.remove(token)
         guard inFlight[id] == connection, !opened.contains(id) else { return }
         answer.give(.failure(CameraLinkFailure(.disconnected, detail: "wifi: the caller left")))
-        guard waiting[id]?.isEmpty ?? true, !stopping.contains(id) else { return }
-        guard handedOut[id] == nil else {
-            log.note("wifi: the connection goes on: an import still holds the camera")
+        guard waiting[id]?.isEmpty ?? true, !stopping.contains(id), !unwanted.contains(id) else { return }
+        guard recoveryReopens[id, default: 0] == 0 else {
+            log.note("wifi: the connection goes on: the import's recovery shares it")
             return
         }
+        unwanted.insert(id)
+        let phase: WirelessPhase? = atSession.contains(id) ? await sessions[id]?.phase : nil
+        // Read across a suspension: a caller may have come back, or the connection got its link or ended, meanwhile.
+        guard inFlight[id] == connection, unwanted.contains(id), !opened.contains(id) else { return }
+        if Self.stillReaching(phase) {
+            stop(id, connection)
+        } else {
+            log.note("wifi: nobody waits for the connection; it finishes on the camera's network and is let go")
+        }
+    }
+
+    /// Whether a connection whose session is at `phase` is still reaching the camera, so stopping it saves a hand-off or a
+    /// join: nil is a connection not at its session yet, or a typed-address open. A reopen inside the stay, or the
+    /// session opening after the join, is on the camera's network already.
+    static func stillReaching(_ phase: WirelessPhase?) -> Bool {
+        switch phase {
+        case nil, .idle?, .handingOff?, .joining?, .awaitingFront?, .leaving?, .paused?: true
+        case .openingSession?, .ready?, .staying?: false
+        }
+    }
+
+    private func stop(_ id: CameraDescriptor.ID, _ connection: Task<Result<any CameraLink, CameraLinkFailure>, Never>) {
+        unwanted.remove(id)
         stopping.insert(id)
         stoppedConnections += 1
         log.note("wifi: stopping the connection: nothing waits for it any more")
         connection.cancel()
+    }
+
+    /// The Wi-Fi recovery (W14) began (`true`) or ended (`false`) a reopen of the camera through its session, past this
+    /// source (`SourceAdoptingRecoverySession`): while one is under way, a connection a Browse left is never stopped,
+    /// since it shares the recovery's preparation.
+    public func recoveryReopening(_ id: CameraDescriptor.ID, _ began: Bool) {
+        let count = recoveryReopens[id, default: 0] + (began ? 1 : -1)
+        recoveryReopens[id] = count > 0 ? count : nil
     }
 
     /// The one connection for a camera: the explanation if one is due, the open, the identity check, the saving.
@@ -210,6 +252,8 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             inFlight[id] = nil
             stopping.remove(id)
             opened.remove(id)
+            unwanted.remove(id)
+            atSession.remove(id)
         }
         failures[id] = nil
         declined.remove(id)
@@ -225,6 +269,7 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         }
         eventSink.yield(.connecting(id))
         let link: any CameraLink
+        atSession.insert(id)
         do throws(WirelessFailure) {
             link = try await open(entry)
         } catch {
@@ -260,6 +305,14 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         watch(link, for: id)
         let model = await (link as? any CameraIdentifying)?.cameraModelName()
         await saveConnected(entry, serial: serial, model: model)
+        if unwanted.contains(id) {
+            // Nobody waits for it (the person left while it opened on the camera's network): let it go as a Browse that
+            // took it and closed would: the session closes it and starts the stay again (or leaves, in the background).
+            log.note("wifi: nobody waits for the connection; letting it go")
+            _ = await finish(id)
+            if entry.typed != nil { await link.close() }
+            return .failure(CameraLinkFailure(.disconnected, detail: "wifi: nobody waits for it"))
+        }
         return .success(link)
     }
 
@@ -500,9 +553,9 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
                 throw .link(error)
             }
         }
-        // Stopped during the preparation (`callerGaveUp` cancels this task): the session leaves, which stops the
-        // preparation where it is. Asked from here, after `prepareImport` has been sent, so the leave can't reach the
-        // session before the preparation it is meant to stop.
+        // Stopped during the preparation (`stop(_:_:)` cancels this task): the session leaves, which stops the preparation
+        // where it is. A preparation not begun yet when the leave comes (it waited for an earlier leave) isn't begun at
+        // all: `WirelessSession.prepareImport` refuses a cancelled caller.
         let session = session(for: entry)
         let prepared: Result<any CameraLink, WirelessFailure> = await withTaskCancellationHandler {
             do throws(WirelessFailure) {
@@ -532,6 +585,14 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     }
 
     private func forward(_ phase: WirelessPhase, from id: CameraDescriptor.ID) async {
+        switch phase {
+        case .handingOff, .joining, .awaitingFront:
+            // A connection nobody waits for that was finishing on the camera's network has fallen back to Bluetooth and
+            // the join (a reopen in the stay that the camera didn't answer): stopped now.
+            if unwanted.contains(id), !opened.contains(id), let connection = inFlight[id] { stop(id, connection) }
+        case .idle, .openingSession, .ready, .staying, .leaving, .paused:
+            break
+        }
         var remaining: Duration?
         if case .staying = phase { remaining = await sessions[id]?.stayRemaining }
         eventSink.yield(.phase(id, phase, stayRemaining: remaining))
