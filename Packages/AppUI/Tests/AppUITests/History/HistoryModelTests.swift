@@ -119,6 +119,9 @@ struct HistoryWordingTests {
         #expect(HistoryWording.outcome(.stopped(reason: CameraLinkFailure.Kind.phoneStorageFull.rawValue),
                                        running: false) == "Stopped: this iPhone is out of space")
         #expect(HistoryWording.outcome(.stopped(reason: "something-new"), running: false) == "Stopped")
+        // A keepers job Photos refused (I12).
+        #expect(HistoryWording.outcome(.stopped(reason: JobRecord.Outcome.photosAccessReason), running: false)
+            == "Stopped: Photos access needed")
         #expect(HistoryWording.outcome(.catalogueUnavailable, running: false)
             == "Stopped: Shutter Bridge couldn't read or update its catalogue")
         #expect(HistoryWording.outcome(nil, running: false) == "Stopped early")

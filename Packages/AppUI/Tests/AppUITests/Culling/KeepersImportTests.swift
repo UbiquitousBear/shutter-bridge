@@ -732,6 +732,48 @@ struct KeepersImportTests {
         #expect(await camera.bytesStarted == 0)
     }
 
+    /// While a keepers job runs, the app's History takes it as the running job (I10): its row reads In progress, not
+    /// Stopped early, and its camera's imports can't be forgotten, which would take the marker of a commit in flight.
+    /// Through `AppModel`, whose other uses of the running import still leave a keepers job out.
+    @Test func theAppsHistoryTakesARunningKeepersJobAsTheRunningJob() async throws {
+        let documents = FileManager.default.temporaryDirectory
+            .appendingPathComponent("KeepersImportTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: documents) }
+        let two = TwoCameras(in: documents)
+        let camA = CameraKey(rawValue: "cam-a")
+        let catalogue = InMemoryCatalogue(records: two.all.map(\.record))
+        await catalogue.upsertCamera(CameraRecord(key: camA, model: "ILCE-7CM2", friendlyName: "ILCE-7CM2"))
+        try await catalogue.setMark(.keep, for: [two.a1.key, two.b1raw.key, two.b1jpg.key])
+        let app = AppModel(discovery: FakeDiscovery(link: FakeLink(items: [])), services: services(),
+                           catalogue: catalogue,
+                           engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
+                           settingsStore: InMemoryDestinationSettingStore(), photos: FakePhotosAccess(),
+                           destinations: FakeDestinations(), cameraKey: CameraKeys.fromDescriptor)
+        let loader = FakeLoader()
+        loader.autoRelease = true
+        let cull: CullModel<String> = app.stagingModel(documents: documents, loader: loader)
+        await cull.load()
+        let reader = HoldingReader()
+        let keepers = app.keepersImport(documents: documents, reader: reader)
+        let rows = cull.rows
+        let run = Task { @MainActor in await keepers.start(.all, in: rows) }
+        #expect(await eventually { reader.waiting > 0 })
+        #expect(app.importer.activeJobKey == camA)
+
+        let history = app.historyModel(documents: documents)
+        await history.load()
+        let row = try #require(history.sections.flatMap(\.rows).first { $0.camera == camA })
+        #expect(row.outcome == "In progress")
+        let camera = try #require(history.forgettableCameras.first { $0.keys.contains(camA) })
+        await history.forgetImports(of: camera)
+        #expect(history.notice?.text == "Wait for the import from ILCE-7CM2 to finish, then forget its imports.")
+
+        reader.release()
+        await run.value
+        keepers.keepStaged()
+        #expect(app.importer.activeJobKey == nil)
+    }
+
     @Test func aSecondStartWhileOneRunsIsIgnored() async throws {
         let reader = HoldingReader()
         let (rig, _) = try await twoCameras(reader: reader)

@@ -95,6 +95,9 @@ public enum HistoryWording {
         case let .stopped(reason):
             if let kind = CameraLinkFailure.Kind(rawValue: reason) {
                 "Stopped: " + withoutFullStop(ImportWording.stopReason(kind))
+            } else if reason == JobRecord.Outcome.photosAccessReason {
+                // A keepers job Photos refused (I12): the Import screen's "Photos access needed".
+                "Stopped: Photos access needed"
             } else {
                 "Stopped"
             }
