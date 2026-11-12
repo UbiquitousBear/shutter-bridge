@@ -156,7 +156,7 @@ struct OneNamePerBodyTests {
         #expect(destinations.stagingFolderName == "ILCE-7CM2")
         let photos = try #require(destinations.photos as? PhotosLibraryDestination)
         #expect(photos.albumPlan.albums == [.init(key: "camera-name:ILCE-7CM2", title: "ILCE-7CM2",
-                                                  legacyKeys: ["camera:" + mscKey.rawValue])])
+                                                  legacyKeys: ["camera:" + mscKey.rawValue], legacyKeyPrefix: "camera:")])
     }
 
     // MARK: The Cameras screen

@@ -80,11 +80,12 @@ public actor PhotosLibraryDestination: ImportDestination {
     public func filedAlbumIdentifier() async -> String? { filedAlbum }
 
     /// The identifiers of the plan's albums that accept photos: found by the stored identifier; else an album an
-    /// earlier build stored under one of the album's legacy keys (`AlbumPlan.Album.legacyKeys`, D11), adopted under its
-    /// key; else created (once) and stored when there is none or the stored one is gone. An album found by its key
-    /// that refuses new content is skipped and noted, not recreated (it is still the person's album). A legacy album
-    /// that refuses new content isn't adopted: the album's key is shared by every camera key with that name, so
-    /// adopting it would leave all of them without an album; it is left as it is and the next legacy key is tried.
+    /// earlier build stored under one of the album's legacy keys, with the album's title (`AlbumPlan.Album.legacyKeys`,
+    /// D11), adopted under its key; else created (once) and stored when there is none or the stored one is gone. An
+    /// album found by its key that refuses new content is skipped and noted, not recreated (it is still the person's
+    /// album). A legacy album that refuses new content isn't adopted: the album's key is shared by every camera key
+    /// with that name, so adopting it would leave all of them without an album; it is left as it is and the next
+    /// legacy key is tried.
     ///
     /// Commits overlap (two downloads in flight, and the save runs off the download path), and this actor suspends
     /// while it reads the store and asks the library, so a second commit could otherwise find no identifier too and
@@ -133,9 +134,9 @@ public actor PhotosLibraryDestination: ImportDestination {
                                 store: any AlbumIdentifierStore) async -> AlbumResolution {
         if let stored = await store.albumIdentifier(forKey: album.key) {
             switch await library.album(withIdentifier: stored) {
-            case .found(canAddContent: true):
+            case .found(canAddContent: true, _):
                 return .identifier(stored)
-            case .found(canAddContent: false):
+            case .found(canAddContent: false, _):
                 return .issue(.doesNotAcceptPhotos(key: album.key))
             case .missing:
                 break // deleted: adopt or make a new one below
@@ -152,19 +153,28 @@ public actor PhotosLibraryDestination: ImportDestination {
         }
     }
 
-    /// The first legacy key's album still in the library that accepts photos, stored under `album.key` too; nil when
-    /// there is none. A legacy entry is never written or removed. Each adoption is recorded under
+    /// The first legacy key's album still in the library that accepts photos and has the album's title, stored under
+    /// `album.key` too; nil when there is none. The album's own legacy keys are tried first (the job's camera key's),
+    /// then every other stored key with `legacyKeyPrefix`, in key order, so an MSC or Wi-Fi job finds the album the
+    /// body's MTP key made with the model's name (`AlbumPlan.Album.legacyKeys` says why the title has to match). A
+    /// legacy entry is never written or removed. Each adoption is recorded under
     /// `adoptionKey(forLegacy:)`, naming the key that took it, and a legacy key another key has taken is passed over:
-    /// one camera key's old album is adopted by one name only. Otherwise a key seen under two names (the MSC key's
-    /// "ILCE-7CM2" and, once another body is attached, the shared "Camera") would give its old album to both, and a
-    /// second body's photos would be filed into the first body's album.
+    /// one camera key's old album is adopted by one name only. The title check already keeps two names from adopting
+    /// one album at once (each name's album has that name as its title); this keeps an adopted album the person later
+    /// renames to another camera's name ("Camera" renamed "ILCE-7CM2") from being adopted by that name as well, which
+    /// would file both names' photos into one album.
     private static func adoptLegacy(_ album: AlbumPlan.Album, library: any PhotoLibraryClient,
                                     store: any AlbumIdentifierStore) async -> AlbumResolution? {
-        for legacy in album.legacyKeys {
+        var candidates = album.legacyKeys
+        if let prefix = album.legacyKeyPrefix {
+            candidates += await store.storedKeys().filter { $0.hasPrefix(prefix) && !candidates.contains($0) }.sorted()
+        }
+        for legacy in candidates {
             let adoption = AlbumPlan.adoptionKey(forLegacy: legacy)
             if let takenBy = await store.albumIdentifier(forKey: adoption), takenBy != album.key { continue }
             guard let id = await store.albumIdentifier(forKey: legacy) else { continue }
-            guard case .found(canAddContent: true) = await library.album(withIdentifier: id) else { continue }
+            guard case let .found(canAddContent: true, title) = await library.album(withIdentifier: id),
+                  title == album.title else { continue }
             await store.setAlbumIdentifier(album.key, forKey: adoption)
             await store.setAlbumIdentifier(id, forKey: album.key)
             return .identifier(id)
