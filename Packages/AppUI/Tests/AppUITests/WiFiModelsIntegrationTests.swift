@@ -336,6 +336,46 @@ struct WiFiAppModelTests {
         #expect(session.count("prepare") == 1)
     }
 
+    /// Import new photos through the real source and composite (Shamil, 12 Nov): inside the stay the camera is still
+    /// joined, so its live Browse opens and reopens it with no join; once the session has left, the offline Browse offers
+    /// Connect and nothing is asked of the session.
+    @Test func importNewPhotosGoesLiveInsideTheStayAndOffersConnectOnceTheCameraIsLeft() async throws {
+        let b = bench()
+        let files = [item("DSC00001.ARW", at: 10, size: 1_000), item("DSC00002.ARW", at: 20, size: 2_000)]
+        let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)
+        let session = b.connecting.session(for: WiFiCameraEntry(
+            descriptor: descriptor, key: nil, peripheral: peripheral, guid: UUID())) as! FakeSession
+        session.script(.success(FakeWiFiLink(items: files)))
+        await b.app.scenePhaseChanged(.active)
+        #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
+        // Browsed once, so its key is known; then Browse is closed and the stay starts.
+        let first = b.app.browseModel(for: descriptor)
+        let firstRun = Task { await first.run() }
+        #expect(await eventuallyLong { first.phase == .listed })
+        let key = try #require(await b.source.knownKey(for: descriptor.id))
+        firstRun.cancel()
+        #expect(await bounded(firstRun) != nil)
+        #expect(await waitUntil { session.count("importFinished") == 1 })
+        #expect(session.count("prepare") == 1)
+
+        // Inside the stay: the live Browse.
+        session.set(phase: .staying)
+        b.app.cameras.path = []
+        let asked = Task { await b.app.importNewPhotos(cameraWith: key, waitingForCamera: .zero,
+                                                       waitingForImport: .milliseconds(200)) }
+        #expect(await eventuallyLong { b.app.cameras.path == [descriptor] })
+        _ = await asked.value
+        b.app.cameras.path = []
+
+        // The session has left: the offline Browse with Connect, and the session isn't asked to prepare.
+        session.set(phase: .idle)
+        let start = await b.app.importNewPhotos(cameraWith: key, waitingForCamera: .zero)
+        #expect(start == .waitingForConnection(choice: .photos, cardRead: true))
+        let shown = try #require(b.app.cameras.path.last)
+        #expect(b.app.cameras.isOffline(shown.id))
+        #expect(session.count("prepare") == 1)
+    }
+
     @Test func theSceneReachesTheSessionsAfterTheImportsOwnRule() async throws {
         let b = bench()
         let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)

@@ -191,13 +191,27 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         declined.contains(id)
     }
 
-    /// Whether `cameraLink(for:)` would start no new connection: a connection is under way (the caller would wait for
-    /// it), or the live link would be handed out again (its session still `.ready`). A camera listed but never opened, or
-    /// whose link died or was let go, isn't: opening it joins.
+    /// Whether `cameraLink(for:)` would join nothing new:
+    /// - a connection the source began is under way (the caller would wait for it);
+    /// - the camera's session is preparing by itself (handing off, joining, waiting for the front, opening its session):
+    ///   the Wi-Fi recovery reopens through the session, past the source, and `WirelessSession.prepareImport` shares a
+    ///   preparation under way;
+    /// - the session is staying, still on the camera's network: a reopen needs no join (unless the camera doesn't answer
+    ///   within `WiFiRecoveryTiming.waitBeforeBluetooth`, when the session falls back to Bluetooth and the join);
+    /// - or the live link would be handed out again (its session `.ready`; a typed-address camera has no session).
+    ///
+    /// A camera listed but never opened, left, paused, or whose link died or was let go, isn't: opening it joins.
     public func isConnected(_ id: CameraDescriptor.ID) async -> Bool {
         if inFlight[id] != nil { return true }
-        guard live[id] != nil else { return false }
-        return await isReusable(id)
+        guard let session = sessions[id] else { return live[id] != nil }
+        switch await session.phase {
+        case .handingOff, .joining, .awaitingFront, .openingSession, .staying:
+            return true
+        case .ready:
+            return live[id] != nil
+        case .idle, .leaving, .paused:
+            return false
+        }
     }
 
     // MARK: - Setting cameras up
