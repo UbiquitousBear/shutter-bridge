@@ -52,29 +52,29 @@ public enum ReminderActivity: Sendable, Hashable {
 
 /// The copy of the reminder's settings. British English. "Nearby", never "switched on" (decision 8).
 public enum ReminderWording {
-    public static let title = "Reminders"
-    public static let toggle = "Remind Me When My Camera Is Nearby"
-    public static let quietHoursHeader = "Quiet Hours"
-    public static let quietFrom = "From"
-    public static let quietTo = "To"
-    public static let camerasHeader = "Remind Me About"
-    public static let camerasFooter = "Switch a camera off to stop reminders about it."
+    public static let title = AppText.string("Reminders")
+    public static let toggle = AppText.string("Remind Me When My Camera Is Nearby")
+    public static let quietHoursHeader = AppText.string("Quiet Hours")
+    public static let quietFrom = AppText.string("From")
+    public static let quietTo = AppText.string("To")
+    public static let camerasHeader = AppText.string("Remind Me About")
+    public static let camerasFooter = AppText.string("Switch a camera off to stop reminders about it.")
     /// Under the toggle: what a reminder is, and the limits of the scan (backlog section 11).
     public static let footer = [
-        "A reminder says your camera is nearby, once, and not again for 4 hours.",
+        AppText.string("A reminder says your camera is nearby, once, and not again for 4 hours."),
         ProximityWording.cameraSetting,
         ProximityWording.swipeAwayStops,
         ProximityWording.lowPowerMayStop,
     ].joined(separator: " ")
     /// When notifications are off for the app in Settings.
     public static let notificationsOff =
-        "Notifications are off for Shutter Bridge. Turn them on in Settings to get reminders."
+        AppText.string("Notifications are off for Shutter Bridge. Turn them on in Settings to get reminders.")
 
     /// The line under the quiet hours, "No reminders from 22:00 to 08:00."
     public static func quietSummary(_ hours: QuietHours) -> String {
-        guard hours.startMinute != hours.endMinute else { return "No quiet hours." }
-        return "No reminders from \(QuietHours.label(forMinute: hours.startMinute)) to "
-            + "\(QuietHours.label(forMinute: hours.endMinute))."
+        guard hours.startMinute != hours.endMinute else { return AppText.string("No quiet hours.") }
+        return AppText.format("No reminders from %@ to %@.", QuietHours.label(forMinute: hours.startMinute),
+                              QuietHours.label(forMinute: hours.endMinute))
     }
 }
 

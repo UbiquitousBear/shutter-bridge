@@ -44,13 +44,14 @@ public struct ProximityArrival: Sendable, Equatable {
 public enum ProximityWording {
     /// iOS doesn't relaunch an app the person swipes away (per Apple; untested), so the scan stops with it.
     public static let swipeAwayStops =
-        "If you swipe Shutter Bridge away in the app switcher, reminders stop until you next open it."
+        AppText.string("If you swipe Shutter Bridge away in the app switcher, reminders stop until you next open it.")
     /// Low Power Mode didn't stop background discovery in the two runs that had it on (3 and 4 to 5 Nov); the copy says "may
     /// stop" until it is tested on purpose (decision-pack.md, 3.12).
-    public static let lowPowerMayStop = "Low Power Mode may stop reminders."
+    public static let lowPowerMayStop = AppText.string("Low Power Mode may stop reminders.")
     /// The camera advertised while off with *Remote Power ON/OFF* On; with it Off it is untested, so the setup names it.
     public static let cameraSetting =
-        "On the camera, turn on Bluetooth Function and Remote Power ON/OFF so it can be noticed nearby while it's off."
+        AppText.string("On the camera, turn on Bluetooth Function and Remote Power ON/OFF so it can be noticed nearby "
+            + "while it's off.")
 }
 
 /// The proximity scan's model: off until the reminder is switched on (decided 9 Nov: off by default).

@@ -6,23 +6,27 @@ import Foundation
 /// Writing). Every line names the camera by its display name, never its key or serial. `locale`, `calendar` and
 /// `timeZone` are for tests; the app passes nothing.
 public enum HistoryWording {
-    public static let title = "History"
-    public static let allCameras = "All Cameras"
-    public static let filterMenu = "Camera"
-    public static let loading = "Reading History…"
-    public static let emptyTitle = "No Imports Yet"
-    public static let emptyDetail = "Imports and staging from your cameras are listed here, newest first."
-    public static let loadFailedTitle = "Couldn't Read History"
-    public static let loadFailedDetail = "Shutter Bridge couldn't read its catalogue. Try again in a moment."
-    public static let tryAgain = "Try Again"
-    public static let resume = "Resume"
-    public static let resumeHint = "Opens Import with the files this job didn't finish, when the camera is connected."
-    public static let rerun = "Re-run Failed Files"
-    public static let rerunHint = "Opens Import with this job's failed files that still aren't imported, when the camera "
-        + "is connected."
-    public static let openStagingHint = "Shows this job's folder in Staging."
-    public static let forgetImportsAction = "Forget Imports"
-    public static let showInStaging = "Show in Staging"
+    public static let title = AppText.string("History")
+    public static let allCameras = AppText.string("All Cameras")
+    public static let filterMenu = AppText.string("Camera")
+    public static let loading = AppText.string("Reading History…")
+    public static let emptyTitle = AppText.string("No Imports Yet")
+    public static let emptyDetail = AppText.string("Imports and staging from your cameras are listed here, newest "
+        + "first.")
+    public static let loadFailedTitle = AppText.string("Couldn't Read History")
+    public static let loadFailedDetail = AppText.string("Shutter Bridge couldn't read its catalogue. Try again in a "
+        + "moment.")
+    public static let tryAgain = AppText.string("Try Again")
+    public static let resume = AppText.string("Resume")
+    public static let resumeHint = AppText.string("Opens Import with the files this job didn't finish, when the camera "
+        + "is connected.")
+    public static let rerun = AppText.string("Re-run Failed Files")
+    public static let rerunHint = AppText.string("Opens Import with this job's failed files that still aren't "
+        + "imported, when the camera "
+        + "is connected.")
+    public static let openStagingHint = AppText.string("Shows this job's folder in Staging.")
+    public static let forgetImportsAction = AppText.string("Forget Imports")
+    public static let showInStaging = AppText.string("Show in Staging")
 
     // MARK: - A job's row
 
@@ -30,9 +34,9 @@ public enum HistoryWording {
     /// from Staging (D6).
     public static func title(_ purpose: JobRecord.Purpose, camera: String) -> String {
         switch purpose {
-        case .import: "Import from \(camera)"
-        case .stage: "Stage from \(camera)"
-        case .keepers: "Keepers from \(camera) to Photos"
+        case .import: AppText.format("Import from %@", camera)
+        case .stage: AppText.format("Stage from %@", camera)
+        case .keepers: AppText.format("Keepers from %@ to Photos", camera)
         }
     }
 
@@ -41,11 +45,21 @@ public enum HistoryWording {
     /// "Nothing imported" or "Nothing staged".
     public static func counts(_ job: JobRecord) -> String {
         var parts: [String] = []
-        if job.filesImported > 0 { parts.append("\(job.filesImported) imported") }
-        if job.filesStaged > 0 { parts.append("\(job.filesStaged) staged") }
-        if parts.isEmpty { parts.append(job.purpose == .stage ? "Nothing staged" : "Nothing imported") }
-        if job.filesSkipped > 0 { parts.append("\(job.filesSkipped) skipped") }
-        if job.filesFailed > 0 { parts.append("\(job.filesFailed) failed") }
+        if job.filesImported > 0 {
+            parts.append(AppText.counted(job.filesImported, one: "%lld imported", other: "%lld imported"))
+        }
+        if job.filesStaged > 0 {
+            parts.append(AppText.counted(job.filesStaged, one: "%lld staged", other: "%lld staged"))
+        }
+        if parts.isEmpty {
+            parts.append(job.purpose == .stage ? AppText.string("Nothing staged") : AppText.string("Nothing imported"))
+        }
+        if job.filesSkipped > 0 {
+            parts.append(AppText.counted(job.filesSkipped, one: "%lld skipped", other: "%lld skipped"))
+        }
+        if job.filesFailed > 0 {
+            parts.append(AppText.counted(job.filesFailed, one: "%lld failed", other: "%lld failed"))
+        }
         return parts.joined(separator: ", ")
     }
 
@@ -89,19 +103,19 @@ public enum HistoryWording {
     /// "In progress" while it runs and "Stopped early" once it doesn't (the app's end interrupted it, section 4).
     public static func outcome(_ outcome: JobRecord.Outcome?, running: Bool) -> String {
         switch outcome {
-        case nil: running ? "In progress" : "Stopped early"
-        case .completed: "Finished"
-        case .cancelled: "Cancelled"
+        case nil: running ? AppText.string("In progress") : AppText.string("Stopped early")
+        case .completed: AppText.string("Finished")
+        case .cancelled: AppText.string("Cancelled")
         case let .stopped(reason):
             if let kind = CameraLinkFailure.Kind(rawValue: reason) {
-                "Stopped: " + withoutFullStop(ImportWording.stopReason(kind))
+                AppText.format("Stopped: %@", withoutFullStop(ImportWording.stopReason(kind)))
             } else if reason == JobRecord.Outcome.photosAccessReason {
                 // A keepers job Photos refused (I12): the Import screen's "Photos access needed".
-                "Stopped: Photos access needed"
+                AppText.string("Stopped: Photos access needed")
             } else {
-                "Stopped"
+                AppText.string("Stopped")
             }
-        case .catalogueUnavailable: "Stopped: Shutter Bridge couldn't read or update its catalogue"
+        case .catalogueUnavailable: AppText.string("Stopped: Shutter Bridge couldn't read or update its catalogue")
         }
     }
 
@@ -115,8 +129,9 @@ public enum HistoryWording {
     public static func place(_ job: JobRecord, camera: String) -> String? {
         switch job.destination {
         case nil: nil
-        case .photos: job.albumIdentifier == nil ? "Photos" : "Photos, album “\(camera)”"
-        case .staging: job.purpose == .stage ? "Staging" : "Staging instead of Photos"
+        case .photos:
+            job.albumIdentifier == nil ? AppText.string("Photos") : AppText.format("Photos, album “%@”", camera)
+        case .staging: job.purpose == .stage ? AppText.string("Staging") : AppText.string("Staging instead of Photos")
         }
     }
 
@@ -138,22 +153,24 @@ public enum HistoryWording {
     /// The *Resumable* line: "Resumable: 12 files left", or "Resumable" when how many isn't known (the card was never
     /// listed).
     public static func resumable(filesLeft: Int?) -> String {
-        guard let filesLeft else { return "Resumable" }
-        return "Resumable: \(ByteWording.files(filesLeft)) left"
+        guard let filesLeft else { return AppText.string("Resumable") }
+        return AppText.format("Resumable: %@ left", ByteWording.files(filesLeft))
     }
 
     /// The re-run line: "2 failed files not imported yet" ("not staged yet" for a stage job).
     public static func failedLeft(_ count: Int, purpose: JobRecord.Purpose) -> String {
-        let files = count == 1 ? "1 failed file" : "\(count) failed files"
-        return files + (purpose == .stage ? " not staged yet" : " not imported yet")
+        purpose == .stage
+            ? AppText.counted(count, one: "%lld failed file not staged yet", other: "%lld failed files not staged yet")
+            : AppText.counted(count, one: "%lld failed file not imported yet", other: "%lld failed files not imported "
+                + "yet")
     }
 
     /// The row as VoiceOver reads it, one line per job (section 4): its title and time, how it ended, the counts, the
     /// bytes and how long it took, where the files went and, when it applies, *Resumable* or the failures left.
     public static func rowAccessibility(title: String, time: String, outcome: String, counts: String, bytes: String,
                                         durationSpoken: String?, place: String?, action: String?) -> String {
-        var line = "\(title), \(time). \(outcome). \(counts). \(bytes)"
-        if let durationSpoken { line += " in \(durationSpoken)" }
+        var line = AppText.format("%@, %@. %@. %@. %@", title, time, outcome, counts, bytes)
+        if let durationSpoken { line += " " + AppText.format("in %@", durationSpoken) }
         line += "."
         if let place { line += " \(place)." }
         if let action { line += " \(action)." }
@@ -165,27 +182,29 @@ public enum HistoryWording {
     /// The camera isn't connected (or, over Wi-Fi, isn't open in Browse): History never starts a join by itself.
     public static func connectCamera(_ name: String, carrier: JobRecord.Carrier?) -> String {
         switch carrier {
-        case .wifi: "Open \(name) in Cameras to connect over Wi-Fi, then tap here again."
-        case .usb, .staging, nil: "Connect \(name) with its USB-C cable, then tap here again."
+        case .wifi: AppText.format("Open %@ in Cameras to connect over Wi-Fi, then tap here again.", name)
+        case .usb, .staging, nil: AppText.format("Connect %@ with its USB-C cable, then tap here again.", name)
         }
     }
 
     /// Everything the job would queue is done already.
     public static func nothingLeft(purpose: JobRecord.Purpose) -> String {
-        purpose == .stage ? "Nothing left to stage: those files are staged already."
-            : "Nothing left to import: those files are imported already."
+        purpose == .stage ? AppText.string("Nothing left to stage: those files are staged already.")
+            : AppText.string("Nothing left to import: those files are imported already.")
     }
 
     public static func listingFailed(_ name: String) -> String {
-        "Shutter Bridge couldn't read the card in \(name). Try again."
+        AppText.format("Shutter Bridge couldn't read the card in %@. Try again.", name)
     }
 
     /// Failed files of a re-run that the card no longer has: "2 failed files are no longer on the card."
     public static func missing(_ count: Int) -> String {
-        count == 1 ? "1 failed file is no longer on the card." : "\(count) failed files are no longer on the card."
+        AppText.counted(count, one: "%lld failed file is no longer on the card.",
+                        other: "%lld failed files are no longer on the card.")
     }
 
-    public static let catalogueFailed = "Shutter Bridge couldn't read its catalogue. Try again in a moment."
+    public static let catalogueFailed = AppText.string("Shutter Bridge couldn't read its catalogue. Try again in a "
+        + "moment.")
 
     // MARK: - Forget imports (D6)
 
@@ -205,27 +224,26 @@ public enum HistoryWording {
 
     public static func forgetConfirmation(camera: String) -> ForgetConfirmation {
         ForgetConfirmation(
-            title: "Forget Imports from \(camera)?",
-            message: "Shutter Bridge will forget which photos it imported from \(camera), so they show as new on its "
-                + "card and could be imported again. The photos stay in Photos, staged copies stay in Staging, and "
-                + "nothing on the camera changes.",
-            footer: "A photo also imported from another camera stays imported.",
-            confirm: "Forget Imports",
-            cancel: "Cancel")
+            title: AppText.format("Forget Imports from %@?", camera),
+            message: AppText.format("Shutter Bridge will forget which photos it imported from %@, so they show as new "
+                + "on "
+                + "its card and could be imported again. The photos stay in Photos, staged copies stay in Staging, and "
+                + "nothing on the camera changes.", camera),
+            footer: AppText.string("A photo also imported from another camera stays imported."),
+            confirm: AppText.string("Forget Imports"),
+            cancel: AppText.string("Cancel"))
     }
 
     /// *Forget imports* asked for while that camera's import is running or paused.
     public static func forgetWhileImporting(_ camera: String) -> String {
-        "Wait for the import from \(camera) to finish, then forget its imports."
+        AppText.format("Wait for the import from %@ to finish, then forget its imports.", camera)
     }
 
     /// After *Forget imports*: "Forgot 48 imports from ILCE-7CM2.", or that there was nothing to forget.
     public static func forgot(_ count: Int, camera: String) -> String {
-        switch count {
-        case 0: "There were no imports from \(camera) to forget."
-        case 1: "Forgot 1 import from \(camera)."
-        default: "Forgot \(count) imports from \(camera)."
-        }
+        count == 0 ? AppText.format("There were no imports from %@ to forget.", camera)
+            : AppText.format("Forgot %@ from %@.", AppText.counted(count, one: "%lld import", other: "%lld imports"),
+                             camera)
     }
 
     // MARK: - The camera's name
@@ -244,5 +262,5 @@ public enum HistoryWording {
 
     // MARK: - The running import, as the tab bar's accessory
 
-    public static let accessoryHint = "Opens the import."
+    public static let accessoryHint = AppText.string("Opens the import.")
 }
