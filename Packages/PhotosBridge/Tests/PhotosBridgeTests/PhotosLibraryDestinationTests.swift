@@ -302,6 +302,153 @@ struct PhotosLibraryDestinationTests {
     }
 }
 
+/// The album a job's record keeps (`filedAlbumIdentifier()`, backlog section 4): the plan's first, once a save has gone
+/// into it. The keys are read from the plan, not written out, so a change of keying (D11) doesn't touch these tests.
+@Suite("The filed album (History)")
+struct FiledAlbumTests {
+    let date = Date(timeIntervalSince1970: 1_793_142_018)
+
+    func plan(_ choice: PhotosImportOptions.Albums = .perCamera) -> AlbumPlan {
+        AlbumPlan(choice: choice, cameraKey: "serial-1", cameraName: "ILCE-7CM2", importID: "job-1", importDate: date,
+                  importTitle: "ILCE-7CM2, 8 Nov")
+    }
+
+    @Test("The filed album is the plan's first album once a save has gone into it, created or found")
+    func filedAlbumIsTheFirstAlbumOnceASaveWentIn() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        let store = InMemoryAlbumIdentifierStore()
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        let key = d.albumPlan.albums[0].key
+        #expect(await d.filedAlbumIdentifier() == nil, "no save yet")
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        let made = try #require(await store.albumIdentifier(forKey: key))
+        #expect(await d.filedAlbumIdentifier() == made)
+        // As the engine reads it: through the protocol, not its extension's default.
+        let erased: any ImportDestination = d
+        #expect(await erased.filedAlbumIdentifier() == made)
+
+        // Found by its stored identifier: no album made.
+        let found = FakePhotoLibrary()
+        await found.addAlbum("OURS", title: "ILCE-7CM2", canAdd: true)
+        let next = PhotosLibraryDestination(library: found, albumStore: InMemoryAlbumIdentifierStore([key: "OURS"]),
+                                            albumPlan: plan())
+        _ = try await next.commit(.single(try s.stage("B.JPG")))
+        #expect(await next.filedAlbumIdentifier() == "OURS")
+        #expect(await found.createdAlbumTitles.isEmpty)
+    }
+
+    @Test("With both albums the filed album is the per-camera one; with one per import, the import's")
+    func filedAlbumFollowsTheChoice() async throws {
+        let s = try Scratch()
+        let store = InMemoryAlbumIdentifierStore()
+        let both = PhotosLibraryDestination(library: FakePhotoLibrary(), albumStore: store, albumPlan: plan(.both))
+        _ = try await both.commit(.single(try s.stage("A.JPG")))
+        let perCamera = try #require(await store.albumIdentifier(forKey: both.albumPlan.albums[0].key))
+        let perImport = try #require(await store.albumIdentifier(forKey: both.albumPlan.albums[1].key))
+        #expect(await both.filedAlbumIdentifier() == perCamera)
+        #expect(perCamera != perImport)
+
+        let own = InMemoryAlbumIdentifierStore()
+        let library = FakePhotoLibrary()
+        let job = PhotosLibraryDestination(library: library, albumStore: own, albumPlan: plan(.perImport))
+        _ = try await job.commit(.single(try s.stage("B.JPG")))
+        #expect(await job.filedAlbumIdentifier() == (await own.albumIdentifier(forKey: job.albumPlan.albums[0].key)))
+        #expect(await library.createdAlbumTitles == ["ILCE-7CM2, 8 Nov"])
+    }
+
+    @Test("No filed album when the album refuses content, can't be made, or the plan has none (album off)")
+    func noFiledAlbumWhenTheAlbumIsSkipped() async throws {
+        let s = try Scratch()
+        let refusing = FakePhotoLibrary()
+        await refusing.addAlbum("SHARED", title: "ILCE-7CM2", canAdd: false)
+        let store = InMemoryAlbumIdentifierStore([plan().albums[0].key: "SHARED"])
+        let shared = PhotosLibraryDestination(library: refusing, albumStore: store, albumPlan: plan())
+        _ = try await shared.commit(.single(try s.stage("A.JPG")))
+        #expect(await shared.filedAlbumIdentifier() == nil)
+
+        // Creating it fails for another reason than a denial (as Limited Access may): saved without it.
+        let failing = FakePhotoLibrary()
+        await failing.setCreateFailure(PhotoLibraryFailure(domain: "PHPhotosErrorDomain", code: -1, detail: "x"))
+        let unmade = PhotosLibraryDestination(library: failing, albumStore: InMemoryAlbumIdentifierStore(),
+                                              albumPlan: plan())
+        _ = try await unmade.commit(.single(try s.stage("B.JPG")))
+        #expect(await failing.saved.count == 1)
+        #expect(await unmade.albumIssues.count == 1)
+        #expect(await unmade.filedAlbumIdentifier() == nil)
+
+        let off = PhotosLibraryDestination(library: FakePhotoLibrary(), albumStore: InMemoryAlbumIdentifierStore(),
+                                           albumPlan: AlbumPlan(albums: []))
+        _ = try await off.commit(.single(try s.stage("C.JPG")))
+        #expect(await off.filedAlbumIdentifier() == nil)
+    }
+
+    @Test("A save that fails or is refused files into no album, though the album was made for it")
+    func noFiledAlbumWhenTheSaveFails() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        let store = InMemoryAlbumIdentifierStore()
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        await library.setSaveFailure(PhotoLibraryFailure(domain: "PHPhotosErrorDomain", code: 3305))
+        await #expect(throws: ImportDestinationFailure.notEnoughSpace) {
+            try await d.commit(.single(try s.stage("A.JPG")))
+        }
+        #expect(await library.createdAlbumTitles == ["ILCE-7CM2"])
+        #expect(await d.filedAlbumIdentifier() == nil)
+        await library.setSaveFailure(PhotoLibraryFailure(domain: "PHPhotosErrorDomain", code: 3311))
+        await #expect(throws: ImportDestinationFailure.photosAccessDenied) {
+            try await d.commit(.single(try s.stage("B.JPG")))
+        }
+        #expect(await d.filedAlbumIdentifier() == nil)
+
+        await library.setSaveFailure(nil)
+        _ = try await d.commit(.single(try s.stage("C.JPG")))
+        #expect(await d.filedAlbumIdentifier() == (await store.albumIdentifier(forKey: d.albumPlan.albums[0].key)))
+        #expect(await d.filedAlbumIdentifier() != nil)
+    }
+
+    @Test("An album deleted mid-import and made again is the filed album")
+    func aRecreatedAlbumIsTheFiledOne() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        let store = InMemoryAlbumIdentifierStore()
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        let old = try #require(await d.filedAlbumIdentifier())
+        await library.deleteAlbum(old)
+        _ = try await d.commit(.single(try s.stage("B.JPG")))
+        let new = try #require(await d.filedAlbumIdentifier())
+        #expect(new != old)
+        #expect(new == (await store.albumIdentifier(forKey: d.albumPlan.albums[0].key)))
+        #expect(await library.createdAlbumTitles.count == 2)
+    }
+
+    @Test("A later save whose album was skipped keeps the album the earlier saves went into")
+    func aSkippedAlbumLaterKeepsTheFiledOne() async throws {
+        let s = try Scratch()
+        let library = FakePhotoLibrary()
+        let store = InMemoryAlbumIdentifierStore()
+        let d = PhotosLibraryDestination(library: library, albumStore: store, albumPlan: plan())
+        _ = try await d.commit(.single(try s.stage("A.JPG")))
+        let filed = try #require(await d.filedAlbumIdentifier())
+        // The album deleted, and making it again fails: the next photo is saved without it.
+        await library.deleteAlbum(filed)
+        await library.setCreateFailure(PhotoLibraryFailure(domain: "PHPhotosErrorDomain", code: -1, detail: "x"))
+        _ = try await d.commit(.single(try s.stage("B.JPG")))
+        #expect(await d.filedAlbumIdentifier() == filed)
+    }
+
+    @Test("The staging folder files into no album")
+    func theStagingFolderFilesIntoNoAlbum() async throws {
+        let s = try Scratch()
+        let staging: any ImportDestination = StagingFolderDestination(
+            root: s.root.appendingPathComponent("Documents"), place: .onThisIPhone(.containerUnavailable),
+            cameraName: "ILCE-7CM2", timeZone: TimeZone(identifier: "UTC")!)
+        _ = try await staging.commit(.single(try s.stage("A.JPG")))
+        #expect(await staging.filedAlbumIdentifier() == nil)
+    }
+}
+
 @Suite("Photos error mapping")
 struct PhotosErrorMappingTests {
     @Test func mapping() {

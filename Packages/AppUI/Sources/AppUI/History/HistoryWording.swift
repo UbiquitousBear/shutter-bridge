@@ -1,6 +1,7 @@
 import Catalogue
 import CameraTransport
 import Foundation
+import PhotosBridge
 
 /// The History screen (backlog section 4; D6), in British English. Titles in title case, lines in sentence case (HIG
 /// Writing). Every line names the camera by its display name, never its key or serial. `locale`, `calendar` and
@@ -123,16 +124,31 @@ public enum HistoryWording {
         line.hasSuffix(".") ? String(line.dropLast()) : line
     }
 
-    /// Where the files went (D6): "Photos", "Photos, album “ILCE-7CM2”" when the job kept its album's identifier (the
-    /// album is named after the camera, D11), "Staging" for a stage job, "Staging instead of Photos" for an import
-    /// Photos refused; nil when the job never got that far.
-    public static func place(_ job: JobRecord, camera: String) -> String? {
+    /// Where the files went (D6): "Photos", "Photos, album “ILCE-7CM2”" when the job kept the identifier of the album
+    /// its saves went into (`albumTitle(_:camera:albums:)`), "Staging" for a stage job, "Staging instead of Photos" for
+    /// an import Photos refused (its album, if the saves before the refusal had one, isn't named: most of its files
+    /// are in Staging); nil when the job never got that far. A Photos job with no album (the album refused content or
+    /// couldn't be made, or the plan had none) is "Photos".
+    public static func place(_ job: JobRecord, camera: String,
+                             albums: PhotosImportOptions.Albums = PhotosImportOptions().albums) -> String? {
         switch job.destination {
         case nil: nil
         case .photos:
-            job.albumIdentifier == nil ? AppText.string("Photos") : AppText.format("Photos, album “%@”", camera)
+            job.albumIdentifier == nil ? AppText.string("Photos")
+                : AppText.format("Photos, album “%@”", albumTitle(job, camera: camera, albums: albums))
         case .staging: job.purpose == .stage ? AppText.string("Staging") : AppText.string("Staging instead of Photos")
         }
+    }
+
+    /// The title the job's album was given, without asking Photos: the record keeps the album plan's first album
+    /// (`ImportDestination.filedAlbumIdentifier()`), so it is that album's title in the plan the person's album choice
+    /// makes. One per camera, or both: the camera's name (D11). One per import: the camera's name and the job's start
+    /// ("ILCE-7CM2, 12 Nov 2026 at 14:05"), worked out again from the record, so it can read a minute later than the
+    /// title when the job started on a minute's turn. An album renamed in Photos, or made under an earlier name, still
+    /// reads by this one.
+    public static func albumTitle(_ job: JobRecord, camera: String, albums: PhotosImportOptions.Albums) -> String {
+        AlbumPlan(choice: albums, cameraKey: job.camera.rawValue, cameraName: camera, importID: job.id.uuidString,
+                  importDate: job.startedAt).albums.first?.title ?? camera
     }
 
     /// "14:05": when the job started, in the person's clock style.

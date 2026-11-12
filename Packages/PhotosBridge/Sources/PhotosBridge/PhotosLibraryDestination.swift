@@ -2,7 +2,8 @@ import Foundation
 
 /// The Photos destination's logic, over a `PhotoLibraryClient`: one asset per unit (a RAW+JPEG pair is one asset,
 /// with the original the person chose), the capture date and EXIF position on it, into the albums the person chose,
-/// each found by its stored `localIdentifier` and created once. Returns the asset's `localIdentifier`.
+/// each found by its stored `localIdentifier` and created once. Returns the asset's `localIdentifier`. After a save,
+/// `filedAlbumIdentifier()` names the plan's first album it went into, for History.
 ///
 /// A save refused as a denial (`PHPhotosErrorDomain` 3311, or 3310) throws `.photosAccessDenied`: not a failed file;
 /// the engine stages this unit and the rest instead. On a successful save the staged files are deleted (they are
@@ -22,6 +23,13 @@ public actor PhotosLibraryDestination: ImportDestination {
     /// Albums that couldn't take this import's photos, for the log and the Import screen: the photo is saved
     /// without them rather than failed.
     public private(set) var albumIssues: [AlbumIssue] = []
+
+    /// The identifier of the plan's first album (`albumPlan.albums.first`: the per-camera album for `.perCamera` and
+    /// `.both`, the per-import one for `.perImport`) as resolved for the latest save that went in with it; nil until
+    /// one has (no save yet, no album in the plan, or the first album skipped: it refuses new content, or it couldn't
+    /// be created, as under Limited Access if iOS refuses it there). A save that fails or is refused leaves it as it
+    /// was, even when the album was made for it; a later save whose first album was skipped doesn't clear it.
+    private var filedAlbum: String?
 
     public enum AlbumIssue: Sendable, Hashable {
         /// The album exists but `canPerform(.addContent)` is false.
@@ -54,16 +62,22 @@ public actor PhotosLibraryDestination: ImportDestination {
 
         let identifier: String
         do {
-            identifier = try await library.save(asset, toAlbums: albums)
+            identifier = try await library.save(asset, toAlbums: albums.identifiers)
         } catch {
             throw ImportDestinationFailure(photoLibraryFailure: error)
         }
+        if let first = albums.first { filedAlbum = first }
         for file in files { try? FileManager.default.removeItem(at: file.url) }
         return .photosAsset(localIdentifier: identifier)
     }
 
     /// The library, whichever albums the plan names.
     public nonisolated func commitTarget(for unit: CommitUnit) -> CommitTarget { .photosLibrary }
+
+    /// The plan's first album, once a save has gone into it (see `filedAlbum`): what the job's record keeps, and
+    /// History names. Declared `async`, as the requirement is: a synchronous one would lose, in an async caller, to the
+    /// protocol extension's default (nil).
+    public func filedAlbumIdentifier() async -> String? { filedAlbum }
 
     /// The identifiers of the plan's albums that accept photos: found by the stored identifier, or created (once)
     /// and stored when there is none or the stored one is gone. An album that refuses new content is skipped and
@@ -74,9 +88,13 @@ public actor PhotosLibraryDestination: ImportDestination {
     /// create a second album. Each key's resolution therefore runs once at a time: the task is registered before the
     /// first suspension point, and a commit that arrives meanwhile awaits the same task. The entry is dropped once
     /// it finishes, so the next commit looks again (an album deleted during the import is made again).
-    private func resolveAlbums() async throws(ImportDestinationFailure) -> [String] {
+    ///
+    /// `first` is the plan's first album's identifier when it is among them (nil when it was skipped), for
+    /// `filedAlbumIdentifier()`.
+    private func resolveAlbums() async throws(ImportDestinationFailure) -> (identifiers: [String], first: String?) {
         var identifiers: [String] = []
-        for album in albumPlan.albums {
+        var first: String?
+        for (index, album) in albumPlan.albums.enumerated() {
             let task: Task<AlbumResolution, Never>
             if let running = albumResolutions[album.key] {
                 task = running
@@ -88,12 +106,14 @@ public actor PhotosLibraryDestination: ImportDestination {
             let resolution = await task.value
             if albumResolutions[album.key] == task { albumResolutions[album.key] = nil }
             switch resolution {
-            case let .identifier(id): identifiers.append(id)
+            case let .identifier(id):
+                identifiers.append(id)
+                if index == 0 { first = id }
             case let .issue(issue): note(issue)
             case .denied: throw .photosAccessDenied
             }
         }
-        return identifiers
+        return (identifiers, first)
     }
 
     private enum AlbumResolution: Sendable {

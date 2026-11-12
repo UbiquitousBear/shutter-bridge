@@ -364,7 +364,7 @@ extension ImportEngine {
         case let .photosRefused(authorisation):
             stopForPhotosAccess(halves, authorisation, of: id)
             return false
-        case let .committed(outcomes, kind, written):
+        case let .committed(outcomes, kind, written, album):
             // A commit that finishes after its job ended (cancelled, stopped) still resolves its files on the ended
             // job, so the finished Import screen's rows and counts show them as imported or staged.
             guard let job = current(id) ?? endedJob(id) else { return false }
@@ -373,6 +373,10 @@ extension ImportEngine {
                 entry.resumable = nil // its folder went with the commit
                 resolve(entry, outcome, into: kind)
             }
+            // The album the save went into, for the record (History names it): kept once the files it holds are
+            // resolved, so the record never names an album for files it doesn't count yet.
+            let albumChanged = album != nil && album != job.albumIdentifier
+            if albumChanged { job.albumIdentifier = album }
             guard current(id) != nil else {
                 refreshState()
                 writeJobRecord(of: job)
@@ -389,6 +393,8 @@ extension ImportEngine {
             }
             if written {
                 refreshState()
+                // Written at once, so a job the app's end interrupts still names its album; `end` writes otherwise.
+                if albumChanged { writeJobRecord(of: job) }
             } else {
                 end(job, .catalogueUnavailable)
             }
@@ -413,11 +419,12 @@ extension ImportEngine {
 
     /// How a commit ended: committed, with what became of each file in the order given (imported or staged and
     /// where, or `.skipped(.alreadyStaged)` for one left out because it was to be staged and is staged already), into
-    /// which destination, and whether every row was written; failed, for every file of the unit; or not begun,
-    /// because its pending-commit marker couldn't be written (`markerNotWritten`: nothing reached the destination, or,
-    /// after Photos refused the save, nothing reached the staging folder).
+    /// which destination, whether every row was written, and the Photos album the save went into (the destination's
+    /// `filedAlbumIdentifier()`, nil for staging or when it went into none); failed, for every file of the unit; or
+    /// not begun, because its pending-commit marker couldn't be written (`markerNotWritten`: nothing reached the
+    /// destination, or, after Photos refused the save, nothing reached the staging folder).
     enum CommitResult: Sendable {
-        case committed([FileOutcome], DestinationKind, rowWritten: Bool)
+        case committed([FileOutcome], DestinationKind, rowWritten: Bool, album: String?)
         case failed(ImportDestinationFailure)
         case markerNotWritten
         /// Photos refused the save (3311) on a route with no fallback (a keepers job's): nothing was saved or staged,
@@ -449,7 +456,7 @@ extension ImportEngine {
         var outcomes = [FileOutcome?](repeating: nil, count: files.count)
         var going = Array(files.indices)
         let alreadyStaged = CommitResult.committed(outcomes.map { _ in .skipped(.alreadyStaged) }, .staging,
-                                                   rowWritten: true)
+                                                   rowWritten: true, album: nil)
         var used = route.destination
         if used.kind == .staging, !(await leaveOutStaged(files, going: &going, outcomes: &outcomes)) {
             return alreadyStaged
@@ -578,7 +585,11 @@ extension ImportEngine {
         if !written { unrecordedCommits[token] = writes }
         // Photos copies; the staging folder moves the file, leaving only its folder.
         for i in going { Self.discard(files[i]) }
-        return .committed(outcomes.map { $0 ?? .skipped(.alreadyStaged) }, used.kind, rowWritten: written)
+        // The album the save went into, for the job's record (History names it). Never after a refused save: `used`
+        // is the staging folder then.
+        let album = used.kind == .photos ? await used.filedAlbumIdentifier() : nil
+        return .committed(outcomes.map { $0 ?? .skipped(.alreadyStaged) }, used.kind, rowWritten: written,
+                          album: album)
     }
 
     /// Leaves out the files still `going` that are to be checked and have a staged copy in the catalogue: their
