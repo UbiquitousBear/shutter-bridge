@@ -44,24 +44,29 @@ public struct PendingCommitReport: Sendable, Hashable {
     public var notFound: Int
     /// Of `notFound`, those not found under Limited Access (or by the fallback): possibly in Photos twice now.
     public var possibleDuplicates: Int
+    /// Stage commits found whose every file already had a staged copy elsewhere (a later stage job staged it On My
+    /// iPhone while the marker waited for iCloud Drive): the marker removed, the existing rows kept and the spare copy
+    /// left where it is (`PendingCommitResolution.spareStagedCopy`).
+    public var spareCopies: Int
     /// Markers kept for a later pass: the lookup can't look yet, or the catalogue refused the write.
     public var waiting: Int
 
     public init(foundInPhotos: Int = 0, foundInStaging: Int = 0, replayed: Int = 0, notFound: Int = 0,
-                possibleDuplicates: Int = 0, waiting: Int = 0) {
+                possibleDuplicates: Int = 0, waiting: Int = 0, spareCopies: Int = 0) {
         self.foundInPhotos = foundInPhotos
         self.foundInStaging = foundInStaging
         self.replayed = replayed
         self.notFound = notFound
         self.possibleDuplicates = possibleDuplicates
         self.waiting = waiting
+        self.spareCopies = spareCopies
     }
 
     /// Whether rows were written, so what Browse shows as imported or staged may have changed.
     public var changedRows: Bool { foundInPhotos + foundInStaging > 0 }
 
     /// Whether the pass resolved anything (rows written or markers removed).
-    public var resolvedAny: Bool { changedRows || notFound > 0 }
+    public var resolvedAny: Bool { changedRows || notFound > 0 || spareCopies > 0 }
 }
 
 /// Why a marker's resolution came out as it did, for the trace (`EngineTrace.pendingCommitResolved`).
@@ -70,7 +75,13 @@ public enum PendingCommitResolution: String, Sendable, Hashable, CaseIterable {
     case replayed
     case foundInPhotos
     case foundInStaging
+    /// A stage commit found in its day folder, but every file already has a staged copy elsewhere (the next stage job
+    /// staged it On My iPhone while this marker waited for iCloud Drive): the existing rows are kept, the marker
+    /// removed, and the spare copy left where it is, since a person's file is never deleted.
+    case spareStagedCopy
     case notFound
+    /// A stage commit not found in its day folder: the file reads as not staged.
+    case notStaged
     /// Not found under Limited Access: the photo may now be in Photos twice.
     case possibleDuplicate
     /// Kept for a later pass: the lookup can't look yet, or the catalogue refused the write.
@@ -156,7 +167,7 @@ public struct LibraryCommitLookup: CommitLookup {
             }
             let wanted = pending.files.map {
                 StagedCopyFinder.Wanted(filename: $0.identity.filename, size: $0.identity.size,
-                                        modificationDate: $0.assetDate)
+                                        modificationDate: $0.assetDate, commitBegan: pending.writtenAt)
             }
             guard let paths = finder.find(wanted, in: folder, under: rootURL),
                   let writes = pending.stagedWrites(at: paths) else { return .notFound(underLimitedAccess: false) }

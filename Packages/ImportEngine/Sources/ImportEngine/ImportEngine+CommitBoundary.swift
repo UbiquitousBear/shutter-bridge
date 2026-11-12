@@ -57,7 +57,11 @@ extension ImportEngine {
     /// and hands any possible duplicates found so far to the job `id` (when it is current), for its outcome.
     func resolveCommitBoundary(for id: UUID?) async {
         if let launch = launchPassTask { _ = await launch.value }
-        await resolvePendingCommits()
+        let report = await resolvePendingCommits()
+        // A pass that wrote rows (a replay, or a waiting marker found once access returned) may have changed what Browse
+        // shows as imported or staged, and a job that then imports nothing would never tell it: the app reads the badges
+        // again. Callers that joined one pass each call this, which is harmless: reading the badges is idempotent.
+        if report.changedRows { onRowsRecovered?() }
         if let id, let job = current(id), possibleDuplicatesUnreported > 0 {
             job.possibleDuplicates += possibleDuplicatesUnreported
             possibleDuplicatesUnreported = 0
@@ -70,6 +74,14 @@ extension ImportEngine {
     /// the engine's actor, synchronously, so ending the process in it leaves the marker and no row.
     public func setBeforeFinishCommit(_ hook: (@Sendable () -> Void)?) {
         beforeFinishCommit = hook
+    }
+
+    /// Sets what runs after a pass before a job's diff wrote rows (`PendingCommitReport.changedRows`), for the app to
+    /// read Browse's badges again; nil removes it. It runs on the engine's actor, synchronously, and must return at
+    /// once and never call back into the engine (hand the work to a task). The launch pass's own report goes to its
+    /// caller (`launchPass()`), not here.
+    public func setOnRowsRecovered(_ hook: (@Sendable () -> Void)?) {
+        onRowsRecovered = hook
     }
 
     /// One pass of `resolvePendingCommits()`.
@@ -115,16 +127,32 @@ extension ImportEngine {
         }
 
         // The rest: from an earlier launch, or a failed `abandonCommit`. A commit still in flight here isn't touched.
+        // Every lookup first, then one read of the store for all of them (not one per marker).
+        var answers: [(marker: PendingCommit, answer: CommitLookupAnswer)] = []
         for marker in markers where !replayed.contains(marker.id) && isLeftOver(marker.id) {
+            answers.append((marker, await commitLookup.look(for: marker)))
+        }
+        guard !answers.isEmpty else { return report }
+        // The lookups suspended: each marker must still be there and still a leftover (a commit of this launch that
+        // ended meanwhile may have cleared it, or left its rows in memory for the next pass). A store that can't list
+        // them again leaves every marker for the next pass, which counts as waiting.
+        let still = (try? await catalogue.pendingCommits()).map { Set($0.map(\.id)) }
+        for (marker, answer) in answers {
             let name = marker.files.first?.identity.filename ?? ""
-            let answer = await commitLookup.look(for: marker)
-            // The lookup suspended: the marker must still be there and still a leftover (a commit of this launch
-            // that ended meanwhile may have cleared it, or left its rows in memory for the next pass).
-            guard isLeftOver(marker.id),
-                  let still = try? await catalogue.pendingCommits(), still.contains(where: { $0.id == marker.id }),
-                  isLeftOver(marker.id) else { continue }
+            guard isLeftOver(marker.id) else { continue }
+            guard let still else {
+                report.waiting += 1
+                trace(.pendingCommitResolved(name, .waiting))
+                continue
+            }
+            guard still.contains(marker.id) else { continue }
             switch answer {
-            case let .found(writes):
+            case let .found(found):
+                var writes = found
+                var spared = 0
+                if case .staging = marker.destination {
+                    (writes, spared) = await withoutSpareCopies(found)
+                }
                 guard await writeRow({ try await self.catalogue.finishCommit(marker.id, writing: writes) }) else {
                     report.waiting += 1
                     trace(.pendingCommitResolved(name, .waiting))
@@ -133,6 +161,9 @@ extension ImportEngine {
                 if case .photos = marker.destination {
                     report.foundInPhotos += 1
                     trace(.pendingCommitResolved(name, .foundInPhotos))
+                } else if writes.isEmpty, spared > 0 {
+                    report.spareCopies += 1
+                    trace(.pendingCommitResolved(name, .spareStagedCopy))
                 } else {
                     report.foundInStaging += 1
                     trace(.pendingCommitResolved(name, .foundInStaging))
@@ -148,13 +179,42 @@ extension ImportEngine {
                     report.possibleDuplicates += 1
                     possibleDuplicatesUnreported += 1
                 }
-                trace(.pendingCommitResolved(name, underLimitedAccess ? .possibleDuplicate : .notFound))
+                let resolution: PendingCommitResolution = if underLimitedAccess {
+                    .possibleDuplicate
+                } else if case .staging = marker.destination {
+                    .notStaged
+                } else {
+                    .notFound
+                }
+                trace(.pendingCommitResolved(name, resolution))
             case .cannotLook:
                 report.waiting += 1
                 trace(.pendingCommitResolved(name, .waiting))
             }
         }
         return report
+    }
+
+    /// A found stage commit's writes without those for a file whose row already has a staged copy elsewhere, and how
+    /// many were left out. A marker for iCloud Drive that couldn't be looked up waits, and a stage job meanwhile stages
+    /// the same file On My iPhone; found once iCloud Drive is back, writing the marker's rows would repoint the row at
+    /// the iCloud copy and leave the other copy with no row. The row that exists is kept (the person's copy that Staging
+    /// shows and culls), the marker goes, and the spare copy stays where it is: nothing is deleted. A row that can't be
+    /// read counts as having none, so the write is tried (and waits if the catalogue is down).
+    func withoutSpareCopies(_ writes: [CommitWrite]) async -> (writes: [CommitWrite], spared: Int) {
+        var kept: [CommitWrite] = []
+        var spared = 0
+        for write in writes {
+            guard case let .staged(identity, _, location) = write,
+                  // A row that names this very copy is no spare; one that names another copy is.
+                  let existing = try? await catalogue.record(for: identity)?.staged,
+                  existing.root != location.root || existing.relativePath != location.relativePath else {
+                kept.append(write)
+                continue
+            }
+            spared += 1
+        }
+        return (kept, spared)
     }
 
     /// Whether the marker `id` is no commit of this process still running and none whose rows are kept in memory.

@@ -23,8 +23,6 @@ struct CamerasScreen: View {
     var importer: ImportModel?
     var showSettings: @MainActor () -> Void = {}
     var showImport: @MainActor () -> Void = {}
-    /// Opens the Staging screen (culling, D5), until I10's tab bar gives it a tab; nil leaves the button out.
-    var showStaging: (@MainActor () -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(WirelessSetupModel.self) private var setup: WirelessSetupModel?
     @Environment(WiFiImportModel.self) private var wifiStatus: WiFiImportModel?
@@ -34,16 +32,6 @@ struct CamerasScreen: View {
         content
             .navigationTitle(CamerasWording.title)
             .toolbar {
-                if let showStaging {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showStaging()
-                        } label: {
-                            Label(CullWording.openStaging, systemImage: "tray.full")
-                        }
-                        .accessibilityHint(CullWording.openStagingHint)
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSettings()

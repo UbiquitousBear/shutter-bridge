@@ -206,6 +206,31 @@ struct IntentsAppModelTests {
         await finish(r, run)
     }
 
+    /// Browse is open but its listing failed: the answer says so and what to tap, not that the card is being read; and
+    /// the import still starts once Try Again has read the card.
+    @Test func aFailedListingIsSaidNotReadingTheCard() async throws {
+        let r = try await rig()
+        await r.link.set(listFailure: CameraLinkFailure(.noAnswer))
+        // The first request opens Browse, which has nothing to say yet.
+        #expect(await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .zero) == .waitingForCard(choice: .photos))
+        guard let (browse, run) = await pushBrowse(r) else {
+            Issue.record("Browse wasn't opened")
+            return
+        }
+        #expect(await eventually { if case .failed = browse.phase { true } else { false } })
+        // Asked again, it follows what Browse shows.
+        let answer = await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .zero)
+        #expect(answer == .waitingForPerson(choice: .photos, why: .listingFailed))
+        #expect(NewPhotosWording.importAnswer(answer, camera: "ILCE-7CM2")
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2. Open Browse and tap Try Again. "
+            + "Its new photos will be imported to Photos once the card is read.")
+        #expect(!r.app.importer.hasJob)
+        await r.link.set(listFailure: nil)
+        browse.retry()
+        #expect(await eventually { r.app.importer.hasJob })
+        await finish(r, run)
+    }
+
     @Test func leavingBrowseBeforeTheCardIsReadDropsTheImport() async throws {
         let r = try await rig()
         await r.link.set(listHangs: true)

@@ -193,6 +193,12 @@ public final class CamerasModel: CameraFinding {
     /// which drops an "Import new photos" waiting for a camera no longer shown.
     @ObservationIgnored var onPathChanged: (@MainActor ([CameraDescriptor]) -> Void)?
 
+    /// The Browse models still alive for the camera `id`, the most recently made last.
+    func browses(of id: CameraDescriptor.ID) -> [BrowseModel] {
+        browsing.removeAll { $0.model == nil }
+        return browsing.compactMap { entry in entry.model.flatMap { $0.camera.id == id ? $0 : nil } }
+    }
+
     /// The Browse models still alive that show their camera's live card, the most recently made last. A model whose
     /// screen was never shown never runs, so it never shows a live card.
     func liveBrowses() -> [BrowseModel] {

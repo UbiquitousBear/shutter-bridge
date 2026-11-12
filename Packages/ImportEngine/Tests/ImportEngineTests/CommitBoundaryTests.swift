@@ -97,7 +97,7 @@ struct CommitBoundaryTests {
         #expect(report == PendingCommitReport(notFound: 1))
         #expect(await store.pendingCommits().isEmpty)
         #expect(await second.record(for: a) == nil, "no row: the file reads new")
-        #expect(second.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", .notFound)))
+        #expect(second.trace.log.contains(.pendingCommitResolved("DSC00001.ARW", kind == .photos ? .notFound : .notStaged)))
 
         let mark = second.trace.count
         try await second.start(.allNew, from: second.link([a]), to: route(kind, second, staging, photos: first.photos))

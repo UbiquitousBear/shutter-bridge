@@ -108,8 +108,10 @@ final class PendingNewPhotosImport {
         gate.open()
     }
 
-    /// The result once there is one, or what is happening when `limit` has passed.
-    func outcome(waitingUpTo limit: Duration) async -> NewPhotosImportStart {
+    /// The result once there is one, or what is happening when `limit` has passed: starting, waiting for the card to be
+    /// read, or (`notReading`, asked then) waiting for the person because Browse isn't reading it.
+    func outcome(waitingUpTo limit: Duration,
+                 notReading: @MainActor () -> NewPhotosCardWait? = { nil }) async -> NewPhotosImportStart {
         let gate = self.gate
         let timer = Task { @MainActor in
             try? await Task.sleep(for: limit)
@@ -118,7 +120,9 @@ final class PendingNewPhotosImport {
         await gate.wait()
         timer.cancel()
         if let result { return result }
-        return isStarting ? .starting(choice: choice) : .waitingForCard(choice: choice)
+        if isStarting { return .starting(choice: choice) }
+        if let why = notReading() { return .waitingForPerson(choice: choice, why: why) }
+        return .waitingForCard(choice: choice)
     }
 }
 
@@ -228,7 +232,9 @@ extension AppModel {
         } else {
             log.note("intents: import new photos: waiting for the card")
         }
-        return await request.outcome(waitingUpTo: waitingForImport)
+        return await request.outcome(waitingUpTo: waitingForImport) { [weak self] in
+            self?.cameras.browses(of: camera.id).last?.newPhotosCardWait
+        }
     }
 
     /// The listed camera whose catalogue key is `key`, waiting up to `limit` for it to be listed.
@@ -329,6 +335,13 @@ extension AppModel {
             case .failed: "refused by the engine"
             }
         case .waitingForCard: return "waiting for the card"
+        case let .waitingForPerson(_, why):
+            return switch why {
+            case .reaching: "waiting: still reaching the camera"
+            case .listingFailed: "waiting: the card couldn't be read"
+            case .couldNotReach: "waiting: the camera couldn't be reached"
+            case .disconnected: "waiting: the camera is disconnected"
+            }
         case .starting: return "starting"
         case .notConnected: return "the camera isn't connected"
         case .couldNotStart: return "Browse couldn't hand the files over"

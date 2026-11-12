@@ -1,4 +1,11 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 // Finding a commit whose catalogue write was lost (backlog section 3.1, I15). The engine writes a pending-commit marker
 // before each commit; one left behind (the app killed between the save and the row, or a store failing every try) is
@@ -88,6 +95,15 @@ extension PhotoLibraryClient {
 /// - Within one number (two entries differing only in case, on a case-sensitive volume), the one whose modification
 ///   date is the wanted date breaks the tie when it is readable; it is never required (whether it survives an iCloud
 ///   upload and eviction is `unverified`).
+/// - Given when the commit began (`Wanted.commitBegan`, the marker's `writtenAt`), only a file the placement touched at
+///   or after then counts (minus `placementSlack`). The modification date can't say: the placer sets it to the camera's
+///   capture date. What can is the status-change time (`ctime`): `FolderPlacer` sets the capture date on the staged
+///   file after the marker is written, which changes it, and the move into the folder changes it again. An older file
+///   with the same name and size (uncompressed RAW has a fixed size, and a file-number reset reuses names) is then not
+///   mistaken for the copy of a commit killed before its file was placed: the row would point at another photo and the
+///   new one would never be staged. A file whose time can't be read doesn't count either (a doubtful answer is "not
+///   found"). That the iCloud mover's move and an iCloud upload leave the time as described is `unverified`: the worst
+///   case is a spare copy, never a lost photo.
 /// - Only regular files whose size can be read count: an evicted iCloud file (".NAME.icloud") is not a match (whether
 ///   its size can be read without downloading it is `unverified`).
 public struct StagedCopyFinder: Sendable {
@@ -97,15 +113,34 @@ public struct StagedCopyFinder: Sendable {
         public var size: UInt64
         /// The marker's `assetDate`; a tie-breaker only.
         public var modificationDate: Date?
+        /// When the commit began (the marker's `writtenAt`): a file placed before it, less `placementSlack`, is an
+        /// older file and not a match. Nil asks for no such check.
+        public var commitBegan: Date?
 
-        public init(filename: String, size: UInt64, modificationDate: Date? = nil) {
+        public init(filename: String, size: UInt64, modificationDate: Date? = nil, commitBegan: Date? = nil) {
             self.filename = filename
             self.size = size
             self.modificationDate = modificationDate
+            self.commitBegan = commitBegan
         }
     }
 
-    public init() {}
+    /// How far before the commit began a placed file's status-change time may fall and still count: file systems keep
+    /// times to a second or two (FAT's modification times are to 2 s), and the marker's clock reading and the file's
+    /// are taken apart.
+    public static let placementSlack: TimeInterval = 2
+
+    /// When the placement last touched the file at `url` (its status-change time), or nil when that can't be read.
+    let placedDate: @Sendable (URL, URLResourceValues) -> Date?
+
+    public init() {
+        placedDate = { url, values in Self.statusChangeDate(of: url, values) }
+    }
+
+    /// For tests: answers the times themselves.
+    init(placedDate: @escaping @Sendable (URL, URLResourceValues) -> Date?) {
+        self.placedDate = placedDate
+    }
 
     /// Each file's path relative to `root`, in the unit's order; nil unless every file is found (a pair under one
     /// number), or when `folder` isn't a plain relative path (empty, absolute, or with "." or ".." in it).
@@ -113,7 +148,12 @@ public struct StagedCopyFinder: Sendable {
         guard !wanted.isEmpty, let components = Self.components(of: folder) else { return nil }
         var url = root
         for component in components { url = url.appendingPathComponent(component, isDirectory: true) }
+        #if canImport(Darwin)
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
+                                      .attributeModificationDateKey]
+        #else
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        #endif
         guard let entries = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys)
         else { return nil }
 
@@ -124,6 +164,11 @@ public struct StagedCopyFinder: Sendable {
             guard let values = try? entry.resourceValues(forKeys: Set(keys)), values.isRegularFile == true,
                   let size = values.fileSize, size >= 0 else { continue }
             for (i, file) in wanted.enumerated() where UInt64(size) == file.size {
+                if let began = file.commitBegan {
+                    // Placed by an earlier commit, or by one whose time can't be told: not this commit's copy.
+                    guard let placed = placedDate(entry, values),
+                          placed >= began.addingTimeInterval(-Self.placementSlack) else { continue }
+                }
                 guard let n = Self.number(of: name, for: FilesFolderNaming.fileName(forCameraFile: file.filename))
                 else { continue }
                 byNumber[i][n, default: []].append((name, values.contentModificationDate))
@@ -169,6 +214,18 @@ public struct StagedCopyFinder: Sendable {
         let parts = folder.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
         return parts
+    }
+
+    /// The file's status-change time: Foundation reports it on Apple platforms (`attributeModificationDate`); elsewhere
+    /// (Linux, where the tests run) `stat` does.
+    static func statusChangeDate(of url: URL, _ values: URLResourceValues) -> Date? {
+        #if canImport(Darwin)
+        return values.attributeModificationDate
+        #else
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        return Date(timeIntervalSince1970: Double(info.st_ctim.tv_sec) + Double(info.st_ctim.tv_nsec) / 1_000_000_000)
+        #endif
     }
 
     private static func sameSecond(_ a: Date?, _ b: Date?) -> Bool {

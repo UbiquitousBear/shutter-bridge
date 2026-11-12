@@ -183,6 +183,21 @@ struct NewPhotosWordingTests {
             == "Reading the card in ILCE-7CM2. Its new photos will be imported to Photos once it's read.")
         #expect(say(.waitingForCard(choice: .staging), camera: CamerasWording.genericName)
             == "Reading the card in the camera. Its new photos will be staged once it's read.")
+        // Browse isn't reading the card: what is actually true in each case.
+        #expect(say(.waitingForPerson(choice: .photos, why: .reaching))
+            == "Reaching ILCE-7CM2. Its new photos will be imported to Photos once the card is read.")
+        #expect(say(.waitingForPerson(choice: .staging, why: .listingFailed))
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2. Open Browse and tap Try Again. "
+            + "Its new photos will be staged once the card is read.")
+        #expect(say(.waitingForPerson(choice: .photos, why: .couldNotReach), camera: CamerasWording.genericName)
+            == "Shutter Bridge couldn't reach the camera. Open Browse and tap Try Again. "
+            + "Its new photos will be imported to Photos once the card is read.")
+        #expect(say(.waitingForPerson(choice: .photos, why: .disconnected))
+            == "ILCE-7CM2 is disconnected. Open Browse and tap Reconnect. "
+            + "Its new photos will be imported to Photos once the card is read.")
+        #expect(say(.waitingForPerson(choice: .photos, why: .disconnected), camera: CamerasWording.genericName)
+            == "The camera is disconnected. Open Browse and tap Reconnect. "
+            + "Its new photos will be imported to Photos once the card is read.")
         #expect(say(.starting(choice: .photos)) == "Starting to import the new photos to Photos.")
         #expect(say(.notConnected) == "ILCE-7CM2 isn't connected. Connect it, then try again.")
         #expect(say(.notConnected, camera: CamerasWording.genericName)
@@ -197,5 +212,7 @@ struct NewPhotosWordingTests {
             == "added 1 file to the job to stage")
         #expect(AppModel.logWords(for: .requested(.failed("serial 1234567"), choice: .photos)) == "refused by the engine")
         #expect(AppModel.logWords(for: .notConnected) == "the camera isn't connected")
+        #expect(AppModel.logWords(for: .waitingForPerson(choice: .photos, why: .listingFailed))
+            == "waiting: the card couldn't be read")
     }
 }

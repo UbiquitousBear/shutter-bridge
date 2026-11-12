@@ -157,6 +157,14 @@ public final class AppModel {
         cameras.onPathChanged = { [weak self] path in self?.browsePathChanged(path) }
         importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
         importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
+        // A pass before a job's diff that wrote rows (a replay, or a waiting marker found once access returns) may have
+        // changed what an open Browse shows as imported or staged, and a job that then imports nothing wouldn't tell it:
+        // the badges are read again. The launch pass does so itself (`runLaunchPass()`).
+        Task { [weak self] in
+            await engine.setOnRowsRecovered {
+                Task { @MainActor in await self?.cameras.refreshBrowseBadges() }
+            }
+        }
         if let wireless {
             // The known cameras go to the proximity confirmation before the reminder applies its setting (W17).
             Task { await wireless.catalogueOpened(catalogue) }

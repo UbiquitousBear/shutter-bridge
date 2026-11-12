@@ -81,6 +81,32 @@ public enum NewPhotoCountAnswer: Sendable, Hashable {
     }
 }
 
+/// Why Browse isn't reading the card while an "Import new photos" waits for it: what the answer then says, instead of
+/// "reading the card".
+public enum NewPhotosCardWait: Sendable, Hashable {
+    /// Over Wi-Fi: still reaching the camera (Bluetooth, the join, the session); the card isn't being read yet.
+    case reaching
+    /// The card couldn't be read: Browse offers Try Again.
+    case listingFailed
+    /// Over Wi-Fi: the camera couldn't be reached: Browse offers Try Again.
+    case couldNotReach
+    /// Over Wi-Fi: the link was lost or let go: Browse waits for the person to tap Reconnect (Shamil, 10 Nov).
+    case disconnected
+}
+
+extension BrowseModel {
+    /// Why this Browse isn't reading its card, when it isn't; nil while it is reading (or about to), when the card has
+    /// been read, or when there is nothing to say. For "Import new photos"'s answer after its wait.
+    var newPhotosCardWait: NewPhotosCardWait? {
+        if interruption == .disconnected { return .disconnected }
+        switch phase {
+        case .connecting: return .reaching
+        case .failed: return failedToReachCamera ? .couldNotReach : .listingFailed
+        case .reading, .listed, .listsNoFiles, .gone: return nil
+        }
+    }
+}
+
 /// What came of "Import new photos" (D7 (a)): `AppModel.importNewPhotos(cameraWith:waitingForCamera:waitingForImport:)`.
 public enum NewPhotosImportStart: Sendable, Hashable {
     /// Browse's *Import* for *Select all new* answered, for the remembered choice.
@@ -88,6 +114,9 @@ public enum NewPhotosImportStart: Sendable, Hashable {
     /// Browse is open on the camera, still reaching it or reading its card when the wait ended: the import starts once
     /// the card has been read.
     case waitingForCard(choice: DestinationKind)
+    /// Browse is open on the camera but isn't reading its card (`why`): the import starts once the person has dealt with
+    /// that (Try Again, Reconnect) and the card has been read, unless the person leaves Browse or the app first.
+    case waitingForPerson(choice: DestinationKind, why: NewPhotosCardWait)
     /// The new files were picked and the import is being started (Photos access may be being asked for).
     case starting(choice: DestinationKind)
     /// No connected camera has this key.
@@ -203,6 +232,20 @@ public enum NewPhotosWording {
         case let .waitingForCard(choice):
             return "Reading the card in \(camera == CamerasWording.genericName ? "the camera" : camera). Its new photos "
                 + (choice == .staging ? "will be staged" : "will be imported to Photos") + " once it's read."
+        case let .waitingForPerson(choice, why):
+            let name = camera == CamerasWording.genericName ? "the camera" : camera
+            let then = "Its new photos " + (choice == .staging ? "will be staged" : "will be imported to Photos")
+                + " once the card is read."
+            switch why {
+            case .reaching:
+                return "Reaching \(name). \(then)"
+            case .listingFailed:
+                return "Shutter Bridge couldn't read the card in \(name). Open Browse and tap \(BrowseWording.tryAgain). \(then)"
+            case .couldNotReach:
+                return "Shutter Bridge couldn't reach \(name). Open Browse and tap \(BrowseWording.tryAgain). \(then)"
+            case .disconnected:
+                return "\(subject) is disconnected. Open Browse and tap \(BrowseWording.reconnect). \(then)"
+            }
         case let .starting(choice):
             return choice == .staging ? "Starting to stage the new photos." : "Starting to import the new photos to Photos."
         case .notConnected:
