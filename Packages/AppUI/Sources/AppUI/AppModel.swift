@@ -242,6 +242,20 @@ public final class AppModel {
                       reader: reader, files: files, log: log)
     }
 
+    /// A model for the History screen (backlog section 4; D6), over the app's catalogue, the import and the staging
+    /// locator. *Resume* and *Re-run* reach a camera through `HistoryCameraFinder`, which never starts a Wi-Fi join; the
+    /// running job is the import's (its record has no end yet, and isn't *Stopped early*). The app passes its Documents
+    /// folder, On My iPhone's staging root, for a stage job's folder.
+    public func historyModel(documents: URL) -> HistoryModel {
+        let discovery = self.discovery
+        let cameras = self.cameras
+        let finder = HistoryCameraFinder(leases: leases, cameras: { cameras.cameras },
+                                         link: { id in try? await discovery.cameraLink(for: id) }, key: cameraKeying)
+        return HistoryModel(catalogue: catalogue, importer: importer, finder: finder, leases: leases,
+                            onThisIPhone: documents, locator: stagingLocator,
+                            activeCamera: { [weak self] in self?.activeImportKey }, log: log)
+    }
+
     /// The model for browsing `camera`, with the catalogue and the import.
     public func browseModel(for camera: CameraDescriptor) -> BrowseModel {
         cameras.browseModel(for: camera)

@@ -232,11 +232,15 @@ private struct DelayedSpinner: View {
     }
 }
 
-/// The app once the catalogue is open: Cameras in a navigation stack with Browse pushed onto it, and the Import and
-/// Settings screens as sheets over the whole stack, so the Import screen outlives Browse when the cable is pulled.
-/// Staging (the cull screen, D5) is a sheet opened from Cameras too, until the tab bar (I10) gives it a tab beside
-/// Cameras and History, with the running import as the bar's bottom accessory.
+/// The app once the catalogue is open: a tab bar (I10; backlog section 4) with Cameras (a navigation stack with Browse
+/// pushed onto it), Staging (the cull screen, D5) and History, and the running import as the bar's bottom accessory,
+/// whose tap opens the Import screen. The Import and Settings screens are sheets over the whole tab bar, so the Import
+/// screen outlives Browse when the cable is pulled; Settings stays in the Cameras screen's bar.
 ///
+/// - Staging's model is made afresh each time its tab is chosen (it reads Staging as it is then) and let go when another
+///   tab is chosen, closing the loupe first, so its previews are released and its marks counted. Its *Import keepers*
+///   (I12) is made once and kept, so a keepers run and its one confirmation (D2) outlive a visit to another tab. History's
+///   model is made once and reads the job records each time its tab appears.
 /// - The scene's phase goes to the app model in order (discovery starts when active; a USB import pauses when the
 ///   app leaves the foreground and carries on when it is back, decision 1), with background time held while a change to
 ///   the background is handled.
@@ -251,45 +255,63 @@ struct LiveApp: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showsSettings = false
     @State private var showsImport = false
-    /// The Staging screen's sheet (D5), and its model, made afresh each time it opens.
-    @State private var showsStaging = false
+    /// The tab shown.
+    @State private var tab: AppTab = .cameras
+    /// The Staging tab's model (D5), made afresh each time the tab is chosen.
     @State private var staging: CullModel<DecodedPreviewImage>?
-    /// *Import keepers* for the Staging screen (I12), made with its model.
+    /// *Import keepers* for the Staging tab (I12), made the first time the tab is chosen and kept while the app runs,
+    /// so a keepers run and its one confirmation (D2) outlive a visit to another tab.
     @State private var stagingKeepers: KeepersImport?
+    /// The History tab's model, made the first time the tab is chosen.
+    @State private var history: HistoryModel?
     /// The last scene-phase change handed to the model, so a quick background-then-active is applied in order.
     @State private var phaseTask: Task<Void, Never>?
 
     var body: some View {
         @Bindable var cameras = model.cameras
-        NavigationStack(path: $cameras.path) {
-            CamerasScreen(model: cameras, importer: model.importer,
-                          showSettings: { showsSettings = true },
-                          showImport: { showsImport = true },
-                          showStaging: {
-                              staging = makeStagingModel()
-                              stagingKeepers = makeKeepersImport()
-                              showsStaging = true
-                          })
-                .navigationDestination(for: CameraDescriptor.self) { camera in
-                    BrowseScreen(model: model.browseModel(for: camera), importer: model.importer,
-                                 isImportShown: showsImport, showImport: { showsImport = true })
+        TabView(selection: $tab) {
+            Tab(CamerasWording.title, systemImage: "camera", value: AppTab.cameras) {
+                NavigationStack(path: $cameras.path) {
+                    CamerasScreen(model: cameras, importer: model.importer,
+                                  showSettings: { showsSettings = true },
+                                  showImport: { showsImport = true })
+                        .navigationDestination(for: CameraDescriptor.self) { camera in
+                            BrowseScreen(model: model.browseModel(for: camera), importer: model.importer,
+                                         isImportShown: showsImport, showImport: { showsImport = true })
+                        }
                 }
+            }
+            Tab(CullWording.title, systemImage: "tray.full", value: AppTab.staging) {
+                StagingTab(model: staging, keepers: stagingKeepers)
+            }
+            Tab(HistoryWording.title, systemImage: "clock.arrow.circlepath", value: AppTab.history) {
+                if let history {
+                    HistoryScreen(model: history, importer: model.importer, showImport: { showsImport = true })
+                }
+            }
+        }
+        // The running import above the tab bar, wherever the person is; its tap opens the Import screen.
+        .tabViewBottomAccessory(isEnabled: model.importer.hasJob) {
+            ImportAccessory(model: model.importer) { showsImport = true }
+        }
+        // Staging is read afresh each time its tab is chosen, and let go when another is: however it is left (a tab, or
+        // the reminder opening a camera while the loupe's cover is up), the loupe is closed too, so its previews are
+        // released and its marks counted.
+        .onChange(of: tab, initial: true) { _, chosen in
+            if chosen == .staging {
+                if staging == nil { staging = makeStagingModel() }
+                if stagingKeepers == nil { stagingKeepers = makeKeepersImport() }
+            } else if let closing = staging {
+                staging = nil
+                Task { await closing.closeLoupe() }
+            }
+            if chosen == .history, history == nil {
+                history = model.historyModel(documents: URL.documentsDirectory)
+            }
         }
         // However Settings closes, a diagnostics file that is ready (or being made) is removed.
         .sheet(isPresented: $showsSettings, onDismiss: { model.settings.settingsClosed() }) {
             SettingsScreen(model: model.settings)
-        }
-        // Staging (the cull screen) in a sheet with its own stack until I10's tab bar gives it a tab (D5).
-        // However the sheet closes (its close button, a swipe, or the reminder opening a camera while the loupe's cover is
-        // up), the loupe is closed too, so its previews are released and its marks counted.
-        .sheet(isPresented: $showsStaging, onDismiss: {
-            if let closing = staging { Task { await closing.closeLoupe() } }
-            staging = nil
-            stagingKeepers = nil
-        }) {
-            if let staging {
-                StagingScreen(model: staging, keepers: stagingKeepers)
-            }
         }
         // The close button and swiping down do the same (HIG Sheets): a finished job is cleared once it has been
         // seen, however the sheet closed; a running one stays.
@@ -344,20 +366,46 @@ struct LiveApp: View {
                            exif: { url in await Task.detached(priority: .utility) { EXIFSummary.read(from: url) }.value })
     }
 
-    /// *Import keepers* for the Staging screen: its jobs read the staged copies coordinated (iCloud Drive) and download an
+    /// *Import keepers* for the Staging tab: its jobs read the staged copies coordinated (iCloud Drive) and download an
     /// evicted keeper before the job starts.
     private func makeKeepersImport() -> KeepersImport {
         model.keepersImport(documents: URL.documentsDirectory, files: UbiquitousFileAvailability(),
                             reader: StagedFileReaders.platform)
     }
 
-    /// Opens the reminder's camera in Browse, if it is listed, and closes the sheets that would hide it: Settings, Staging,
-    /// and Import unless its job is that camera's.
+    /// Opens the reminder's camera in Browse, if it is listed: the Cameras tab (leaving Staging closes its loupe), with
+    /// the sheets that would hide it closed: Settings, and Import unless its job is that camera's.
     private func openCameraFromReminder() async {
         guard await model.openCameraFromReminder() else { return }
+        tab = .cameras
         showsSettings = false
-        showsStaging = false
         if model.importer.camera?.descriptor.id != model.cameras.path.last?.id { showsImport = false }
+    }
+}
+
+/// The tab bar's tabs (I10; D5): Cameras, Staging and History.
+private enum AppTab: Hashable {
+    case cameras
+    case staging
+    case history
+}
+
+/// The Staging tab: the cull screen in its own navigation stack, with no close button (it was a sheet before the tab bar,
+/// `StagingScreen`); nothing while its model is being made.
+private struct StagingTab: View {
+    let model: CullModel<DecodedPreviewImage>?
+    /// *Import keepers* (I12): the toolbar button, the day rows' menu, the strip and the one confirmation (D2).
+    let keepers: KeepersImport?
+
+    var body: some View {
+        NavigationStack {
+            if let model {
+                CullScreen(model: model, keepers: keepers)
+            } else {
+                Color.clear
+                    .navigationTitle(CullWording.title)
+            }
+        }
     }
 }
 
