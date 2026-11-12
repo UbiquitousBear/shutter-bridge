@@ -239,6 +239,11 @@ final class Job {
     private var byContent: [ObjectIdentity.ContentKey: ObjectIdentity] = [:]
     /// Picked files without an identity (no capture date), skipped and counted.
     var unkeyed: [CameraItem] = []
+    /// Files left out for their Reject mark (D3), by content: not in the job, counted for the outcome
+    /// (`ImportProgress.rejectsLeftOut`). A set, so a file left out twice (picked by *Select all new* again, or
+    /// appended during the listing and left out by the diff too) counts once; a file added to the job later (an
+    /// explicit pick) leaves it, since it wasn't left out after all.
+    var rejectsLeftOut: Set<ObjectIdentity.ContentKey> = []
     /// Pending files, kept sorted by `FileEntry.index`.
     var queue: [ObjectIdentity] = []
     var nextIndex = 0
@@ -312,6 +317,7 @@ final class Job {
         }
         entries[entry.identity] = entry
         byContent[entry.identity.contentKey] = entry.identity
+        rejectsLeftOut.remove(entry.identity.contentKey)
     }
 
     var hasActiveFiles: Bool { entries.values.contains { $0.isActive } }

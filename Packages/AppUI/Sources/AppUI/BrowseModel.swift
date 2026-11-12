@@ -145,6 +145,10 @@ public final class BrowseModel {
     /// The files the catalogue has a staged copy of (Shamil, 11 Nov), for the Staged badge: matched by content, as
     /// `imported` is, and read with it.
     public private(set) var staged: Set<CameraItem.ID> = []
+    /// The files the catalogue holds a Reject mark for (D3, Shamil, 11 Nov), for the Rejected badge: by content key
+    /// (`marks(of:)`), as `imported` is, and read with it. *Select All New* and New Only leave them out, even once the
+    /// staged copy has gone; an explicit pick still imports one, and `liftReject(_:)` clears the mark.
+    public private(set) var rejected: Set<CameraItem.ID> = []
     /// The picked files, which the sticky bar counts and Import hands over.
     public private(set) var selection: Set<CameraItem.ID> = [] {
         didSet { if !allNewPicks.isSubset(of: selection) { allNewPicks.formIntersection(selection) } }
@@ -986,16 +990,23 @@ public final class BrowseModel {
     /// Whether the catalogue has a staged copy of `item`. The cell shows Staged only when it isn't imported.
     public func isStaged(_ item: CameraItem) -> Bool { staged.contains(item.id) }
 
-    /// Imported or staged: what *Select All New* skips and New Only hides (Shamil, 11 Nov).
-    private func isDone(_ id: CameraItem.ID) -> Bool { imported.contains(id) || staged.contains(id) }
+    /// Whether the catalogue holds a Reject mark for `item` (D3). The cell shows Rejected unless it is imported.
+    public func isRejected(_ item: CameraItem) -> Bool { rejected.contains(item.id) }
+
+    /// Imported, staged or rejected: what *Select All New* skips and New Only hides (Shamil, 11 Nov; D3).
+    private func isDone(_ id: CameraItem.ID) -> Bool {
+        imported.contains(id) || staged.contains(id) || rejected.contains(id)
+    }
 
     /// Whether an import for `choice` would leave the file out as done (the engine's rule, by the badges):
     /// *Import to Photos* leaves out imported files; *Stage* staged ones, and imported ones when only new files were
     /// asked for (`newOnly`, *Select All New*).
     private func isDone(_ id: CameraItem.ID, for choice: DestinationKind, newOnly: Bool) -> Bool {
+        // Only new files were asked for: a reject is left out whatever the choice (D3), as the engine leaves it out.
+        if newOnly && rejected.contains(id) { return true }
         switch choice {
-        case .photos: imported.contains(id)
-        case .staging: staged.contains(id) || (newOnly && imported.contains(id))
+        case .photos: return imported.contains(id)
+        case .staging: return staged.contains(id) || (newOnly && imported.contains(id))
         }
     }
 
@@ -1054,6 +1065,7 @@ public final class BrowseModel {
             services.log.note("browse: staged badges not refreshed: catalogue error (\(type(of: error)))")
             stagedIdentities = nil
         }
+        let rejectedKeys = await rejectedKeys(of: Array(byIdentity.keys))
         // The card may have been replaced while the catalogue answered.
         guard shown == items else {
             services.log.note("browse: badges not refreshed: card replaced")
@@ -1069,10 +1081,62 @@ public final class BrowseModel {
             let nowStaged = Set(byIdentity.compactMap { identity, id in stagedIdentities.contains(identity) ? id : nil })
             if nowStaged != staged { staged = nowStaged }
         }
+        if let rejectedKeys {
+            let nowRejected = Set(byIdentity.compactMap { identity, id in
+                rejectedKeys.contains(identity.contentKey) ? id : nil
+            })
+            if nowRejected != rejected { rejected = nowRejected }
+        }
         dropDoneNewPicks()
         if filter.newOnly { rebuildSections() }
+        // The rejected count only when there are rejects (D3), so the line reads as before otherwise.
+        let rejectedText = rejected.isEmpty ? "" : ", \(rejected.count) rejected"
         services.log.note("browse: badges refreshed \(why): \(shown.count) shown, \(byIdentity.count) dated, "
-            + "\(now.count) imported, \(staged.count) staged, key \(keyTags.tag(for: key))")
+            + "\(now.count) imported, \(staged.count) staged\(rejectedText), key \(keyTags.tag(for: key))")
+    }
+
+    /// The content keys among `identities` with a Reject mark (D3); nil when the catalogue can't say, so the Rejected
+    /// badges stay as they were.
+    private func rejectedKeys(of identities: [ObjectIdentity]) async -> Set<ObjectIdentity.ContentKey>? {
+        guard let catalogue else { return nil }
+        do {
+            let marks = try await catalogue.store.marks(of: identities.map(\.contentKey))
+            return Set(marks.compactMap { $0.value.decision == .reject ? $0.key : nil })
+        } catch {
+            services.log.note("browse: rejected badges not refreshed: catalogue error (\(type(of: error)))")
+            return nil
+        }
+    }
+
+    /// Lifts the Reject of `item` (D3): clears the mark in the catalogue, for the file and for the other half of its
+    /// RAW+JPEG pair on the card when that is rejected too (one mark per pair, D4), so the photo is new again and
+    /// *Select All New* picks it. Nothing happens for a file that isn't rejected. When the catalogue refuses, the badge
+    /// stays and the notice says so. Returns whether the mark was cleared.
+    @discardableResult
+    public func liftReject(_ item: CameraItem) async -> Bool {
+        guard rejected.contains(item.id), let catalogue, let key = cameraKey else { return false }
+        let zone = self.zone
+        let rule = RawPairingRule()
+        let lifted = items.filter { other in
+            other.id == item.id || (rejected.contains(other.id)
+                && rule.pairs(PairCandidate(item: item), PairCandidate(item: other)))
+        }
+        let keys = lifted.compactMap { $0.identity(camera: key, timeZone: zone)?.contentKey }
+        guard !keys.isEmpty else { return false }
+        do {
+            try await catalogue.store.clearMarks(of: keys)
+        } catch {
+            services.log.note("browse: the reject wasn't lifted: catalogue error (\(type(of: error)))")
+            importNoticeCount += 1
+            importStatus = StatusNotice(id: importNoticeCount, text: BrowseWording.liftRejectFailed, tone: .problem,
+                                        systemImage: "exclamationmark.triangle", dismissesItself: false)
+            return false
+        }
+        // The card may have been replaced meanwhile; the next badge read answers for the new one.
+        rejected.subtract(lifted.map(\.id))
+        if filter.newOnly { rebuildSections() }
+        services.log.note("browse: lifted a reject (\(keys.count) file\(keys.count == 1 ? "" : "s"))")
+        return true
     }
 
     /// The bench log's line for a listing: how long it took, the key by its tag, how many files came without a folder
@@ -1135,6 +1199,7 @@ public final class BrowseModel {
     private func show(_ newItems: [CameraItem], carryingImported: Bool = false) {
         let carried = carryingImported ? contentKeys(of: imported) : []
         let carriedStaged = carryingImported ? contentKeys(of: staged) : []
+        let carriedRejected = carryingImported ? contentKeys(of: rejected) : []
         items = newItems
         if hasFiles == newItems.isEmpty { hasFiles = !newItems.isEmpty }
         itemsByID = Dictionary(newItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1151,6 +1216,12 @@ public final class BrowseModel {
             if now != staged { staged = now }
         } else if !staged.isSubset(of: ids) {
             staged.formIntersection(ids)
+        }
+        if !carriedRejected.isEmpty {
+            let now = matching(carriedRejected, in: newItems)
+            if now != rejected { rejected = now }
+        } else if !rejected.isSubset(of: ids) {
+            rejected.formIntersection(ids)
         }
         dropDoneNewPicks()
         rebuildSections()
@@ -1216,8 +1287,8 @@ public final class BrowseModel {
     /// What the Import button does by default: the import's remembered choice (Photos when there is no import).
     public var importChoice: DestinationKind { importer?.importChoice ?? .photos }
 
-    /// Takes the files *Select All New* picked out of the selection once they are imported or staged meanwhile: they
-    /// were picked as new. An explicit pick of a done file stays (it may be staged, or imported).
+    /// Takes the files *Select All New* picked out of the selection once they are imported, staged or rejected
+    /// meanwhile: they were picked as new. An explicit pick of a done file stays (it may be staged, or imported).
     private func dropDoneNewPicks() {
         let done = allNewPicks.filter(isDone)
         guard !done.isEmpty else { return }
@@ -1241,8 +1312,9 @@ public final class BrowseModel {
         }
     }
 
-    /// Selects every file the filters show that is new: stills neither imported nor staged and with a capture date,
-    /// so video, other files, imported, staged and undated files are skipped (backlog section 6; Shamil, 11 Nov).
+    /// Selects every file the filters show that is new: stills neither imported, staged nor rejected and with a capture
+    /// date, so video, other files, imported, staged, rejected and undated files are skipped (backlog section 6;
+    /// Shamil, 11 Nov; D3).
     /// Enters the selecting mode.
     public func selectAllNew() {
         var picked = selection
@@ -1269,7 +1341,7 @@ public final class BrowseModel {
     }
 
     /// The files the filters show that *Select All New* picks: those that could be selected now and are neither
-    /// imported nor staged.
+    /// imported, staged nor rejected.
     private var selectableShown: [CameraItem.ID] {
         sections.flatMap { section in section.items.filter { canSelect($0) && !isDone($0.id) }.map(\.id) }
     }
@@ -1383,7 +1455,14 @@ public final class BrowseModel {
     /// `.isSelected` trait.
     public func accessibilityLabel(for item: CameraItem, date: String?) -> String {
         BrowseWording.cellAccessibility(name: item.name, date: date, kind: CardLayout.kind(of: item),
-                                        isImported: isImported(item), isStaged: isStaged(item))
+                                        isImported: isImported(item), isStaged: isStaged(item),
+                                        isRejected: isRejected(item))
+    }
+
+    /// Whether the cell shows the Rejected badge, which a tap lifts (`liftReject(_:)`): a rejected still that isn't
+    /// imported (Imported takes its place).
+    public func showsRejectedBadge(_ item: CameraItem) -> Bool {
+        CardLayout.kind(of: item).offersJPEGActions && isRejected(item) && !isImported(item)
     }
 
     /// The grid cell's VoiceOver value: why it can't be selected, when the label doesn't already say so.
@@ -1401,6 +1480,14 @@ public final class BrowseModel {
     private static func seconds(since start: ContinuousClock.Instant) -> String {
         JPEGBenchRecord.format(JPEGPipeline.seconds(ContinuousClock.now - start))
     }
+}
+
+/// A card file as the pairing rule sees it, for lifting a pair's reject together.
+private struct PairCandidate: PairableFile {
+    let item: CameraItem
+    var pairingFolder: String { item.folder }
+    var pairingFilename: String { item.name }
+    var pairingCaptureDate: Date? { item.captureDate }
 }
 
 /// Browse's own waits, with what they rest on.

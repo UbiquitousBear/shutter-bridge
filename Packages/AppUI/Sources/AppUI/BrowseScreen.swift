@@ -539,7 +539,8 @@ struct DayHeader: View {
 /// selecting it selects the file, otherwise it starts selecting with this file (`BrowseModel.tap(_:)`, until the
 /// loupe exists); VoiceOver's default action does the same. A still of the live card offers the press-and-hold menu.
 /// Video and other files are greyed out with no actions, and while selecting so are stills that can't be imported
-/// (no capture date); VoiceOver's value says why. Imported and staged stills can be picked (Shamil, 11 Nov).
+/// (no capture date); VoiceOver's value says why. Imported and staged stills can be picked (Shamil, 11 Nov). A rejected
+/// still shows Rejected, which a tap (or the press-and-hold menu) lifts (D3).
 struct CardCell: View {
     let item: CameraItem
     let model: BrowseModel
@@ -553,12 +554,13 @@ struct CardCell: View {
         let block = model.selectionBlock(for: item)
         let imported = model.isImported(item)
         let staged = model.isStaged(item)
+        let rejected = model.showsRejectedBadge(item)
         // Only the picture is dimmed: the labels that explain a greyed-out cell stay readable (HIG Colour and
         // contrast).
         let picture = thumbnail
             .opacity(opacity(selecting: selecting, selectable: block == nil))
             .overlay(alignment: .topTrailing) { badge }
-            .overlay(alignment: .bottomLeading) { label(imported: imported, staged: staged) }
+            .overlay(alignment: .bottomLeading) { label(imported: imported, staged: staged, rejected: rejected) }
             .overlay(alignment: .bottomTrailing) {
                 if selecting, block == nil || selected {
                     SelectionMark(selected: selected)
@@ -591,10 +593,26 @@ struct CardCell: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
         // Video, other files, and stills that can't be selected now do nothing when tapped: not a button.
         .accessibilityRemoveTraits(model.respondsToTap(item) ? [] : .isButton)
+        // The Rejected badge sits above the cell's button, so a tap on it lifts the reject (D3) rather than selecting;
+        // while selecting, taps go through it to the cell. VoiceOver reaches it as a button of its own.
+        .overlay(alignment: .bottomLeading) {
+            if rejected {
+                RejectedBadge(selecting: selecting) {
+                    Task { await model.liftReject(item) }
+                }
+            }
+        }
 
         if model.offersJPEGActions(item) {
             cell
                 .contextMenu {
+                    if rejected {
+                        Button {
+                            Task { await model.liftReject(item) }
+                        } label: {
+                            Label(BrowseWording.liftReject, systemImage: "arrow.uturn.backward")
+                        }
+                    }
                     Button {
                         model.copyAsJPEG(item)
                     } label: {
@@ -646,8 +664,9 @@ struct CardCell: View {
         }
     }
 
-    /// Imported takes precedence over Staged (Shamil, 11 Nov); VoiceOver's label says both.
-    @ViewBuilder private func label(imported: Bool, staged: Bool) -> some View {
+    /// Imported takes precedence over Staged (Shamil, 11 Nov); VoiceOver's label says both. A rejected still that
+    /// isn't imported shows the Rejected badge instead (`RejectedBadge`, drawn above the cell so a tap lifts it).
+    @ViewBuilder private func label(imported: Bool, staged: Bool, rejected: Bool) -> some View {
         switch kind {
         case .video:
             CellLabel(text: BrowseWording.videoLabel)
@@ -656,10 +675,32 @@ struct CardCell: View {
         case .photo:
             if imported {
                 CellLabel(text: BrowseWording.importedBadge, systemImage: "checkmark.circle.fill")
+            } else if rejected {
+                EmptyView()
             } else if staged {
                 CellLabel(text: BrowseWording.stagedBadge, systemImage: "tray.full")
             }
         }
+    }
+}
+
+/// The Rejected badge (D3) over a cell's corner: a tap lifts the reject, so the photo is new again. Its tap area reaches
+/// 44 points into the cell (HIG: hit targets). While selecting, taps pass through it to the cell, which selects.
+/// VoiceOver reads it as a *Lift Reject* button with a hint; the cell's own label already says Rejected.
+struct RejectedBadge: View {
+    let selecting: Bool
+    let lift: () -> Void
+
+    var body: some View {
+        Button(action: lift) {
+            CellLabel(text: BrowseWording.rejectedBadge, systemImage: "xmark.circle")
+                .frame(minWidth: 44, minHeight: 44, alignment: .bottomLeading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(!selecting)
+        .accessibilityLabel(BrowseWording.liftReject)
+        .accessibilityHint(BrowseWording.liftRejectHint)
     }
 }
 

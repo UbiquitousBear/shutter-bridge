@@ -47,6 +47,7 @@ struct EngineTraceWordingTests {
         #expect(line(.sizeMismatch("DSC00001.ARW", expected: 100, actual: 90))
             == "engine: DSC00001.ARW came to 90 B but the camera lists 100 B")
         #expect(line(.alreadyStaged("DSC00001.ARW")) == "engine: skipped DSC00001.ARW: already staged")
+        #expect(line(.rejectedLeftOut("DSC00001.ARW")) == "engine: skipped DSC00001.ARW: rejected")
         #expect(line(.sameFileListedTwice("DSC00001.ARW"))
             == "engine: left out a second copy of DSC00001.ARW listed in another folder")
         #expect(line(.waitingForPartner("DSC00001.ARW")) == nil)
@@ -165,6 +166,7 @@ struct EngineTraceWordingTests {
             .finished(.catalogueUnavailable), .reconnected(.usb, sinceLost: .zero, filesLeft: 0),
             .firstByteAfterReconnect("A.JPG", bytes: 1, sinceResumed: .zero), .commitMarkerNotWritten("A.ARW"),
             .jobRecordNotWritten, .lateSessionLossIgnored(generation: 1), .partialReset("A.JPG"),
+            .rejectedLeftOut("A.JPG"),
         ]
     }
 
@@ -214,7 +216,8 @@ struct EngineTraceWordingTests {
         let name = "DSC\n2026-11-11T10:00:00Z error [browse] serial \(serial)\u{0}\u{7}.ARW"
         // The checkpoint-wait and lone-half lines carry a name too, so they clean it the same way.
         for event in [EngineTrace.waitingForCheckpointWrites(name), .checkpointWritesUnsettled(name),
-                      .committedWithoutPartner(name), .commitMarkerNotWritten(name), .partialReset(name)] {
+                      .committedWithoutPartner(name), .commitMarkerNotWritten(name), .partialReset(name),
+                      .rejectedLeftOut(name)] {
             let waiting = try #require(line(event))
             #expect(!waiting.contains("\n") && !waiting.contains("\u{0}") && !waiting.contains("\u{7}"))
         }
