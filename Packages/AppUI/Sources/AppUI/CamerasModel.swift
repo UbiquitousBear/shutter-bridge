@@ -168,7 +168,21 @@ public final class CamerasModel: CameraFinding {
         )
         browsing.removeAll { $0.model == nil }
         browsing.append(WeakBrowse(model: model))
+        model.onListed = { [weak self] listed in self?.onBrowseListed?(listed) }
         return model
+    }
+
+    // MARK: - App Intents (I16)
+
+    /// Told when a Browse model has listed its camera's live card (`BrowseModel.onListed`). Set by `AppModel`, which
+    /// starts an "Import new photos" waiting for that camera.
+    @ObservationIgnored var onBrowseListed: (@MainActor (BrowseModel) -> Void)?
+
+    /// The Browse models still alive that show their camera's live card, the most recently made last. A model whose
+    /// screen was never shown never runs, so it never shows a live card.
+    func liveBrowses() -> [BrowseModel] {
+        browsing.removeAll { $0.model == nil }
+        return browsing.compactMap { entry in entry.model.flatMap { $0.showsLiveCard ? $0 : nil } }
     }
 
     /// The scene changed: every Browse model still alive is told, so a Wi-Fi Browse knows whether a lost session happened
