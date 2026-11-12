@@ -42,10 +42,6 @@ struct CullScreen: View {
     @Environment(\.displayScale) private var displayScale
     /// The screen's size, for the previews' decode size.
     @State private var size: CGSize = .zero
-    /// The loupe's cover; when it closes, however it closes, the model closes the loupe it showed.
-    @State private var showsLoupe = false
-    /// The loupe the cover shows, so its dismissal closes that one and never one opened since.
-    @State private var presented: CullLoupe<DecodedPreviewImage>?
     /// The removal's one confirmation (D2), up while *Import keepers* offers it.
     @State private var confirmsRemoval = false
 
@@ -66,16 +62,9 @@ struct CullScreen: View {
             }
             .onChange(of: model.loadFailureNotice) { _, notice in notice?.announcement.post() }
             .task { await model.load() }
-            .fullScreenCover(isPresented: $showsLoupe, onDismiss: {
-                guard let dismissed = presented else { return }
-                presented = nil
-                let model = self.model
-                Task { await model.closeLoupe(dismissed) }
-            }) {
-                if let loupe = presented {
-                    LoupeView(loupe: loupe) { showsLoupe = false }
-                }
-            }
+            // The loupe a day's row opens is `model.loupe`; its cover is put up by the screen's host over the whole tab
+            // view (LiveApp), not from here inside the tab: on a wide iPhone, whose tabs and toolbar are a strip at the
+            // side, a cover put up from inside the tab never showed (#139).
     }
 
     /// *Import keepers* on the screen (I12): its strip, its toolbar button and the removal's one confirmation (D2).
@@ -168,8 +157,6 @@ struct CullScreen: View {
                         ForEach(section.days) { row in
                             CullDayRowView(row: row, counts: model.counts(of: row)) {
                                 model.openLoupe(row.id, maxPixelSize: maxPixelSize)
-                                presented = model.loupe
-                                showsLoupe = presented != nil
                             }
                             .contextMenu {
                                 if let keepers {
