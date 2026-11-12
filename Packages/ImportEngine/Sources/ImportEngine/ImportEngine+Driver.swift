@@ -73,6 +73,12 @@ extension ImportEngine {
         guard let job = currentListing(id, generation) else { return }
         job.listRetries = 0
         if job.hasListed {
+            // A file that left the card (a card swapped, its handles reused) is skipped by `remap`, which deletes its
+            // partial copy: its `.partial` row goes back to new first, while it is still queued, so the job can't end
+            // before the row has gone.
+            let leaving = resumablesLeavingTheCard(job, listed)
+            for entry in leaving { await forgetPartialRow(of: entry) }
+            guard let job = currentListing(id, generation) else { return }
             remap(job, listed)
         } else {
             await diff(listed, id: id, generation: generation)
@@ -151,6 +157,9 @@ extension ImportEngine {
         // A job that ended (cancel, stop) may still be committing one of these files: its row has to land first, or
         // the file would be queued, copied and saved again.
         await settleCommits(ofJobsOtherThan: id)
+        // A commit whose row was lost (a kill after the save, or a store failing every try) is resolved before the
+        // catalogue is read, after the launch pass (backlog section 3.1, I15).
+        await resolveCommitBoundary(for: id)
         // A partial file iOS emptied from Caches, or the prune deleted, sends its row back to offset 0 first (I13).
         await reconcilePartials()
         guard currentListing(id, generation) != nil else { return }
@@ -280,8 +289,7 @@ extension ImportEngine {
                 entry.item = item
             } else {
                 job.queue.removeAll { $0 == entry.identity }
-                entry.phase = .done(.skipped(.link(.itemNotFound)))
-                trace(.skipped(entry.item.name, .link(.itemNotFound)))
+                resolve(entry, .skipped(.link(.itemNotFound))) // and its partial copy goes
             }
         }
         job.phase = .downloading
