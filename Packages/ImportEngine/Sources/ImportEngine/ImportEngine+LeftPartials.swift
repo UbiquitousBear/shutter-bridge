@@ -7,15 +7,17 @@ import Foundation
 // exists only for a file left resumable.
 //
 // - A file skipped or failed for a reason of its own (it left the card, its retries are used up) won't be continued:
-//   `resolve` deletes its partial copy, and its row goes back to `.new` here (`forgetPartialRow(of:)`), rather than
-//   pointing at a deleted file until the 7-day prune.
+//   `resolve` deletes its partial copy, and its row goes back to `.new` here (`resolveForgettingPartial(_:_:)`, or
+//   `forgetPartialRow(of:)` for a queued file the listing no longer holds), rather than pointing at a deleted file
+//   until the 7-day prune.
 // - A job stopped for a reason that isn't the file's (a full phone) keeps the file's partial copy and its row, with its
 //   latest checkpoint written first, so the next job continues it, as it would after a drop
 //   (`keepsPartialWhenStopped(by:download:entry:)`).
 extension ImportEngine {
     /// Sends the file's `.partial` row back to `.new` (`CatalogueStore.forgetPartial`) while it still names a file in
-    /// the file's own partial folder, at the offset read: called just before the file is resolved skipped or failed
-    /// on a link that resumes, which deletes that folder. A checkpoint written in another folder (another job's), an
+    /// the file's own partial folder, at the offset read: called just before a queued file the listing no longer holds
+    /// is resolved skipped (`remap`), which deletes that folder, and for a stop that is the file's own; a file skipped or
+    /// failed from its lane goes through `resolveForgettingPartial(_:_:)` instead. A checkpoint written in another folder (another job's), an
     /// import or a staged copy is left alone. A catalogue that can't answer leaves the row: the launch pass
     /// (`reconcilePartials()`) sends it back to offset 0 once its file is gone.
     ///
@@ -27,6 +29,19 @@ extension ImportEngine {
     func forgetPartialRow(of entry: FileEntry) async {
         guard let resumable = entry.resumable else { return }
         entry.resumable = nil
+        await sendRowBackToNew(of: entry, for: resumable)
+        let stillTheJobs = job?.entries[entry.identity] === entry && entry.outcome == nil
+        if entry.resumable == nil, stillTheJobs {
+            entry.resumable = resumable
+        } else if !isHeld(resumable.folder) {
+            try? FileManager.default.removeItem(at: resumable.folder)
+        }
+    }
+
+    /// Waits for the file's checkpoint writes in flight, then sends its `.partial` row back to `.new` if it still names a
+    /// file in `resumable`'s folder (`forgetPartialRow(of:)`'s catalogue half). `resumable.persistedOffset` goes to 0
+    /// when the row was sent back.
+    private func sendRowBackToNew(of entry: FileEntry, for resumable: ResumableFile) async {
         await settle(entry.checkpointWrites, of: entry.item.name)
         let folder = resumable.folder.standardizedFileURL.pathComponents
         if let row = try? await catalogue.record(for: entry.identity), row.state == .partial,
@@ -35,12 +50,23 @@ extension ImportEngine {
            (try? await catalogue.forgetPartial(entry.identity, ifTempURL: tempURL, offset: row.resumeOffset)) == true {
             resumable.persistedOffset = 0
         }
-        let stillTheJobs = job?.entries[entry.identity] === entry && entry.outcome == nil
-        if entry.resumable == nil, stillTheJobs {
-            entry.resumable = resumable
-        } else if !isHeld(resumable.folder) {
-            try? FileManager.default.removeItem(at: resumable.folder)
+    }
+
+    /// Resolves the file with `outcome` (skipped or failed for a reason of its own) and sends its `.partial` row back to
+    /// `.new`. The outcome is recorded first, before the catalogue is awaited: a job that ends meanwhile (cancelled)
+    /// then lists the file as it was resolved, not queued, and its record says so; and the file, no longer downloading,
+    /// is not put back in the queue by a reconnect or a stall, nor does it take another checkpoint. Its partial folder
+    /// is kept until the row has been sent back (the row is compared with it) and then deleted, as `resolve` would have
+    /// at once. Without a partial copy it is `resolve` alone.
+    func resolveForgettingPartial(_ entry: FileEntry, _ outcome: FileOutcome) async {
+        guard let resumable = entry.resumable else {
+            resolve(entry, outcome)
+            return
         }
+        entry.resumable = nil // so `resolve` leaves the folder for now
+        resolve(entry, outcome)
+        await sendRowBackToNew(of: entry, for: resumable)
+        if !isHeld(resumable.folder) { try? FileManager.default.removeItem(at: resumable.folder) }
     }
 
     /// Whether a job stopped by `failure` keeps the partial copy of the file whose download failed with it: on a link

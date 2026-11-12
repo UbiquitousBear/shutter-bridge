@@ -76,10 +76,21 @@ extension ImportEngine {
             // A file that left the card (a card swapped, its handles reused) is skipped by `remap`, which deletes its
             // partial copy: its `.partial` row goes back to new first, while it is still queued, so the job can't end
             // before the row has gone.
-            let leaving = resumablesLeavingTheCard(job, listed)
-            for entry in leaving { await forgetPartialRow(of: entry) }
-            guard let job = currentListing(id, generation) else { return }
-            remap(job, listed)
+            // The set is read again after each round of awaits: a file that became queued while the rows were awaited
+            // (an `append` that adopted a partial row) and isn't on the card either leaves with the rest, since `remap`
+            // skips every queued file the card doesn't hold. The last read and `remap` follow with no await between them.
+            var handled = Set<ObjectIdentity>()
+            while let job = currentListing(id, generation) {
+                let leaving = resumablesLeavingTheCard(job, listed).filter { !handled.contains($0.identity) }
+                if leaving.isEmpty {
+                    remap(job, listed)
+                    return
+                }
+                for entry in leaving {
+                    handled.insert(entry.identity)
+                    await forgetPartialRow(of: entry)
+                }
+            }
         } else {
             await diff(listed, id: id, generation: generation)
         }

@@ -31,6 +31,10 @@ actor FailingCatalogue: CatalogueStore {
     var failRecordJob = false
     /// `partialRecords()` fails.
     var failPartialRecords = false
+    /// Every `pendingCommits()` call, answered or refused.
+    private(set) var pendingCommitsCalls = 0
+    /// `pendingCommits()` fails from this call on (1-based); nil: never.
+    var failPendingCommitsFrom: Int?
 
     func setFailUpserts(_ on: Bool) { failUpserts = on }
     func setFailStates(_ on: Bool) { failStates = on }
@@ -40,6 +44,8 @@ actor FailingCatalogue: CatalogueStore {
     func setFailAbandonCommit(_ on: Bool) { failAbandonCommit = on }
     func setFailRecordJob(_ on: Bool) { failRecordJob = on }
     func setFailPartialRecords(_ on: Bool) { failPartialRecords = on }
+    /// Every `pendingCommits()` from call `n` on fails (1 fails them all); nil lets them through again.
+    func setFailPendingCommits(from n: Int?) { failPendingCommitsFrom = n }
 
     func record(for identity: ObjectIdentity) throws -> CatalogueRecord? { records[identity] }
 
@@ -130,7 +136,9 @@ actor FailingCatalogue: CatalogueStore {
     }
 
     func pendingCommits() throws -> [PendingCommit] {
-        markers.values.sorted { $0.writtenAt < $1.writtenAt }
+        pendingCommitsCalls += 1
+        if let n = failPendingCommitsFrom, pendingCommitsCalls >= n { throw Broken() }
+        return markers.values.sorted { $0.writtenAt < $1.writtenAt }
     }
 
     var allRecords: [CatalogueRecord] { Array(records.values) }

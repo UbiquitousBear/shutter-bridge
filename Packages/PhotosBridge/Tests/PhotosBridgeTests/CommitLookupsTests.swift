@@ -144,6 +144,71 @@ struct CommitLookupsTests {
         #expect(f.find([.init(filename: "DSC00001.ARW", size: 40, modificationDate: Self.date)]) == [f.path(expected)])
     }
 
+    // MARK: Only a file placed at or after the commit began
+
+    /// A staged copy placed before the commit began (an older photo with the same name and size, after a file-number
+    /// reset) isn't the commit's copy; the one placed since is. Times are given per name, since a status-change time
+    /// can't be set on a file.
+    @Test func anOlderFileWithTheSameNameAndSizeIsNotFound() throws {
+        let f = Folder()
+        try f.put("DSC00001.ARW", size: 40)          // an older photo's copy
+        try f.put("DSC00001 (2).ARW", size: 40)      // placed by the commit that was killed
+        let began = Self.date
+        let placed: [String: Date] = [
+            "DSC00001.ARW": began.addingTimeInterval(-3600),
+            "DSC00001 (2).ARW": began.addingTimeInterval(1),
+        ]
+        let finder = StagedCopyFinder { url, _ in placed[url.lastPathComponent] }
+        let wanted = [StagedCopyFinder.Wanted(filename: "DSC00001.ARW", size: 40, commitBegan: began)]
+        #expect(finder.find(wanted, in: f.folder, under: f.root)?.map(\.relativePath) == [f.path("DSC00001 (2).ARW")])
+
+        // Only the older one is there: the commit's file was never placed, so nothing is found.
+        try FileManager.default.removeItem(at: f.url.appendingPathComponent("DSC00001 (2).ARW"))
+        #expect(finder.find(wanted, in: f.folder, under: f.root) == nil)
+        // Without the commit's begin time nothing is checked, as before.
+        let unchecked = [StagedCopyFinder.Wanted(filename: "DSC00001.ARW", size: 40)]
+        #expect(finder.find(unchecked, in: f.folder, under: f.root)?.map(\.relativePath) == [f.path("DSC00001.ARW")])
+    }
+
+    @Test func aFilePlacedJustBeforeTheCommitBeganCountsWithinTheSlack() throws {
+        let f = Folder()
+        try f.put("A.JPG", size: 1)
+        let began = Self.date
+        let wanted = [StagedCopyFinder.Wanted(filename: "A.JPG", size: 1, commitBegan: began)]
+        let slack = StagedCopyFinder.placementSlack
+        let within = StagedCopyFinder { _, _ in began.addingTimeInterval(-slack + 0.5) }
+        #expect(within.find(wanted, in: f.folder, under: f.root)?.map(\.relativePath) == [f.path("A.JPG")])
+        let before = StagedCopyFinder { _, _ in began.addingTimeInterval(-slack - 0.5) }
+        #expect(before.find(wanted, in: f.folder, under: f.root) == nil)
+        // A file whose time can't be read is a doubtful one.
+        let unreadable = StagedCopyFinder { _, _ in nil }
+        #expect(unreadable.find(wanted, in: f.folder, under: f.root) == nil)
+    }
+
+    @Test func aPairNeedsBothFilesPlacedSinceTheCommitBegan() throws {
+        let f = Folder()
+        try f.put("DSC00001.ARW", size: 40)
+        try f.put("DSC00001.JPG", size: 20)
+        let began = Self.date
+        let placed: [String: Date] = ["DSC00001.ARW": began, "DSC00001.JPG": began.addingTimeInterval(-3600)]
+        let finder = StagedCopyFinder { url, _ in placed[url.lastPathComponent] }
+        let pair: [StagedCopyFinder.Wanted] = [.init(filename: "DSC00001.ARW", size: 40, commitBegan: began),
+                                               .init(filename: "DSC00001.JPG", size: 20, commitBegan: began)]
+        #expect(finder.find(pair, in: f.folder, under: f.root) == nil, "the JPEG is an older file's")
+    }
+
+    /// The real status-change time of a file written now is after a commit that began a minute ago and before one that
+    /// begins in an hour (so the default reading works on this platform).
+    @Test func theDefaultReadingUsesTheFilesStatusChangeTime() throws {
+        let f = Folder()
+        try f.put("A.JPG", size: 1, date: Self.date) // the placer's capture date doesn't make it older
+        let now = Date()
+        let past = [StagedCopyFinder.Wanted(filename: "A.JPG", size: 1, commitBegan: now.addingTimeInterval(-60))]
+        let future = [StagedCopyFinder.Wanted(filename: "A.JPG", size: 1, commitBegan: now.addingTimeInterval(3600))]
+        #expect(f.find(past) == [f.path("A.JPG")])
+        #expect(f.find(future) == nil)
+    }
+
     @Test func aMissingFolderOrOneThatIsNotAPlainPathFindsNothing() throws {
         let f = Folder()
         try f.put("A.JPG", size: 1)

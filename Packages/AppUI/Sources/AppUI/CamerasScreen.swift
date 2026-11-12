@@ -5,8 +5,8 @@ import UIKit
 
 /// The Cameras screen (backlog section 6): the connected cameras with a USB-C badge and the mode in the camera's
 /// wording, the empty state, a clear message when ImageCaptureCore's access is off, and another with Try Again when
-/// discovery couldn't start at all (so it isn't taken for "No Camera Connected"). Its toolbar opens Settings, and
-/// Staging (the cull screen, D5) until the tab bar gives Staging a tab of its own (I10).
+/// discovery couldn't start at all (so it isn't taken for "No Camera Connected"). Its toolbar opens Settings (Staging
+/// has a tab of its own, I10).
 /// While a job exists, the same import strip as on Browse sits at the top and opens the Import screen.
 ///
 /// Wi-Fi (wireless plan W16), from the models the app puts in the environment, each optional so a build without them is
@@ -23,8 +23,6 @@ struct CamerasScreen: View {
     var importer: ImportModel?
     var showSettings: @MainActor () -> Void = {}
     var showImport: @MainActor () -> Void = {}
-    /// Opens the Staging screen (culling, D5), until I10's tab bar gives it a tab; nil leaves the button out.
-    var showStaging: (@MainActor () -> Void)?
     @Environment(\.openURL) private var openURL
     @Environment(WirelessSetupModel.self) private var setup: WirelessSetupModel?
     @Environment(WiFiImportModel.self) private var wifiStatus: WiFiImportModel?
@@ -34,16 +32,6 @@ struct CamerasScreen: View {
         content
             .navigationTitle(CamerasWording.title)
             .toolbar {
-                if let showStaging {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showStaging()
-                        } label: {
-                            Label(CullWording.openStaging, systemImage: "tray.full")
-                        }
-                        .accessibilityHint(CullWording.openStagingHint)
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSettings()

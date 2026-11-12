@@ -155,6 +155,11 @@ struct EngineTraceWordingTests {
             == "engine: interrupted commit of DSC00001.ARW: found in Staging, marked staged")
         #expect(line(.pendingCommitResolved("DSC00001.ARW", .notFound))
             == "engine: interrupted commit of DSC00001.ARW: not found, so it reads as not imported")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .notStaged))
+            == "engine: interrupted commit of DSC00001.ARW: not found in Staging, so it reads as not staged")
+        #expect(line(.pendingCommitResolved("DSC00001.ARW", .spareStagedCopy))
+            == "engine: interrupted commit of DSC00001.ARW: found in Staging, but the file has a staged copy elsewhere; "
+            + "the spare is left in place")
         #expect(line(.pendingCommitResolved("DSC00001.ARW", .possibleDuplicate))
             == "engine: interrupted commit of DSC00001.ARW: not found with Limited Access, so it may be imported twice")
         #expect(line(.pendingCommitResolved("DSC00001.ARW", .waiting))

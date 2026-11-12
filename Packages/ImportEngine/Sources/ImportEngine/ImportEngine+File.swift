@@ -82,12 +82,10 @@ extension ImportEngine {
             if failure.kind == .cardUnavailable { cardLost(job) } else { cameraLost(job, job.cameraLossReason) }
             return false
         case .skipFile:
-            // Nothing will continue its partial copy: its row goes back to new first, while the file is the lane's.
-            if entry.resumable != nil {
-                await forgetPartialRow(of: entry)
-                guard stillDownloading(entry, download, in: id) else { return false }
-            }
-            resolve(entry, .skipped(.link(failure.kind)))
+            // Nothing will continue its partial copy: its row goes back to new, with the outcome recorded first so a
+            // job that ends meanwhile lists the file skipped.
+            await resolveForgettingPartial(entry, .skipped(.link(failure.kind)))
+            guard let job = current(id) else { return false }
             commitLoneHalves(of: job) // a partner kept for this file goes alone
             refreshState()
             return false
@@ -107,6 +105,8 @@ extension ImportEngine {
                 return false
             }
             if entry.resumable != nil { // a stop that is the file's own (another camera's): its copy goes
+                // Not resolved before the await, as the two paths above are: the file has to stay the lane's until the
+                // job ends, or a camera lost meanwhile would find nothing left to copy and complete the job instead.
                 await forgetPartialRow(of: entry)
                 guard let job = current(id) else { return false }
                 if stillDownloading(entry, download, in: id) { resolve(entry, .failed(.link(failure.kind))) }
@@ -190,13 +190,10 @@ extension ImportEngine {
     func retry(_ identity: ObjectIdentity, of id: UUID, after reason: FailureReason) async -> Bool {
         guard let job = current(id), let entry = job.entries[identity] else { return false }
         guard entry.retries < policy.retryDelays.count else {
-            // Nothing will continue its partial copy: its row goes back to new first, while the file is the lane's.
-            if entry.resumable != nil, let download = entry.download {
-                await forgetPartialRow(of: entry)
-                guard stillDownloading(entry, download, in: id) else { return false }
-            }
-            resolve(entry, .failed(reason))
-            refreshState()
+            // Nothing will continue its partial copy: its row goes back to new, with the outcome recorded first so a
+            // job that ends meanwhile lists the file failed.
+            await resolveForgettingPartial(entry, .failed(reason))
+            if current(id) != nil { refreshState() }
             return false
         }
         entry.retries += 1

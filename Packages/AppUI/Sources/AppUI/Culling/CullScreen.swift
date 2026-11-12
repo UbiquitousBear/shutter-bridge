@@ -2,32 +2,6 @@
 import SwiftUI
 import UIKit
 
-/// The Staging screen in a sheet over Cameras, with its own navigation stack and a close button: culling of staged
-/// files lives here (D5) until I10's tab bar gives it a tab of its own. The model is made each time the sheet opens
-/// (`AppModel.stagingModel`), so it reads Staging as it is then.
-struct StagingScreen: View {
-    @State private var model: CullModel<DecodedPreviewImage>
-    /// *Import keepers* (I12), made with the model; nil leaves the action out.
-    @State private var keepers: KeepersImport?
-    @Environment(\.dismiss) private var dismiss
-
-    init(model: CullModel<DecodedPreviewImage>, keepers: KeepersImport? = nil) {
-        _model = State(initialValue: model)
-        _keepers = State(initialValue: keepers)
-    }
-
-    var body: some View {
-        NavigationStack {
-            CullScreen(model: model, keepers: keepers)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(role: .close) { dismiss() }
-                    }
-                }
-        }
-    }
-}
-
 /// The cull screen (backlog section 7.3): the staged files by camera and capture day, newest day first, each day with
 /// its counts ("Today: 120 staged, 34 kept, 60 rejected"), from the catalogue with no camera connected. A day opens the
 /// loupe over its photos, full screen, at the first one with no mark. Staged files that can't be shown are counted

@@ -206,6 +206,54 @@ struct IntentsAppModelTests {
         await finish(r, run)
     }
 
+    /// Browse is open but its listing failed: the answer says so and what to tap, not that the card is being read; and
+    /// the import still starts once Try Again has read the card.
+    @Test func aFailedListingIsSaidNotReadingTheCard() async throws {
+        let r = try await rig()
+        await r.link.set(listFailure: CameraLinkFailure(.noAnswer))
+        // The first request opens Browse, which has nothing to say yet.
+        #expect(await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .zero) == .waitingForCard(choice: .photos))
+        guard let (browse, run) = await pushBrowse(r) else {
+            Issue.record("Browse wasn't opened")
+            return
+        }
+        #expect(await eventually { if case .failed = browse.phase { true } else { false } })
+        // Asked again, it follows what Browse shows.
+        let answer = await r.app.importNewPhotos(cameraWith: r.key, waitingForImport: .zero)
+        #expect(answer == .waitingForPerson(choice: .photos, why: .listingFailed))
+        #expect(NewPhotosWording.importAnswer(answer, camera: "ILCE-7CM2")
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2. Open Browse and tap Try Again. "
+            + "Its new photos will be imported to Photos once the card is read.")
+        #expect(!r.app.importer.hasJob)
+        await r.link.set(listFailure: nil)
+        browse.retry()
+        #expect(await eventually { r.app.importer.hasJob })
+        await finish(r, run)
+    }
+
+    /// A USB camera that couldn't be opened: Browse's failed state has no Try Again, so the answer doesn't send the person
+    /// to one, nor promise an import that nothing will start.
+    @Test func aCameraThatCouldNotBeOpenedIsSaidWithNothingToTap() async throws {
+        let link = FakeLink(items: card)
+        let browse = BrowseModel(
+            camera: link.descriptor,
+            openLink: { () async throws(CameraLinkFailure) -> any CameraLink in throw CameraLinkFailure(.noAnswer) },
+            services: services(),
+            onGone: { _ in }
+        )
+        let run = Task { await browse.run() }
+        #expect(await eventually { if case .failed = browse.phase { true } else { false } })
+        // Over USB a failed open ends the run: nothing will open the link again, and Browse shows no Try Again.
+        #expect(!browse.canRetry)
+        #expect(browse.newPhotosCardWait == .failedWithNoRetry)
+        #expect(NewPhotosWording.importAnswer(.waitingForPerson(choice: .photos, why: .failedWithNoRetry),
+                                              camera: "ILCE-7CM2")
+            == "Shutter Bridge couldn't read the card in ILCE-7CM2, so its new photos won't be imported to Photos. "
+            + "Open Browse to see why.")
+        run.cancel()
+        await run.value
+    }
+
     @Test func leavingBrowseBeforeTheCardIsReadDropsTheImport() async throws {
         let r = try await rig()
         await r.link.set(listHangs: true)
