@@ -79,9 +79,12 @@ public actor PhotosLibraryDestination: ImportDestination {
     /// protocol extension's default (nil).
     public func filedAlbumIdentifier() async -> String? { filedAlbum }
 
-    /// The identifiers of the plan's albums that accept photos: found by the stored identifier, or created (once)
-    /// and stored when there is none or the stored one is gone. An album that refuses new content is skipped and
-    /// noted, not recreated (it is still the person's album).
+    /// The identifiers of the plan's albums that accept photos: found by the stored identifier; else an album an
+    /// earlier build stored under one of the album's legacy keys (`AlbumPlan.Album.legacyKeys`, D11), adopted under its
+    /// key; else created (once) and stored when there is none or the stored one is gone. An album found by its key
+    /// that refuses new content is skipped and noted, not recreated (it is still the person's album). A legacy album
+    /// that refuses new content isn't adopted: the album's key is shared by every camera key with that name, so
+    /// adopting it would leave all of them without an album; it is left as it is and the next legacy key is tried.
     ///
     /// Commits overlap (two downloads in flight, and the save runs off the download path), and this actor suspends
     /// while it reads the store and asks the library, so a second commit could otherwise find no identifier too and
@@ -135,9 +138,10 @@ public actor PhotosLibraryDestination: ImportDestination {
             case .found(canAddContent: false):
                 return .issue(.doesNotAcceptPhotos(key: album.key))
             case .missing:
-                break // deleted: make a new one below
+                break // deleted: adopt or make a new one below
             }
         }
+        if let adopted = await adoptLegacy(album, library: library, store: store) { return adopted }
         do {
             let created = try await library.createAlbum(titled: album.title)
             await store.setAlbumIdentifier(created, forKey: album.key)
@@ -146,6 +150,26 @@ public actor PhotosLibraryDestination: ImportDestination {
             if ImportDestinationFailure(photoLibraryFailure: error) == .photosAccessDenied { return .denied }
             return .issue(.couldNotCreate(key: album.key, detail: error.description))
         }
+    }
+
+    /// The first legacy key's album still in the library that accepts photos, stored under `album.key` too; nil when
+    /// there is none. A legacy entry is never written or removed. Each adoption is recorded under
+    /// `adoptionKey(forLegacy:)`, naming the key that took it, and a legacy key another key has taken is passed over:
+    /// one camera key's old album is adopted by one name only. Otherwise a key seen under two names (the MSC key's
+    /// "ILCE-7CM2" and, once another body is attached, the shared "Camera") would give its old album to both, and a
+    /// second body's photos would be filed into the first body's album.
+    private static func adoptLegacy(_ album: AlbumPlan.Album, library: any PhotoLibraryClient,
+                                    store: any AlbumIdentifierStore) async -> AlbumResolution? {
+        for legacy in album.legacyKeys {
+            let adoption = AlbumPlan.adoptionKey(forLegacy: legacy)
+            if let takenBy = await store.albumIdentifier(forKey: adoption), takenBy != album.key { continue }
+            guard let id = await store.albumIdentifier(forKey: legacy) else { continue }
+            guard case .found(canAddContent: true) = await library.album(withIdentifier: id) else { continue }
+            await store.setAlbumIdentifier(album.key, forKey: adoption)
+            await store.setAlbumIdentifier(id, forKey: album.key)
+            return .identifier(id)
+        }
+        return nil
     }
 
     /// The position from the JPEG or HEIF first (cheap to read), then the ARW.

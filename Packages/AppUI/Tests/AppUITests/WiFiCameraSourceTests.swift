@@ -86,8 +86,12 @@ struct WiFiCameraSourceTests {
             if case let .appeared(camera) = event { camera } else { nil }
         }
         #expect(listed.count == 2)   // the USB row isn't a Wi-Fi camera
-        #expect(listed.allSatisfy { $0.mode == .wifi(.cameraNetwork) && $0.name == "Camera" })
+        #expect(listed.allSatisfy { $0.mode == .wifi(.cameraNetwork) })
         #expect(listed.map(\.id).contains(WiFiCameraEntry.id(forGUID: guid)))
+        // One name per body (D11): a camera that has connected is named by the model it reported; one never connected
+        // is "Camera".
+        #expect(listed.first { $0.id == WiFiCameraEntry.id(forGUID: guid) }?.name == "ILCE-7CM2")
+        #expect(listed.first { $0.id == WiFiCameraEntry.id(forGUID: waiting.guid) }?.name == "Camera")
         #expect(await h.source.knownKey(for: WiFiCameraEntry.id(forGUID: guid)) == record.key)
         #expect(await h.source.knownKey(for: WiFiCameraEntry.id(forGUID: waiting.guid)) == nil)
         #expect(h.connecting.sessionCount == 0)   // nothing is joined to be listed
@@ -198,14 +202,18 @@ struct WiFiCameraSourceTests {
         #expect(record.lastSeen == fixedNow)
         #expect(record.lastIP == nil)
         #expect(h.pending.load().isEmpty)   // moved into the catalogue
-        // The descriptor doesn't change, so a camera being browsed isn't dropped when its key becomes known: the entry
-        // under the same ID now has the key, and no second camera was listed.
-        #expect(await h.discoveries.wait(for: 1))
+        // The descriptor's ID doesn't change, so a camera being browsed isn't dropped when its key becomes known: the
+        // entry under the same ID now has the key, and no second camera was listed. It is listed again under the same ID,
+        // named by its model (D11).
+        #expect(await h.discoveries.wait(for: 2))
         let entries = await h.source.cameras
         #expect(entries.map(\.id) == [id] && entries.first?.key == key)
+        #expect(entries.first?.descriptor.name == "ILCE-7CM2")
+        #expect(h.discoveries.all.last == .appeared(CameraDescriptor(id: id, name: "ILCE-7CM2",
+                                                                     mode: .wifi(.cameraNetwork))))
         let another = await h.source.registerPairedCamera(peripheral: anotherPeripheral)
-        #expect(await h.discoveries.wait(for: 2))
-        #expect(h.discoveries.all.count == 2 && h.discoveries.all.last == .appeared(another))
+        #expect(await h.discoveries.wait(for: 3))
+        #expect(h.discoveries.all.count == 3 && h.discoveries.all.last == .appeared(another))
     }
 
     @Test func theNextLaunchKnowsTheKeyAndTheGUID() async throws {
@@ -217,7 +225,8 @@ struct WiFiCameraSourceTests {
         let next = Harness(catalogue: h.catalogue, pendingStore: h.pending)
         try await next.source.start()
         #expect(await next.discoveries.wait(for: 1))
-        #expect(next.discoveries.all == h.discoveries.all)   // the same descriptor: the same ID
+        // The same descriptor as it was last listed (named by its model, D11): the same ID.
+        #expect(next.discoveries.all == [try #require(h.discoveries.all.last)])
         let before = await h.source.knownKey(for: id)
         let after = await next.source.knownKey(for: id)
         #expect(after == before && after != nil)
@@ -436,7 +445,9 @@ struct WiFiCameraSourceTests {
         let next = Harness(catalogue: h.catalogue, pendingStore: h.pending)
         try await next.source.start()
         #expect(await next.discoveries.wait(for: 1))
-        #expect(next.discoveries.all == [.appeared(descriptor)])
+        var named = descriptor
+        named.name = "ILCE-7CM2"   // by its model since its first connection (D11)
+        #expect(next.discoveries.all == [.appeared(named)])
     }
 
     @Test func aTypedOpenThatFailsIsAFailureOfThatLink() async throws {
@@ -721,6 +732,367 @@ struct WiFiCameraConnectionTests {
         #expect(ObjectIdentifier(third) == ObjectIdentifier(link) && session.count("prepare") == 1)
     }
 
+    // MARK: A connection nobody waits for is stopped (bench 22.1)
+
+    /// The person leaves Browse while the camera is being reached (switched off, say): the connection stops there, the
+    /// session leaves, and nothing is joined behind the screen they left. The next open starts afresh.
+    @Test func theLastCallerGivingUpStopsTheConnectionAndTheNextOpenStartsAfresh() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        // Two links: the stopped preparation may or may not have taken the first before it ended.
+        session.script(.success(FakeWiFiLink()), .success(FakeWiFiLink()))
+        session.set(phase: .handingOff)   // reaching the camera over Bluetooth
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { () -> CameraLinkFailure.Kind? in
+            do throws(CameraLinkFailure) { _ = try await source.cameraLink(for: id); return nil } catch { return error.kind }
+        }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        #expect(await bounded(browse) == .some(.disconnected))
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(await source.stoppedConnections == 1)
+        #expect(await !source.hasLiveLink(for: id))
+        session.set(phase: .ready)
+        // Opening the camera again connects afresh, with no hold this time.
+        let opened = try #require(try await source.cameraLink(for: id) as? FakeWiFiLink)
+        #expect(await !opened.closed)
+        #expect(session.preparesStarted == 2)
+        #expect(await source.hasLiveLink(for: id))
+    }
+
+    @Test func aConnectionAnotherCallerStillWaitsForGoesOn() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let link = FakeWiFiLink()
+        session.script(.success(link))
+        session.holdPrepare()
+        let source = h.source
+        let leaving = Task { try? await source.cameraLink(for: id) }
+        let staying = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntilAsync { await source.joinedConnections == 1 })
+        leaving.cancel()
+        _ = await bounded(leaving)
+        session.releasePrepare()
+        let got = try #require(await bounded(staying) ?? nil)
+        #expect(ObjectIdentifier(got) == ObjectIdentifier(link))
+        #expect(session.count("leave") == 0)
+        #expect(await source.stoppedConnections == 0)
+        #expect(await source.hasLiveLink(for: id))
+    }
+
+    @Test func aCallerThatHasGoneAlreadyStartsNothing() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()))
+        let source = h.source
+        let gone = Task { () -> CameraLinkFailure.Kind? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do throws(CameraLinkFailure) { _ = try await source.cameraLink(for: id); return nil } catch { return error.kind }
+        }
+        #expect(await bounded(gone) == .some(.disconnected))
+        #expect(session.preparesStarted == 0)
+        #expect(session.calls.isEmpty)
+    }
+
+    /// The review's probe: the caller is cancelled at every point of its connection, with a Local Network gate that hops to
+    /// the main actor as the app's does. Each round ends with the caller holding the link, or with no live link and the
+    /// session told to leave after any preparation: never a preparation begun after the stop, nor a link left open that
+    /// nobody holds.
+    @Test func aStopAtAnyPointLeavesNothingBehind() async throws {
+        for round in 0 ..< 120 {
+            let connecting = FakeConnecting()
+            let source = WiFiCameraSource(catalogue: InMemoryCatalogue(), connecting: connecting,
+                                          beforeFirstConnection: { await MainActor.run { true } }, now: { fixedNow })
+            let descriptor = await source.registerPairedCamera(peripheral: peripheral)
+            let entry = WiFiCameraEntry(descriptor: descriptor, key: nil, peripheral: nil, guid: UUID())
+            let session = connecting.session(for: entry) as! FakeSession
+            session.script(.success(FakeWiFiLink()))
+            let id = descriptor.id
+            let caller = Task { try? await source.cameraLink(for: id) }
+            for _ in 0 ..< round % 40 { await Task.yield() }
+            caller.cancel()
+            let got = await bounded(caller) ?? nil
+            // Let the stop finish: nothing in flight any more.
+            #expect(await waitUntilAsync { await !source.isConnecting(id) })
+            if let got {
+                #expect(await source.hasLiveLink(for: id), "round \(round): got a link that isn't live")
+                await source.linkClosed(got)
+            } else {
+                #expect(await !source.hasLiveLink(for: id), "round \(round): a live link nobody holds")
+                // Stopped (the session told to leave) or let go (the session told the import is over): never left
+                // holding the camera with nobody to end it.
+                let calls = session.calls
+                if calls.contains("prepare") {
+                    #expect(calls.last == "leave" || calls.last == "importFinished", "round \(round): \(calls)")
+                }
+            }
+        }
+    }
+
+    /// The Wi-Fi recovery is reopening the camera through its session, past the source, and a Browse joined that
+    /// preparation: closing Browse doesn't stop it.
+    @Test func aConnectionSharingTheRecoverysReopenIsntStopped() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let first = FakeWiFiLink()
+        session.script(.success(first), .success(FakeWiFiLink()))
+        _ = try await h.source.cameraLink(for: id)   // the import's link
+        await first.send(.removed)
+        #expect(await waitUntilAsync { await h.source.hasLiveLink(for: id) == false })
+        let source = h.source
+        await source.recoveryReopening(id, true)
+        session.set(phase: .handingOff)
+        session.holdPrepare()
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 2 })
+        browse.cancel()
+        _ = await bounded(browse)   // Browse lets go at once
+        #expect(await source.stoppedConnections == 0)
+        session.releasePrepare()
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(session.count("leave") == 0)
+        await source.recoveryReopening(id, false)
+    }
+
+    /// Review of the fix: a paused import holding its dead link isn't the recovery reopening. A Reconnect that Browse
+    /// left while it joins is stopped, and the import's own end still reaches the session.
+    @Test func aDeadImportLinkWithNoRecoveryReopeningDoesntKeepAConnectionGoing() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let first = FakeWiFiLink()
+        session.script(.success(first), .success(FakeWiFiLink()))
+        _ = try await h.source.cameraLink(for: id)   // the import's link
+        await first.send(.removed)
+        #expect(await waitUntilAsync { await h.source.hasLiveLink(for: id) == false })
+        let source = h.source
+        session.set(phase: .handingOff)
+        session.holdPrepare()
+        let reconnect = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 2 })
+        reconnect.cancel()
+        _ = await bounded(reconnect)
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(await source.stoppedConnections == 1)
+        #expect(await !source.hasLiveLink(for: id))
+        // The import is cancelled: its dead link's last holder letting go still ends it on the session.
+        await source.linkClosed(first)
+        #expect(session.count("importFinished") == 1)
+    }
+
+    /// Review of the fix: inside the stay the phone is still on the camera's network, and opening the camera reopens the
+    /// session with no join. Closing Browse during that reopen lets it finish and go back to the stay, rather than
+    /// leaving and throwing the stay away.
+    @Test func aStayReopenNobodyWaitsForFinishesAndGoesBackToTheStay() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()))
+        session.set(phase: .staying)
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await source.stoppedConnections == 0)
+        session.set(phase: .openingSession)
+        session.releasePrepare()
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(session.count("leave") == 0)
+        #expect(session.count("importFinished") == 1)   // let go: the stay starts again
+        #expect(await !source.hasLiveLink(for: id))
+    }
+
+    /// The same reopen, but the camera doesn't answer and the session falls back to Bluetooth and the join: stopped then.
+    @Test func aStayReopenNobodyWaitsForThatFallsBackToBluetoothIsStopped() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()))
+        session.set(phase: .staying)
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await source.stoppedConnections == 0)
+        session.send(.handingOff)   // the reopen gave up: back to Bluetooth
+        #expect(await waitUntilAsync { await source.stoppedConnections == 1 })
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(await !source.hasLiveLink(for: id))
+    }
+
+    /// Third review: the person taps the camera again while a connection finishing for nobody is saving the camera (its
+    /// link already live). They get that link, and it isn't closed under them by the let-go.
+    @Test func aCallerComingBackAsTheLinkIsSavedTakesItOver() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        let link = GatedModelLink()
+        session.script(.success(link))
+        session.set(closesLinkWhenFinished: true)
+        session.set(phase: .staying)
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await source.stoppedConnections == 0)
+        session.set(phase: .ready)
+        session.releasePrepare()
+        #expect(await waitUntilAsync { await link.modelAsked })
+        let again = Task { try? await source.cameraLink(for: id) }
+        let got = try #require(await bounded(again) ?? nil)
+        #expect(ObjectIdentifier(got) == ObjectIdentifier(link))
+        link.release.finish()
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(await !link.closed)
+        #expect(session.count("importFinished") == 0)
+        #expect(await source.hasLiveLink(for: id))
+    }
+
+    /// Third review: the person taps the camera again while the let-go is closing the link. They wait for it and get a
+    /// fresh connection, rather than a failure that would say the camera went away.
+    @Test func aCallerComingBackDuringTheLetGoGetsAFreshConnection() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()), .success(FakeWiFiLink()))
+        session.set(closesLinkWhenFinished: true)
+        session.set(phase: .staying)
+        session.holdPrepare()
+        session.holdFinish()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        session.set(phase: .ready)
+        session.releasePrepare()
+        #expect(await waitUntil { session.finishStarted == 1 })
+        #expect(await !source.isConnected(id))   // being let go: asking now would connect afresh
+        let again = Task { () -> Bool in
+            do throws(CameraLinkFailure) { _ = try await source.cameraLink(for: id); return true } catch { return false }
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        session.releaseFinish()
+        #expect(await bounded(again) == .some(true))
+        #expect(session.preparesStarted == 2)
+        #expect(await source.hasLiveLink(for: id))
+    }
+
+    /// Third review: the Wi-Fi recovery begins its reopen after Browse left a stay reopen it now shares. The connection is
+    /// neither stopped when the reopen falls back to Bluetooth nor let go when it opens: the recovery adopts its link.
+    @Test func aRecoveryThatBeginsAfterBrowseLeftTakesTheConnectionOver() async throws {
+        let h = Harness()
+        let (id, session) = await h.pair()
+        session.script(.success(FakeWiFiLink()))
+        session.set(phase: .staying)
+        session.holdPrepare()
+        let source = h.source
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await source.stoppedConnections == 0)
+        await source.recoveryReopening(id, true)
+        session.send(.handingOff)   // the reopen falls back to Bluetooth
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await source.stoppedConnections == 0)
+        session.set(phase: .ready)
+        session.releasePrepare()
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(session.count("importFinished") == 0)
+        #expect(session.count("leave") == 0)
+        #expect(await source.hasLiveLink(for: id))
+        await source.recoveryReopening(id, false)
+    }
+
+    /// Third review: while a stop is under way the camera isn't connected (asking would wait for the stop, then join).
+    /// The connection is held at a Local Network gate that doesn't end on cancellation, so the stop stays under way.
+    @Test func aConnectionBeingStoppedIsntConnected() async throws {
+        let gate = ContinuationGate()
+        let connecting = FakeConnecting()
+        let source = WiFiCameraSource(catalogue: InMemoryCatalogue(), connecting: connecting,
+                                      beforeFirstConnection: { await gate.wait(); return true }, now: { fixedNow })
+        let descriptor = await source.registerPairedCamera(peripheral: peripheral)
+        let id = descriptor.id
+        let session = connecting.session(for: WiFiCameraEntry(descriptor: descriptor, key: nil, peripheral: nil,
+                                                              guid: UUID())) as! FakeSession
+        session.script(.success(FakeWiFiLink()))
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { gate.waiting == 1 })
+        #expect(await source.isConnected(id))   // under way, and nobody has left yet
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await waitUntilAsync { await source.stoppedConnections == 1 })
+        #expect(await source.isConnecting(id))   // the stop is under way: the gate still holds the connection
+        #expect(await !source.isConnected(id))
+        gate.open()
+        #expect(await waitUntilAsync { await !source.isConnecting(id) })
+        #expect(session.preparesStarted == 0)   // stopped before the session
+    }
+
+    /// Fourth review: a recovery reopen that begins while a stop is under way waits for it to end before it reaches the
+    /// session, and a caller that gives up while waiting out a stop returns at once.
+    @Test func aStopUnderWayIsWaitedOutByTheRecoveryAndLeftByACancelledCaller() async throws {
+        let gate = ContinuationGate()
+        let connecting = FakeConnecting()
+        let source = WiFiCameraSource(catalogue: InMemoryCatalogue(), connecting: connecting,
+                                      beforeFirstConnection: { await gate.wait(); return true }, now: { fixedNow })
+        let descriptor = await source.registerPairedCamera(peripheral: peripheral)
+        let id = descriptor.id
+        let session = connecting.session(for: WiFiCameraEntry(descriptor: descriptor, key: nil, peripheral: nil,
+                                                              guid: UUID())) as! FakeSession
+        session.script(.success(FakeWiFiLink()))
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { gate.waiting == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await waitUntilAsync { await source.stoppedConnections == 1 })
+        // Browse is opened again and left again while the stop is still under way: that caller doesn't wait behind it.
+        let again = Task { () -> CameraLinkFailure.Kind? in
+            do throws(CameraLinkFailure) { _ = try await source.cameraLink(for: id); return nil } catch { return error.kind }
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        again.cancel()
+        #expect(await bounded(again) == .some(.disconnected))
+        // The recovery begins a reopen meanwhile: it waits for the stop to end.
+        let reopen = Task { await source.recoveryReopening(id, true); return true }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await source.isConnecting(id))
+        gate.open()
+        #expect(await bounded(reopen) == .some(true))
+        #expect(await !source.isConnecting(id))
+        await source.recoveryReopening(id, false)
+    }
+
+    @Test func whichPhasesAreStillReachingTheCamera() {
+        for phase in [WirelessPhase?.none, .idle, .handingOff, .joining, .awaitingFront, .leaving, .paused(.needsJoin)] {
+            #expect(WiFiCameraSource.stillReaching(phase))
+        }
+        for phase in [WirelessPhase.openingSession, .ready, .staying] {
+            #expect(!WiFiCameraSource.stillReaching(phase))
+        }
+    }
+
+    @Test func aTypedCameraWhoseOpenNobodyWaitsForIsCancelled() async throws {
+        let h = Harness()
+        let descriptor = await h.source.addTypedCamera(try #require(TypedCameraAddress("\(typedHost):15741")))
+        h.connecting.scriptTyped(.success(FakeWiFiLink()))
+        h.connecting.holdTyped()
+        let source = h.source
+        let id = descriptor.id
+        let browse = Task { try? await source.cameraLink(for: id) }
+        #expect(await waitUntil { h.connecting.typedOpens.count == 1 })
+        browse.cancel()
+        _ = await bounded(browse)
+        #expect(await waitUntilAsync { await source.stoppedConnections == 1 })
+        #expect(await !source.hasLiveLink(for: id))
+    }
+
     @Test func aFailedConnectionFailsEveryCallerWaitingOnItAndTheNextTriesAgain() async throws {
         let h = Harness()
         let (id, session) = await h.pair()
@@ -895,5 +1267,33 @@ struct WiFiCameraConnectionTests {
         // The latest link's events are the ones forwarded.
         await last.send(.waitingForLocalNetwork)
         #expect(await waitUntil { h.events.all == [.link(id, .waitingForLocalNetwork)] })
+    }
+}
+
+/// A wait that ends only when opened, whatever happens to the waiting task.
+private final class ContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    var waiting: Int { lock.withLock { waiters.count } }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeNow: Bool = lock.withLock {
+                if isOpen { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let resumed: [CheckedContinuation<Void, Never>] = lock.withLock {
+            isOpen = true
+            defer { waiters = [] }
+            return waiters
+        }
+        for waiter in resumed { waiter.resume() }
     }
 }

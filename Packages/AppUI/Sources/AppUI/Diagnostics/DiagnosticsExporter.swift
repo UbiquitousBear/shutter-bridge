@@ -78,13 +78,16 @@ struct DiagnosticsFacts: Sendable {
         if let latest = records.max(by: { $0.lastSeen < $1.lastSeen }), latest.lastSeen != .distantPast {
             facts.lastLink = latest.preferredCarrier == .wifi ? "Wi-Fi" : "USB"
         }
+        // The models any camera reported: a friendly name that is one of them is the app's own name for a body (D11:
+        // MSC and MTP rows are named after the model, `CameraNaming`), which the header names, not a private one.
+        let models = Set(records.map { $0.model.lowercased() }.filter { !$0.isEmpty })
         for record in records {
             if let ssid = record.wifiSSID { facts.privateValues.append(ssid) }
             if let ip = record.lastIP { facts.privateValues.append(ip) }
             if let guid = record.ptpipGUID { facts.privateValues.append(guid.uuidString) }
             if let id = record.bluetoothPeripheralID { facts.privateValues.append(id.uuidString) }
-            // A name the person gave the camera; not when it only repeats the model, which the header names.
-            if !record.friendlyName.isEmpty, record.friendlyName.caseInsensitiveCompare(record.model) != .orderedSame {
+            // A name the person gave the camera; not when it only repeats a model, which the header names.
+            if !record.friendlyName.isEmpty, !models.contains(record.friendlyName.lowercased()) {
                 facts.privateValues.append(record.friendlyName)
             }
         }

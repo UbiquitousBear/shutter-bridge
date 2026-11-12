@@ -62,7 +62,9 @@ public struct BrowseServices {
 /// The Cameras screen's model (backlog section 6): the cameras discovery reports, whether access is allowed, the
 /// navigation into Browse, and the message when a camera goes away while it is browsed. It also finds a camera by
 /// its catalogue key for the import (`CameraFinding`), and tells the import when a camera is connected, so a job
-/// paused by a removed cable carries on once the camera is back and listed (decision 7).
+/// paused by a removed cable carries on once the camera is back and listed (decision 7). It also gives the import the
+/// other attached USB cameras, so a paused job can continue on the same body in the other Image Transfer mode by
+/// content (D11), and names each camera by the one-name-per-body rule (`displayName(for:)`, `CameraNaming`).
 @MainActor
 @Observable
 public final class CamerasModel: CameraFinding {
@@ -98,6 +100,10 @@ public final class CamerasModel: CameraFinding {
     /// The free space last read on each listed camera's card, in bytes (I17: USB in Image Transfer (MTP), once Browse
     /// has listed the card; `readCardFreeSpace(of:)`). A camera with no entry shows no free-space line.
     public private(set) var cardFreeBytes: [CameraDescriptor.ID: UInt64] = [:]
+    /// The one named body the catalogue knows (`CameraNaming.onlyBodyName(among:)`), which a camera in Image Transfer
+    /// (MSC) is named after; nil when there is none or several. Read when the app becomes active, when a camera appears,
+    /// when Browse has listed a card and when a job starts (each can name a body).
+    public private(set) var onlyBodyName: String?
 
     /// The import, told when a camera is connected, and handed Browse's selection. Set by the app (`AppModel`).
     @ObservationIgnored public weak var importModel: ImportModel?
@@ -151,6 +157,7 @@ public final class CamerasModel: CameraFinding {
     public func becameActive() async {
         watchDiscoveries()
         await refreshKnownKeys()
+        await refreshOnlyBodyName()
         guard !isLooking, !starting else {
             await importModel?.cameraConnected()
             return
@@ -186,7 +193,8 @@ public final class CamerasModel: CameraFinding {
                 BrowseCatalogue(store: $0, cameraKey: cameraKey, knownKey: { await discovery.knownKey(for: id) })
             },
             importer: importModel,
-            leases: leases
+            leases: leases,
+            cameraName: displayName(for: camera)
         )
         browsing.removeAll { $0.model == nil }
         browsing.append(WeakBrowse(model: model))
@@ -255,6 +263,41 @@ public final class CamerasModel: CameraFinding {
         return nil
     }
 
+    /// The attached USB cameras that list files whose key isn't `key` (`CameraFinding`), for continuing a paused job on
+    /// the same body in the other Image Transfer mode by content (D11). Never a Wi-Fi camera (its link could start a
+    /// join) nor one in Remote Shoot (it lists nothing). Each camera's key is the one discovery knows for it, else the
+    /// one read from its link, as `link(forCameraWith:)` reads it; nothing is opened (cheap over USB).
+    public func otherUSBCameras(than key: CameraKey) async -> [AttachedCamera] {
+        var found: [AttachedCamera] = []
+        for camera in cameras where camera.carrier == .usb && camera.mode != .usb(.remoteShoot) {
+            let known = await discovery.knownKey(for: camera.id)
+            if known == key { continue }
+            guard let link = try? await discovery.cameraLink(for: camera.id) else { continue }
+            let cameraKey: CameraKey
+            if let known { cameraKey = known } else { cameraKey = await self.cameraKey(camera, link) }
+            guard cameraKey != key else { continue }
+            found.append(AttachedCamera(descriptor: camera, key: cameraKey, link: link))
+        }
+        return found
+    }
+
+    // MARK: - One name per body (D11)
+
+    /// The name the camera's row and Browse's title show: in Image Transfer (MSC) the one named body's
+    /// (`onlyBodyName`), else "Camera"; otherwise the camera's own name (`CameraNaming.displayName(for:onlyBodyName:)`).
+    /// An offline Browse's camera keeps the name it was given from the catalogue.
+    public func displayName(for camera: CameraDescriptor) -> String {
+        if let offline = offlineCameras[camera.id] { return offline.browse.name }
+        return CameraNaming.displayName(for: camera, onlyBodyName: onlyBodyName)
+    }
+
+    /// Reads the one named body again from the catalogue's Camera rows.
+    public func refreshOnlyBodyName() async {
+        guard let catalogue, let records = try? await catalogue.cameras() else { return }
+        let name = CameraNaming.onlyBodyName(among: records)
+        if name != onlyBodyName { onlyBodyName = name }
+    }
+
     /// What the camera's row may say about the device: its battery level and the card's free space, only for a link that
     /// reports them (`CameraLinkCapabilities.reportsBatteryAndFreeSpace`; Wi-Fi's does not, B:70). `nil` for a value
     /// nobody has read: unknown is never shown as 0, so a Wi-Fi row can never grow a "0%" or "0 bytes free". The free
@@ -272,6 +315,8 @@ public final class CamerasModel: CameraFinding {
     /// say how much space is free on the card.
     private func browseListed(_ camera: CameraDescriptor) {
         Task { [weak self] in await self?.readCardFreeSpace(of: camera) }
+        // Browse wrote the camera's name to its row (D11), which may name the one body.
+        Task { [weak self] in await self?.refreshOnlyBodyName() }
     }
 
     /// Reads the card's free space over `camera`'s link, when its carrier reports one (USB; never Wi-Fi, whose link
@@ -350,6 +395,7 @@ public final class CamerasModel: CameraFinding {
             }
             let id = camera.id
             Task { [weak self] in await self?.readKnownKey(of: id) }
+            Task { [weak self] in await self?.refreshOnlyBodyName() }
             // An offline Browse shown for this camera becomes the live one (W6-absent).
             if let shown = path.last, offlineCameras[shown.id] != nil {
                 Task { [weak self] in await self?.matchOfflineCamera() }
@@ -359,6 +405,8 @@ public final class CamerasModel: CameraFinding {
             knownKeys[id] = nil
             withdrawOfflineConnect(from: id)
             cardFreeBytes[id] = nil
+            // A probe of the paused job may list its card again once it is back (D11).
+            importModel?.cameraDisappeared(id)
             cameraWentAway(id)
         }
     }
@@ -444,7 +492,9 @@ extension CamerasModel {
 
     /// Connect on an offline Browse: the live Browse on the listed Wi-Fi camera replaces it, and starts the join.
     func connectOffline(_ id: CameraDescriptor.ID) {
-        guard path.last?.id == id, let live = offlineCameras[id]?.listed, cameras.contains(live) else { return }
+        // By ID: a Wi-Fi camera's descriptor is renamed by its model at its first connection (D11).
+        guard path.last?.id == id, let listed = offlineCameras[id]?.listed,
+              let live = cameras.first(where: { $0.id == listed.id }) else { return }
         replaceOffline(id, with: live)
     }
 
