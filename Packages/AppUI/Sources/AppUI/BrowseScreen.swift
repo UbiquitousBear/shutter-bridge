@@ -8,9 +8,9 @@ import UIKit
 /// shown at once while the camera reads the live one; RAW, HEIF, *Imported* and *Staged* badges; filters (new only,
 /// type, date); selection as in Photos (the title reports it, *Select All New* turns into *Deselect All*, Back is
 /// hidden), with the count, size and Import in the system bottom toolbar; and press and hold a photo for *Copy as
-/// JPEG* and *Share as JPEG…*. The link is held while the screen is up and let go when it goes (it closes unless an
-/// import still uses it). Selecting ticks, and a JPEG copied or shared (or not) plays success or error (HIG Playing
-/// haptics).
+/// JPEG* and *Share as JPEG…*. The link is held while Browse is open, including while another tab hides it (Shamil,
+/// 19 Nov), and let go when Browse is left (it closes unless an import still uses it). Selecting ticks, and a JPEG
+/// copied or shared (or not) plays success or error (HIG Playing haptics).
 struct BrowseScreen: View {
     @State private var model: BrowseModel
     private let showImport: @MainActor () -> Void
@@ -82,7 +82,10 @@ struct BrowseScreen: View {
                 BrowseFilterSheet(model: model)
                     .presentationDetents([.medium, .large])
             }
-            .task { await model.run() }
+            // Started on appearing and never stopped on disappearing: another tab hiding Browse isn't leaving it
+            // (Shamil, 19 Nov). The Cameras model stops the run once the camera is off the navigation path (Back, the
+            // swipe back, or code replacing the path). Starting again does nothing while the run is under way.
+            .onAppear { model.start() }
             .onChange(of: model.share) { _, share in
                 guard let share else { return }
                 let model = self.model

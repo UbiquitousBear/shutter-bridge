@@ -41,7 +41,9 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
 - **Leaving a connection.** Going back from Browse while the app is still switching on a Wi-Fi camera's Wi-Fi or
   joining it stops the connection, and no request to join comes afterwards. Going back once it says *Opening the
   camera…* lets the connection finish, and the phone stays joined to the camera's Wi-Fi as it does after an import.
-  While a paused Wi-Fi import of that camera is reconnecting, the connection carries on for the import.
+  While a paused Wi-Fi import of that camera is reconnecting, the connection carries on for the import. Switching to
+  the Staging or History tab isn't leaving Browse: a Wi-Fi connection keeps going, and coming back to the Cameras tab
+  shows the same Browse; over USB the card isn't read again.
 - **The running import shows above the tab bar** only; the line at the top of Cameras and Browse is gone. The status
   lines that remain on Cameras line up with the camera rows.
 - **Export Diagnostics…** in Settings makes a text file of the app's own log, with serial numbers, network names and
@@ -74,6 +76,9 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
 10. With a Wi-Fi camera switched off, run *Import New Photos*: the app should offer *Connect* and not join until you
     tap it. Then open the camera from the Cameras screen and go back while it is still switching on the camera's
     Wi-Fi or joining it: the connecting line should go within a few seconds, with no request to join afterwards.
+    Open it again and, while it is connecting, switch to the History tab and back: the connection should still be
+    going (or done, with the card shown), not started again. Over USB, open a card, switch tabs and come back: the
+    card should be there at once, not read again.
 
 **Known limits**
 
