@@ -84,8 +84,12 @@ struct BrowseScreen: View {
             }
             // Started on appearing and never stopped on disappearing: another tab hiding Browse isn't leaving it
             // (Shamil, 19 Nov). The Cameras model stops the run once the camera is off the navigation path (Back, the
-            // swipe back, or code replacing the path). Starting again does nothing while the run is under way.
+            // swipe back, or code replacing the path). Starting again while the run is under way only reads the badges
+            // again (the catalogue may have changed behind another tab); the card isn't read again.
             .onAppear { model.start() }
+            // Another tab hiding Browse keeps its run going, but not a Copy or Share as JPEG in progress: it is cancelled,
+            // as before, so no share sheet opens over Staging or History, or later on return.
+            .onDisappear { model.cancelAction() }
             .onChange(of: model.share) { _, share in
                 guard let share else { return }
                 let model = self.model

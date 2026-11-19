@@ -49,11 +49,11 @@ public protocol PairedCameraRegistering: Sendable {
 ///
 /// **Ending.** When the last holder lets the link go (`LinkLeases`, `AppModel`), `linkClosed(_:)` tells the camera's session
 /// the import has finished, which starts the stay in front or leaves in the background (`WirelessSession.importFinished`).
-/// Browse holds a lease for as long as it is on screen, so in the background the camera is let go without waiting for
-/// it: `scenePhaseChanged(_:activeImport:)` finishes every camera with a live link whose import isn't running, and
-/// `linkReleased(_:activeImport:)` does the same when an import's lease goes while Browse still holds the link. In the
-/// foreground the stay still starts only when the last holder lets go (open for Shamil: it differs from "one timer from the
-/// end of the import" while Browse stays open). Scene changes reach every session. A link the Wi-Fi recovery opened
+/// Browse holds a lease while Browse is open, on screen or behind another tab, so in the background the camera is let go
+/// without waiting for it: `scenePhaseChanged(_:activeImport:)` finishes every camera with a live link whose import
+/// isn't running, and `linkReleased(_:activeImport:)` does the same when an import's lease goes while Browse still holds
+/// the link. In the foreground the stay still starts only when the last holder lets go (open for Shamil: it differs from
+/// "one timer from the end of the import" while Browse stays open). Scene changes reach every session. A link the Wi-Fi recovery opened
 /// through the session is adopted as the camera's (`adoptRecovered(_:for:)`), and an import paused away for an expiry
 /// lets the camera go (`importPausedAway(_:)`).
 ///
@@ -439,11 +439,12 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         await finish(id)
     }
 
-    /// A holder let `link` go but another still holds it (Browse, on screen). In the foreground nothing changes: the stay
-    /// starts when the last one lets go. In the background the camera is let go at once if no import is running over it
-    /// (`activeImport`: the key of the import that is active, if any), since the phone must not stay on the camera's
-    /// network because a screen is still open: the import's last step in the background is `importFinished()`. Returns
-    /// whether the camera's session let it go (the link is then closed, though still held).
+    /// A holder let `link` go but another still holds it (Browse, while Browse is open, on screen or behind another tab).
+    /// In the foreground nothing changes: the stay starts when the last one lets go. In the background the camera is let
+    /// go at once if no import is running over it (`activeImport`: the key of the import that is active, if any), since
+    /// the phone must not stay on the camera's network because a screen is still open: the import's last step in the
+    /// background is `importFinished()`. Returns whether the camera's session let it go (the link is then closed, though
+    /// still held).
     @discardableResult
     public func linkReleased(_ link: any CameraLink, activeImport: CameraKey? = nil) async -> Bool {
         guard inBackground, let id = handedOutID(of: link), !isImporting(id, activeImport) else { return false }

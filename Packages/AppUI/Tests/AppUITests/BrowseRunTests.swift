@@ -1,4 +1,5 @@
 import CameraTransport
+import Catalogue
 import Foundation
 import Testing
 @testable import AppUI
@@ -24,14 +25,15 @@ struct BrowseRunTests {
         var camera: CameraDescriptor { link.descriptor }
     }
 
-    /// A USB camera in Image Transfer (MSC) whose link discovery hands out.
-    func rig() async -> Rig {
+    /// A USB camera in Image Transfer (MSC) whose link discovery hands out, over `catalogue` if given.
+    func rig(catalogue: (any CatalogueStore)? = nil) async -> Rig {
         let link = FakeLink(items: card, id: "usb-a")
         let discovery = ScriptedDiscovery()
         await discovery.set(link: link, for: link.descriptor.id)
         let leases = LinkLeases()
         let log = RecordingLog()
-        let cameras = CamerasModel(discovery: discovery, services: services(log: log), leases: leases)
+        let cameras = CamerasModel(discovery: discovery, services: services(log: log), catalogue: catalogue,
+                                   leases: leases)
         return Rig(cameras: cameras, discovery: discovery, link: link, leases: leases, log: log)
     }
 
@@ -209,6 +211,53 @@ struct BrowseRunTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(live.isStarted)
         #expect(await !r.link.closed)
+        r.cameras.path = []
+        #expect(await eventually { await r.link.closed })
+    }
+
+    // MARK: - Shown again: the badges are read again, the card isn't
+
+    /// The catalogue's key for the rig's camera, and the identity of a file on its card.
+    var key: CameraKey { CameraKeys.key(for: FakeLink(items: [], id: "usb-a").descriptor, material: nil) }
+
+    func identity(_ name: String) -> ObjectIdentity {
+        card.first { $0.name == name }!.identity(camera: key, timeZone: .current)!
+    }
+
+    /// Forget Imports in History while Browse is hidden: coming back shows the photos new again, without reading the
+    /// card again.
+    @Test func showingAgainReadsTheBadgesAfterForgetImports() async throws {
+        let catalogue = InMemoryCatalogue(records: [
+            CatalogueRecord(identity: identity("DSC00001.ARW"), format: .raw, state: .imported),
+        ])
+        let r = await rig(catalogue: catalogue)
+        let browse = open(r)
+        #expect(await eventually { browse.phase == .listed && browse.imported.count == 1 })
+        // Another tab: History forgets the camera's imports. Then back to Cameras: the screen appears again.
+        #expect(await catalogue.forgetImports(camera: key) == 1)
+        browse.start()
+        #expect(await eventually { browse.imported.isEmpty })
+        #expect(await r.link.listCount == 1)   // the card isn't read again
+        #expect(browse.isStarted)
+        #expect(r.log.lines.contains { $0.hasPrefix("browse: badges refreshed on showing again") })
+        r.cameras.path = []
+        #expect(await eventually { await r.link.closed })
+    }
+
+    /// A reject marked in Staging while Browse is hidden: coming back shows the Rejected badge.
+    @Test func showingAgainReadsTheBadgesAfterARejectInStaging() async throws {
+        let catalogue = InMemoryCatalogue()
+        let r = await rig(catalogue: catalogue)
+        let browse = open(r)
+        #expect(await eventually { browse.phase == .listed })
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(browse.rejected.isEmpty)
+        try await catalogue.setMark(.reject, rating: 0, for: [identity("DSC00002.ARW").contentKey],
+                                    at: Date(timeIntervalSince1970: 1_793_000_000))
+        browse.start()
+        let rejected = try #require(card.first { $0.name == "DSC00002.ARW" }).id
+        #expect(await eventually { browse.rejected == [rejected] })
+        #expect(await r.link.listCount == 1)
         r.cameras.path = []
         #expect(await eventually { await r.link.closed })
     }

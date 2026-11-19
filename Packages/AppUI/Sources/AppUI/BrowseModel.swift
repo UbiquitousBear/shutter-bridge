@@ -69,8 +69,9 @@ public struct BrowseCatalogue: Sendable {
 /// selection to the import as *Import to Photos* or *Stage* (the Import button's menu; Shamil, 11 Nov), fetches
 /// thumbnails through the link, and runs *Copy as JPEG* and *Share as JPEG…*.
 ///
-/// The screen's `.task` calls `run()`, which holds the link (`LinkLeases`) until the task is cancelled (the screen
-/// went away) and then lets go of it; the link closes unless an import still uses it.
+/// The screen starts the run as it appears (`start()`), which holds the link (`LinkLeases`) while Browse is open,
+/// including while another tab hides it (Shamil, 19 Nov), until the Cameras model stops it (`stop()`) when the camera
+/// leaves the navigation path, and then lets go of it; the link closes unless an import still uses it.
 ///
 /// **Over Wi-Fi the link can go while the screen stays** (bench 19.1, 9 Nov). Opening it is the join, so the screen says
 /// it is connecting (`Phase.connecting`) until the link is in hand, and only then reads the card. When the camera's session
@@ -353,13 +354,20 @@ public final class BrowseModel {
     var isStarted: Bool { runTask.map { !$0.isCancelled } ?? false }
 
     /// Runs Browse (`run()`) in a task the model keeps, so it goes on while the screen is merely hidden by another tab
-    /// (Shamil, 19 Nov: switching tabs isn't leaving Browse). Does nothing while a started run is under way. A run
+    /// (Shamil, 19 Nov: switching tabs isn't leaving Browse). While a started run is under way it only reads the badges
+    /// again (the catalogue may have changed behind another tab): the run, the link and the listing are left as they
+    /// are. A run
     /// that ended by itself (the camera went away, an open failed with nothing to reconnect, the USB link's events
     /// ended) can be started again, as the screen's reappearance restarted it before. After `stop()`, the new run
     /// waits for the stopped one to have let go of its link. Only `stop()` ends a started run: the Cameras model calls
     /// it when the camera is no longer on the navigation path (Back, the swipe back, or code replacing the path).
     public func start() {
-        if let runTask, !runTask.isCancelled { return }
+        if let runTask, !runTask.isCancelled {
+            // Shown again after another tab hid it: the catalogue may have changed meanwhile (Forget Imports in History,
+            // a mark in Staging), so the badges are read again. The card isn't.
+            Task { [weak self] in await self?.refreshImportedStates(.shownAgain) }
+            return
+        }
         guard phase != .gone else { return }
         onStart?(self)
         runGeneration += 1
@@ -960,8 +968,9 @@ public final class BrowseModel {
             let outcome = await pipeline.run(source, purpose: purpose, in: folder) { stage in
                 Task { @MainActor in self.progressed(id, stage) }
             }
-            // A cancel that came after the pipeline's last check (Cancel, leaving Browse, the app leaving the
-            // foreground) still wins: nothing reaches the clipboard or the share sheet, and the folder goes.
+            // A cancel that came after the pipeline's last check (Cancel, leaving Browse or another tab hiding it, the
+            // app leaving the foreground) still wins: nothing reaches the clipboard or the share sheet, and the folder
+            // goes.
             let result: Result<JPEGOutput, JPEGActionFailure> = Task.isCancelled ? .failure(.cancelled) : outcome
             self.finish(id, purpose, source, folder, result)
         }
@@ -1121,6 +1130,8 @@ public final class BrowseModel {
         case lastKnown
         case importedMore(revision: Int)
         case asked
+        /// Browse shown again after another tab hid it, its run still under way (`start()`).
+        case shownAgain
 
         var description: String {
             switch self {
@@ -1128,6 +1139,7 @@ public final class BrowseModel {
             case .lastKnown: "on the last-known card"
             case let .importedMore(revision): "after import (rev \(revision))"
             case .asked: "on request"
+            case .shownAgain: "on showing again"
             }
         }
     }
