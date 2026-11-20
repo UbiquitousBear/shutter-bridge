@@ -31,6 +31,11 @@ public protocol CameraDiscovery: Actor {
     /// reach, so for one with neither this is false, and `cameraLink(for:)` would (or, in the stay, could) join. "Import new photos" asks it, to open such a camera's offline Browse with Connect
     /// rather than join it (Shamil, 12 Nov).
     func isConnected(_ id: CameraDescriptor.ID) async -> Bool
+    /// `cameraLink(for:)` when getting the link needs no join, else `disconnected`, with nothing begun. Over Wi-Fi: the
+    /// live link, or a reopen on the camera's network while its session stays there after an import, which gives up
+    /// rather than go back to Bluetooth and the join (`WiFiCameraSource`). A Browse that let its link go behind another tab
+    /// reopens with it when shown again (Shamil, 20 Nov: no join without the person's tap).
+    func cameraLinkWithoutJoining(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink
 }
 
 extension CameraDiscovery {
@@ -41,6 +46,10 @@ extension CameraDiscovery {
     /// A source that lists only attached cameras (USB): opening a listed camera's link joins nothing.
     /// (`CompositeDiscovery` asks the source that listed the camera.)
     public func isConnected(_ id: CameraDescriptor.ID) async -> Bool { true }
+    /// A listed camera's link (USB) joins nothing.
+    public func cameraLinkWithoutJoining(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink {
+        try await cameraLink(for: id)
+    }
 }
 
 /// What Browse uses besides the link: the JPEG maker, the clipboard, the temporary folders and the bench log.
@@ -194,6 +203,9 @@ public final class CamerasModel: CameraFinding {
             services: services,
             openFailureText: { await discovery.openFailureText(for: id) },
             openWasDeclined: { await discovery.openWasDeclined(for: id) },
+            reopenWithoutJoin: { () async throws(CameraLinkFailure) -> any CameraLink in
+                try await discovery.cameraLinkWithoutJoining(for: id)
+            },
             onGone: { [weak self] id in self?.cameraWentAway(id) },
             onDeclined: { [weak self] id in self?.openWasDeclined(id) },
             catalogue: catalogue.map {
@@ -203,6 +215,7 @@ public final class CamerasModel: CameraFinding {
             leases: leases,
             cameraName: displayName(for: camera)
         )
+        model.idleTimer = browseIdleTimer
         track(model)
         model.onListed = { [weak self] listed in
             self?.onBrowseListed?(listed)
@@ -256,6 +269,10 @@ public final class CamerasModel: CameraFinding {
     }
 
     // MARK: - Browse's run (Shamil, 19 Nov)
+
+    /// The idle timer each live Browse made from now on gets: a Wi-Fi Browse hidden behind another tab lets its link go
+    /// once it has been idle this long (`BrowseModel.hidden()`, Shamil 20 Nov). Tests give their own.
+    @ObservationIgnored var browseIdleTimer = BrowseIdleTimer.standard
 
     /// Holds `model` weakly among the Browse models made, and has a start of it stop any other Browse on its camera.
     private func track(_ model: BrowseModel) {

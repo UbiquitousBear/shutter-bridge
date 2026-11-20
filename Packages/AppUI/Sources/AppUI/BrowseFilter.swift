@@ -100,7 +100,8 @@ public struct SelectionSummary: Sendable, Hashable {
     public static let empty = SelectionSummary(count: 0, bytes: 0)
 }
 
-/// Who holds a camera link open: Browse while it is open (another tab hiding it included), the import while its job
+/// Who holds a camera link open: Browse while it is open (another tab hiding it included, until a hidden Wi-Fi Browse
+/// lets go when idle: `BrowseModel.hidden()`), the import while its job
 /// uses the link. The link closes when the last holder lets go, so leaving Browse never closes the link under a
 /// running import, and a finished import never closes it under Browse (USB links are shared:
 /// `USBCameraBrowser.link(for:)` hands out the same link while it is usable). One per app, shared by every `BrowseModel` and the `ImportModel`.

@@ -76,12 +76,37 @@ actor FakeWiFiLink: CameraIdentifying {
         self.items = items
     }
 
+    private var bytesGate: AsyncStream<Void>?
+    private var bytesRelease: AsyncStream<Void>.Continuation?
+
     func send(_ event: CameraLinkEvent) { fanOut.send(event) }
+    /// Makes each download wait until `releaseBytes()`, so a job stays running.
+    func holdBytes() { (bytesGate, bytesRelease) = AsyncStream<Void>.makeStream() }
+    func releaseBytes() { bytesRelease?.finish() }
     func cameraKeyMaterial() -> String? { serial }
     func cameraModelName() -> String? { model }
 
+    private var listingGate: AsyncStream<Void>?
+    private var listingRelease: AsyncStream<Void>.Continuation?
+    private var listingFailures: [CameraLinkFailure] = []
+    private(set) var listCount = 0
+
+    /// Makes each listing wait until `releaseListing()`, so the card stays being read.
+    func holdListing() { (listingGate, listingRelease) = AsyncStream<Void>.makeStream() }
+    func releaseListing() { listingRelease?.finish() }
+    /// The next listing throws `failure`; the ones after it list the card.
+    func failNextListing(_ failure: CameraLinkFailure) { listingFailures.append(failure) }
+
     func open() throws(CameraLinkFailure) {}
-    func list() throws(CameraLinkFailure) -> [CameraItem] { items.newestFirst() }
+    func list() async throws(CameraLinkFailure) -> [CameraItem] {
+        listCount += 1
+        if let listingGate {
+            var iterator = listingGate.makeAsyncIterator()
+            _ = await iterator.next()
+        }
+        if !listingFailures.isEmpty { throw listingFailures.removeFirst() }
+        return items.newestFirst()
+    }
 
     func info(of item: CameraItem.ID) throws(CameraLinkFailure) -> CameraItem {
         guard let found = items.first(where: { $0.id == item }) else { throw CameraLinkFailure(.itemNotFound) }
@@ -92,7 +117,11 @@ actor FakeWiFiLink: CameraIdentifying {
 
     func bytes(of item: CameraItem.ID, into directory: URL, resuming: PartialDownload?,
                checkpoint: @escaping @Sendable (PartialDownload) -> Void,
-               progress: @escaping @Sendable (UInt64) -> Void) throws(CameraLinkFailure) -> URL {
+               progress: @escaping @Sendable (UInt64) -> Void) async throws(CameraLinkFailure) -> URL {
+        if let bytesGate {
+            var iterator = bytesGate.makeAsyncIterator()
+            _ = await iterator.next()
+        }
         guard let found = items.first(where: { $0.id == item }) else { throw CameraLinkFailure(.itemNotFound) }
         let url = directory.appendingPathComponent(found.name)
         do { try Data(count: Int(found.size)).write(to: url) } catch { throw CameraLinkFailure(.phoneStorageFull) }
@@ -158,7 +187,8 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
     func count(_ call: String) -> Int { calls.filter { $0 == call }.count }
 
     /// The results `prepareImport` gives in turn; the last one repeats.
-    func script(_ results: Result<any CameraLink, WirelessFailure>...) { lock.withLock { self.results = results } }
+    func script(_ results: Result<any CameraLink, WirelessFailure>...) { script(results) }
+    func script(_ results: [Result<any CameraLink, WirelessFailure>]) { lock.withLock { self.results = results } }
     func send(_ phase: WirelessPhase) { phaseSink.yield(phase) }
     func set(stayRemaining: Duration?) { lock.withLock { stay = stayRemaining } }
     func set(peripheral: PeripheralID?) { lock.withLock { peripheralValue = peripheral } }
@@ -203,6 +233,24 @@ final class FakeSession: WirelessControlling, @unchecked Sendable {
         guard let next else { throw .cancelled }
         let link = try next.get()
         lock.withLock { lastLink = link }
+        return link
+    }
+
+    /// As the real session: inside the stay (or with the session `.ready`) a reopen, which answers as `prepareImport`
+    /// does and is recorded as "reopen"; otherwise nil with nothing begun, recorded as "reopen refused".
+    func reopenWithoutJoining() async throws(WirelessFailure) -> (any CameraLink)? {
+        let reopens: Bool = lock.withLock {
+            let reopens = phaseValue == .staying || phaseValue == .ready
+            recorded.append(reopens ? "reopen" : "reopen refused")
+            return reopens
+        }
+        guard reopens else { return nil }
+        let next: Result<any CameraLink, WirelessFailure>? = lock.withLock {
+            results.count > 1 ? results.removeFirst() : results.first
+        }
+        guard let next else { throw .cancelled }
+        let link = try next.get()
+        lock.withLock { lastLink = link; phaseValue = .ready }
         return link
     }
 

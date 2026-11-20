@@ -304,8 +304,12 @@ extension AppModel {
         let shown = cameras.path.last?.id == camera.id
         if !shown { cameras.path = [camera] }
         intents.navigate(showsImport: false)
-        // Browse already shows the live card: nothing more will be listed, so the import starts now.
-        if shown, let browse = cameras.liveBrowses().last(where: { $0.camera.id == camera.id }) {
+        // Browse already shows the live card on a held link: nothing more will be listed, so the import starts now. A Wi-Fi
+        // Browse that let its link go behind another tab still shows the card, but can't hand files over: the reopen that
+        // showing it starts lists again (`onListed`), and the import starts then; after the stay, nothing joins, and the
+        // answer says it waits for the person (Shamil, 12 Nov).
+        if shown, let browse = cameras.liveBrowses().last(where: { $0.camera.id == camera.id }),
+           browse.isReadyToImportAllNew {
             browseListed(browse)
         } else {
             log.note("intents: import new photos: waiting for the card")

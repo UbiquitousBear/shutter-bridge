@@ -49,11 +49,13 @@ public protocol PairedCameraRegistering: Sendable {
 ///
 /// **Ending.** When the last holder lets the link go (`LinkLeases`, `AppModel`), `linkClosed(_:)` tells the camera's session
 /// the import has finished, which starts the stay in front or leaves in the background (`WirelessSession.importFinished`).
-/// Browse holds a lease while Browse is open, on screen or behind another tab, so in the background the camera is let go
-/// without waiting for it: `scenePhaseChanged(_:activeImport:)` finishes every camera with a live link whose import
-/// isn't running, and `linkReleased(_:activeImport:)` does the same when an import's lease goes while Browse still holds
-/// the link. In the foreground the stay still starts only when the last holder lets go (open for Shamil: it differs from
-/// "one timer from the end of the import" while Browse stays open). Scene changes reach every session. A link the Wi-Fi recovery opened
+/// Browse holds a lease while Browse is open, on screen or behind another tab (until a hidden Browse has been idle for its
+/// timeout, Shamil 20 Nov: it lets go, and reopens with `cameraLinkWithoutJoining(for:)` when shown again), so in the
+/// background the camera is let go without waiting for it: `scenePhaseChanged(_:activeImport:)` finishes every camera
+/// with a live link whose import isn't running, and `linkReleased(_:activeImport:)` does the same when an import's lease
+/// goes while Browse still holds the link. In the foreground the stay starts only when the last holder lets go: with
+/// Browse on screen that is when the person leaves it (it differs from "one timer from the end of the import"), and
+/// behind another tab when Browse lets go for being idle. Scene changes reach every session. A link the Wi-Fi recovery opened
 /// through the session is adopted as the camera's (`adoptRecovered(_:for:)`), and an import paused away for an expiry
 /// lets the camera go (`importPausedAway(_:)`).
 ///
@@ -105,6 +107,8 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     /// Cameras whose unwanted connection is being let go (the session closing it): a caller that asks now waits for that,
     /// then connects afresh.
     private var lettingGo: Set<CameraDescriptor.ID> = []
+    /// Cameras whose connection under way may not join (`cameraLinkWithoutJoining(for:)`).
+    private var reopeningOnly: Set<CameraDescriptor.ID> = []
     /// How many Wi-Fi recovery reopens are under way for each camera (`recoveryReopening(_:_:)`).
     private var recoveryReopens: [CameraDescriptor.ID: Int] = [:]
     private var failures: [CameraDescriptor.ID: WirelessFailure] = [:]
@@ -151,6 +155,26 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
     }
 
     public func cameraLink(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink {
+        try await link(for: id, joining: true)
+    }
+
+    /// `cameraLink(for:)` that never starts a join (Shamil, 20 Nov: a Browse that let its link go behind another tab
+    /// reopens by itself only when that needs no join). The live link while its session is `.ready` (an import holds
+    /// it), a connection under way (begun by someone else), or a new connection whose session reopens on the camera's
+    /// network (`WirelessControlling.reopenWithoutJoining()`): inside the stay, it reopens; when the session holds nothing
+    /// (the stay ended and it left, or it never joined), believes the camera's Wi-Fi off, or gets no answer on the network,
+    /// it begins no hand-off and no join, and this throws `disconnected` with no failure recorded. Deciding that is one
+    /// step on the session, so a stay that ends between a caller's check and the reopen can't turn it into a join. A
+    /// typed-address camera is opened on the phone's own network, which joins nothing. No Local Network explanation is due
+    /// (the camera has connected before), and no `.connecting` is reported: the session's phases tell the reopen.
+    public func cameraLinkWithoutJoining(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink {
+        try await link(for: id, joining: false)
+    }
+
+    /// The failure detail of an open refused because it would need a join.
+    static let joinNeededDetail = "wifi: a join would be needed"
+
+    private func link(for id: CameraDescriptor.ID, joining: Bool) async throws(CameraLinkFailure) -> any CameraLink {
         await loadIfNeeded()
         guard let entry = entries[id] else { throw CameraLinkFailure(.disconnected, detail: "wifi: no such camera") }
         if let cached = live[id] {
@@ -170,6 +194,13 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         }
         // A caller that has gone already (its screen closed while it got here) starts and joins nothing.
         if Task.isCancelled { throw CameraLinkFailure(.disconnected, detail: "wifi: the caller left") }
+        if joining, reopeningOnly.contains(id), let reopen = inFlight[id] {
+            // A reopen that may not join can't serve a caller that may: it is let end, and this caller then takes its
+            // link if it opened, or connects afresh.
+            await Self.waitOut(reopen)
+            if Task.isCancelled { throw CameraLinkFailure(.disconnected, detail: "wifi: the caller left") }
+            return try await link(for: id, joining: true)
+        }
         // No suspension between this check and the task being stored, so two callers never both start a connection.
         if let running = inFlight[id] {
             joinedConnections += 1
@@ -177,7 +208,12 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             unwanted.remove(id)
             return try await wait(for: running, of: id)
         }
-        let task = Task { await self.connect(entry) }
+        // Never opened through a session (and not a typed address): reaching it is the hand-off and the join.
+        if !joining, entry.typed == nil, sessions[id] == nil {
+            throw CameraLinkFailure(.disconnected, detail: Self.joinNeededDetail)
+        }
+        if !joining { reopeningOnly.insert(id) }
+        let task = Task { await self.connect(entry, joining: joining) }
         inFlight[id] = task
         return try await wait(for: task, of: id)
     }
@@ -280,8 +316,10 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         }
     }
 
-    /// The one connection for a camera: the explanation if one is due, the open, the identity check, the saving.
-    private func connect(_ entry: WiFiCameraEntry) async -> Result<any CameraLink, CameraLinkFailure> {
+    /// The one connection for a camera: the explanation if one is due, the open, the identity check, the saving. With
+    /// `joining` false (`cameraLinkWithoutJoining(for:)`) it is a reopen: no explanation, no `.connecting`, and an open
+    /// that would need a join ends it with nothing recorded.
+    private func connect(_ entry: WiFiCameraEntry, joining: Bool = true) async -> Result<any CameraLink, CameraLinkFailure> {
         let id = entry.id
         defer {
             inFlight[id] = nil
@@ -290,24 +328,31 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
             unwanted.remove(id)
             atSession.remove(id)
             lettingGo.remove(id)
+            reopeningOnly.remove(id)
         }
-        failures[id] = nil
-        declined.remove(id)
-        if let gate = beforeFirstConnection, await gate() == false {
-            log.note("wifi: the connection wasn't started")
-            declined.insert(id)
-            return .failure(CameraLinkFailure(.disconnected, detail: "wifi: not started"))
+        if joining {
+            failures[id] = nil
+            declined.remove(id)
+            if let gate = beforeFirstConnection, await gate() == false {
+                log.note("wifi: the connection wasn't started")
+                declined.insert(id)
+                return .failure(CameraLinkFailure(.disconnected, detail: "wifi: not started"))
+            }
         }
         // Stopped during the explanation (or its hop to the main actor): nothing has reached the session yet.
         if Task.isCancelled {
             log.note("wifi: the connection was stopped before it began")
             return .failure(CameraLinkFailure(.disconnected, detail: "wifi: stopped"))
         }
-        eventSink.yield(.connecting(id))
+        if joining { eventSink.yield(.connecting(id)) }
         let link: any CameraLink
         atSession.insert(id)
         do throws(WirelessFailure) {
-            link = try await open(entry)
+            guard let reached = try await open(entry, joining: joining) else {
+                log.note("wifi: reopening would need a join; not joining without the person's tap")
+                return .failure(CameraLinkFailure(.disconnected, detail: Self.joinNeededDetail))
+            }
+            link = reached
         } catch {
             failures[id] = error
             eventSink.yield(.failed(id, error))
@@ -439,7 +484,8 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         await finish(id)
     }
 
-    /// A holder let `link` go but another still holds it (Browse, while Browse is open, on screen or behind another tab).
+    /// A holder let `link` go but another still holds it (Browse, while Browse is open and hasn't let go for being idle
+    /// behind another tab).
     /// In the foreground nothing changes: the stay starts when the last one lets go. In the background the camera is let
     /// go at once if no import is running over it (`activeImport`: the key of the import that is active, if any), since
     /// the phone must not stay on the camera's network because a screen is still open: the import's last step in the
@@ -585,7 +631,9 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         return entry.descriptor
     }
 
-    private func open(_ entry: WiFiCameraEntry) async throws(WirelessFailure) -> any CameraLink {
+    /// The open link: a typed-address camera's, or its session's preparation (`joining`), or its session's reopen that
+    /// never joins, which is nil when a join would be needed.
+    private func open(_ entry: WiFiCameraEntry, joining: Bool) async throws(WirelessFailure) -> (any CameraLink)? {
         if let typed = entry.typed {
             do throws(CameraLinkFailure) {
                 return try await connecting.openTyped(typed, for: entry)
@@ -597,9 +645,9 @@ public actor WiFiCameraSource: CameraDiscovery, PairedCameraRegistering, WiFiCon
         // where it is. A preparation not begun yet when the leave comes (it waited for an earlier leave) isn't begun at
         // all: `WirelessSession.prepareImport` refuses a cancelled caller.
         let session = session(for: entry)
-        let prepared: Result<any CameraLink, WirelessFailure> = await withTaskCancellationHandler {
+        let prepared: Result<(any CameraLink)?, WirelessFailure> = await withTaskCancellationHandler {
             do throws(WirelessFailure) {
-                return .success(try await session.prepareImport())
+                return .success(joining ? try await session.prepareImport() : try await session.reopenWithoutJoining())
             } catch {
                 return .failure(error)
             }

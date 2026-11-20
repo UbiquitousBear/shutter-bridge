@@ -71,7 +71,9 @@ public struct BrowseCatalogue: Sendable {
 ///
 /// The screen starts the run as it appears (`start()`), which holds the link (`LinkLeases`) while Browse is open,
 /// including while another tab hides it (Shamil, 19 Nov), until the Cameras model stops it (`stop()`) when the camera
-/// leaves the navigation path, and then lets go of it; the link closes unless an import still uses it.
+/// leaves the navigation path, and then lets go of it; the link closes unless an import still uses it. Over Wi-Fi a
+/// Browse hidden behind another tab lets go of its link once it has been idle for `BrowseTiming.hiddenIdleTimeout`, so the
+/// camera's stay starts, and reopens with no join when shown again, or offers Reconnect (Shamil, 20 Nov: `hidden()`).
 ///
 /// **Over Wi-Fi the link can go while the screen stays** (bench 19.1, 9 Nov). Opening it is the join, so the screen says
 /// it is connecting (`Phase.connecting`) until the link is in hand, and only then reads the card. When the camera's session
@@ -126,11 +128,17 @@ public final class BrowseModel {
 
     public let camera: CameraDescriptor
     public private(set) var phase: Phase {
-        didSet { if !waitsForLink { resumeThumbnailWaiters() } }
+        didSet {
+            if !waitsForLink { resumeThumbnailWaiters() }
+            updateIdleTimer()
+        }
     }
     /// Set while the link has gone under a shown card (Wi-Fi only); nil when there is nothing to say.
     public private(set) var interruption: Interruption? {
-        didSet { if !waitsForLink { resumeThumbnailWaiters() } }
+        didSet {
+            if !waitsForLink { resumeThumbnailWaiters() }
+            updateIdleTimer()
+        }
     }
     /// Why the last reconnect failed, with its next step, under the disconnected strip (Wi-Fi: the discovery's failure
     /// text); nil when there is none.
@@ -144,7 +152,9 @@ public final class BrowseModel {
     public private(set) var sections: [CardSection] = []
     /// When the shown card was listed, while it is the catalogue's last-known card rather than the live one; nil
     /// once the live listing has replaced it (or when there was none).
-    public private(set) var lastKnownListedAt: Date?
+    public private(set) var lastKnownListedAt: Date? {
+        didSet { updateIdleTimer() }
+    }
     /// The files the catalogue has as imported, for the badge: by name, capture time (to the second) and size, from
     /// either USB mode and under any camera key or folder (Shamil's rule of 8 Nov, `ObjectIdentity.ContentKey`), as
     /// the engine skips them. Read after each listing, on the last-known card, and each time the import imports more
@@ -174,7 +184,9 @@ public final class BrowseModel {
         didSet { if filter != oldValue { rebuildSections() } }
     }
     /// True while Import is handing the selection over (Photos may be asking).
-    public private(set) var isStartingImport = false
+    public private(set) var isStartingImport = false {
+        didSet { updateIdleTimer() }
+    }
     /// What came of the last Import tap, for a strip at the top: a confirmation that goes by itself, or a refusal or
     /// failure that stays until it is closed (`StatusNotice.importRequest(_:id:)`); cleared with
     /// `dismissImportNotice()`.
@@ -187,6 +199,7 @@ public final class BrowseModel {
             case .finished, .failed: actionOutcomeCount += 1
             case .idle, .working: break
             }
+            updateIdleTimer()
         }
     }
     /// What an offline Browse (`Phase.notConnected`) found in the catalogue: nil for a Browse on a listed camera.
@@ -204,6 +217,9 @@ public final class BrowseModel {
     public private(set) var share: JPEGShare?
 
     @ObservationIgnored private let openLink: @Sendable () async throws(CameraLinkFailure) -> any CameraLink
+    /// The link only when getting it needs no join (`CameraDiscovery.cameraLinkWithoutJoining(for:)`): what showing
+    /// Browse again after it let its link go behind another tab reopens with. Nil: showing it again offers Reconnect.
+    @ObservationIgnored private let reopenWithoutJoin: (@Sendable () async throws(CameraLinkFailure) -> any CameraLink)?
     /// The camera this offline Browse stands for; nil for a Browse on a listed camera.
     @ObservationIgnored let offline: OfflineBrowse?
     /// Connect on an offline Browse: the Cameras model opens the live Browse on the listed camera.
@@ -225,14 +241,18 @@ public final class BrowseModel {
     @ObservationIgnored private let onDeclined: @MainActor (CameraDescriptor.ID) -> Void
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let calendar: Calendar
-    @ObservationIgnored private var link: (any CameraLink)?
+    @ObservationIgnored private var link: (any CameraLink)? {
+        didSet { updateIdleTimer() }
+    }
     @ObservationIgnored private var isRunning = false
     /// The run `start()` began, while it runs or lets go after `stop()`; nil before the first start and once a run
     /// ends.
     @ObservationIgnored private var runTask: Task<Void, Never>?
     /// Counts `start()`'s runs, so a run that ends after a newer one began doesn't clear the newer one's task.
     @ObservationIgnored private var runGeneration = 0
-    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadTask: Task<Void, Never>? {
+        didSet { updateIdleTimer() }
+    }
     @ObservationIgnored private var rule = JPEGSourceRule(listing: [])
     @ObservationIgnored private var thumbnails: [CameraItem.ID: Data] = [:]
     @ObservationIgnored private var actionTask: Task<Void, Never>?
@@ -259,6 +279,24 @@ public final class BrowseModel {
     @ObservationIgnored private var listedAt: ContinuousClock.Instant?
     /// The last open failed (rather than a listing): the failed state's title says the camera couldn't be reached.
     @ObservationIgnored private var openFailed = false
+    // Hidden behind another tab (Wi-Fi; Shamil, 20 Nov).
+    /// What waits out the idle timeout of a Browse hidden behind another tab (`BrowseTiming.hiddenIdleTimeout`); tests
+    /// give their own, which they fire.
+    @ObservationIgnored var idleTimer = BrowseIdleTimer.standard
+    /// Whether the screen is hidden behind another tab, as its last appearance (`start()`) or disappearance (`hidden()`)
+    /// said.
+    @ObservationIgnored private(set) var isHidden = false
+    /// The idle timer under way, while Browse is hidden and idle (`isIdleWhileHidden`).
+    @ObservationIgnored private var idleTask: Task<Void, Never>?
+    /// The idle timer fired during the hold under way: the hold ends and its link is let go.
+    @ObservationIgnored private var letGoRequested = false
+    @ObservationIgnored private var letGoWaiter: (token: Int, continuation: CheckedContinuation<Void, Never>)?
+    @ObservationIgnored private var nextLetGoWaiter = 0
+    /// The last hold ended because Browse was hidden and idle, and nothing has reopened since: showing Browse again
+    /// reopens with no join, or offers Reconnect.
+    @ObservationIgnored private(set) var letGoWhileHidden = false
+    /// Browse was shown again after such a let-go: the run reopens with no join (`ReopenCause.shownAgain`).
+    @ObservationIgnored private var reopenOnShow = false
     // Thumbnails.
     /// Over Wi-Fi, files whose thumbnail this link refused (`unreadableItem`, `itemNotFound`): not asked again until the
     /// next link lists the card (`listed(_:seconds:)` forgets them). Over USB nothing is kept: a cell asks again, as before.
@@ -279,6 +317,9 @@ public final class BrowseModel {
     ///     Nil, or a nil answer, shows the kind's own wording.
     ///   - openWasDeclined: Asked when opening the link failed: true when the person chose not to continue (Not Now on the
     ///     Local Network explanation), so `onDeclined` closes the screen with no notice instead of `onGone`'s.
+    ///   - reopenWithoutJoin: The link only when getting it needs no join (Wi-Fi: `CameraDiscovery
+    ///     .cameraLinkWithoutJoining(for:)`), for showing Browse again after it let its link go behind another tab. Nil:
+    ///     showing it again offers Reconnect.
     ///   - offline: Makes this an offline Browse for a camera that isn't connected (`Phase.notConnected`): it shows the
     ///     catalogue's last-known card for that key and never calls `openLink`.
     ///   - cameraName: The camera's name for the title, as the Cameras model names it (`CamerasModel.displayName(for:)`,
@@ -289,6 +330,7 @@ public final class BrowseModel {
         services: BrowseServices,
         openFailureText: (@Sendable () async -> String?)? = nil,
         openWasDeclined: (@Sendable () async -> Bool)? = nil,
+        reopenWithoutJoin: (@Sendable () async throws(CameraLinkFailure) -> any CameraLink)? = nil,
         onGone: @escaping @MainActor (CameraDescriptor.ID) -> Void,
         onDeclined: @escaping @MainActor (CameraDescriptor.ID) -> Void = { _ in },
         catalogue: BrowseCatalogue? = nil,
@@ -309,6 +351,7 @@ public final class BrowseModel {
         self.services = services
         self.openFailureText = openFailureText
         self.openWasDeclined = openWasDeclined
+        self.reopenWithoutJoin = reopenWithoutJoin
         self.onGone = onGone
         self.onDeclined = onDeclined
         self.catalogue = catalogue
@@ -362,6 +405,7 @@ public final class BrowseModel {
     /// waits for the stopped one to have let go of its link. Only `stop()` ends a started run: the Cameras model calls
     /// it when the camera is no longer on the navigation path (Back, the swipe back, or code replacing the path).
     public func start() {
+        shown()
         if let runTask, !runTask.isCancelled {
             // Shown again after another tab hid it: the catalogue may have changed meanwhile (Forget Imports in History,
             // a mark in Staging), so the badges are read again. The card isn't.
@@ -389,6 +433,37 @@ public final class BrowseModel {
         guard let runTask, !runTask.isCancelled else { return }
         services.log.note("browse: left; stopping")
         runTask.cancel()
+        idleTask?.cancel()
+        idleTask = nil
+    }
+
+    /// The screen was hidden: another tab hides it (or it was popped, when the path change stops the run anyway). Its run
+    /// goes on. Over Wi-Fi, once the link is open and the live card listed (or its listing failed, the link kept for Try
+    /// Again) with nothing Browse drives in flight, an idle timer starts (`BrowseTiming.hiddenIdleTimeout`, Shamil 20 Nov);
+    /// shown again before it fires, nothing happens. When it fires, Browse lets go of its own lease on the link, as leaving
+    /// it would, so the stay starts once no import holds the link; its run, the navigation path and auto-import's arm stay
+    /// as they are, and the card stays with the disconnected strip (a failed listing stays failed, and its Try Again
+    /// prepares the link again, with no join within the stay). A join under way, a listing, a reconnect or an import in
+    /// progress carries on behind the tab (an import holds its own lease). Showing Browse again (`start()`) after a let-go
+    /// from the listed card then reopens and lists again only if that needs
+    /// no join (`reopenWithoutJoin`): the camera's session still stays on its network, or a job holds the link; otherwise
+    /// the strip offers Reconnect and nothing joins. Over USB nothing of this applies: Browse keeps its card.
+    public func hidden() {
+        guard !isHidden else { return }
+        isHidden = true
+        updateIdleTimer()
+    }
+
+    /// The screen appeared (`start()`): a pending idle timer is dropped, and after a let-go behind another tab the run
+    /// reopens with no join.
+    private func shown() {
+        guard isHidden else { return }
+        isHidden = false
+        updateIdleTimer()
+        if letGoWhileHidden, !reopenOnShow {
+            reopenOnShow = true
+            wakeReopen()
+        }
     }
 
     /// Opens the link, shows the last-known card, lists the card, and follows the link's events and the import's
@@ -406,6 +481,9 @@ public final class BrowseModel {
         isRunning = true
         defer {
             isRunning = false
+            letGoWhileHidden = false
+            reopenOnShow = false
+            updateIdleTimer()
             canReopen = false
             resumeThumbnailWaiters()
             logThumbnails(Task.isCancelled ? "the screen went" : "Browse stopped")
@@ -414,8 +492,9 @@ public final class BrowseModel {
         // Where staging goes, for the Import menu's wording; not waited for (finding the iCloud folder can take a moment).
         Task { [weak self] in await self?.refreshStagingPlace() }
         var reconnecting = false
+        var withoutJoin = false
         while !Task.isCancelled, phase != .gone {
-            switch await attempt(reconnecting: reconnecting) {
+            switch await attempt(reconnecting: reconnecting, withoutJoin: withoutJoin) {
             case .stopped:
                 return
             case .openFailed:
@@ -425,11 +504,16 @@ public final class BrowseModel {
                 guard reconnects, !Task.isCancelled, phase != .gone else { return }
                 if case .failed = phase { canReopen = true }
             }
-            guard let why = await waitToReopen() else { return }
+            guard let cause = await waitToReopen() else { return }
             canReopen = false
             reconnecting = showsListedCard
             if reconnecting { interruptionDetail = nil }
-            services.log.note("browse: \(reconnecting ? "reconnecting" : "opening again") (\(why))")
+            withoutJoin = cause == .shownAgain
+            if withoutJoin {
+                services.log.note("browse: shown again; reopening with no join (within the stay, or on a job's link)")
+            } else {
+                services.log.note("browse: \(reconnecting ? "reconnecting" : "opening again") (\(cause.rawValue))")
+            }
         }
     }
 
@@ -438,7 +522,9 @@ public final class BrowseModel {
 
     /// One open of the link and its hold. `reconnecting`: the live card is on screen and stays while a new link is
     /// prepared and the card listed again; otherwise the screen connects (Wi-Fi) or reads (USB) from the start.
-    private func attempt(reconnecting: Bool) async -> Attempt {
+    /// `withoutJoin`: Browse was shown again after it let its link go behind another tab, so the link is had only if that
+    /// needs no join (`reopenWithoutJoin`); if not, the card stays with the disconnected strip and Reconnect.
+    private func attempt(reconnecting: Bool, withoutJoin: Bool = false) async -> Attempt {
         let started = ContinuousClock.now
         var shownEarlyFor: CameraKey?
         if reconnecting {
@@ -456,8 +542,21 @@ public final class BrowseModel {
         }
         let link: any CameraLink
         do throws(CameraLinkFailure) {
-            link = try await openLink()
+            link = try await open(withoutJoin: withoutJoin)
         } catch {
+            if withoutJoin {
+                guard !Task.isCancelled else { return .stopped }
+                if error.kind == .disconnected {
+                    services.log.note("browse: shown again; the camera's Wi-Fi was left; offering Reconnect")
+                    interruptionDetail = nil
+                } else {
+                    services.log.note("browse: shown again; reopening failed after \(Self.seconds(since: started)) s: "
+                        + "\(error); offering Reconnect")
+                    interruptionDetail = await openFailureText?()
+                }
+                interruption = .disconnected
+                return .linkEnded
+            }
             if reconnecting {
                 guard !Task.isCancelled else { return .stopped }
                 services.log.note("browse: reconnecting failed after \(Self.seconds(since: started)) s: \(error)")
@@ -479,6 +578,7 @@ public final class BrowseModel {
         }
         self.link = link
         leases.acquire(link)
+        letGoRequested = false
         // The card is read from now on: the time so far starts here, not at the join (bench 19.1).
         if case .connecting = phase { phase = .reading(since: now()) }
         await adoptKey(of: link, shownEarlyFor: shownEarlyFor, reconnecting: reconnecting)
@@ -488,6 +588,7 @@ public final class BrowseModel {
         let events = link.events
         // Subscribed before the listing, so an import that finishes while the card is read is still noticed.
         let imports = importer?.importedUpdates()
+        let letsGoWhenIdle = reconnects
         linkEnd = .eventsFinished
         await withTaskGroup(of: Bool.self) { group in
             group.addTask {
@@ -496,6 +597,10 @@ public final class BrowseModel {
                     followers.addTask { await self.follow(events, of: link); return true }
                     if let imports {
                         followers.addTask { await self.followImports(imports); return false }
+                    }
+                    // Hidden behind another tab and idle for the timeout (Wi-Fi): the hold ends as if its events had.
+                    if letsGoWhenIdle {
+                        followers.addTask { await self.waitForIdleLetGo(); return true }
                     }
                     while let eventsEnded = await followers.next() {
                         if eventsEnded { followers.cancelAll() }
@@ -509,14 +614,26 @@ public final class BrowseModel {
                 if !keepHolding { group.cancelAll() }
             }
         }
-        // Browse was left (its run cancelled), or the link ended: nothing more is asked of this link.
+        // Browse was left (its run cancelled), the link ended, or Browse was hidden and idle: nothing more is asked of
+        // this link.
         loadTask?.cancel()
         loadTask = nil
         actionTask?.cancel()
         self.link = nil
         let screenGone = Task.isCancelled
+        let letGo = letGoRequested && !screenGone
+        letGoRequested = false
+        if letGo, showsListedCard {
+            // Shown again while it was letting go: the run reopens straight away. From the failed state, Try Again
+            // (`canReopen`) prepares the link again instead, which within the stay needs no join.
+            letGoWhileHidden = true
+            if !isHidden { reopenOnShow = true }
+        }
         if screenGone {
             services.log.note("browse: the screen went; letting go of the link after \(Self.seconds(since: started)) s")
+        } else if letGo {
+            services.log.note("browse: let go of the link while hidden, after \(Self.seconds(since: started)) s")
+            logThumbnails("the link was let go")
         } else {
             let after = listedAt.map { "\(Self.seconds(since: $0)) s after listing" } ?? "before listing"
             services.log.note("browse: the link ended under the screen (\(linkEnd.rawValue)) \(after), phase "
@@ -553,17 +670,112 @@ public final class BrowseModel {
         }
     }
 
-    /// Waits, over Wi-Fi, for a reason to prepare the link again: Reconnect or Try Again, and nothing else (a return to the
-    /// front reconnects nothing by itself, Shamil 10 Nov). Nil when the calling task is cancelled.
-    private func waitToReopen() async -> String? {
+    /// Why the run opens the link again.
+    enum ReopenCause: String, Sendable {
+        case reconnect = "Reconnect"
+        case tryAgain = "Try Again"
+        /// Shown again after it let its link go behind another tab: reopened only if that needs no join.
+        case shownAgain = "shown again"
+    }
+
+    /// Waits, over Wi-Fi, for a reason to prepare the link again: Reconnect or Try Again, or Browse shown again after it let
+    /// its link go behind another tab (which reopens only with no join), and nothing else (a return to the front
+    /// reconnects nothing by itself, Shamil 10 Nov). Nil when the calling task is cancelled.
+    private func waitToReopen() async -> ReopenCause? {
         while true {
             if Task.isCancelled { return nil }
             if reopenTapped {
                 reopenTapped = false
-                return interruption == .disconnected ? "Reconnect" : "Try Again"
+                reopenOnShow = false
+                letGoWhileHidden = false
+                return interruption == .disconnected ? .reconnect : .tryAgain
+            }
+            if reopenOnShow {
+                reopenOnShow = false
+                letGoWhileHidden = false
+                return .shownAgain
             }
             await nextReopenWake()
         }
+    }
+
+    /// The link for an attempt: the one that may join (`openLink`), or, shown again after a let-go, only one that needs no
+    /// join (`reopenWithoutJoin`; without it, none).
+    private func open(withoutJoin: Bool) async throws(CameraLinkFailure) -> any CameraLink {
+        guard withoutJoin else { return try await openLink() }
+        guard let reopenWithoutJoin else {
+            throw CameraLinkFailure(.disconnected, detail: "browse: no way to reopen without a join")
+        }
+        return try await reopenWithoutJoin()
+    }
+
+    // MARK: - Hidden and idle (Wi-Fi; Shamil, 20 Nov)
+
+    /// Whether the idle timer runs: a hidden Wi-Fi Browse whose run holds an open link with the live card listed, or with
+    /// its first listing failed (the link kept for Try Again), and nothing Browse drives in flight (a listing, a reconnect,
+    /// a Copy or Share as JPEG, Import being handed over), and whose hold isn't letting go already.
+    private var isIdleWhileHidden: Bool {
+        reconnects && isHidden && isRunning && link != nil && !letGoRequested && (showsListedCard || listingHasFailed)
+            && interruption == nil && loadTask == nil && !action.isWorking && !isStartingImport
+    }
+
+    /// Whether the failed state is shown (a listing that failed, while the link is held).
+    private var listingHasFailed: Bool {
+        if case .failed = phase { true } else { false }
+    }
+
+    /// Starts the idle timer when Browse has become hidden and idle, and drops it when it no longer is. Called whenever
+    /// one of `isIdleWhileHidden`'s inputs changes, so a timer runs from the moment the last of them settled.
+    private func updateIdleTimer() {
+        if isIdleWhileHidden {
+            guard idleTask == nil else { return }
+            let timer = idleTimer
+            idleTask = Task { [weak self] in
+                do { try await timer.sleep(timer.timeout) } catch { return }
+                guard !Task.isCancelled else { return }
+                self?.idleTimerFired()
+            }
+        } else if let idleTask {
+            idleTask.cancel()
+            self.idleTask = nil
+        }
+    }
+
+    private func idleTimerFired() {
+        idleTask = nil
+        guard isIdleWhileHidden else { return }
+        letGoRequested = true
+        services.log.note("browse: hidden and idle for \(idleTimer.timeout.components.seconds) s; letting the Wi-Fi link "
+            + "go (the stay can start)")
+        if let waiter = letGoWaiter {
+            letGoWaiter = nil
+            waiter.continuation.resume()
+        }
+    }
+
+    /// Parks until the idle timer fires for this hold (`idleTimerFired()`) or the calling task is cancelled.
+    private func waitForIdleLetGo() async {
+        nextLetGoWaiter += 1
+        let token = nextLetGoWaiter
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if letGoRequested || Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    letGoWaiter?.continuation.resume()
+                    letGoWaiter = (token, continuation)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in self.wakeLetGoWaiter(token) }
+        }
+    }
+
+    /// Resumes the let-go waiter `token`, if it still waits (a later hold's waiter isn't touched).
+    private func wakeLetGoWaiter(_ token: Int) {
+        guard let waiter = letGoWaiter, waiter.token == token else { return }
+        letGoWaiter = nil
+        waiter.continuation.resume()
     }
 
     /// Parks until `wakeReopen()` or the calling task's cancellation, whichever comes first.
@@ -1684,6 +1896,20 @@ public enum BrowseTiming {
     /// choice, above a join with iOS's prompt (55 s on 5 Nov) and a full card's listing; the cell's own task, cancelled
     /// when it scrolls away, usually ends the wait first.
     public static let thumbnailWait: Duration = .seconds(120)
+    /// How long a Wi-Fi Browse hidden behind another tab stays idle (its link open, the live card listed, nothing it drives
+    /// in flight) before it lets go of its link, so the camera's 3-minute stay starts as if the person had left Browse:
+    /// Shamil's "idle timeout" (20 Nov), a choice, not measured.
+    public static let hiddenIdleTimeout: Duration = .seconds(30)
+}
+
+/// What waits out the idle timeout of a Wi-Fi Browse hidden behind another tab: `BrowseTiming.hiddenIdleTimeout` on the
+/// real clock in the app; tests give their own `sleep`, which they fire.
+struct BrowseIdleTimer: Sendable {
+    var timeout: Duration
+    /// Returns when `timeout` has passed; throws when the calling task is cancelled.
+    var sleep: @Sendable (Duration) async throws -> Void
+
+    static let standard = BrowseIdleTimer(timeout: BrowseTiming.hiddenIdleTimeout) { try await Task.sleep(for: $0) }
 }
 
 /// A grid cell's thumbnail task: the file and the link generation, so a cell still without a picture asks again when a

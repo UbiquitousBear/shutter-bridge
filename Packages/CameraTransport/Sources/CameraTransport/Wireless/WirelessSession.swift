@@ -207,7 +207,7 @@ public actor WirelessSession {
     private var stayEnd: Duration?
     private var stayTask: Task<Void, Never>?
     private var stayToken = 0
-    private var operation: Task<Result<any CameraLink, WirelessFailure>, Never>?
+    private var operation: Task<Result<(any CameraLink)?, WirelessFailure>, Never>?
     private var leaveTask: Task<Void, Never>?
     /// Bumped by every call that changes what is held, so a call that resumes after an await can tell it was overtaken.
     private var epoch = 0
@@ -223,6 +223,14 @@ public actor WirelessSession {
     private var preparationAway: Duration = .zero
     /// The preparation's last failed hand-off switched the camera's Wi-Fi on again after a lapse (for the trace).
     private var failedInRewrite = false
+    /// Tests only: awaited at the start of each preparation, before `prepare(joining:)`, so a test can let something else
+    /// reach the session in between (the stay ending). Nil in the app: no suspension, so nothing changes.
+    var beforePrepare: (@Sendable () async -> Void)?
+
+    /// Tests only: sets `beforePrepare`.
+    func setBeforePrepare(_ hook: (@Sendable () async -> Void)?) {
+        beforePrepare = hook
+    }
 
     /// - Parameters:
     ///   - camera: the camera's Bluetooth identity from the catalogue.
@@ -296,6 +304,32 @@ public actor WirelessSession {
     /// `.needsJoin`. Never `apply`s from the background. Only a call that starts a preparation sets this; a second call
     /// meanwhile waits for the same result.
     public func prepareImport(bluetoothSwitchOnWhenAway: Bool) async throws(WirelessFailure) -> any CameraLink {
+        while true {
+            if let opened = try await preparation(joining: true, bluetoothSwitchOnWhenAway: bluetoothSwitchOnWhenAway) {
+                return opened
+            }
+            // It shared a reopen that may not join (`reopenWithoutJoining()`), which found a join needed: this caller
+            // may join, so it prepares afresh.
+        }
+    }
+
+    /// A reopen of the camera's session on its network, never a join (Shamil, 20 Nov: a Browse that let its link go behind
+    /// another tab reopens by itself only when that needs no join; only the person's tap joins). Inside the stay, or with
+    /// the session `.ready`, it reopens as `prepareImport()` does. It returns nil, starting no hand-off and no join, when
+    /// one would be needed: nothing is held (the stay ended and the session left, or it never joined), the camera's Wi-Fi
+    /// is taken to be off (the app was away longer than the camera's 50 s), or the reopen gets no answer within
+    /// `WirelessTiming.wifiRetryBeforeBluetooth` (the camera has gone: the session then lets go of the network, as a
+    /// refused reopen does). The check and the reopen are one step on the session, so a stay that ends just before it is
+    /// seen as ended. A preparation under way is shared as `prepareImport()` shares it (one that joins was begun by
+    /// someone else).
+    public func reopenWithoutJoining() async throws(WirelessFailure) -> (any CameraLink)? {
+        try await preparation(joining: false, bluetoothSwitchOnWhenAway: false)
+    }
+
+    /// The preparation for a caller: the one under way, or a new one. Nil from a preparation that may not join and found a
+    /// join needed.
+    private func preparation(joining: Bool, bluetoothSwitchOnWhenAway: Bool)
+        async throws(WirelessFailure) -> (any CameraLink)? {
         // A leave under way ends first. So does a preparation a leave is stopping (only `leave()` cancels one): it ends
         // as cancelled, and a caller that isn't the one stopped (the Wi-Fi recovery's Try Again, say) lets it and the
         // leave that follows end, then prepares afresh rather than sharing its `.cancelled`.
@@ -311,7 +345,7 @@ public actor WirelessSession {
             }
             break
         }
-        let task: Task<Result<any CameraLink, WirelessFailure>, Never>
+        let task: Task<Result<(any CameraLink)?, WirelessFailure>, Never>
         if let operation {
             task = operation
         } else {
@@ -319,13 +353,18 @@ public actor WirelessSession {
             // this waited for a leave under way) found nothing to stop, and nothing would stop it afterwards (bench 22.1).
             // No suspension between this check and the preparation being stored.
             if Task.isCancelled { throw .cancelled }
+            // Nothing to reopen without a join: answered at once, with nothing begun or traced.
+            if !joining, !canReopenWithoutJoining { return nil }
             epoch += 1
             switchOnWhenAway = bluetoothSwitchOnWhenAway
-            task = Task { await self.runPreparation() }
+            task = Task { await self.runPreparation(joining: joining) }
             operation = task
         }
         return try await task.value.get()
     }
+
+    /// Whether a preparation could reopen on the camera's network rather than go to Bluetooth and the join.
+    private var canReopenWithoutJoining: Bool { network != nil && !bluetoothFirst }
 
     /// The import has ended (finished, or stopped by the person). In front: close the session and start the stay. In the
     /// background: leave at once, as the continued task's last step (decided 8 Nov). Does nothing unless `ready`.
@@ -408,8 +447,9 @@ public actor WirelessSession {
 
     // MARK: - Preparation
 
-    private func runPreparation() async -> Result<any CameraLink, WirelessFailure> {
+    private func runPreparation(joining: Bool) async -> Result<(any CameraLink)?, WirelessFailure> {
         defer { operation = nil }
+        if let beforePrepare { await beforePrepare() }
         preparationAwaySince = inBackground ? clock.now() : nil
         preparationAway = .zero
         failedInRewrite = false
@@ -418,8 +458,8 @@ public actor WirelessSession {
             trace(.preparationStarted(joined: network != nil, bluetoothFirst: network != nil && bluetoothFirst))
         }
         do throws(WirelessFailure) {
-            let opened = try await prepare()
-            endTimeline(succeeded: true)
+            let opened = try await prepare(joining: joining)
+            endTimeline(succeeded: opened != nil)
             return .success(opened)
         } catch {
             if trace.isOn {
@@ -439,7 +479,13 @@ public actor WirelessSession {
         trace(.preparationEnded(succeeded: succeeded, times: ended.times))
     }
 
-    private func prepare() async throws(WirelessFailure) -> any CameraLink {
+    /// The preparation. With `joining` false it never hands off or joins: it returns nil instead, before the stay is
+    /// touched when there is nothing to reopen (so a stay that goes on keeps its timer), or after letting go when the
+    /// reopen gets no answer.
+    private func prepare(joining: Bool) async throws(WirelessFailure) -> (any CameraLink)? {
+        // Read again here, on the session, with no suspension before the stay is stopped: a leave since the caller's
+        // check (the stay ending) has taken the network.
+        if !joining, !canReopenWithoutJoining { return nil }
         stopStay()
         if network != nil {
             if let old = link {
@@ -463,6 +509,12 @@ public actor WirelessSession {
                     throw .cancelled
                 case .gaveUp:
                     trace(.stayReopenGaveUp(after: clock.now() - reopenStart))
+                    guard joining else {
+                        // The camera didn't answer on its network, and only the person's tap may go back to Bluetooth and
+                        // the join: let go, as after a refused reopen.
+                        await abandon()
+                        return nil
+                    }
                     // back to Bluetooth (Shamil, 9 Nov)
                 }
             }

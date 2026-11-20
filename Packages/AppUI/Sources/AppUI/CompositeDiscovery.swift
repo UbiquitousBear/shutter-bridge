@@ -13,8 +13,8 @@ import Foundation
 ///   Camera Access message and its Try Again exactly as before, while the Wi-Fi cameras list regardless. Starting again
 ///   starts every source again (each ignores a start it has already made), which is what Try Again does after a source
 ///   failed.
-/// - **Links.** `cameraLink(for:)` goes to the source that listed the camera, and throws `disconnected` for a camera no
-///   source lists (it went away), as `USBCameraBrowser` does.
+/// - **Links.** `cameraLink(for:)` and `cameraLinkWithoutJoining(for:)` go to the source that listed the camera, and
+///   throw `disconnected` for a camera no source lists (it went away), as `USBCameraBrowser` does.
 ///
 /// IDs are the sources' own and are assumed not to collide: USB's come from a device identifier, Wi-Fi's from an
 /// initiator GUID with a `wifi-` prefix.
@@ -77,6 +77,12 @@ public actor CompositeDiscovery: CameraDiscovery {
     public func cameraLink(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink {
         guard let index = routes[id] else { throw CameraLinkFailure(.disconnected, detail: "composite: no source lists it") }
         return try await sources[index].cameraLink(for: id)
+    }
+
+    /// From the source that listed the camera, as `cameraLink(for:)`.
+    public func cameraLinkWithoutJoining(for id: CameraDescriptor.ID) async throws(CameraLinkFailure) -> any CameraLink {
+        guard let index = routes[id] else { throw CameraLinkFailure(.disconnected, detail: "composite: no source lists it") }
+        return try await sources[index].cameraLinkWithoutJoining(for: id)
     }
 
     public func knownKey(for id: CameraDescriptor.ID) async -> CameraKey? {

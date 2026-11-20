@@ -274,6 +274,149 @@ struct WirelessStayTests {
         #expect(await session.phase == .idle)
     }
 
+    // MARK: A reopen that never joins (Shamil, 20 Nov)
+
+    /// Browse hidden behind another tab let its link go, and the stay started; shown again a minute in, it reopens on the
+    /// camera's network with no hand-off and no join.
+    @Test func aReopenWithoutJoiningInsideTheStayReopens() async throws {
+        let (rig, first) = try await joinedRig()
+        let end = rig.clock.elapsed
+        let session = rig.session
+        let reopened: Int? = await drive(rig.clock) {
+            let oneMinuteIn = rig.clock.gate(at: end + .seconds(60))
+            await session.importFinished()
+            await oneMinuteIn.wait()
+            return (try? await session.reopenWithoutJoining() as? StubLink)?.number
+        }
+        #expect(reopened == 2)
+        #expect(await first.closeCount == 1)
+        #expect(rig.opener.reopenings == [false, true])
+        #expect(rig.handoff.calls.count == 1)
+        #expect(rig.joiner.applyTimes.count == 1)
+        #expect(await session.phase == .ready)
+    }
+
+    /// The stay has ended and the session left: nothing to reopen, so nothing is begun (no Bluetooth, no join).
+    @Test func aReopenWithoutJoiningAfterTheStayEndedBeginsNothing() async throws {
+        let (rig, _) = try await joinedRig()
+        let session = rig.session
+        await drive(rig.clock) {
+            await session.importFinished()
+            await rig.phases.waitFor(.idle, times: 2)
+        }
+        let phasesBefore = rig.phases.all.count
+        let reopened = try await session.reopenWithoutJoining()
+        #expect(reopened == nil)
+        #expect(rig.connector.count == 1)
+        #expect(rig.handoff.calls.count == 1)
+        #expect(rig.joiner.applyTimes.count == 1)
+        #expect(rig.opener.times.count == 1)
+        #expect(await session.phase == .idle)
+        #expect(rig.phases.all.count == phasesBefore)
+    }
+
+    /// The stay ends between the reopen's own check and its preparation reaching the session (the stay's timer wakes and
+    /// leaves first): the preparation reads the network again before anything else, finds it gone, and answers nil, with no
+    /// Bluetooth hand-off and no join (Shamil, 10 Nov: only the person's tap joins).
+    @Test func theStayEndingAsAReopenWithoutJoiningBeginsStartsNoJoin() async throws {
+        let (rig, _) = try await joinedRig()
+        let end = rig.clock.elapsed
+        let session = rig.session
+        let clock = rig.clock
+        let phases = rig.phases
+        let reopened: Bool = await drive(rig.clock) {
+            let oneMinuteIn = clock.gate(at: end + .seconds(60))
+            await session.importFinished()
+            await oneMinuteIn.wait()
+            // Called once the reopen has passed its check and stored its preparation: the stay runs out and the session
+            // leaves before the preparation goes on.
+            await session.setBeforePrepare {
+                clock.advance(by: end + WirelessTiming.stay - clock.elapsed)
+                await phases.waitFor(.leaving)
+            }
+            return (try? await session.reopenWithoutJoining()) != nil
+        }
+        #expect(!reopened)
+        #expect(rig.phases.all.contains(.leaving))
+        #expect(rig.handoff.calls.count == 1)
+        #expect(rig.joiner.applyTimes.count == 1)
+        #expect(rig.connector.count == 1)
+        #expect(rig.opener.times.count == 1)
+        await rig.phases.waitFor(.idle, times: 2)
+        #expect(await session.network == nil)
+    }
+
+    /// Never joined at all: nil, with nothing begun.
+    @Test func aReopenWithoutJoiningOnASessionThatNeverJoinedBeginsNothing() async throws {
+        let rig = Rig()
+        #expect(try await rig.session.reopenWithoutJoining() == nil)
+        #expect(rig.connector.count == 0)
+        #expect(rig.handoff.calls.isEmpty)
+        #expect(rig.joiner.applyTimes.isEmpty)
+        #expect(await rig.session.phase == .idle)
+    }
+
+    /// Inside the stay, but the camera doesn't answer on its network for 30 s (its Wi-Fi went off): where
+    /// `prepareImport()` goes back to Bluetooth, this lets go and answers nil, so no join starts without the person's tap.
+    @Test func aReopenWithoutJoiningThatGetsNoAnswerLetsGoInsteadOfJoining() async throws {
+        let (rig, _) = try await joinedRig()
+        let end = rig.clock.elapsed
+        rig.opener.script(Array(repeating: CameraLinkFailure(.disconnected), count: 31), fallback: .some(nil))
+        let session = rig.session
+        let reopened: Bool = await drive(rig.clock) {
+            let oneMinuteIn = rig.clock.gate(at: end + .seconds(60))
+            await session.importFinished()
+            await oneMinuteIn.wait()
+            return (try? await session.reopenWithoutJoining()) != nil
+        }
+        #expect(!reopened)
+        #expect(rig.handoff.calls.count == 1)
+        #expect(rig.joiner.applyTimes.count == 1)
+        #expect(rig.connector.count == 1)
+        #expect(rig.joiner.leaveTimes == [end + .seconds(60) + WirelessTiming.wifiRetryBeforeBluetooth])
+        #expect(await session.phase == .idle)
+    }
+
+    /// A caller that may join (the person's tap, the import's recovery) asks while a reopen that may not is under way: it
+    /// shares it, and when that finds a join needed, it prepares afresh and joins, rather than taking the refusal.
+    @Test func aCallerThatMayJoinSharingAReopenThatMayNotJoinsAfterIt() async throws {
+        let (rig, _) = try await joinedRig()
+        let end = rig.clock.elapsed
+        rig.opener.script(Array(repeating: CameraLinkFailure(.disconnected), count: 31), fallback: .some(nil))
+        rig.connector.enqueue([.success(rig.anotherLink())])   // the reopen let go of the Bluetooth link too
+        let session = rig.session
+        let (reopened, joined): (Bool, Bool) = await drive(rig.clock) {
+            let oneMinuteIn = rig.clock.gate(at: end + .seconds(60))
+            let fiveSecondsLater = rig.clock.gate(at: end + .seconds(65))
+            await session.importFinished()
+            await oneMinuteIn.wait()
+            let reopen = Task { (try? await session.reopenWithoutJoining()) != nil }
+            await fiveSecondsLater.wait()
+            let joined = (try? await session.prepareImport()) != nil
+            return (await reopen.value, joined)
+        }
+        #expect(!reopened)
+        #expect(joined)
+        #expect(rig.connector.count == 2)
+        #expect(rig.handoff.calls.count == 2)
+        #expect(rig.joiner.applyTimes.count == 2)
+        #expect(await session.phase == .ready)
+    }
+
+    /// Back after longer than the camera's 50 s off its network: the camera's Wi-Fi is taken to be off, so where
+    /// `prepareImport()` goes straight to Bluetooth, this begins nothing.
+    @Test func aReopenWithoutJoiningWhenTheCamerasWiFiIsTakenToBeOffBeginsNothing() async throws {
+        let (rig, _) = try await joinedRig()
+        await rig.session.appMovedToBackground()
+        rig.clock.advance(by: .seconds(60))
+        rig.path.setCurrent(nil)
+        await rig.session.appBecameActive()
+        #expect(try await rig.session.reopenWithoutJoining() == nil)
+        #expect(rig.handoff.calls.count == 1)
+        #expect(rig.joiner.applyTimes.count == 1)
+        #expect(rig.opener.times.count == 1)
+    }
+
     @Test func aPhoneMovedOffTheNetworkLongerThanTheCamerasFiftySecondsGoesToBluetoothAtOnce() async throws {
         let (rig, first) = try await joinedRig()
         await rig.session.appMovedToBackground() // a paused import, still joined

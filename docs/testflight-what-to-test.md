@@ -43,9 +43,11 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
   camera…* lets the connection finish, and the phone stays joined to the camera's Wi-Fi as it does after an import.
   While a paused Wi-Fi import of that camera is reconnecting, the connection carries on for the import. Switching to
   the Staging or History tab isn't leaving Browse: a Wi-Fi connection keeps going, and coming back to the Cameras tab
-  shows the same Browse; over USB the card isn't read again. While Browse is open behind another tab, the phone stays
-  on the camera's Wi-Fi, as it does with Browse on screen. The 3-minute stay starts only once you go back from Browse,
-  and the phone leaves at once when the app goes to the background. A *Copy as JPEG* or *Share as JPEG…* in progress
+  shows the same Browse; over USB the card isn't read again. Once a Wi-Fi Browse has shown its card behind another tab
+  for 30 s with nothing happening, it lets the camera's Wi-Fi go and the 3-minute stay runs, as if you had gone back
+  (an import or a connection in progress carries on first). Come back within the stay and the card is read again with
+  no request to join; come back later, once the phone has left the camera's Wi-Fi, and Browse offers *Reconnect*. The
+  phone still leaves at once when the app goes to the background. A *Copy as JPEG* or *Share as JPEG…* in progress
   is still cancelled by switching tabs: start a *Share as JPEG…* over Wi-Fi, switch to Staging, and no share sheet
   should appear there or when you come back.
 - **The running import shows above the tab bar** only; the line at the top of Cameras and Browse is gone. The status
@@ -85,8 +87,10 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
     tap it. Then open the camera from the Cameras screen and go back while it is still switching on the camera's
     Wi-Fi or joining it: the connecting line should go within a few seconds, with no request to join afterwards.
     Open it again and, while it is connecting, switch to the History tab and back: the connection should still be
-    going (or done, with the card shown), not started again. Over USB, open a card, switch tabs and come back: the
-    card should be there at once, not read again.
+    going (or done, with the card shown), not started again. With the card shown, stay on History for a minute and
+    come back: the card should be read again with no request to join. Stay away for more than four minutes and come
+    back: Browse should offer *Reconnect* and join only when you tap it. Over USB, open a card, switch tabs and come
+    back: the card should be there at once, not read again.
 11. Turn on *Import When Connected* for your camera, then plug it in with the app open: Browse should open and import
     only the new photos. Unplug it and plug it in again: it should say there are no new photos. Over Wi-Fi, tap the
     camera: it should import once, and not again after *Reconnect*.
