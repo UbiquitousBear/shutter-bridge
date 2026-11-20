@@ -511,6 +511,8 @@ Could change with: decision 1, if it is reopened; decision 4, if it is reopened;
 
 *Decided (Shamil, 19 Nov):* a per-camera setting, off by default (the catalogue's `Camera.autoImport`). When that camera connects with the app in front, the app opens Browse and imports the new photos with the remembered Photos or Stage choice. Over Wi-Fi it starts once the person has tapped the camera to connect. A proximity wake still only shows the reminder.
 
+*Confirmed (Shamil, 20 Nov):* the three answers auto-import was built to. A camera already plugged in when the app comes to the front (connected while the app was away, or at a cold launch) counts as connecting; Image Transfer (MSC), which reports no model, follows the one named body; and the reminder's *Import Now* counts as the person's tap that starts a Wi-Fi visit. Nothing changes in what was built.
+
 **Status (19 Nov):**
 
 | Item | Status | Note |

@@ -9,7 +9,8 @@ import UIKit
 /// type, date); selection as in Photos (the title reports it, *Select All New* turns into *Deselect All*, Back is
 /// hidden), with the count, size and Import in the system bottom toolbar; and press and hold a photo for *Copy as
 /// JPEG* and *Share as JPEG…*. The link is held while Browse is open, including while another tab hides it (Shamil,
-/// 19 Nov), and let go when Browse is left (it closes unless an import still uses it). Selecting ticks, and a JPEG
+/// 19 Nov), and let go when Browse is left (it closes unless an import still uses it); a Wi-Fi Browse hidden and idle
+/// for 30 s lets it go too, and reopens on return when that needs no join (Shamil, 20 Nov). Selecting ticks, and a JPEG
 /// copied or shared (or not) plays success or error (HIG Playing haptics).
 struct BrowseScreen: View {
     @State private var model: BrowseModel
@@ -85,11 +86,18 @@ struct BrowseScreen: View {
             // Started on appearing and never stopped on disappearing: another tab hiding Browse isn't leaving it
             // (Shamil, 19 Nov). The Cameras model stops the run once the camera is off the navigation path (Back, the
             // swipe back, or code replacing the path). Starting again while the run is under way only reads the badges
-            // again (the catalogue may have changed behind another tab); the card isn't read again.
+            // again (the catalogue may have changed behind another tab); the card isn't read again. It also tells the
+            // model it is shown again: after a Wi-Fi Browse let its link go behind another tab, it reopens with no join
+            // or offers Reconnect (Shamil, 20 Nov).
             .onAppear { model.start() }
             // Another tab hiding Browse keeps its run going, but not a Copy or Share as JPEG in progress: it is cancelled,
-            // as before, so no share sheet opens over Staging or History, or later on return.
-            .onDisappear { model.cancelAction() }
+            // as before, so no share sheet opens over Staging or History, or later on return. The model is told it is
+            // hidden: a Wi-Fi Browse that stays idle for the timeout lets its link go, so the stay can start (Shamil,
+            // 20 Nov). A pop also lands here, but then the path change has stopped the run already.
+            .onDisappear {
+                model.cancelAction()
+                model.hidden()
+            }
             .onChange(of: model.share) { _, share in
                 guard let share else { return }
                 let model = self.model

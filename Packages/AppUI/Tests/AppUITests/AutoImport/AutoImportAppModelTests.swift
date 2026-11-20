@@ -724,6 +724,40 @@ struct AutoImportAppModelTests {
         await finish(r, run)
     }
 
+    /// Shamil, 20 Nov: a Wi-Fi Browse hidden behind another tab lets its link go when idle, and reopens when shown again.
+    /// That is still the same visit: its relist doesn't import a second time.
+    @Test func aWiFiAutoImportStartsOnceAcrossALetGoBehindAnotherTabAndTheReopen() async throws {
+        let r = try await rig()
+        let timer = IdleTimerControl()
+        r.app.cameras.browseIdleTimer = timer.timer
+        let link = await camera(r, id: "wifi-camera", mode: .wifi(.cameraNetwork))
+        let key = await Self.bodyKeying(link.descriptor, link)
+        await r.discovery.set(key: key, for: link.descriptor.id)
+        await seedBody(r, link)
+        await connect(r, link.descriptor)
+        r.app.cameras.path = [link.descriptor]
+        let browse = r.app.browseModel(for: link.descriptor)
+        browse.start()
+        #expect(await eventually { browse.importNotice == "Importing 2 files automatically." })
+        #expect(await jobFinished(r))
+        #expect(r.jobs == 1)
+        // Another tab hides Browse; idle for the timeout, it lets its link go.
+        browse.hidden()
+        #expect(await waitUntil { timer.pending == 1 })
+        timer.fire()
+        #expect(await eventually { await link.closed })
+        #expect(r.app.autoImportArms.state(of: link.descriptor.id) == .ended(.started))
+        // Shown again: reopened and listed again, but not imported again in this visit.
+        _ = await camera(r, id: "wifi-camera", mode: .wifi(.cameraNetwork))
+        let revision = r.app.intents.camerasRevision
+        browse.start()
+        #expect(await listed(r, after: revision))
+        #expect(r.log.lines.contains("auto-import: not again for this connection (the card was listed again)"))
+        #expect(r.jobs == 1)
+        r.app.cameras.path = []
+        #expect(await eventually { !browse.isStarted })
+    }
+
     @Test func aWiFiCamerasFirstConnectionFollowsItsBodysMTPRow() async throws {
         let r = try await rig()
         // Switched on through its MTP row; its Wi-Fi key isn't known before its first connection.

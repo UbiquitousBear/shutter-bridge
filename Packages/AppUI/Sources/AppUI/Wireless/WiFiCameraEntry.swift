@@ -156,6 +156,9 @@ public protocol WirelessControlling: Sendable {
     /// Where the session is now (the source hands out a cached link only while this is `.ready`).
     var phase: WirelessPhase { get async }
     func prepareImport() async throws(WirelessFailure) -> any CameraLink
+    /// A reopen on the camera's network that never hands off or joins: nil, beginning nothing, when one would be needed
+    /// (`WirelessSession.reopenWithoutJoining()`).
+    func reopenWithoutJoining() async throws(WirelessFailure) -> (any CameraLink)?
     func importFinished() async
     func appMovedToBackground() async
     func appBecameActive() async
