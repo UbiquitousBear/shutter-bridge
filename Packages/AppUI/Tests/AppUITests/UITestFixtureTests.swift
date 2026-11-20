@@ -35,6 +35,20 @@ struct UITestFixtureTests {
         #expect(await catalogue.camera(UITestFixture.cameraKey)?.friendlyName == UITestFixture.cameraName)
     }
 
+    @Test func seedsABodyForImportWhenConnectedOffByDefault() async throws {
+        let catalogue = try await UITestFixture.makeCatalogue(documents: documents, now: now, image: Self.bytes)
+        defer { try? FileManager.default.removeItem(at: documents) }
+        let body = try #require(await catalogue.camera(UITestFixture.bodyKey))
+        #expect(HistoryWording.cameraName(body) == UITestFixture.cameraName)
+        #expect(!body.autoImport)
+        // What the UI test finds in Settings › Import When Connected.
+        #expect(AutoImportRule.choices(among: await catalogue.cameras())
+            == [AutoImportChoice(name: UITestFixture.cameraName, isOn: false)])
+        let settings = AutoImportSettings(catalogue: catalogue)
+        await settings.load()
+        #expect(settings.choices == [AutoImportChoice(name: "ILCE-7CM2", isOn: false)])
+    }
+
     @Test func writesEachStagedFileWithTheSizeItsRowRecords() async throws {
         let catalogue = try await UITestFixture.makeCatalogue(documents: documents, now: now, image: Self.bytes)
         defer { try? FileManager.default.removeItem(at: documents) }

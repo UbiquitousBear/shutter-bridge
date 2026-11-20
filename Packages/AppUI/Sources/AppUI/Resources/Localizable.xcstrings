@@ -51,6 +51,16 @@
         }
       }
     },
+    "%@ can't tell cameras apart, so while more than one camera is listed here, a camera in that mode isn't imported automatically." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ can't tell cameras apart, so while more than one camera is listed here, a camera in that mode isn't imported automatically."
+          }
+        }
+      }
+    },
     "%@ couldn't be removed and stay staged; try again from Staging" : {
       "localizations" : {
         "en-GB" : {
@@ -947,6 +957,16 @@
         }
       }
     },
+    "A camera is listed here once its card has been read in %@ or over Wi-Fi." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A camera is listed here once its card has been read in %@ or over Wi-Fi."
+          }
+        }
+      }
+    },
     "A name can only have letters, numbers, hyphens and dots." : {
       "localizations" : {
         "en-GB" : {
@@ -1027,12 +1047,32 @@
         }
       }
     },
+    "Added %@ to staging automatically." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added %@ to staging automatically."
+          }
+        }
+      }
+    },
     "Added %@ to staging." : {
       "localizations" : {
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Added %@ to staging."
+          }
+        }
+      }
+    },
+    "Added %@ to the import automatically." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added %@ to the import automatically."
           }
         }
       }
@@ -2027,6 +2067,16 @@
         }
       }
     },
+    "Import When Connected" : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import When Connected"
+          }
+        }
+      }
+    },
     "Import cancelled." : {
       "localizations" : {
         "en-GB" : {
@@ -2137,6 +2187,16 @@
         }
       }
     },
+    "Importing %@ automatically." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importing %@ automatically."
+          }
+        }
+      }
+    },
     "Importing %@ to Photos." : {
       "localizations" : {
         "en-GB" : {
@@ -2213,6 +2273,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Imports the photos you kept to Photos, then offers to remove the staged copies."
+          }
+        }
+      }
+    },
+    "Imports this camera's new photos when it connects." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imports this camera's new photos when it connects."
           }
         }
       }
@@ -2763,6 +2833,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No new photos"
+          }
+        }
+      }
+    },
+    "No new photos to import." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No new photos to import."
+          }
+        }
+      }
+    },
+    "No new photos to stage." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No new photos to stage."
           }
         }
       }
@@ -4299,6 +4389,16 @@
         }
       }
     },
+    "Staging %@ automatically." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Staging %@ automatically."
+          }
+        }
+      }
+    },
     "Staging %@." : {
       "localizations" : {
         "en-GB" : {
@@ -4959,6 +5059,16 @@
         }
       }
     },
+    "The setting wasn't saved. Try again." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The setting wasn't saved. Try again."
+          }
+        }
+      }
+    },
     "The share sheet couldn't be shown. Try again." : {
       "localizations" : {
         "en-GB" : {
@@ -5375,6 +5485,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Waiting for your answer about Photos access…"
+          }
+        }
+      }
+    },
+    "When a camera turned on here connects while Shutter Bridge is open, Browse opens and the camera's new photos are imported to Photos or staged, whichever you chose last time. Over Wi-Fi it starts once you've tapped the camera to connect and its card has been read; a reminder never starts an import by itself. To stop the camera asking for a USB mode each time you plug it in, set its USB connection mode in the camera's menu." : {
+      "localizations" : {
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When a camera turned on here connects while Shutter Bridge is open, Browse opens and the camera's new photos are imported to Photos or staged, whichever you chose last time. Over Wi-Fi it starts once you've tapped the camera to connect and its card has been read; a reminder never starts an import by itself. To stop the camera asking for a USB mode each time you plug it in, set its USB connection mode in the camera's menu."
           }
         }
       }

@@ -33,7 +33,8 @@ public struct CameraRecord: Sendable, Hashable, Codable, CustomStringConvertible
     /// The carrier the camera was last set up for. The stored column has said "usb" for every row since build 17.1,
     /// so a camera nobody chose a carrier for reads `.usb`, as does a value a later version adds.
     public var preferredCarrier: Carrier
-    /// Auto-import on connect (backlog section 14, not in this round): stored, not acted on.
+    /// Auto-import on connect (backlog section 14): AppUI reads it by the camera's name over one-body keys (D11,
+    /// `AutoImportRule`), and writes it only on those keys.
     public var autoImport: Bool
     /// The camera's network name (SSID), kept only to remove the app's hotspot configuration on leaving. Never the
     /// password (see the type's documentation).

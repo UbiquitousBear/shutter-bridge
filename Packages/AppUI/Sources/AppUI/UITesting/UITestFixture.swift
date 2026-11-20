@@ -11,6 +11,8 @@ import PTPKit
 ///
 /// What is seeded, all under one camera ("ILCE-7CM2", a made-up key):
 ///
+/// - two Camera rows of that name: the made-up key the files are under, and a USB device's key (`bodyKey`), so Settings ›
+///   *Import When Connected* lists the camera, off;
 /// - three job records for History: an import to Photos that finished, a stage job that finished, and an import that
 ///   stopped with two failed files (so its row offers *Re-run Failed Files*, which says to connect the camera);
 /// - four staged JPEGs of one capture day, written under `documents` (`Staging/ILCE-7CM2/2026-11-08/`) from the images
@@ -44,6 +46,10 @@ enum UITestFixture {
     /// The one camera, by its display name (D11): its row's friendly name and its Staging folder.
     static let cameraName = "ILCE-7CM2"
     static let cameraKey = CameraKey(rawValue: "ui-test-camera")
+    /// The same camera's own key (a USB device's, `CameraNaming.namesOneBody`), so Settings › *Import When Connected*
+    /// lists it, off (backlog section 14): `cameraKey` isn't one, and the section lists only bodies. History groups both
+    /// rows under the one name.
+    static let bodyKey = CameraKey(rawValue: "usb-device:ui-test-body")
 
     /// The staged files, in shooting order, and the day they were taken (the camera's wall clock).
     static let stagedNames = ["DSC00001.JPG", "DSC00002.JPG", "DSC00003.JPG", "DSC00004.JPG"]
@@ -80,6 +86,8 @@ enum UITestFixture {
         try fm.createDirectory(at: documents, withIntermediateDirectories: true)
 
         try await catalogue.upsertCamera(CameraRecord(key: cameraKey, model: cameraName, friendlyName: cameraName,
+                                                      lastSeen: now.addingTimeInterval(-3_600)))
+        try await catalogue.upsertCamera(CameraRecord(key: bodyKey, model: cameraName, friendlyName: cameraName,
                                                       lastSeen: now.addingTimeInterval(-3_600)))
 
         var staged: [ObjectIdentity] = []

@@ -31,7 +31,7 @@ Each section below starts with a status table, one row per acceptance criterion,
 | **Open** | Waiting on a decision or an action by someone; the note says who. |
 | **Later** | Left out of this round (the plan's section 5), with its reason. |
 
-Sections 10 and 13 to 16 have no table: section 10 is *Later* as a whole, and sections 13 to 16 are outside this close-out (see the plan's section 5 for 13 to 15).
+Sections 10, 13, 15 and 16 have no table (section 14 has one since 19 Nov): section 10 is *Later* as a whole, and sections 13 to 16 are outside this close-out (see the plan's section 5 for 13 to 15).
 
 ## Sony-specific pieces in plain terms
 
@@ -509,13 +509,29 @@ Could change with: decision 1, if it is reopened; decision 4, if it is reopened;
 
 ## 14. Auto-import on connect
 
+*Decided (Shamil, 19 Nov):* a per-camera setting, off by default (the catalogue's `Camera.autoImport`). When that camera connects with the app in front, the app opens Browse and imports the new photos with the remembered Photos or Stage choice. Over Wi-Fi it starts once the person has tapped the camera to connect. A proximity wake still only shows the reminder.
+
+**Status (19 Nov):**
+
+| Item | Status | Note |
+| --- | --- | --- |
+| A per-camera setting, off by default | **Built** | Settings › *Import When Connected*; one-body keys, read by name (D11). |
+| USB: opens Browse, imports the new photos with the app in front | **Bench** | check 14 (a)–(f) |
+| Wi-Fi: only after the person's tap | **Bench** | check 14 (j)–(k) |
+| A proximity wake doesn't start an import | **Built** | Linux test; check 14 (k) |
+| Remote Shoot asks for MSC or MTP | **Bench** | Browse's *No Files over USB*; check 14 (i) |
+| Once per connection | **Built** | `AutoImportArms`; check 14 (c), (g), (j) |
+| Fixing the camera's USB mode | **Open** | the menu's name isn't read off the camera yet; the footer says "USB connection mode" |
+
 Acceptance criteria:
 
 - **A setting, off by default** (proposal). Over USB the camera's USB mode can be fixed, so it stops asking *Select USB Connect Mode* on every plug (Shamil, 2 Nov, `usb.mode.fixable` yes); the setting's menu wording isn't recorded yet ("USB Connection Mode" is the plan's name). That makes auto-import on plug-in possible once the person has set it. The empty-state copy uses the camera's mode names (*Image Transfer (MSC)*, *Image Transfer (MTP)*) until the menu path is read off the camera (spike-remaining.md section 4; iteration-1-backlog.md section 6).
 - **Auto-import runs with the app in front:** over USB because of the 30 s suspension (section 13), and over Wi-Fi because the join needs the foreground (section 8). A proximity wake shows the reminder; it doesn't start an import.
 - *Remote Shoot (PC Remote)* over USB lists no files in ImageCaptureCore (4 Nov 12:10), so in that mode the app asks for MSC or MTP rather than auto-importing.
 
-Could change with: decision 1, if it is reopened; decision 7, if it is reopened (MSC in the app's copy, decided).
+Done (19 Nov): auto-import on connect, in `Packages/AppUI/Sources/AppUI/AutoImport/` (pure, tested on Linux), with its hooks in `CamerasModel.apply` (a camera discovery didn't list before, and its going), `browseListed` (every listing no "Import new photos" takes) and `browsePathChanged` (Browse opened or left). **The setting** is `CameraRecord.autoImport`, written only on one-body keys (`usb-device:`, `wifi-serial:`) whose row reads as the body's name, through `updateCamera` (`AutoImportSettings`, Settings › *Import When Connected*), and read by the camera's D11 name (`AutoImportRule`): a body's Wi-Fi key follows its MTP row with no write, MSC follows the one named body (with none or several, MSC is "Camera" and off; the footer says so while more than one camera is listed), and two bodies of one model share one switch. **The rules:** over USB a new discovery appearance is a connection, decided with the app in front (at once, or at the next activation for a camera connected while the app was away or at a cold launch); when on, Browse opens unless another camera's Browse is open, a job is running or paused, Import keepers runs or an "Import new photos" waits, and the first live listing in front does what *Select All New* then *Import* do with the remembered choice; over Wi-Fi a connection is one Browse visit the person started (a row tap, Connect, or the reminder's Import Now), read at its first live listing. At most once per connection (`AutoImportArms`): leaving Browse before the card is read, choosing files, a running job or an "Import new photos" taking the listing ends it, and a Reconnect, Try Again or a second Browse logs "not again"; a replug or a new Wi-Fi visit is a new connection. The Import sheet opens only over the camera's Browse on the Cameras tab with Settings closed (`IntentNavigation.importOverCamera`), so a long MTP listing never pulls the person back from Staging or History. Browse's notice says "automatically" (`StatusNotice.autoImport`). Bench log lines start `auto-import:` (connection, listing, drop and outcome, no identifiers) and `settings: auto-import`. **Tests:** `AutoImportRuleTests`, `AutoImportArmsTests`, `AutoImportSettingsTests`, `AutoImportWordingTests` and `AutoImportAppModelTests` (USB and Wi-Fi through the app model with the real engine and catalogue, the reminder's Import Now included), `UITestFixtureTests.seedsABodyForImportWhenConnectedOffByDefault`, and the UI test `testSettingsListsTheCameraForImportWhenConnectedOffByDefault`. `SettingsScreen` and `LiveRoot` compiled only by CI; the plug-in and Wi-Fi paths need a physical iPhone (bench check 14). Not built, on purpose: a "will import once the card is read" strip with Don't Import, queueing until a job ends, a switch in Browse's menu, and retrying to open Browse at each return to the front.
+
+Could change with: decision 1, if it is reopened; decision 7, if it is reopened (MSC in the app's copy, decided); bench check 14(l), if iOS reports a plugged-in camera as gone and back across a background spell (each return would then be a new connection).
 
 ## 15. Accessibility, energy and memory
 

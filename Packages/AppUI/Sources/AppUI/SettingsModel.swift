@@ -48,6 +48,9 @@ public final class SettingsModel {
     @ObservationIgnored private let staging: (any StagingLocator)?
     @ObservationIgnored private let diagnostics: (any DiagnosticsExporting)?
     @ObservationIgnored private let uploads: StagedUploadMonitor?
+    /// Settings › *Import When Connected* (backlog section 14); nil leaves the screen without the section. The screen
+    /// loads it itself (`AutoImportSettings.load()`): `refresh()` doesn't, since the app awaits it at each activation.
+    public let autoImport: AutoImportSettings?
     /// Counts the times the person left Settings, so an export that finishes after that is discarded, not shown.
     @ObservationIgnored private var exportEpoch = 0
 
@@ -58,12 +61,15 @@ public final class SettingsModel {
     ///   - diagnostics: Makes the diagnostics export; without it the screen has no export row.
     ///   - uploads: Whether staged files in iCloud Drive have uploaded; without it the screen says nothing about
     ///     uploads.
+    ///   - autoImport: The *Import When Connected* switches; without it the screen has no such section.
     public init(photos: (any PhotosAuthorising)? = nil, staging: (any StagingLocator)? = nil,
-                diagnostics: (any DiagnosticsExporting)? = nil, uploads: StagedUploadMonitor? = nil) {
+                diagnostics: (any DiagnosticsExporting)? = nil, uploads: StagedUploadMonitor? = nil,
+                autoImport: AutoImportSettings? = nil) {
         self.photos = photos
         self.staging = staging
         self.diagnostics = diagnostics
         self.uploads = uploads
+        self.autoImport = autoImport
     }
 
     // MARK: Diagnostics export

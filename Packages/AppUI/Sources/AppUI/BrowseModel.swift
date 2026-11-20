@@ -1117,6 +1117,19 @@ public final class BrowseModel {
     /// The catalogue key of the live card shown; nil while the last-known card (or none) is shown.
     var liveCardKey: CameraKey? { showsLiveCard ? cameraKey : nil }
 
+    /// Whether *Select All New* then *Import* can hand files over now (auto-import, backlog section 14): the live card shown
+    /// on a held link with its key, no interruption, and no Import being handed over.
+    var isReadyToImportAllNew: Bool {
+        showsLiveCard && !isStartingImport && importer != nil && link != nil && cameraKey != nil && interruption == nil
+    }
+
+    /// Says an auto-import found nothing new on the card (backlog section 14), as Import's own notice would say it.
+    func noteNothingNewAutomatically(staging: Bool) {
+        importNoticeCount += 1
+        importStatus = StatusNotice.autoImport(.nothingNew(staging: staging), id: importNoticeCount,
+                                               choice: staging ? .staging : .photos)
+    }
+
     /// How many files of the live card *Select All New* would pick with no filter (`NewPhotoCount`): nil while the
     /// last-known card (or none) is shown. "How many new photos" answers with it while a USB camera is listed.
     var liveNewPhotoCount: Int? {
@@ -1545,10 +1558,14 @@ public final class BrowseModel {
     /// Photos access off an *Import to Photos* stages, so it also leaves out staged files, and its count and its
     /// nothing-new reason are the notice's.
     ///
-    /// - Parameter choice: *Import to Photos* or *Stage*, from the Import button's menu; nil, the button itself, is
-    ///   the remembered choice (`importChoice`). The import remembers what was used.
+    /// - Parameters:
+    ///   - choice: *Import to Photos* or *Stage*, from the Import button's menu; nil, the button itself, is the
+    ///     remembered choice (`importChoice`). The import remembers what was used.
+    ///   - automatic: Auto-import handed the files over (backlog section 14): the notice says so
+    ///     (`StatusNotice.autoImport`).
     @discardableResult
-    public func importSelected(as choice: DestinationKind? = nil) async -> ImportRequestOutcome? {
+    public func importSelected(as choice: DestinationKind? = nil, automatic: Bool = false) async
+        -> ImportRequestOutcome? {
         guard canImport, let importer, let link, let key = cameraKey else { return nil }
         let choice = choice ?? importer.importChoice
         let selected = selectedItems
@@ -1570,7 +1587,8 @@ public final class BrowseModel {
             break
         }
         importNoticeCount += 1
-        importStatus = StatusNotice.importRequest(outcome, id: importNoticeCount, choice: choice)
+        importStatus = automatic ? StatusNotice.autoImport(outcome, id: importNoticeCount, choice: choice)
+            : StatusNotice.importRequest(outcome, id: importNoticeCount, choice: choice)
         return outcome
     }
 

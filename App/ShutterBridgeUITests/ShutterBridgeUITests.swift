@@ -70,6 +70,41 @@ final class ShutterBridgeUITests: XCTestCase {
         XCTAssertTrue(settingsButton.waitForExistence(timeout: timeout))
     }
 
+    /// Settings › Import When Connected (backlog section 14): the fixture's camera is listed, off by default; a tap turns
+    /// it on, and Settings opened again reads it back from the catalogue.
+    @MainActor
+    func testSettingsListsTheCameraForImportWhenConnectedOffByDefault() throws {
+        let app = launchFixture()
+        let settingsButton = app.buttons["Settings"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: launchTimeout), "the Cameras screen's Settings button")
+        settingsButton.tap()
+
+        let header = app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Import When Connected")).firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: timeout), "the Import When Connected section")
+        var toggle = app.switches[camera]
+        if !toggle.waitForExistence(timeout: timeout) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout), "the camera's switch")
+        XCTAssertEqual(toggle.value as? String, "0", "off by default")
+        tapSwitch(toggle)
+        XCTAssertTrue(waitForValue("1", of: toggle), "the switch turns on")
+
+        let close = app.buttons["Close"]
+        XCTAssertTrue(close.waitForExistence(timeout: timeout))
+        close.tap()
+        XCTAssertTrue(waitForDisappearance(of: header), "Settings closes")
+
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: timeout))
+        settingsButton.tap()
+        toggle = app.switches[camera]
+        if !toggle.waitForExistence(timeout: timeout) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout), "the camera's switch, again")
+        XCTAssertTrue(waitForValue("1", of: toggle), "read back on: \(String(describing: toggle.value))")
+    }
+
     // MARK: Staging (the cull screen)
 
     @MainActor
@@ -161,6 +196,24 @@ final class ShutterBridgeUITests: XCTestCase {
     @MainActor
     private func element(in app: XCUIApplication, labelEndingWith suffix: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label ENDSWITH %@", suffix)).firstMatch
+    }
+
+    /// Taps a switch's control rather than its label: a `Toggle` in a `Form` toggles only when its switch is hit.
+    @MainActor
+    private func tapSwitch(_ toggle: XCUIElement) {
+        let control = toggle.switches.firstMatch
+        if control.exists, control.isHittable {
+            control.tap()
+        } else {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        }
+    }
+
+    /// Whether `element`'s value is `value` within the timeout.
+    @MainActor
+    private func waitForValue(_ value: String, of element: XCUIElement) -> Bool {
+        let reached = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+        return XCTWaiter().wait(for: [reached], timeout: timeout) == .completed
     }
 
     /// Whether `element` is gone within the timeout.

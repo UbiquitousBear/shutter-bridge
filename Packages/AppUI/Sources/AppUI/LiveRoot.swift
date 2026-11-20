@@ -365,9 +365,17 @@ struct LiveApp: View {
         .task { model.cameras.launch() }
         // "Import new photos" (I16) opened its camera in Browse, or found it not connected: the Cameras tab, with
         // Settings closed, and the Import sheet once the import has started (otherwise closed unless its job is that
-        // camera's).
+        // camera's). An auto-import that started (backlog section 14, `importOverCamera`) changes no tab and closes
+        // nothing: the person may have moved on during a long listing, so the Import sheet opens only over that
+        // camera's Browse, on the Cameras tab with Settings closed (its opening of Browse is a navigation without it).
         .onChange(of: model.intents.navigation) { _, navigation in
             guard let navigation else { return }
+            if let camera = navigation.importOverCamera {
+                if navigation.showsImport, tab == .cameras, !showsSettings, model.cameras.path.last?.id == camera {
+                    showsImport = true
+                }
+                return
+            }
             tab = .cameras
             showsSettings = false
             if navigation.showsImport {

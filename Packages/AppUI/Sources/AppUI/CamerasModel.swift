@@ -230,6 +230,14 @@ public final class CamerasModel: CameraFinding {
     /// which drops an "Import new photos" waiting for a camera no longer shown.
     @ObservationIgnored var onPathChanged: (@MainActor ([CameraDescriptor]) -> Void)?
 
+    /// Told when discovery lists a camera it didn't list before (not an update of one listed). Set by `AppModel` for
+    /// auto-import (backlog section 14), which starts a USB camera's connection.
+    @ObservationIgnored var onCameraAppeared: (@MainActor (CameraDescriptor) -> Void)?
+
+    /// Told when discovery says a camera went, before Browse on it is left. Set by `AppModel` for auto-import, which ends
+    /// the camera's connection.
+    @ObservationIgnored var onCameraDisappeared: (@MainActor (CameraDescriptor.ID) -> Void)?
+
     /// The Browse models still alive for the camera `id`, the most recently made last.
     func browses(of id: CameraDescriptor.ID) -> [BrowseModel] {
         browsing.removeAll { $0.model == nil }
@@ -425,6 +433,7 @@ public final class CamerasModel: CameraFinding {
                 notice = nil
                 noticeCamera = nil
             }
+            let isNew = !cameras.contains { $0.id == camera.id }
             if let index = cameras.firstIndex(where: { $0.id == camera.id }) {
                 cameras[index] = camera
             } else {
@@ -441,7 +450,11 @@ public final class CamerasModel: CameraFinding {
             if let shown = path.last, offlineCameras[shown.id] != nil {
                 Task { [weak self] in await self?.matchOfflineCamera() }
             }
+            // Listed by now, so auto-import finds it among `cameras`.
+            if isNew { onCameraAppeared?(camera) }
         case let .disappeared(id):
+            // First, so the path cleared below isn't taken for the person leaving Browse.
+            onCameraDisappeared?(id)
             cameras.removeAll { $0.id == id }
             knownKeys[id] = nil
             withdrawOfflineConnect(from: id)
