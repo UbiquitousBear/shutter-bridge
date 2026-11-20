@@ -50,7 +50,10 @@ struct AutoImportSettingsTests {
     @Test func listsEachBodyOffByDefault() async {
         let model = AutoImportSettings(catalogue: await seeded())
         #expect(model.choices.isEmpty)
+        // Not read yet: the screen shows no "no cameras" line until it has been.
+        #expect(!model.hasLoaded)
         await model.load()
+        #expect(model.hasLoaded)
         #expect(model.choices == [AutoImportChoice(name: "ILCE-7M4", isOn: false),
                                   AutoImportChoice(name: autoImportModel, isOn: false)])
         #expect(model.listsSeveralCameras)
@@ -91,7 +94,8 @@ struct AutoImportSettingsTests {
 
     @Test func aSwitchShowsItsNewValueAtOnceAndIsWritten() async {
         let catalogue = await seeded()
-        let model = AutoImportSettings(catalogue: catalogue)
+        let log = RecordingLog()
+        let model = AutoImportSettings(catalogue: catalogue, log: log)
         await model.load()
         var bindings = model.choiceBindings
         bindings[1].isOn = true
@@ -99,9 +103,16 @@ struct AutoImportSettingsTests {
         #expect(model.choices[1] == AutoImportChoice(name: autoImportModel, isOn: true))
         #expect(await eventually { await catalogue.camera(bodyWiFiKey)?.autoImport == true })
         #expect(await eventually { await catalogue.camera(bodyMTPKey)?.autoImport == true })
-        // An unchanged list writes nothing.
+        // An unchanged list writes nothing, even where the switch shown differs from what is stored: ILCE-7M4 is turned
+        // on behind the model's back, and still shows off.
+        #expect(await eventually { log.lines.contains("settings: auto-import turned on for a camera (2 key(s))") })
+        try? await Task.sleep(for: .milliseconds(50)) // the write's read-back
+        try? await catalogue.updateCamera(otherKey) { $0.autoImport = true }
+        #expect(model.choices[0] == AutoImportChoice(name: "ILCE-7M4", isOn: false))
         model.choiceBindings = model.choiceBindings
-        #expect(await catalogue.camera(otherKey)?.autoImport == false)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await catalogue.camera(otherKey)?.autoImport == true)
+        #expect(log.lines.filter { $0.hasPrefix("settings: auto-import turned") }.count == 1)
     }
 
     @Test func aRefusedWriteSaysSoAndReadsBack() async {
@@ -124,6 +135,8 @@ struct AutoImportSettingsTests {
         let model = AutoImportSettings(catalogue: BrokenCatalogue(), log: log)
         await model.load()
         #expect(model.choices.isEmpty)
+        // Read, if unsuccessfully: the screen says no camera is listed.
+        #expect(model.hasLoaded)
         #expect(log.lines == ["settings: auto-import: the catalogue couldn't be read (Broken)"])
         await model.set(true, for: autoImportModel)
         #expect(model.saveFailed)

@@ -43,7 +43,11 @@ extension AppModel {
     func autoImportPathChanged(_ path: [CameraDescriptor]) {
         let offline = Set(path.map(\.id).filter { cameras.isOffline($0) })
         let left = autoImportArms.pathChanged(to: path, isOffline: { offline.contains($0) })
-        for _ in left { log.note("auto-import: dropped: Browse was left before the card was read") }
+        // A Browse that went because the camera did (`cameraGone()` sets `.gone` before its `onGone` clears the path) isn't
+        // the person leaving it.
+        for id in left where cameras.browses(of: id).last?.phase != .gone {
+            log.note("auto-import: dropped: Browse was left before the card was read")
+        }
     }
 
     /// Reads the setting for an undecided USB connection with the app in front (section 3.2): off ends it; on opens
@@ -127,6 +131,7 @@ extension AppModel {
             break
         }
         guard inFront else {
+            autoImportArms.readWhileAway(id)
             log.note("auto-import: the card was read with the app away; waiting for it to be in front")
             return
         }
@@ -136,6 +141,12 @@ extension AppModel {
             autoImportArms.end(id, .off(.unidentified))
             log.note("auto-import: the card is read (\(Self.autoImportCarrierWord(browse.camera))): off "
                 + "(\(AutoImportDecision.unidentified.logWords))")
+            return
+        }
+        if browse.showsLiveCard, browse.isStartingImport {
+            // The person's own Import is being handed over (Photos may be asking): they chose files before the card was read.
+            autoImportArms.end(id, .choosingFiles)
+            log.note("auto-import: not started: the person is choosing files")
             return
         }
         guard browse.isReadyToImportAllNew, let key = browse.liveCardKey, autoImportArms.beginDeciding(id) else { return }
@@ -152,6 +163,12 @@ extension AppModel {
         guard decision == .on else {
             autoImportArms.finishDeciding(id, .ended(.off(decision)))
             log.note("auto-import: the card is read (\(carrier)): off (\(decision.logWords))")
+            return
+        }
+        if browse.isStartingImport {
+            // The person's own Import started while the setting was read.
+            autoImportArms.finishDeciding(id, .ended(.choosingFiles))
+            log.note("auto-import: not started: the person is choosing files")
             return
         }
         guard inFront, cameras.path.last?.id == id, browse.isReadyToImportAllNew else {
@@ -198,7 +215,9 @@ extension AppModel {
             log.note("auto-import: the app is in front; deciding \(undecided.count) camera(s) connected while it was away")
             for id in undecided { await decideConnection(id) }
         }
-        for id in autoImportArms.waiting {
+        // Only a card read with the app away is decided on a return, and only on the first: any other waiting arm waits
+        // for a listing, so a later lock and unlock never starts an import after the person imported files themselves.
+        for id in autoImportArms.takeReadWhileAway() {
             guard let browse = cameras.liveBrowses().last(where: { $0.camera.id == id }) else { continue }
             autoImportListed(browse)
         }

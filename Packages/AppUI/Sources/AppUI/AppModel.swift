@@ -201,9 +201,10 @@ public final class AppModel {
         cameras.onPathChanged = { [weak self] path in self?.browsePathChanged(path) }
         // ... and moves over to the live camera when an offline Browse is replaced by its live one (W6-absent).
         cameras.onOfflineReplaced = { [weak self] offline, live in self?.offlineCameraReplaced(offline, by: live) }
-        // Auto-import (backlog section 14): a USB camera connecting, and going.
+        // Auto-import (backlog section 14): a USB camera connecting, and going (as discovery says, or under Browse).
         cameras.onCameraAppeared = { [weak self] camera in self?.autoImportCameraAppeared(camera) }
         cameras.onCameraDisappeared = { [weak self] id in self?.autoImportCameraDisappeared(id) }
+        cameras.onCameraWentAway = { [weak self] id in self?.autoImportArms.cameraWentAway(id) }
         importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
         importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
         // A pass before a job's diff that wrote rows (a replay, or a waiting marker found once access returns) may have

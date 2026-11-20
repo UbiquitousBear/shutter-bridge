@@ -49,6 +49,10 @@ struct AutoImportArms: Sendable, Hashable {
         var state: State
         /// The camera has been on the navigation path during this connection.
         var shown: Bool
+        /// Its card was read with the app away: the next return to the front decides it once (`readWhileAway`,
+        /// `takeReadWhileAway()`). Only such a listing is decided on a return; any other waiting arm waits for a listing,
+        /// so a return never starts an import after the person has chosen and imported files themselves.
+        var readWhileAway = false
     }
 
     private(set) var arms: [CameraDescriptor.ID: Arm] = [:]
@@ -66,6 +70,14 @@ struct AutoImportArms: Sendable, Hashable {
     /// The camera went: its connection ends, whatever its state.
     mutating func disconnected(_ id: CameraDescriptor.ID) {
         arms[id] = nil
+    }
+
+    /// The camera went under Browse (its link was removed, or failed as disconnected) and Browse is about to be closed for
+    /// it (`CamerasModel.cameraWentAway(_:)`): a USB arm not yet ended is no longer shown, so the cleared path isn't taken
+    /// for the person leaving Browse. Discovery's disappearance, if it follows, removes it; otherwise it keeps waiting.
+    mutating func cameraWentAway(_ id: CameraDescriptor.ID) {
+        guard let arm = arms[id], arm.origin == .usbConnection, !arm.state.isEnded else { return }
+        arms[id]?.shown = false
     }
 
     /// Wi-Fi: a live ID new on the path gets a waiting, shown arm; a Wi-Fi arm whose ID left the path is removed.
@@ -131,5 +143,20 @@ struct AutoImportArms: Sendable, Hashable {
     /// The connections waiting for their first live listing in front.
     var waiting: [CameraDescriptor.ID] {
         arms.filter { $0.value.state == .waiting }.map(\.key).sorted { $0.rawValue < $1.rawValue }
+    }
+
+    /// The card of `id`'s connection was read with the app away.
+    mutating func readWhileAway(_ id: CameraDescriptor.ID) {
+        guard let arm = arms[id], !arm.state.isEnded else { return }
+        arms[id]?.readWhileAway = true
+    }
+
+    /// The waiting arms whose card was read with the app away, in ID order, each returned once: the mark is cleared,
+    /// so only the first return to the front after such a listing decides it.
+    mutating func takeReadWhileAway() -> [CameraDescriptor.ID] {
+        let ids = arms.filter { $0.value.readWhileAway && $0.value.state == .waiting }.map(\.key)
+            .sorted { $0.rawValue < $1.rawValue }
+        for id in arms.keys { arms[id]?.readWhileAway = false }
+        return ids
     }
 }

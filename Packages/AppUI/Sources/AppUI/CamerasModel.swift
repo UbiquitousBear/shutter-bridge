@@ -238,6 +238,10 @@ public final class CamerasModel: CameraFinding {
     /// the camera's connection.
     @ObservationIgnored var onCameraDisappeared: (@MainActor (CameraDescriptor.ID) -> Void)?
 
+    /// Told when Browse is closed because its camera went (`cameraWentAway(_:)`), before the path is cleared. Set by
+    /// `AppModel` for auto-import, which then doesn't take the cleared path for the person leaving Browse.
+    @ObservationIgnored var onCameraWentAway: (@MainActor (CameraDescriptor.ID) -> Void)?
+
     /// The Browse models still alive for the camera `id`, the most recently made last.
     func browses(of id: CameraDescriptor.ID) -> [BrowseModel] {
         browsing.removeAll { $0.model == nil }
@@ -419,6 +423,8 @@ public final class CamerasModel: CameraFinding {
     /// The camera went away: if it is being browsed, back to Cameras with a message.
     public func cameraWentAway(_ id: CameraDescriptor.ID) {
         guard let browsed = path.first(where: { $0.id == id }) else { return }
+        // Before the path is cleared, so auto-import doesn't take it for the person leaving Browse.
+        onCameraWentAway?(id)
         path.removeAll()
         noticeCount += 1
         notice = CamerasWording.disconnected(browsed)

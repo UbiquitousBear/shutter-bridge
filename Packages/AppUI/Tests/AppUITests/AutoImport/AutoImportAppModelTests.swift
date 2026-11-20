@@ -2,6 +2,7 @@ import CameraTransport
 import Catalogue
 import Foundation
 import ImportEngine
+import Observation
 import PhotosBridge
 import Testing
 @testable import AppUI
@@ -25,6 +26,44 @@ private final class QuietCentral: GATTConnector, ProximityScanning, @unchecked S
 
 private final class NoRefreshScheduled: ProximityRefreshScheduling {
     func scheduleRefresh(earliest date: Date?) {}
+}
+
+/// Photos access nobody has asked for yet, whose prompt waits for `answer(_:)`: the first *Import to Photos* is held at
+/// the prompt, as on a first import.
+private final class PromptedPhotosAccess: PhotosAuthorising, @unchecked Sendable {
+    private let lock = NSLock()
+    private var status = PhotosAuthorisation.notDetermined
+    private var waiters: [CheckedContinuation<PhotosAuthorisation, Never>] = []
+
+    var isAsking: Bool { lock.withLock { !waiters.isEmpty } }
+
+    func authorisation() async -> PhotosAuthorisation { lock.withLock { status } }
+
+    func requestReadWriteAuthorisation() async -> PhotosAuthorisation {
+        await withCheckedContinuation { continuation in
+            let answered: PhotosAuthorisation? = lock.withLock {
+                guard status == .notDetermined else { return status }
+                waiters.append(continuation)
+                return nil
+            }
+            if let answered { continuation.resume(returning: answered) }
+        }
+    }
+
+    func answer(_ answer: PhotosAuthorisation) {
+        let waiting = lock.withLock {
+            status = answer
+            defer { waiters = [] }
+            return waiters
+        }
+        for waiter in waiting { waiter.resume(returning: answer) }
+    }
+}
+
+/// The person's Import, started from an observation's change.
+@MainActor
+private final class PersonsImport {
+    var task: Task<ImportRequestOutcome?, Never>?
 }
 
 @MainActor
@@ -61,7 +100,8 @@ struct AutoImportAppModelTests {
         func lines(beginning prefix: String) -> [String] { log.lines.filter { $0.hasPrefix(prefix) } }
     }
 
-    func rig(choice: DestinationKind = .photos, active: Bool = true) async throws -> Rig {
+    func rig(choice: DestinationKind = .photos, active: Bool = true,
+             photos: any PhotosAuthorising = FakePhotosAccess()) async throws -> Rig {
         let catalogue = InMemoryCatalogue()
         let discovery = ScriptedDiscovery()
         let log = RecordingLog()
@@ -70,7 +110,7 @@ struct AutoImportAppModelTests {
         let destinations = FakeDestinations()
         let app = AppModel(discovery: discovery, services: services(log: log), catalogue: catalogue,
                            engine: ImportEngine(catalogue: catalogue, stagingDirectory: temporaryStaging()),
-                           settingsStore: settings, photos: FakePhotosAccess(), destinations: destinations,
+                           settingsStore: settings, photos: photos, destinations: destinations,
                            cameraKey: Self.bodyKeying)
         let rejected = Self.card[2].identity(camera: bodyMTPKey, timeZone: .current)!.contentKey
         try await catalogue.setMark(.reject, rating: 0, for: [rejected], at: Date(timeIntervalSince1970: 1_793_000_000))
@@ -98,9 +138,13 @@ struct AutoImportAppModelTests {
         #expect(await eventually { r.app.cameras.cameras.contains { $0.id == camera.id } })
     }
 
-    /// What `LiveApp` does when the path gets the camera: Browse's screen makes its model and runs it.
+    /// What `LiveApp` does when the path gets the camera: Browse's screen makes its model and runs it. A path that never
+    /// gets the camera is a failure, not a quiet pass.
     func pushBrowse(_ r: Rig, _ camera: CameraDescriptor) async -> (BrowseModel, Task<Void, Never>)? {
-        guard await eventually({ r.app.cameras.path.last?.id == camera.id }) else { return nil }
+        guard await eventually({ r.app.cameras.path.last?.id == camera.id }) else {
+            Issue.record("Browse wasn't opened on \(camera.id.rawValue)")
+            return nil
+        }
         let browse = r.app.browseModel(for: camera)
         return (browse, Task { await browse.run() })
     }
@@ -141,10 +185,7 @@ struct AutoImportAppModelTests {
         #expect(await eventually { r.app.cameras.path == [link.descriptor] })
         #expect(r.app.intents.navigation?.showsImport == false)
         #expect(r.app.intents.navigation?.importOverCamera == nil)
-        guard let (browse, run) = await pushBrowse(r, link.descriptor) else {
-            Issue.record("Browse wasn't opened")
-            return
-        }
+        guard let (browse, run) = await pushBrowse(r, link.descriptor) else { return }
         #expect(await eventually { r.app.importer.hasJob })
         #expect(await eventually { browse.importNotice == "Importing 2 files automatically." })
         #expect(await eventually { r.app.intents.navigation?.showsImport == true })
@@ -167,10 +208,7 @@ struct AutoImportAppModelTests {
         let link = await camera(r)
         await seedBody(r, link)
         await connect(r, link.descriptor)
-        guard let (browse, run) = await pushBrowse(r, link.descriptor) else {
-            Issue.record("Browse wasn't opened")
-            return
-        }
+        guard let (browse, run) = await pushBrowse(r, link.descriptor) else { return }
         #expect(await eventually { browse.importNotice == "Staging 2 files automatically." })
         #expect(r.log.lines.contains("auto-import: the card is read (usb); importing all new to stage"))
         #expect(r.log.lines.contains("auto-import: started with 2 files to stage"))
@@ -299,6 +337,49 @@ struct AutoImportAppModelTests {
         await finish(r, run)
     }
 
+    /// A return to the front decides only a card read with the app away, and only once: a connection left waiting for
+    /// any other reason (its card listed while Browse couldn't import) waits for a listing, so a later lock and unlock
+    /// never starts an import after the person has chosen and imported files themselves.
+    @Test func aReturnDecidesOnlyACardReadWhileAwayAndOnlyOnce() async throws {
+        let r = try await rig()
+        let link = await camera(r)
+        await seedBody(r, link)
+        await connect(r, link.descriptor)
+        guard let (browse, run) = await pushBrowse(r, link.descriptor) else { return }
+        #expect(await jobFinished(r))
+        #expect(r.jobs == 1)
+        #expect(browse.isReadyToImportAllNew)
+        let id = link.descriptor.id
+        let decided = r.lines(beginning: "auto-import: the card is read").count
+        // The connection waiting again, as if its listing had come while Browse couldn't import (not read while away).
+        var arms = AutoImportArms()
+        let armed = arms.connected(link.descriptor)
+        #expect(armed)
+        arms.decided(id, .on)
+        r.app.autoImportArms = arms
+        await r.app.scenePhaseChanged(.background)
+        await r.app.scenePhaseChanged(.active)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(r.lines(beginning: "auto-import: the card is read").count == decided)
+        #expect(r.app.autoImportArms.state(of: id) == .waiting)
+        // Read while away: decided at the first return (nothing new is left), and not at the next.
+        r.app.autoImportArms.readWhileAway(id)
+        await r.app.scenePhaseChanged(.background)
+        await r.app.scenePhaseChanged(.active)
+        #expect(await eventually { r.lines(beginning: "auto-import: the card is read").count == decided + 1 })
+        #expect(await eventually { r.app.autoImportArms.state(of: id) == .ended(.started) })
+        var again = AutoImportArms()
+        _ = again.connected(link.descriptor)
+        again.decided(id, .on)
+        r.app.autoImportArms = again
+        await r.app.scenePhaseChanged(.background)
+        await r.app.scenePhaseChanged(.active)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(r.lines(beginning: "auto-import: the card is read").count == decided + 1)
+        #expect(r.jobs == 1)
+        await finish(r, run)
+    }
+
     @Test func leavingBrowseBeforeTheCardIsReadEndsItForTheConnection() async throws {
         let r = try await rig()
         let link = await camera(r)
@@ -402,6 +483,91 @@ struct AutoImportAppModelTests {
         #expect(await eventually { r.log.lines.contains("auto-import: not started: the person is choosing files") })
         #expect(!r.app.importer.hasJob)
         #expect(browse.isSelecting)
+        await finish(r, run)
+    }
+
+    @Test func thePersonsImportStartedBeforeTheListingArrivedIsNeverAddedTo() async throws {
+        let photos = PromptedPhotosAccess()
+        let r = try await rig(photos: photos)
+        let link = await camera(r)
+        await seedBody(r, link)
+        await link.set(listHangs: true)
+        await connect(r, link.descriptor)
+        guard let (browse, run) = await pushBrowse(r, link.descriptor) else { return }
+        #expect(await eventually { await link.listCount == 1 })
+        // As soon as the grid shows the live card, and before Browse hands its listing on (the badges and the listing
+        // are saved first), the person taps a photo and Import; Photos asks, the first time, which holds the Import.
+        let person = PersonsImport()
+        withObservationTracking { _ = browse.phase } onChange: {
+            Task { @MainActor in
+                browse.tap(Self.card[0])
+                person.task = Task { await browse.importSelected() }
+            }
+        }
+        let revision = r.app.intents.camerasRevision
+        await link.set(listHangs: false)
+        #expect(await listed(r, after: revision))
+        #expect(person.task != nil)
+        #expect(r.app.autoImportArms.state(of: link.descriptor.id) == .ended(.choosingFiles))
+        #expect(r.log.lines.contains("auto-import: not started: the person is choosing files"))
+        // Photos answers: the person's one file is imported.
+        #expect(await eventually { photos.isAsking })
+        photos.answer(.authorised)
+        if let outcome = await person.task?.value {
+            #expect(outcome == .started(1))
+        } else {
+            Issue.record("the person's Import didn't run")
+        }
+        #expect(await jobFinished(r))
+        // A later lock and unlock with Browse still open starts nothing more.
+        await r.app.scenePhaseChanged(.background)
+        await r.app.scenePhaseChanged(.active)
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(r.app.autoImportArms.state(of: link.descriptor.id) == .ended(.choosingFiles))
+        #expect(r.jobs == 1)
+        #expect(await link.fetched == [Self.card[0].id])
+        #expect(!r.log.lines.contains { $0.contains("importing all new") })
+        await finish(r, run)
+    }
+
+    @Test func aCableThatGoesUnderBrowseIsNotThePersonLeavingIt() async throws {
+        let r = try await rig()
+        let link = await camera(r)
+        await seedBody(r, link)
+        await link.set(listHangs: true)
+        await connect(r, link.descriptor)
+        guard let (browse, run) = await pushBrowse(r, link.descriptor) else { return }
+        // The device's own removal reaches Browse before discovery's: Browse closes itself.
+        await link.remove()
+        #expect(await eventually { browse.phase == .gone && r.app.cameras.path.isEmpty })
+        #expect(!r.log.lines.contains { $0.hasPrefix("auto-import: dropped") })
+        // Until discovery says the camera went, its connection still waits (a session closed under an attached camera).
+        #expect(r.app.autoImportArms.state(of: link.descriptor.id) == .waiting)
+        await r.discovery.send(.disappeared(link.descriptor.id))
+        #expect(await eventually { r.app.autoImportArms.state(of: link.descriptor.id) == nil })
+        #expect(!r.log.lines.contains { $0.hasPrefix("auto-import: dropped") })
+        await link.set(listHangs: false)
+        await finish(r, run)
+    }
+
+    @Test func aListingThatFailsAsDisconnectedIsNotThePersonLeavingBrowse() async throws {
+        let r = try await rig()
+        let link = await camera(r)
+        await seedBody(r, link)
+        await link.set(listHangs: true)
+        await connect(r, link.descriptor)
+        guard let (browse, run) = await pushBrowse(r, link.descriptor) else { return }
+        #expect(await eventually { await link.listCount == 1 })
+        // The cable is pulled during the listing, which fails as disconnected before discovery reports the removal.
+        await link.set(listFailure: CameraLinkFailure(.disconnected))
+        await link.set(listHangs: false)
+        #expect(await eventually { browse.phase == .gone && r.app.cameras.path.isEmpty })
+        #expect(r.app.autoImportArms.state(of: link.descriptor.id) == .waiting)
+        await r.discovery.send(.disappeared(link.descriptor.id))
+        #expect(await eventually { r.app.cameras.cameras.isEmpty })
+        #expect(r.app.autoImportArms.state(of: link.descriptor.id) == nil)
+        #expect(!r.log.lines.contains { $0.hasPrefix("auto-import: dropped") })
+        #expect(!r.app.importer.hasJob)
         await finish(r, run)
     }
 

@@ -13,6 +13,9 @@ public final class AutoImportSettings {
     public private(set) var choices: [AutoImportChoice] = []
     /// The last switch change wasn't saved; cleared by the next one that is.
     public private(set) var saveFailed = false
+    /// A read of the cameras has finished (well or not), so an empty list means the catalogue has none, not that it
+    /// hasn't been read yet.
+    public private(set) var hasLoaded = false
 
     @ObservationIgnored private let catalogue: any CatalogueStore
     @ObservationIgnored private let log: any BenchLog
@@ -22,7 +25,8 @@ public final class AutoImportSettings {
         self.log = log
     }
 
-    /// Reads the cameras again. A catalogue that can't be read leaves the rows as they were, and is logged.
+    /// Reads the cameras again. A catalogue that can't be read leaves the rows as they were, and is logged; either way
+    /// `hasLoaded` is then true.
     public func load() async {
         do {
             let read = AutoImportRule.choices(among: try await catalogue.cameras())
@@ -30,6 +34,7 @@ public final class AutoImportSettings {
         } catch {
             log.note("settings: auto-import: the catalogue couldn't be read (\(type(of: error)))")
         }
+        if !hasLoaded { hasLoaded = true }
     }
 
     /// Turns the switch of the camera named `name` on or off: every one-body key of that name, from a fresh read, then

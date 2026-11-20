@@ -143,4 +143,27 @@ struct AutoImportArmsTests {
         arms.disconnected(usb.id)
         #expect(arms.state(of: usb.id) == nil)
     }
+
+    @Test func aCardReadWhileAwayIsTakenOnceAndOnlyWhileWaiting() {
+        var arms = AutoImportArms()
+        let first = CameraDescriptor(id: .init(rawValue: "usb-1"), name: "Camera", mode: .usb(.mtp))
+        let second = CameraDescriptor(id: .init(rawValue: "usb-2"), name: "Camera", mode: .usb(.mtp))
+        let armedFirst = arms.connected(first), armedSecond = arms.connected(second)
+        #expect(armedFirst && armedSecond)
+        arms.decided(first.id, .on)
+        arms.decided(second.id, .on)
+        let none = arms.takeReadWhileAway()
+        #expect(none.isEmpty)                            // waiting, but nothing was read while away
+        arms.readWhileAway(first.id)
+        let taken = arms.takeReadWhileAway(), takenAgain = arms.takeReadWhileAway()
+        #expect(taken == [first.id])
+        #expect(takenAgain.isEmpty)                      // once
+        arms.readWhileAway(second.id)
+        arms.end(second.id, .jobRunning)
+        let afterEnd = arms.takeReadWhileAway()
+        #expect(afterEnd.isEmpty)                        // an ended arm isn't decided again
+        arms.readWhileAway(second.id)                    // nor marked once ended
+        let markedEnded = arms.takeReadWhileAway()
+        #expect(markedEnded.isEmpty)
+    }
 }
