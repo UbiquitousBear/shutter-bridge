@@ -60,6 +60,10 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
   Browse offers them for staging again.
 - **iCloud storage full.** When staged photos can't upload because your iCloud storage is full, Settings' Staging
   section says so, and so does the Import screen while it stages to iCloud Drive.
+- **Import when connected.** In Settings, turn on *Import When Connected* for a camera. When it connects over USB with
+  the app open, Browse opens and its new photos are imported (or staged, whichever you chose last). Over Wi-Fi it
+  starts once you tap the camera and its card has been read. A reminder never starts an import by itself. Turning it
+  on doesn't import from a camera that's already connected: unplug it and plug it in again.
 
 **Please try**
 
@@ -83,6 +87,9 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
     Open it again and, while it is connecting, switch to the History tab and back: the connection should still be
     going (or done, with the card shown), not started again. Over USB, open a card, switch tabs and come back: the
     card should be there at once, not read again.
+11. Turn on *Import When Connected* for your camera, then plug it in with the app open: Browse should open and import
+    only the new photos. Unplug it and plug it in again: it should say there are no new photos. Over Wi-Fi, tap the
+    camera: it should import once, and not again after *Reconnect*.
 
 **Known limits**
 
@@ -92,6 +99,7 @@ set up over Wi-Fi. Only the bench's camera model has been tried.
 - *Image Transfer (MSC)* can't tell cameras apart: it takes the one model name the app has seen in
   *Image Transfer (MTP)* or over Wi-Fi, whichever camera is plugged in, and once the app has seen two or more models,
   its imports go into an album called *Camera*. Two cameras of the same model share one album and Staging folder.
+- In *Image Transfer (MSC)*, *Import When Connected* works only while the app knows one camera model.
 - Battery level isn't shown yet, and free space is shown only in *Image Transfer (MTP)*.
 - Deleting a whole day's folder (or the Staging folder) in iCloud Drive leaves those photos marked *Staged*; delete the
   photos inside it instead.

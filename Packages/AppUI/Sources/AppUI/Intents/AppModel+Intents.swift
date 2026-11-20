@@ -17,6 +17,9 @@ import PhotosBridge
 //   camera is connected and listed in Browse, and otherwise from the catalogue's last listing, with its age. It never
 //   opens a link.
 // - The camera picker lists `AppModel.intentCameras()`.
+//
+// Auto-import on connect (backlog section 14, `AutoImport/AppModel+AutoImport.swift`) shares `browseListed(_:)`, which
+// hands it every listing no "Import new photos" takes, `browsePathChanged(_:)` and `BrowseModel.importAllNew(automatic:)`.
 
 /// Where the intents find the app's model (I16). The live launch sets `launcher` before launch finishes, so an intent
 /// that launched the app waits for the catalogue to open rather than finding nothing.
@@ -108,9 +111,9 @@ public final class AppIntentRequests {
 
     public init() {}
 
-    func navigate(showsImport: Bool) {
+    func navigate(showsImport: Bool, importOverCamera: CameraDescriptor.ID? = nil) {
         navigations += 1
-        navigation = IntentNavigation(id: navigations, showsImport: showsImport)
+        navigation = IntentNavigation(id: navigations, showsImport: showsImport, importOverCamera: importOverCamera)
     }
 
     func cardListed() { camerasRevision += 1 }
@@ -121,6 +124,15 @@ public struct IntentNavigation: Sendable, Hashable {
     public let id: Int
     /// Open the Import sheet: the import started or files were added to it.
     public let showsImport: Bool
+    /// Set when an auto-import started (backlog section 14): the screens change no tab and close nothing; the Import sheet
+    /// opens only over this camera's Browse on the Cameras tab with Settings closed. Nil: an intent's navigation, as before.
+    public let importOverCamera: CameraDescriptor.ID?
+
+    public init(id: Int, showsImport: Bool, importOverCamera: CameraDescriptor.ID? = nil) {
+        self.id = id
+        self.showsImport = showsImport
+        self.importOverCamera = importOverCamera
+    }
 }
 
 /// An "Import new photos" waiting for Browse to read its camera's card.
@@ -407,6 +419,7 @@ extension AppModel {
     /// The navigation stack changed: a waiting "Import new photos" whose camera is no longer shown is dropped now, not
     /// at the next listing, so coming back to the camera later is the person's own visit and starts nothing.
     func browsePathChanged(_ path: [CameraDescriptor]) {
+        autoImportPathChanged(path)
         guard let request = intents.pending, path.last?.id != request.camera else { return }
         dropPendingNewPhotosImport(because: "Browse was left")
     }
@@ -420,10 +433,15 @@ extension AppModel {
     }
 
     /// A Browse model listed its camera's live card (`CamerasModel.onBrowseListed`): the waiting "Import new photos"
-    /// for that camera starts, if it still applies.
+    /// for that camera starts, if it still applies, and takes the camera's auto-import connection with it; otherwise
+    /// auto-import decides the listing (`autoImportListed(_:)`).
     func browseListed(_ browse: BrowseModel) {
         intents.cardListed()
-        guard let request = intents.pending, request.camera == browse.camera.id else { return }
+        guard let request = intents.pending, request.camera == browse.camera.id else {
+            autoImportListed(browse)
+            return
+        }
+        autoImportRequestTookListing(browse.camera.id)
         intents.pending = nil
         let reason: String? = if importer.isAway {
             "the app is in the background"
@@ -461,7 +479,7 @@ extension AppModel {
 
     /// Where the files of an import request actually go, for the answer: an *Import to Photos* stages when Photos access
     /// is off (decision 9), and then it says "Staging", not "to Photos".
-    private func destinationUsed(by outcome: ImportRequestOutcome, remembered: DestinationKind) -> DestinationKind {
+    func destinationUsed(by outcome: ImportRequestOutcome, remembered: DestinationKind) -> DestinationKind {
         switch outcome {
         case .started, .appended:
             if case .staging? = importer.progress.destination { return .staging }
@@ -513,15 +531,19 @@ extension BrowseModel {
     /// the card is picked rather than those shown, and any selection the person had made replaced. With nothing new it
     /// leaves the selecting mode and answers *nothing new* for the remembered choice; nil when Browse couldn't hand the
     /// files over (its link went, or an Import was being handed over).
-    func importAllNew() async -> ImportRequestOutcome? {
+    ///
+    /// - Parameter automatic: Auto-import on connect (backlog section 14): the notice says so, nothing new included.
+    func importAllNew(automatic: Bool = false) async -> ImportRequestOutcome? {
         if filter.isActive { filter = .none }
         clearSelection()
         selectAllNew()
         guard !selection.isEmpty else {
             isSelecting = false
-            return .nothingNew(staging: importChoice == .staging)
+            let staging = importChoice == .staging
+            if automatic { noteNothingNewAutomatically(staging: staging) }
+            return .nothingNew(staging: staging)
         }
-        return await importSelected()
+        return await importSelected(automatic: automatic)
     }
 }
 

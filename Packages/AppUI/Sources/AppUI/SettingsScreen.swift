@@ -19,6 +19,10 @@ import UIKit
 /// the person shares it. The model removes the file's folder once the sheet closes, and when Settings closes (`LiveApp`'s
 /// sheet).
 ///
+/// When the app has auto-import's switches (backlog section 14), an *Import When Connected* section between Staging and
+/// Diagnostics lists each camera body with a switch, off by default (`AutoImportSection`); it is read when the screen
+/// appears and when the app comes back to the foreground.
+///
 /// When the app has the proximity reminder (W18, placed by W16), a Reminders row pushes `ReminderSettingsView` inside this
 /// sheet's navigation stack and says whether the reminder is on; the `ReminderModel` comes from the environment.
 struct SettingsScreen: View {
@@ -63,6 +67,9 @@ struct SettingsScreen: View {
                 } footer: {
                     Text(SettingsWording.stagingFooter)
                 }
+                if let autoImport = model.autoImport {
+                    AutoImportSection(model: autoImport)
+                }
                 if model.offersDiagnosticsExport {
                     Section {
                         Button {
@@ -106,6 +113,8 @@ struct SettingsScreen: View {
             }
         }
         .task {
+            // First: the catalogue's cameras don't wait for Photos, the staging place or the upload status.
+            await model.autoImport?.load()
             await model.refresh()
             await model.refreshUploads()
         }
@@ -122,7 +131,51 @@ struct SettingsScreen: View {
         .onChange(of: model.exportAnnouncement) { _, announcement in announcement?.post() }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
-            Task { await model.refresh() }
+            Task {
+                await model.refresh()
+                await model.autoImport?.load()
+            }
+        }
+    }
+}
+
+/// Settings › *Import When Connected* (backlog section 14): a switch for each camera body the catalogue knows by name,
+/// off by default, bound through `AutoImportSettings.choiceBindings` (a changed switch shows its new value at once and is
+/// written in a task, then reads back what was stored). With no camera of its own yet, once the catalogue has been read
+/// (`hasLoaded`), a line says when one is listed. A failed write says so under the switches. The footer says what the
+/// setting does, and, while more than one camera is listed, that a camera in Image Transfer (MSC) isn't imported
+/// automatically.
+private struct AutoImportSection: View {
+    @Bindable var model: AutoImportSettings
+
+    var body: some View {
+        Section {
+            if model.choices.isEmpty {
+                // Only once the catalogue has been read: before that, an empty list isn't "no cameras".
+                if model.hasLoaded {
+                    Text(AutoImportWording.noCameras)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ForEach($model.choiceBindings) { $choice in
+                    Toggle(choice.name, isOn: $choice.isOn)
+                        .accessibilityHint(AutoImportWording.toggleHint)
+                }
+            }
+            if model.saveFailed {
+                Label(AutoImportWording.saveFailed, systemImage: "exclamationmark.triangle")
+                    .font(.subheadline)
+            }
+        } header: {
+            Text(AutoImportWording.header)
+        } footer: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(AutoImportWording.footer)
+                if model.listsSeveralCameras {
+                    Text(AutoImportWording.mscNote)
+                }
+            }
         }
     }
 }

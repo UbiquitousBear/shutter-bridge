@@ -17,6 +17,8 @@ import PhotosBridge
 ///   staged files deleted in Files are reconciled (`StagedCopyReconciler`, then every open Browse reads its badges
 ///   again) and the iCloud upload status is read (`uploads`, shown in Settings and on the Import screen). Before each
 ///   job, the import checks the free space (`ImportModel`, through `freeSpace`).
+/// - Auto-import on connect (backlog section 14, `AppModel+AutoImport.swift`): a camera switched on in Settings ›
+///   *Import When Connected* (`autoImport`) imports its new photos once per connection, with the app in front.
 @MainActor
 @Observable
 public final class AppModel {
@@ -39,6 +41,14 @@ public final class AppModel {
     /// What the App Intents asked the app to do (I16): the import "Import new photos" waits to start, and what the
     /// screens show for it (`AppIntentRequests.navigation`).
     public let intents = AppIntentRequests()
+    /// Settings › *Import When Connected* (backlog section 14): the per-camera switches, which `settings` shows.
+    public let autoImport: AutoImportSettings
+    /// Auto-import's state for each connection (backlog section 14; `AppModel+AutoImport.swift`).
+    @ObservationIgnored var autoImportArms = AutoImportArms()
+    /// The app is in front: true from `.active`, false from `.background`, unchanged by `.inactive`. Set first in
+    /// `scenePhaseChanged`, before any wait, so auto-import never reads `importer.isAway`, which changes only after discovery
+    /// has started again.
+    @ObservationIgnored private(set) var inFront = false
     @ObservationIgnored private let notifier: any LocalNotifier
     @ObservationIgnored let discovery: any CameraDiscovery
     @ObservationIgnored let log: any BenchLog
@@ -149,7 +159,10 @@ public final class AppModel {
             wifiRecovery = nil
             wirelessSetup = nil
         }
-        settings = SettingsModel(photos: photos, staging: destinations, diagnostics: diagnostics, uploads: uploads)
+        let autoImport = AutoImportSettings(catalogue: catalogue, log: services.log)
+        self.autoImport = autoImport
+        settings = SettingsModel(photos: photos, staging: destinations, diagnostics: diagnostics, uploads: uploads,
+                                 autoImport: autoImport)
         cameras.importModel = importer
         importer.cameraFinder = cameras
         // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse has been left).
@@ -188,6 +201,10 @@ public final class AppModel {
         cameras.onPathChanged = { [weak self] path in self?.browsePathChanged(path) }
         // ... and moves over to the live camera when an offline Browse is replaced by its live one (W6-absent).
         cameras.onOfflineReplaced = { [weak self] offline, live in self?.offlineCameraReplaced(offline, by: live) }
+        // Auto-import (backlog section 14): a USB camera connecting, and going (as discovery says, or under Browse).
+        cameras.onCameraAppeared = { [weak self] camera in self?.autoImportCameraAppeared(camera) }
+        cameras.onCameraDisappeared = { [weak self] id in self?.autoImportCameraDisappeared(id) }
+        cameras.onCameraWentAway = { [weak self] id in self?.autoImportArms.cameraWentAway(id) }
         importer.onJobStarted = { [weak self] camera in self?.jobStarted(camera) }
         importer.onJobEnded = { [weak self] camera in self?.jobEnded(camera) }
         // A pass before a job's diff that wrote rows (a replay, or a waiting marker found once access returns) may have
@@ -359,6 +376,12 @@ public final class AppModel {
     public func scenePhaseChanged(_ phase: AppScenePhase) async {
         // First, so the Wi-Fi sessions reading the scene and the reminder's rules see it before anything acts on it (W16).
         wireless?.sceneChanged(phase)
+        // Before any wait: a camera listed while this runs is decided by what is true now (auto-import, backlog section 14).
+        switch phase {
+        case .active: inFront = true
+        case .background: inFront = false
+        case .inactive: break
+        }
         // The reminder's request as it stood when the app left, so one made while this runs (Import Now) isn't dropped.
         let requestOnLeaving = phase == .background ? wireless?.reminders.cameraToOpen : nil
         // Browse hears the way to the background before its link is let go, so it doesn't take the end for one in front.
@@ -394,6 +417,9 @@ public final class AppModel {
             cameras.browseScenePhaseChanged(.active)
             // After the import's rule and the sessions, so a paused USB import carries on as soon as it did before (W16).
             await wireless?.becameActive()
+            // After the import's own rule, so a paused USB job that carried on counts as running: a camera connected while
+            // the app was away is decided now, and a card read meanwhile starts its import (backlog section 14).
+            await autoImportBecameActive()
             // Last, and not awaited: the person may have deleted staged files in Files while away (staging PR 7).
             if upkeepDue {
                 upkeepDue = false

@@ -90,6 +90,24 @@ public struct StatusNotice: Sendable, Hashable {
         }
     }
 
+    /// After an auto-import handed the card's new files over (backlog section 14): started, added or nothing new as an
+    /// info notice that goes by itself, worded "automatically"; a refusal or failure as `importRequest` words it.
+    public static func autoImport(_ outcome: ImportRequestOutcome, id: Int = 0,
+                                  choice: DestinationKind = .photos) -> StatusNotice {
+        let staging = choice == .staging
+        let text: String
+        switch outcome {
+        case let .started(n): text = AutoImportWording.started(n, staging: staging)
+        case let .appended(n): text = AutoImportWording.appended(n, staging: staging)
+        case let .nothingNew(staged): text = AutoImportWording.nothingNew(staged: staged)
+        case .busyWithAnotherCamera, .busyWithAnotherMode, .busyWithKeepers, .stillStarting, .failed:
+            return importRequest(outcome, id: id, choice: choice)
+        }
+        var notice = importRequest(outcome, id: id, choice: choice)
+        notice.text = text
+        return notice
+    }
+
     /// *Copy as JPEG* or *Share as JPEG…*'s confirmation (goes by itself) or error (kept until closed); nil while
     /// idle or working. *Sharing the camera's preview* is said urgently: the share sheet opens at the same moment
     /// and VoiceOver would read it instead.
