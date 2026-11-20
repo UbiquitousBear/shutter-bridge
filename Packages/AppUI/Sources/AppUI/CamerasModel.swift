@@ -84,9 +84,14 @@ public final class CamerasModel: CameraFinding {
     public private(set) var access: Access = .unknown
     /// True once discovery has started.
     public private(set) var isLooking = false
-    /// The navigation stack: the camera being browsed, if any.
+    /// The navigation stack: the camera being browsed, if any. A Browse whose camera leaves it is stopped
+    /// (`stopBrowsesLeftBehind()`): only leaving Browse in the navigation sense stops it, never another tab hiding it.
     public var path: [CameraDescriptor] = [] {
-        didSet { if path != oldValue { onPathChanged?(path) } }
+        didSet {
+            guard path != oldValue else { return }
+            stopBrowsesLeftBehind()
+            onPathChanged?(path)
+        }
     }
     /// A message for the top of the screen, such as a camera disconnected while it was browsed. It goes when that
     /// camera is connected again, or when the person closes it.
@@ -114,7 +119,9 @@ public final class CamerasModel: CameraFinding {
     @ObservationIgnored private let cameraKey: CameraKeying
     @ObservationIgnored private let leases: LinkLeases
     @ObservationIgnored private var watchTask: Task<Void, Never>?
-    /// The Browse models made, held weakly, so the scene reaches the one on screen (`browseScenePhaseChanged(_:)`).
+    /// The Browse models made, held weakly, so the scene reaches the one on screen (`browseScenePhaseChanged(_:)`)
+    /// and a path change stops the ones left behind. A started model is kept alive by its own run until it is
+    /// stopped.
     @ObservationIgnored private var browsing: [WeakBrowse] = []
     @ObservationIgnored private var starting = false
     @ObservationIgnored private var launched = false
@@ -174,7 +181,7 @@ public final class CamerasModel: CameraFinding {
         }
     }
 
-    /// The model for browsing `camera`. Cheap: nothing is opened until its screen runs it.
+    /// The model for browsing `camera`. Cheap: nothing is opened until its screen starts it (`BrowseModel.start()`).
     public func browseModel(for camera: CameraDescriptor) -> BrowseModel {
         if let offline = offlineCameras[camera.id] { return offlineBrowseModel(for: camera, offline) }
         let discovery = self.discovery
@@ -196,8 +203,7 @@ public final class CamerasModel: CameraFinding {
             leases: leases,
             cameraName: displayName(for: camera)
         )
-        browsing.removeAll { $0.model == nil }
-        browsing.append(WeakBrowse(model: model))
+        track(model)
         model.onListed = { [weak self] listed in
             self?.onBrowseListed?(listed)
             self?.browseListed(camera)
@@ -235,6 +241,41 @@ public final class CamerasModel: CameraFinding {
     func liveBrowses() -> [BrowseModel] {
         browsing.removeAll { $0.model == nil }
         return browsing.compactMap { entry in entry.model.flatMap { $0.showsLiveCard ? $0 : nil } }
+    }
+
+    // MARK: - Browse's run (Shamil, 19 Nov)
+
+    /// Holds `model` weakly among the Browse models made, and has a start of it stop any other Browse on its camera.
+    private func track(_ model: BrowseModel) {
+        browsing.removeAll { $0.model == nil }
+        browsing.append(WeakBrowse(model: model))
+        model.onStart = { [weak self] started in self?.browseStarting(started) }
+    }
+
+    /// The navigation path changed: every Browse model still alive whose camera is no longer on it is stopped, so a
+    /// Wi-Fi connection it started and nothing else waits for is stopped and its link let go (#146). By ID: a Wi-Fi
+    /// camera's descriptor is renamed by its model at its first connection (D11), and that isn't leaving it. An
+    /// offline Browse replaced by its live one is left behind this way too; a model the stack never showed was never
+    /// started.
+    private func stopBrowsesLeftBehind() {
+        let shown = Set(path.map(\.id))
+        browsing.removeAll { $0.model == nil }
+        for entry in browsing {
+            guard let model = entry.model, model.isStarted, !shown.contains(model.camera.id) else { continue }
+            model.stop()
+        }
+    }
+
+    /// A Browse model is starting: any other started on the same camera is stopped. The screen keeps its model while
+    /// the camera stays on the path, so this only matters if SwiftUI makes Browse's screen (and model) again for it.
+    private func browseStarting(_ model: BrowseModel) {
+        browsing.removeAll { $0.model == nil }
+        for entry in browsing {
+            guard let other = entry.model, other !== model, other.isStarted, other.camera.id == model.camera.id
+            else { continue }
+            services.log.note("browse: another Browse on the same camera started; stopping the older one")
+            other.stop()
+        }
     }
 
     /// The scene changed: every Browse model still alive is told, so a Wi-Fi Browse knows whether a lost session happened
@@ -531,8 +572,7 @@ extension CamerasModel {
         )
         model.offerConnect(offline.listed != nil)
         model.onConnect = { [weak self] in self?.connectOffline(camera.id) }
-        browsing.removeAll { $0.model == nil }
-        browsing.append(WeakBrowse(model: model))
+        track(model)
         return model
     }
 

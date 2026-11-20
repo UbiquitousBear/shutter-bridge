@@ -152,7 +152,7 @@ public final class AppModel {
         settings = SettingsModel(photos: photos, staging: destinations, diagnostics: diagnostics, uploads: uploads)
         cameras.importModel = importer
         importer.cameraFinder = cameras
-        // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse is closed).
+        // A Wi-Fi camera's stay starts when the last holder lets its link go (the import has finished, and Browse has been left).
         // In the background it doesn't wait for Browse: an import's lease going with no import running is its end, and the
         // camera is no longer connected for the reminder, though Browse still holds the closed link.
         if let source = wifi?.source {

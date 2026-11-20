@@ -313,8 +313,9 @@ struct WiFiAppModelTests {
         await b.app.scenePhaseChanged(.active)   // discovery starts; the Wi-Fi model follows its source
         #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
 
+        b.app.cameras.path = [descriptor]
         let browse = b.app.browseModel(for: descriptor)
-        let run = Task { await browse.run() }
+        browse.start()
         #expect(await eventuallyLong { browse.phase == .listed })
         // The key is the serial's, whatever the descriptor says.
         let key = CameraKeys.key(for: descriptor, material: fakeSerial)
@@ -330,8 +331,9 @@ struct WiFiAppModelTests {
         })
         // Browse still holds the link: the stay hasn't started.
         #expect(session.count("importFinished") == 0)
-        run.cancel()
-        #expect(await bounded(run) != nil)
+        // Back to Cameras: Browse lets go, and the stay starts.
+        b.app.cameras.path = []
+        #expect(await eventuallyLong { !browse.isStarted })
         #expect(await waitUntil { session.count("importFinished") == 1 })
         #expect(session.count("prepare") == 1)
     }
@@ -350,7 +352,7 @@ struct WiFiAppModelTests {
         #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
         // Browsed, so its key is known, and Browse still holds the link: the intent goes to the live Browse.
         let first = b.app.browseModel(for: descriptor)
-        let firstRun = Task { await first.run() }
+        first.start()
         #expect(await eventuallyLong { first.phase == .listed })
         let key = try #require(await b.source.knownKey(for: descriptor.id))
         let asked = Task { await b.app.importNewPhotos(cameraWith: key, waitingForCamera: .zero,
@@ -359,11 +361,10 @@ struct WiFiAppModelTests {
         #expect(await eventuallyLong { b.app.cameras.path.map(\.id) == [descriptor.id] })
         _ = await asked.value
         #expect(session.count("prepare") == 1)
+        // Leaving Browse stops it: it lets go and the stay starts. Connect, not the live Browse, and nothing is
+        // prepared.
         b.app.cameras.path = []
-
-        // Browse lets go and the stay starts: Connect, not the live Browse, and nothing is prepared.
-        firstRun.cancel()
-        #expect(await bounded(firstRun) != nil)
+        #expect(await eventuallyLong { !first.isStarted })
         #expect(await waitUntil { session.count("importFinished") == 1 })
         session.set(phase: .staying)
         let inStay = await b.app.importNewPhotos(cameraWith: key, waitingForCamera: .zero)
@@ -381,10 +382,8 @@ struct WiFiAppModelTests {
         #expect(session.count("prepare") == 1)
     }
 
-    /// Bench 22.1: the camera was off, Browse began the join, and the person went back to Cameras; the join carried on and
-    /// its line stayed there. Now closing Browse stops the connection: the session leaves, so nothing joins behind the
-    /// screen the person has left.
-    @Test func closingBrowseWhileTheCameraConnectsStopsTheConnection() async throws {
+    /// A paired camera that is off, so its connection is held reaching it (`holdPrepare`), with the app active.
+    func connectingBench() async -> (b: Bench, descriptor: CameraDescriptor, session: FakeSession) {
         let b = bench()
         let descriptor = await b.source.registerPairedCamera(peripheral: peripheral)
         let session = b.connecting.session(for: WiFiCameraEntry(
@@ -394,16 +393,86 @@ struct WiFiAppModelTests {
         session.holdPrepare()
         await b.app.scenePhaseChanged(.active)
         #expect(await eventuallyLong { b.app.cameras.cameras == [descriptor] })
+        return (b, descriptor, session)
+    }
+
+    /// Bench 22.1: the camera was off, Browse began the join, and the person went back to Cameras; the join carried on
+    /// and its line stayed there. Now leaving Browse (the camera off the navigation path) stops the connection: the
+    /// session leaves, so nothing joins behind the screen the person has left.
+    @Test func closingBrowseWhileTheCameraConnectsStopsTheConnection() async throws {
+        let (b, descriptor, session) = await connectingBench()
+        b.app.cameras.path = [descriptor]
         let browse = b.app.browseModel(for: descriptor)
-        let run = Task { await browse.run() }
+        browse.start()
         #expect(await waitUntil { session.preparesStarted == 1 })
-        run.cancel()
-        #expect(await bounded(run) != nil)   // Browse lets go at once, not when the join is over
+        b.app.cameras.path = []   // Back
+        #expect(await eventuallyLong { !browse.isStarted })   // Browse lets go at once, not when the join is over
         // Told to leave from the stop, and again if the held preparation opened as it was stopped.
         #expect(await waitUntil { session.count("leave") >= 1 })
         #expect(await waitUntilAsync { await !b.source.isConnecting(descriptor.id) })
         #expect(await b.source.stoppedConnections == 1)
         #expect(await !b.source.hasLiveLink(for: descriptor.id))
+    }
+
+    /// The same through the run's own cancellation, which is what `stop()` does (and what a direct caller of `run()`
+    /// does): the connection nothing else waits for is stopped (#146).
+    @Test func cancellingBrowsesRunWhileTheCameraConnectsStopsTheConnection() async throws {
+        let (b, descriptor, session) = await connectingBench()
+        let browse = b.app.browseModel(for: descriptor)
+        let run = Task { await browse.run() }
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        run.cancel()
+        #expect(await bounded(run) != nil)
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await waitUntilAsync { await !b.source.isConnecting(descriptor.id) })
+        #expect(await b.source.stoppedConnections == 1)
+    }
+
+    /// Shamil, 19 Nov: another tab hiding Browse isn't leaving it. With the camera still on the path (the stand-in for
+    /// a tab switch) and the screen appearing again (`start()` once more), the connection Browse started keeps going:
+    /// it is neither stopped nor started again, and Browse lists the card once the camera answers.
+    @Test func aTabSwitchWhileTheCameraConnectsKeepsTheConnectionGoing() async throws {
+        let (b, descriptor, session) = await connectingBench()
+        b.app.cameras.path = [descriptor]
+        let browse = b.app.browseModel(for: descriptor)
+        browse.start()
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        // Another tab, then back: nothing changes the path, and the screen's appearance starts it again.
+        try await Task.sleep(for: .milliseconds(200))
+        browse.start()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(browse.isStarted)
+        #expect(session.count("leave") == 0)
+        #expect(await b.source.isConnecting(descriptor.id))
+        #expect(await b.source.stoppedConnections == 0)
+        #expect(session.preparesStarted == 1)
+        // The camera answers: the same connection's link is listed.
+        session.set(phase: .ready)
+        session.releasePrepare()
+        #expect(await eventuallyLong { browse.phase == .listed })
+        #expect(session.count("prepare") == 1)
+        b.app.cameras.path = []
+        #expect(await eventuallyLong { !browse.isStarted })
+    }
+
+    /// The camera's descriptor on the path replaced by one with the same ID (renamed by its model at its first
+    /// connection, D11) isn't leaving Browse: its connection keeps going.
+    @Test func aRenamedDescriptorOnThePathDoesntStopTheConnection() async throws {
+        let (b, descriptor, session) = await connectingBench()
+        b.app.cameras.path = [descriptor]
+        let browse = b.app.browseModel(for: descriptor)
+        browse.start()
+        #expect(await waitUntil { session.preparesStarted == 1 })
+        var renamed = descriptor
+        renamed.name = "ILCE-7CM2"
+        b.app.cameras.path = [renamed]
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(browse.isStarted)
+        #expect(session.count("leave") == 0)
+        #expect(await b.source.stoppedConnections == 0)
+        b.app.cameras.path = []
+        #expect(await waitUntil { session.count("leave") >= 1 })
+        #expect(await b.source.stoppedConnections == 1)
     }
 
     @Test func theSceneReachesTheSessionsAfterTheImportsOwnRule() async throws {
